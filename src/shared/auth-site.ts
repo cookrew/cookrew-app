@@ -31,11 +31,18 @@ import type { StepUpAct } from './step-up'
  * THE WAY BACK TO THE DESKTOP is the legacy return with `code` in place of
  * `handoff`: cookrew://oauth#code=…&state=… or #error=denied|expired&state=…,
  * or the same fields as a query on http://127.0.0.1:<port>/oauth/return.
+ *
+ * THE CONSOLE (0.6.0) is a page on its own origin that signs in as the desktop
+ * does: its own challenge and state, the code spent at POST /v2/auth/token
+ * with its own verifier. Its way back is fixed, `<console origin>/auth/complete
+ * ?code&state`, a route of the page itself. What it gets is a console session:
+ * a fifteen-minute token renewed with the device key, good for the console's
+ * few routes (registry console-scope.ts).
  */
 
-export type AuthClient = 'web' | 'desktop' | 'cli'
+export type AuthClient = 'web' | 'desktop' | 'cli' | 'console'
 
-export const AUTH_CLIENTS: readonly AuthClient[] = ['web', 'desktop', 'cli']
+export const AUTH_CLIENTS: readonly AuthClient[] = ['web', 'desktop', 'cli', 'console']
 
 export const isAuthClient = (value: unknown): value is AuthClient =>
   typeof value === 'string' && (AUTH_CLIENTS as readonly string[]).includes(value)
@@ -47,12 +54,12 @@ export const isAuthClient = (value: unknown): value is AuthClient =>
  * account that opened it, after the account's own step-up on the page;
  * `step-up` is that proof on its own, for one act cookrew.dev/me is about to do.
  */
-export type AuthIntent = 'sign-in' | 'create' | 'github' | 'google' | 'link' | 'passkey' | 'step-up'
+export type AuthIntent = 'sign-in' | 'create' | 'github' | 'google' | 'link' | 'passkey' | 'step-up' | 'grant'
 
-export const AUTH_INTENTS: readonly AuthIntent[] = ['sign-in', 'create', 'github', 'google', 'link', 'passkey', 'step-up']
+export const AUTH_INTENTS: readonly AuthIntent[] = ['sign-in', 'create', 'github', 'google', 'link', 'passkey', 'step-up', 'grant']
 
 /** The intents a signed-in client opens for its own account; nobody signs in on them. */
-export const SIGNED_IN_INTENTS: readonly AuthIntent[] = ['link', 'passkey', 'step-up']
+export const SIGNED_IN_INTENTS: readonly AuthIntent[] = ['link', 'passkey', 'step-up', 'grant']
 
 /**
  * THE ACTS cookrew.dev/me MAY ASK THE PAGE TO PROVE, and no others: each is a
@@ -244,6 +251,7 @@ export const AUTH_WEB_COOKIE = '__Host-cr_auth_web'
 export function clientLabelOf(client: AuthClient): string {
   if (client === 'web') return 'cookrew.dev'
   if (client === 'desktop') return 'Cookrew desktop app'
+  if (client === 'console') return 'Cookrew console'
   return 'cookrew login'
 }
 

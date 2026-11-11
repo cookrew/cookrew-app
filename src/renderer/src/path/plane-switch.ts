@@ -55,6 +55,8 @@ export type PlaneOutcome =
   | 'refused'
   /** The browser would prompt, and nobody is looking. Nothing was tried. */
   | 'unasked'
+  /** The machine this race was for is no longer the one the page talks to. Nothing was adopted or reported. */
+  | 'left'
   /** A path proved to be this Mac and was slower than the plane in use (plane-quality.ts). */
   | 'slower'
   | 'switched'
@@ -78,9 +80,23 @@ export const planeCandidates = (
   const here = planeRank(current)
   const seen = new Set<string>()
   const candidates: PlaneCandidate[] = []
+  const owner = card.deviceId.toLowerCase()
   for (const origin of card.trusted ?? []) {
     if (typeof origin !== 'string') continue
-    const trimmed = origin.replace(/\/+$/, '')
+    // WHAT A MACHINE MAY NAME AS ITS OWN ADDRESS: a bare https origin whose name is
+    // `<address>.<its own id>.<zone>`. The list comes from the machine, and everything meant for
+    // it is sent to whatever is adopted from it, so it is not taken as written: no path or
+    // query (it would become the base of every request), no credentials, no plain http, and
+    // never a name under another machine's id.
+    let named: URL
+    try {
+      named = new URL(origin)
+    } catch {
+      continue
+    }
+    if (named.protocol !== 'https:' || named.username !== '' || named.password !== '' || named.pathname !== '/' || named.search !== '' || named.hash !== '') continue
+    if (named.hostname.split('.')[1] !== owner) continue
+    const trimmed = named.origin
     if (seen.has(trimmed)) continue
     const kind = trustedNetwork(trimmed)
     if (kind === null || planeRank(kind) <= here) continue
@@ -157,6 +173,15 @@ export interface PlaneSwitchDeps {
    * it always was.
    */
   readonly worthIt?: (origin: string, kind: 'lan' | 'tailnet') => Promise<boolean>
+  /**
+   * IS THIS RACE STILL FOR THE MACHINE THE PAGE TALKS TO. A race takes
+   * seconds, and on the console another machine can be entered meanwhile; a
+   * name proved for the machine that was left would then be adopted as the
+   * next one's path, and everything sent to the next machine, its token
+   * included, would go to the last one's address. Asked after every wait.
+   * Absent, the race is always live, as on a page that has one machine.
+   */
+  readonly live?: () => boolean
 }
 
 /**
@@ -189,7 +214,9 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
   // adopted, dropped, and adopted again forever — a flap the reader sees as a
   // badge blinking between LAN and RELAY.
   if (deps.held?.() === true) return 'skipped'
+  const live = (): boolean => deps.live?.() !== false
   const card = await deps.card().catch(() => null)
+  if (!live()) return 'left'
   if (!card || card.deviceId.length === 0) return 'no-card'
   const offered = planeCandidates(card, current.kind)
   if (offered.length === 0) return 'no-trusted'
@@ -202,6 +229,7 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
   // recorded at home kill that path would be this change causing exactly the
   // silent death it was written to prevent.
   const permission = await deps.permission?.().catch((): LocalNetworkState => 'unsupported')
+  if (!live()) return 'left'
   const blocked =
     permission !== undefined && !mayRace(permission, deps.mayPrompt?.() === true)
   const candidates = blocked
@@ -226,12 +254,15 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
       const tier = candidates.filter((candidate) => candidate.kind === kind)
       if (tier.length === 0) continue
       const result = await raceTier(tier, kind, card.deviceId, deps)
+      if (!live()) return 'left'
       attempts = [...attempts, ...result.attempts]
       if (!result.won) continue
       if (deps.worthIt && !(await deps.worthIt(result.won, kind).catch(() => false))) {
+        if (!live()) return 'left'
         slower = true
         continue
       }
+      if (!live()) return 'left'
       // THE PLANE KEEPS TALKING THE WAY THE HELLO GOT THROUGH. Chrome 152
       // behind a system proxy refuses the annotated request in 32 ms and
       // delivers the same one without it (2026-09-08), so a plane adopted after

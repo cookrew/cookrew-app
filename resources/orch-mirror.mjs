@@ -19,6 +19,12 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import https from 'node:https'
+import { clipboardGuard } from './line-guard.mjs'
+
+/** What the other machine's bytes pass on their way into this pane (line-guard.mjs). One for the pane's life. */
+const shown = clipboardGuard()
+/** And what is typed back: an answer about the clipboard is not forwarded, whoever gave it. */
+const typedBack = clipboardGuard({ typed: true })
 
 // TLS trust for the localhost self-signed cert is per-request via the Agent
 // below (rejectUnauthorized:false) — NOT the global NODE_TLS_REJECT_UNAUTHORIZED
@@ -125,7 +131,7 @@ function connectStream() {
             continue
           }
           if (event === 'data') {
-            process.stdout.write(payload) // faithful ANSI bytes → our xterm
+            process.stdout.write(shown(payload)) // faithful ANSI bytes → our xterm, less a question for the clipboard
           } else if (event === 'hello') {
             // Server announced ITS geometry; make sure it serializes at OURS.
             void post('resize', { cols: cols(), rows: rows() })
@@ -164,7 +170,8 @@ function wireInput() {
       cleanup()
       process.exit(0)
     }
-    void post('raw', { data })
+    const sent = typedBack(data)
+    if (sent) void post('raw', { data: sent })
   })
 }
 

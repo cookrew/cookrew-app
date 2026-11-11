@@ -11,17 +11,15 @@ import { IdentityService } from '../registry/src/identity'
 import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
-import { ASSETS } from '../registry/src/assets-bundle'
 import { canonicalJson } from '../registry/src/v2-reach'
 
 /**
- * PHASE 2 — /me GROWS THE DESKTOP PICKER (M3).
+ * WHAT /me's DESKTOP PICKER LEFT BEHIND (M3).
  *
- * The markup is asserted because it is OURS: the CSP forbids an inline script,
- * so every state a reader can reach — probing, needs pairing, offline — has to
- * be in the page the server sent, with a script that only switches between
- * them. A picker assembled at load is a picker nobody can read in view-source
- * and nobody can style.
+ * The page and its script are gone (0.6.0: the machines are the console's;
+ * tests/registry-no-site.test.ts holds that /me answers nothing). What the
+ * picker opened is still here and still the registry's: the one relay path of
+ * an account's own machine, as data.
  */
 
 const PASSWORD = 'correct horse battery staple'
@@ -97,132 +95,23 @@ afterAll(async () => {
   await close()
 })
 
-const mePage = async (): Promise<{ status: number; csp: string; html: string }> => {
-  const res = await fetch(`${origin}/me`, { headers: { cookie: `__Host-cr_session=${session}` } })
-  return {
-    status: res.status,
-    csp: res.headers.get('content-security-policy') ?? '',
-    html: await res.text()
-  }
-}
-
-describe('the DESKTOPS section', () => {
-  it('lists the desktop and a probing badge, nothing from inside it (not even how many workspaces) before the gate', async () => {
-    const { status, html } = await mePage()
-    expect(status).toBe(200)
-    expect(html).toContain('id="me-desktops"')
-    expect(html).toContain(`data-desktop="${deviceId}"`)
-    expect(html).toContain('MacBook Pro')
-    expect(html).not.toContain('2 workspaces')
-    expect(html).not.toContain('Cookrew Dev')
-    expect(html).not.toContain('Playground')
-    expect(html).toContain('PROBING')
+describe('the relay path, when the Mac is holding no line', () => {
+  it('answers 503 with a sentence, as data: the relay carries no page', async () => {
+    const res = await fetch(`${origin}/api/m/${deviceId}/api/fleet`, {
+      headers: { 'x-cookrew-session': session, accept: 'text/html' }
+    })
+    expect(res.status).toBe(503)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    const body = (await res.json()) as { error: string; message: string }
+    expect(body.error).toBe('no_link')
+    expect(body.message).toMatch(/[.!]$/)
   })
 
-  it('names the four badges the script switches between, and no more', async () => {
-    const { html } = await mePage()
-    // LAN JOINED THEM IN V3-14 (M5) and shares the same slot deliberately:
-    // PROBING · ONLINE · OFFLINE answer "is cookrew.dev holding this Mac's
-    // line", LAN answers "and this device can reach it directly". One slot,
-    // because a reader is asking one question — how does this page get to
-    // that Mac — and two badges side by side make them hunt for the answer.
-    for (const badge of ['PROBING', 'ONLINE', 'OFFLINE', 'LAN']) expect(html).toContain(badge)
-    // TAILNET and RELAY never came back: the page does not probe, so it must
-    // not name a path it cannot see. NEEDS PAIRING went with the ceremony.
-    for (const gone of ['TAILNET', 'RELAY', 'NEEDS PAIRING']) expect(html).not.toContain(gone)
-  })
-
-  /**
-   * REACH v2.1. Pairing happens on the phone, on the companion's own "Not
-   * paired" card, with the token the Mac prints. A row here that offered to
-   * scan, to type six characters, to forget a key or to explain why the last
-   * one was refused was a ceremony that no longer exists — and it put the
-   * credential on the wrong device besides.
-   */
-  it('offers no pairing at all — no QR, no key field, no LINK, no refusals', async () => {
-    const { html } = await mePage()
-    for (const gone of [
-      'SCAN QR',
-      'TYPE KEY',
-      'FORGET KEY',
-      'data-scan=',
-      'data-type-key=',
-      'data-key-form=',
-      'data-key-input=',
-      'data-key-link=',
-      'data-forget-pair=',
-      'data-key-note',
-      'data-refused-key',
-      'data-refused-device',
-      'reach-refused',
-      'data-pair-note',
-      'Pair a phone'
-    ]) {
-      expect(html, gone).not.toContain(gone)
-    }
-  })
-
-  it('still carries no ADDRESS for a Mac — only its name, its workspaces and a way to ask', async () => {
-    const { html } = await mePage()
-    // THE RULE THAT HOLDS: the addresses a Mac published are its own fact and
-    // this page does not probe, so it must not carry them. What V3-14 added is
-    // not an address — `data-reach` is the desktop's id on a button that ASKS
-    // that Mac for its keyboard, answered by a tap over there. The credential
-    // still never reaches this page.
-    expect(html).toContain('data-reach="')
-    expect(html).toContain('USE WI-FI')
-    expect(html).not.toContain('192.168.1.24')
-    expect(html).not.toContain('mac.tail1234.ts.net')
-  })
-
-  /**
-   * OPEN IS AN href IN THE MARKUP, so it works with the script broken, and it
-   * carries nothing: no token, no key, no device. Opening a Mac from
-   * cookrew.dev never leaves cookrew.dev.
-   */
-  it('opens the Mac at cookrew.dev\u2019s own relay prefix, with a bare query', async () => {
-    const { html } = await mePage()
-    expect(html).toContain(`href="/relay/@picker/desktop/${deviceId}/">OPEN</a>`)
-    expect(html).not.toContain('?open=')
-    expect(html).not.toContain('data-open-desktop')
-  })
-})
-
-describe('the page stays inert', () => {
-  it('has no inline script and loads reach.js from this origin', async () => {
-    const { html, csp } = await mePage()
-    expect(html).not.toMatch(/<script(?![^>]*\ssrc=)[^>]*>/)
-    expect(html).toContain('/assets/reach.js?v=')
-    expect(html).toContain('/assets/device-id.js?v=')
-    expect(csp).toContain("script-src 'self'")
-  })
-
-  it('keeps connect-src to this origin, because the page reaches nowhere else', async () => {
-    const { csp } = await mePage()
-    expect(csp).toContain("connect-src 'self'")
-    expect(csp).not.toContain('connect-src *')
-    expect(csp).not.toContain('192.168.1.24')
-  })
-
-  it('bundles reach.js and device-id.js so the one file the registry is carries them', () => {
-    expect(ASSETS['reach.js']?.type).toBe('text/javascript; charset=utf-8')
-    expect(ASSETS['device-id.js']?.type).toBe('text/javascript; charset=utf-8')
-    // The one question it asks, and the three it no longer does.
-    expect(ASSETS['reach.js'].body).toContain('/v2/me/presence')
-    expect(ASSETS['reach.js'].body).not.toContain('relay-status')
-    expect(ASSETS['reach.js'].body).not.toContain('/api/hello')
-    expect(ASSETS['reach.js'].body).not.toContain('cr_pair:')
-    expect(ASSETS['reach.js'].body).not.toContain('cr_path:')
-  })
-})
-
-describe('the relay path, when the Mac is holding no line (phase 3)', () => {
-  it('answers 503 with a sentence and a way back, as a page', async () => {
+  it('answers nothing at the old per-machine page address', async () => {
     const res = await fetch(`${origin}/relay/@picker/desktop/${deviceId}/`, {
       headers: { cookie: `__Host-cr_session=${session}`, accept: 'text/html' }
     })
-    expect(res.status).toBe(503)
-    expect(res.headers.get('content-type')).toContain('text/html')
-    expect(await res.text()).toContain('Not reachable just now')
+    expect(res.status).toBe(404)
+    await res.arrayBuffer()
   })
 })

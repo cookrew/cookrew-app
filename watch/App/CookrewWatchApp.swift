@@ -8,7 +8,7 @@ private func info(_ key: String) -> String? {
 
 @main
 struct CookrewWatchApp: App {
-  private let registry = info("CookrewRegistry") ?? "https://cookrew.dev"
+  private let registry = info("CookrewRegistry") ?? "https://api.cookrew.dev"
 
   var body: some Scene {
     WindowGroup {

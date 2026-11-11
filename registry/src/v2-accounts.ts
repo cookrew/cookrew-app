@@ -149,6 +149,11 @@ export interface V2Session extends SessionAge {
    * ends every pass minted under it, renewed or not.
    */
   sitting?: string
+  /**
+   * OPENED BY THE CONSOLE'S PAGE, and carried across renewals: its tokens are
+   * short and narrow (v2-tokens.ts · CONSOLE_SESSION_TTL_MS, console-scope.ts).
+   */
+  via?: 'console'
 }
 
 /** The ids a door must refuse once these sessions end: each jti and its sign-in. */
@@ -791,7 +796,7 @@ export class V2Accounts {
   startSession(
     username: string,
     deviceId: string,
-    age: { signedInAt?: number; verifiedBy?: VerifiedBy; sitting?: string; trust?: false } = {}
+    age: { signedInAt?: number; verifiedBy?: VerifiedBy; sitting?: string; trust?: false; via?: 'console' } = {}
   ): V2Session | null {
     const account = this.get(username)
     if (!account || !account.devices.some((d) => d.id === deviceId)) return null
@@ -804,7 +809,8 @@ export class V2Accounts {
       sitting: age.sitting ?? jti,
       signedInAt: age.signedInAt ?? at,
       lastUsedAt: at,
-      ...(age.verifiedBy === undefined ? {} : { verifiedAt: at, verifiedBy: age.verifiedBy })
+      ...(age.verifiedBy === undefined ? {} : { verifiedAt: at, verifiedBy: age.verifiedBy }),
+      ...(age.via === undefined ? {} : { via: age.via })
     }
     // Bounded: the oldest goes so a long-lived account cannot grow a list
     // nobody reads into a file nobody can load.

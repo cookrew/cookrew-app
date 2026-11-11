@@ -1,107 +1,18 @@
 import { machineCopy } from '../src/shared/machine-words'
 import { describe, expect, it } from 'vitest'
-import {
-  PAIR_FRAGMENT,
-  pairingUrl,
-  withoutConnectCode,
-  parsePairingFragment,
-  relayDesktopUrl
-} from '../src/shared/pairing-url'
+import { parsePairingFragment } from '../src/shared/pairing-url'
 import { pairingHandout } from '../src/main/pairing-handout'
 import { reachCard } from '../src/main/reach'
 
 /**
- * THE ONE CREDENTIAL, IN THE ONE URL.
- *
- * Two properties are load-bearing and neither is obvious from reading the
- * string: the token is in the FRAGMENT, so cookrew.dev never receives it; and
- * the prefix is exactly the relay prefix the registry serves, so the phone
- * stays on cookrew.dev instead of being sent to an address on a Wi-Fi it may
- * not be on.
+ * WHAT A MACHINE HANDS OUT TO BE SCANNED. A machine of an account hands out an
+ * address (its level on the console) and no credential; a machine with no
+ * account hands out its own address on the network, which carries its pairing
+ * token. A token still read from a pasted `#pair=` fragment is read here.
  */
 
 const DEVICE = '0189d0f2-9a4c-8f31-9c0e-2b7a5d6e1f40'
 const TOKEN = 'a-persisted-pairing-token'
-
-describe('the canonical pairing URL', () => {
-  it('is the relay prefix for this account and this Mac, with the token after the #', () => {
-    expect(
-      pairingUrl({
-        registryOrigin: 'https://cookrew.dev',
-        username: 'drej',
-        deviceId: DEVICE,
-        pairingToken: TOKEN
-      })
-    ).toBe(`https://cookrew.dev/relay/@drej/desktop/${DEVICE}/#pair=${TOKEN}`)
-  })
-
-  it('keeps the token OUT of everything the registry is sent', () => {
-    const url = pairingUrl({
-      registryOrigin: 'https://cookrew.dev',
-      username: 'drej',
-      deviceId: DEVICE,
-      pairingToken: TOKEN
-    })
-    const parsed = new URL(url as string)
-    // Path and query are what a browser puts on the wire. Neither may carry it.
-    expect(parsed.pathname).not.toContain(TOKEN)
-    expect(parsed.search).toBe('')
-    expect(parsed.hash).toBe(`#${PAIR_FRAGMENT}=${TOKEN}`)
-  })
-
-  it('percent-encodes a token, so a fragment cannot be split in two', () => {
-    const url = pairingUrl({
-      registryOrigin: 'https://cookrew.dev',
-      username: 'drej',
-      deviceId: DEVICE,
-      pairingToken: 'a b&c#d'
-    })
-    expect(url).toContain('#pair=a%20b%26c%23d')
-    expect(parsePairingFragment(new URL(url as string).hash)).toBe('a b&c#d')
-  })
-
-  it('tolerates a trailing slash on the origin and honours a self-hosted one', () => {
-    expect(
-      pairingUrl({
-        registryOrigin: 'https://registry.example/',
-        username: 'drej',
-        deviceId: DEVICE,
-        pairingToken: TOKEN
-      })
-    ).toBe(`https://registry.example/relay/@drej/desktop/${DEVICE}/#pair=${TOKEN}`)
-  })
-
-  it('allows a plain-http registry only on loopback, where nothing is on the path', () => {
-    expect(
-      pairingUrl({ registryOrigin: 'http://127.0.0.1:8797', username: 'drej', deviceId: DEVICE, pairingToken: TOKEN })
-    ).toBe(`http://127.0.0.1:8797/relay/@drej/desktop/${DEVICE}/#pair=${TOKEN}`)
-    expect(
-      pairingUrl({ registryOrigin: 'http://registry.example', username: 'drej', deviceId: DEVICE, pairingToken: TOKEN })
-    ).toBeNull()
-  })
-
-  it('is nothing at all when any part of it is missing or malformed', () => {
-    const good = {
-      registryOrigin: 'https://cookrew.dev',
-      username: 'drej',
-      deviceId: DEVICE,
-      pairingToken: TOKEN
-    }
-    expect(pairingUrl({ ...good, username: 'Not A Handle' })).toBeNull()
-    expect(pairingUrl({ ...good, username: '' })).toBeNull()
-    expect(pairingUrl({ ...good, deviceId: 'not-a-uuid' })).toBeNull()
-    expect(pairingUrl({ ...good, pairingToken: '' })).toBeNull()
-    expect(pairingUrl({ ...good, registryOrigin: '' })).toBeNull()
-    // A registry origin that is not https is not one we hand a phone.
-    expect(pairingUrl({ ...good, registryOrigin: 'ftp://cookrew.dev' })).toBeNull()
-  })
-
-  it('names the prefix the relay actually serves', () => {
-    expect(
-      relayDesktopUrl({ registryOrigin: 'https://cookrew.dev', username: 'drej', deviceId: DEVICE })
-    ).toBe(`https://cookrew.dev/relay/@drej/desktop/${DEVICE}/`)
-  })
-})
 
 describe('reading the fragment back', () => {
   it('takes the token with or without the leading #', () => {
@@ -124,25 +35,35 @@ describe('what the desktop hands its two surfaces', () => {
     { url: 'https://localhost:8643/?token=t', kind: 'loopback' }
   ]
 
-  it('is the relay URL when this Mac has an account', () => {
+  it('is this machine’s address on the console when it has an account: an address, with no token on it', () => {
     const handout = pairingHandout({
       account: () => ({ username: 'drej', deviceId: DEVICE, name: 'This Mac' }),
-      registryOrigin: () => 'https://cookrew.dev',
+      consoleOrigin: () => 'https://console.cookrew.dev',
       endpoints: () => endpoints,
       pairingToken: () => TOKEN
     })
     expect(handout).toEqual({
-      url: `https://cookrew.dev/relay/@drej/desktop/${DEVICE}/#pair=${TOKEN}`,
-      via: 'relay',
+      url: `https://console.cookrew.dev/d/${DEVICE}`,
+      via: 'console',
       desktopName: 'This Mac',
       deviceId: DEVICE
     })
+    expect(handout?.url).not.toContain(TOKEN)
+  })
+
+  it('shows nothing, and never the token link, when the console is nowhere this app would send a phone or the id is not a machine’s', () => {
+    const at = (consoleAt: string, deviceId: string): ReturnType<typeof pairingHandout> =>
+      pairingHandout({ account: () => ({ username: 'drej', deviceId, name: 'This Mac' }), consoleOrigin: () => consoleAt, endpoints: () => endpoints, pairingToken: () => TOKEN })
+    expect(at('javascript:alert(1)', DEVICE)).toBeNull()
+    expect(at('', DEVICE)).toBeNull()
+    expect(at('https://console.cookrew.dev', '../../v2/me')).toBeNull()
+    expect(at('https://console.cookrew.dev/', DEVICE.toUpperCase())?.url).toBe(`https://console.cookrew.dev/d/${DEVICE}`)
   })
 
   it('falls back to the most reachable DIRECT address with no account', () => {
     const handout = pairingHandout({
       account: () => null,
-      registryOrigin: () => 'https://cookrew.dev',
+      consoleOrigin: () => 'https://console.cookrew.dev',
       endpoints: () => endpoints,
       pairingToken: () => TOKEN
     })
@@ -156,7 +77,7 @@ describe('what the desktop hands its two surfaces', () => {
   it('never offers loopback as the thing to scan', () => {
     const handout = pairingHandout({
       account: () => null,
-      registryOrigin: () => 'https://cookrew.dev',
+      consoleOrigin: () => 'https://console.cookrew.dev',
       endpoints: () => [{ url: 'https://localhost:8643/?token=t', kind: 'loopback' }],
       pairingToken: () => TOKEN
     })
@@ -167,7 +88,7 @@ describe('what the desktop hands its two surfaces', () => {
     expect(
       pairingHandout({
         account: () => ({ username: 'drej', deviceId: DEVICE, name: 'This Mac' }),
-        registryOrigin: () => 'https://cookrew.dev',
+        consoleOrigin: () => 'https://console.cookrew.dev',
         endpoints: () => endpoints,
         pairingToken: () => null
       })
@@ -193,34 +114,20 @@ describe('the reach card still carries no credential', () => {
   })
 })
 
-describe('the connect code in the link', () => {
-  const input = { registryOrigin: 'https://cookrew.dev', username: 'drej', deviceId: '11111111-2222-3333-4444-555555555555', pairingToken: 'tok' }
-  const CODE = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ'
-
-  it('can be taken back out, leaving the link that pairs', () => {
-    const sealed = pairingUrl({ ...input, connectCode: CODE }) as string
-    expect(sealed).toContain(`&code=${CODE}`)
-    expect(withoutConnectCode(sealed)).toBe(pairingUrl(input))
-    expect(withoutConnectCode(pairingUrl(input) as string)).toBe(pairingUrl(input))
-  })
-
-  it('rides the fragment, never the path or the query', () => {
-    const url = new URL(pairingUrl({ ...input, connectCode: CODE }) as string)
-    expect(url.search).toBe('')
-    expect(url.pathname).not.toContain(CODE)
-    expect(url.hash).toBe(`#pair=tok&code=${CODE}`)
-  })
-
-  it('a link with none reads as before', () => {
-    expect(pairingUrl(input)).toBe('https://cookrew.dev/relay/@drej/desktop/11111111-2222-3333-4444-555555555555/#pair=tok')
-  })
-
-  it('the handout carries it on the relay link and never on a direct one', () => {
-    const endpoints = () => [{ url: 'https://mac.tail1234.ts.net:8643/?token=t', kind: 'tailscale' }]
-    const shared = { registryOrigin: () => 'https://cookrew.dev', endpoints, pairingToken: () => 't', connectCode: () => CODE }
-    const account = { username: 'drej', deviceId: input.deviceId, name: 'Mac' }
-    expect(pairingHandout({ ...shared, account: () => account })?.url).toContain(`&code=${CODE}`)
-    expect(pairingHandout({ ...shared, account: () => null })?.url).not.toContain(CODE)
+describe('no link through the registry carries a credential any more', () => {
+  it('nothing in the app builds the relay page’s address: that page is gone, and its link was a key', () => {
+    const { readdirSync, readFileSync } = require('node:fs') as typeof import('node:fs')
+    const path = require('node:path') as typeof import('node:path')
+    const root = path.join(__dirname, '..', 'src')
+    const building: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const file = path.join(dir, entry.name)
+        if (entry.isDirectory()) walk(file)
+        else if (/\.tsx?$/.test(entry.name) && /`[^`]*\/relay\/@\$\{/.test(readFileSync(file, 'utf8'))) building.push(path.relative(root, file))
+      }
+    }
+    walk(root)
+    expect(building).toEqual([])
   })
 })
-

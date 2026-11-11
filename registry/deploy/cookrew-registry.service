@@ -3,13 +3,21 @@
 #   sudo cp cookrew-registry.service /etc/systemd/system/
 #   sudo systemctl enable --now cookrew-registry
 #
-# The bundle is built with (assets first — xterm.js and the site's scripts
+# The bundle is built with (assets first — the auth host's scripts and fonts
 # travel inside the bundle as strings, see scripts/registry-assets.mjs):
 #   npm run registry:build          # → /tmp/registry.mjs
 #
-# --origin is the address a BROWSER will send, not the port this binds. The
-# ceremony compares it exactly, so it must be the public https origin even
-# though Caddy is what listens on 443.
+# --origin is the PRODUCT origin: the passkeys' rpId and the name in every
+# sentence. In 0.6.0 that host is a static site served elsewhere; this process
+# answers on two names of its own and on no other:
+#
+#   API_ORIGIN       /v1, /v2 and the relay path. No page, no cookie.
+#   AUTH_ORIGIN      the sign-in page, and account & security.
+#   CONSOLE_ORIGIN   the console, a static site: the one origin whose page may
+#                    call the API.
+#
+# All three or it refuses to start (registry/src/auth-origin.ts). Only --dev
+# runs as one host.
 
 [Unit]
 Description=Cookrew registry and relay
@@ -21,6 +29,9 @@ Type=simple
 User=cookrew
 Group=cookrew
 WorkingDirectory=/opt/cookrew
+Environment=API_ORIGIN=https://api.cookrew.dev
+Environment=AUTH_ORIGIN=https://auth.cookrew.dev
+Environment=CONSOLE_ORIGIN=https://console.cookrew.dev
 ExecStart=/usr/bin/node /opt/cookrew/registry.mjs --port 8791 --data /var/lib/cookrew --origin https://cookrew.dev
 Restart=always
 RestartSec=2

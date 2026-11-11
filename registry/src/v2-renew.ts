@@ -192,7 +192,12 @@ async function renewSession(ctx: V2Context): Promise<void> {
     return
   }
   // The same sign-in, continued: its clock and its sitting carry over.
-  const session = v2.accounts.startSession(found.username, deviceId, { signedInAt: live.signedInAt ?? v2.now(), sitting: live.sitting ?? live.jti })
+  const session = v2.accounts.startSession(found.username, deviceId, {
+    signedInAt: live.signedInAt ?? v2.now(),
+    sitting: live.sitting ?? live.jti,
+    // A console session stays one: short tokens, a narrow reach (v2-tokens.ts).
+    ...(live.via === undefined ? {} : { via: live.via })
+  })
   if (session === null) {
     refuse(response, 500, 'malformed')
     return
@@ -203,7 +208,7 @@ async function renewSession(ctx: V2Context): Promise<void> {
    * the old session rather than signed out of both.
    */
   v2.accounts.closeOtherSessionsForDevice(found.username, deviceId, session.jti)
-  const minted = v2.tokens.mintSession(found.username, deviceId, session.jti, tokenExpiry(session, v2.now(), SESSION_TTL_MS))
+  const minted = v2.tokens.mintSession(found.username, deviceId, session.jti, tokenExpiry(session, v2.now(), SESSION_TTL_MS), session.via)
   v2Json(
     response,
     201,

@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { ReleaseCache, pickAsset, type Release } from '../registry/src/releases'
+import { parseRelease, pickAsset, type Release } from '../registry/src/releases'
 
 /**
- * THE DOWNLOAD LINKS ARE REAL. The homepage names the current build by asking
- * GitHub for the latest release, and /download sends a reader to the asset
- * for their platform. A page that hard-coded a version would advertise an old
- * one within a week, so the cache refreshes and falls back to the last good
- * answer when GitHub is unreachable.
+ * THE DOWNLOAD LINKS ARE REAL. The static site names the current build by
+ * asking GitHub for the latest release when it is built, and offers the asset
+ * for each platform. This is how GitHub's answer is read. (The registry's own
+ * cache of it went with the registry's pages in 0.6.0.)
  */
 
 const RELEASE_JSON = {
@@ -21,53 +20,24 @@ const RELEASE_JSON = {
   ]
 }
 
-const fetchOk = async (): Promise<Response> =>
-  new Response(JSON.stringify(RELEASE_JSON), { status: 200, headers: { 'content-type': 'application/json' } })
-
-describe('the release cache', () => {
-  it('reads the latest release once and answers from memory', async () => {
-    let calls = 0
-    const cache = new ReleaseCache({
-      fetch: async () => {
-        calls++
-        return fetchOk()
-      },
-      ttlMs: 60_000
-    })
-    const first = await cache.latest()
-    const second = await cache.latest()
-    expect(calls).toBe(1)
-    expect(first?.version).toBe('0.1.2')
-    expect(first?.publishedAt).toBe('2026-08-28T14:05:26Z')
-    expect(second).toEqual(first)
-    expect(first?.assets.map((a) => a.name)).toEqual([
+describe('reading GitHub’s answer', () => {
+  it('reads the version, the date and the installables, and drops the update manifest', () => {
+    const release = parseRelease(RELEASE_JSON)
+    expect(release?.version).toBe('0.1.2')
+    expect(release?.tag).toBe('v0.1.2')
+    expect(release?.publishedAt).toBe('2026-08-28T14:05:26Z')
+    expect(release?.url).toBe(RELEASE_JSON.html_url)
+    expect(release?.assets.map((a) => a.name)).toEqual([
       'Cookrew-0.1.2-arm64-mac.zip',
       'Cookrew-0.1.2-arm64.dmg',
       'Cookrew-0.1.2-windows-preview-x64.exe'
     ])
   })
 
-  it('keeps the last good answer when GitHub fails, and null before any', async () => {
-    let fail = false
-    const cache = new ReleaseCache({
-      fetch: async () => (fail ? new Response('nope', { status: 503 }) : fetchOk()),
-      ttlMs: 0
-    })
-    expect(await cache.latest()).not.toBeNull()
-    fail = true
-    expect((await cache.latest())?.version).toBe('0.1.2')
-    const cold = new ReleaseCache({ fetch: async () => new Response('nope', { status: 503 }), ttlMs: 0 })
-    expect(await cold.latest()).toBeNull()
-  })
-
-  it('a throwing fetch is a miss, not a crash', async () => {
-    const cache = new ReleaseCache({
-      fetch: async () => {
-        throw new Error('offline')
-      },
-      ttlMs: 0
-    })
-    expect(await cache.latest()).toBeNull()
+  it('an answer that is no release is nothing, not a crash', () => {
+    expect(parseRelease('nope')).toBeNull()
+    expect(parseRelease(null)).toBeNull()
+    expect(parseRelease({ tag_name: 'v1' })).toBeNull()
   })
 })
 

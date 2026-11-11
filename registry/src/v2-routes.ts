@@ -5,7 +5,7 @@ import {
   head,
   noContent,
   refuse,
-  sameOrigin,
+  writeOriginOk,
   signedIn,
   v2Json,
   asking,
@@ -14,13 +14,7 @@ import {
 } from './v2-http'
 import { handleCertRoute } from './v2-cert-routes'
 import { handleSeatRoute, mySeats } from './v2-seat-routes'
-import {
-  decideRequest,
-  getRequest,
-  listEvents,
-  listRequests,
-  openReachRequest
-} from './v2-requests'
+import { listEvents, listRequests } from './v2-requests'
 import { handleMigrateRoute, legacyHolds, refuseIfLegacy } from './v2-migrate-routes'
 import type { V2Account, V2Desktop } from './v2-accounts'
 import { readReach } from './v2-reach'
@@ -39,6 +33,7 @@ import { handleOAuthRoute } from './v2-oauth-routes'
 import { linkedView } from './v2-links'
 import { deleteAccount } from './v2-delete'
 import { handleAuthRoute } from './v2-auth-routes'
+import { consoleMayAsk } from './console-scope'
 import { authorizeSession } from './auth-finish'
 import { setupForNewAccount } from './v2-second-step'
 import { tokenExpiry } from './v2-session-age'
@@ -72,8 +67,6 @@ export {
 
 /** Bodies: an account or a session is small; a profile carries a picture. */
 const SMALL_BODY = 16 * 1024
-/** A request id and a device id are both UUIDs on these routes. */
-const REQUEST_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const PROFILE_BODY = 192 * 1024
 
 // ── the router ───────────────────────────────────────────────────────────
@@ -83,7 +76,7 @@ export function handleV2Route(ctx: V2Context): boolean {
   if (ctx.parts[0] !== 'v2') return false
   const { method, parts, response } = ctx
   const writes = method !== 'GET' && method !== 'HEAD'
-  if (writes && !sameOrigin(ctx.request)) {
+  if (writes && !writeOriginOk(ctx)) {
     refuse(response, 403, 'bad_origin')
     return true
   }
@@ -280,7 +273,8 @@ async function openSession(ctx: V2Context): Promise<void> {
 }
 
 function signOut(ctx: V2Context): void {
-  const signed = signedIn(ctx.request, ctx.v2)
+  // A console session ends itself here too, as any session does.
+  const signed = signedIn(ctx.request, ctx.v2, 'any', { console: ctx.via !== 'auth' })
   if (signed !== null) ctx.v2.accounts.closeSession(signed.account.username, signed.claims.jti)
   // 204 either way: signing out of a session that has already ended is not an
   // error, and telling a caller which it was leaks whether a token was live.
@@ -411,7 +405,8 @@ async function checkHello(ctx: V2Context): Promise<void> {
     refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
     return
   }
-  const signed = signedIn(ctx.request, v2)
+  // The console checks a machine's hello before it trusts a direct path to it: its kind of session asks this.
+  const signed = signedIn(ctx.request, v2, 'any', { console: ctx.via !== 'auth' })
   if (signed === null) {
     refuse(response, 401, 'unauthenticated')
     return
@@ -534,9 +529,17 @@ const hasNames = (ctx: V2Context): ((deviceId: string) => boolean) =>
 
 async function mine(ctx: V2Context, rest: string[]): Promise<void> {
   const { response, v2, method } = ctx
-  const signed = signedIn(ctx.request, v2)
+  // A CONSOLE SESSION READS A LITTLE OF THIS FAMILY (who is signed in, the
+  // machines from outside, the device pass) and nothing else of it, and never
+  // on the auth host. Asked for by kind here, and held to its allow-list here
+  // as well as at the door (console-scope.ts): two locks, one list.
+  const signed = signedIn(ctx.request, v2, 'any', { console: ctx.via !== 'auth' })
   if (signed === null) {
     refuse(response, 401, 'unauthenticated')
+    return
+  }
+  if (signed.claims.via === 'console' && !consoleMayAsk(method === 'HEAD' ? 'GET' : method, `/${ctx.parts.join('/')}`)) {
+    refuse(response, 403, 'console_scope')
     return
   }
   const { account, claims } = signed
@@ -584,12 +587,12 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     return
   }
 
-  // ── the one queue (identity v3, R1/R2) ─────────────────────────────────
+  // ── the one queue (identity v3) ────────────────────────────────────────
   //
-  // GET /v2/me/requests is the VIEW over join (approvals), seat and reach; the
-  // seat and reach stores are new, the join rows are read live so nothing is
-  // stored twice. The bodies of these live in v2-requests.ts; here are the
-  // mount points, kept small so V3-10's join-code routes merge beside them.
+  // GET /v2/me/requests is the VIEW over the sign-ins waiting for a nod, read
+  // live so nothing is stored twice; they are answered at /v2/me/approvals.
+  // The bodies of these live in v2-requests.ts; here are the mount points,
+  // kept small so V3-10's join-code routes merge beside them.
   if (rest.length === 1 && rest[0] === 'requests' && method === 'GET') {
     listRequests(ctx, signed)
     return
@@ -597,33 +600,6 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
   if (rest.length === 1 && rest[0] === 'events' && method === 'GET') {
     const since = Number(new URL(ctx.request.url ?? '', 'http://x').searchParams.get('since') ?? '0')
     listEvents(ctx, signed, since)
-    return
-  }
-  if (rest.length === 2 && rest[0] === 'requests' && method === 'GET') {
-    const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
-    if (!REQUEST_UUID.test(id)) {
-      refuse(response, 404, 'not_found')
-      return
-    }
-    getRequest(ctx, signed, id)
-    return
-  }
-  if (rest.length === 2 && rest[0] === 'requests' && method === 'POST') {
-    const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
-    if (!REQUEST_UUID.test(id)) {
-      refuse(response, 404, 'not_found')
-      return
-    }
-    await decideRequest(ctx, signed, id)
-    return
-  }
-  if (rest.length === 3 && rest[0] === 'desktops' && rest[2] === 'reach-requests' && method === 'POST') {
-    const target = (ctx.decode(rest[1]) ?? '').toLowerCase()
-    if (!REQUEST_UUID.test(target)) {
-      refuse(response, 404, 'not_found')
-      return
-    }
-    openReachRequest(ctx, signed, target)
     return
   }
   if (rest.length === 1 && rest[0] === 'devices' && method === 'GET') {
@@ -650,10 +626,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
       refuse(response, out.reason === 'last_device' ? 409 : 404, out.reason)
       return
     }
-    // §06: revoking a device voids its pending requests, and every device is
-    // told. The reach requests it made or was aimed at cannot be answered any
-    // more, so they go now rather than expiring quietly.
-    v2.requests.voidDevice(id)
+    // §06: every device is told.
     v2.events.append(account.username, { kind: 'revoked', ...(goneName === undefined ? {} : { device: goneName }) })
     // Revoking the device in your hand is allowed, and it ends this session —
     // so the browser is handed an empty cookie rather than one that no longer
@@ -726,12 +699,17 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     // Additive: every member a client read before is still there.
     const presence = ctx.presence?.(account.username) ?? new Map()
     const now = Date.now()
+    // THE CONSOLE'S PAGE READS THEM FROM OUTSIDE: the name, the platform it
+    // reported, whether it holds its line. Nothing from inside a machine before
+    // its gate (owner: workspace names too), and that rule is kept here rather
+    // than left to the page, so what the page is never sent it cannot show.
+    const outside = signed.claims.via === 'console'
     v2Json(
       response,
       200,
       account.desktops.map((desktop) => ({
-        ...desktopBody(desktop, hasNames(ctx)(desktop.deviceId)),
-        ...fleetRow(account.username, desktop, presence.get(desktop.deviceId), now)
+        ...(outside ? {} : desktopBody(desktop, hasNames(ctx)(desktop.deviceId))),
+        ...fleetRow(desktop, presence.get(desktop.deviceId), now)
       }))
     )
     return

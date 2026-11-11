@@ -101,15 +101,17 @@ describe('path badge view model', () => {
     expect(view.pulsing).toBe(true)
   })
 
-  it('offers switch desktop only once it has been TOLD where the registry is', () => {
-    // Classifying an origin can guess at the relay's host and be wrong by one
-    // word on a badge. Sending somebody to "switch desktop" has to be a fact —
-    // a guess sends a self-hosting owner to a site that never heard of them.
+  it('offers the way to another machine only where there is one: the console’s machines, never a guessed site', () => {
+    // 0.6.0: the account's machines are the console's first level. A page that is not the
+    // console has no such level to offer, and the registry's hosts serve no page for it
+    // (its API host serves none at all): knowing where the registry is offers nothing.
     expect(pathBadgeView(live).switchDesktopUrl).toBeNull()
-    expect(pathBadgeView({ ...live, registryOrigin: 'https://reg.test/' }).switchDesktopUrl)
-      .toBe('https://reg.test/me/account')
-    expect(pathBadgeView({ ...live, registryOrigin: 'https://cookrew.dev' }).switchDesktopUrl)
-      .toBe('https://cookrew.dev/me/account')
+    expect(pathBadgeView({ ...live, registryOrigin: 'https://api.cookrew.dev' }).switchDesktopUrl).toBeNull()
+    expect(pathBadgeView({ ...live, machinesUrl: '/' }).switchDesktopUrl).toBe('/')
+  })
+
+  it('knows the relay by the registry’s API host', () => {
+    expect(classifyOrigin('https://api.cookrew.dev')).toBe('RELAY')
   })
 
   it('reports no latency as null rather than zero', () => {

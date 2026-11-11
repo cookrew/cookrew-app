@@ -1,11 +1,10 @@
 import type http from 'node:http'
-import { acceptHandshake, type AcceptedHandshake, type SealHello, type SealSession } from '../shared/canvas-seal'
+import { acceptHandshake, type AcceptedHandshake, type SealHello, type SealSession, proveReplaced } from '../shared/canvas-seal'
 import { createInbox, createRecordReader, decodeFrame, encodeFrame, encodeRecord, SEAL_DATA_MAX, type InboxAnswer, type SealFrame } from '../shared/canvas-seal-wire'
 import { FixedWindowLimiter } from '../shared/fixed-window-limiter'
 import { BRIDGE_BODY_MAX, loggedPath, RELAY_MARKER, type BridgeCall, type BridgeDialer, type BridgeResponse } from './canvas-bridge'
 import { relayedRequest } from './host-gate'
 import { bodiless } from './http-compress'
-import { RELAY_BASE_HEADER } from './relay-base'
 import { RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER } from './relay-device'
 import { DOOR_MARKER } from '../shared/remote-unlock'
 
@@ -27,7 +26,7 @@ import { DOOR_MARKER } from '../shared/remote-unlock'
  * it the pairing token is still what the companion asks for.
  *
  * What came from the relay is believed exactly as far as it is on a plain relayed
- * request: the base and the device, read once from the hello. What arrives inside a
+ * request: the device and its name, read once from the hello. What arrives inside a
  * record can name neither.
  */
 
@@ -57,7 +56,6 @@ const METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIO
 
 /** What the relay said about this reader, on the request that opened the session. */
 export interface SealOuter {
-  readonly base?: string
   readonly device?: string
   readonly deviceName?: string
 }
@@ -65,6 +63,8 @@ export interface SealOuter {
 export interface SealTerminusDeps {
   /** The connect code with this id; null when there is none. */
   codeFor(id: string): Uint8Array | null
+  /** For a code this Mac replaced: the key that proves so (connect-code.ts). Absent = it only ever says no. */
+  replacedKeyFor?(id: string): Uint8Array | null
   readonly dial: BridgeDialer
   readonly handshakesPerMinute?: number
   /**
@@ -100,7 +100,6 @@ export async function routeSeal(request: http.IncomingMessage, response: http.Se
   }
   const { headers } = request
   await terminus.handle(request, response, {
-    base: stringOf(headers[RELAY_BASE_HEADER]),
     device: stringOf(headers[RELAY_DEVICE_HEADER]),
     deviceName: stringOf(headers[RELAY_DEVICE_NAME_HEADER])
   })
@@ -109,7 +108,7 @@ export async function routeSeal(request: http.IncomingMessage, response: http.Se
 /** Hop by hop, and everything only the bridge may say. The dialer writes host and the marker itself. */
 const NOT_FROM_INSIDE = new Set([
   'host', 'connection', 'keep-alive', 'proxy-connection', 'proxy-authorization', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'content-length', 'expect',
-  'x-real-ip', RELAY_MARKER, RELAY_BASE_HEADER, RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER, DOOR_MARKER
+  'x-real-ip', RELAY_MARKER, RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER, DOOR_MARKER
 ])
 
 export function innerHeaders(asked: Readonly<Record<string, string>>, outer: SealOuter): Record<string, string> {
@@ -118,7 +117,6 @@ export function innerHeaders(asked: Readonly<Record<string, string>>, outer: Sea
     .filter(([name]) => !NOT_FROM_INSIDE.has(name) && !name.startsWith('x-forwarded-'))
   return {
     ...Object.fromEntries(kept),
-    ...(outer.base === undefined ? {} : { [RELAY_BASE_HEADER]: outer.base }),
     ...(outer.device === undefined ? {} : { [RELAY_DEVICE_HEADER]: outer.device }),
     ...(outer.deviceName === undefined ? {} : { [RELAY_DEVICE_NAME_HEADER]: outer.deviceName })
   }
@@ -470,7 +468,15 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     const allowed = [ceiling.take('all'), limiter.take(outer.device ?? 'no-device')].every(Boolean)
     if (!allowed) return reply(response, 429, { error: 'too many handshakes' })
     const code = typeof body.id === 'string' ? deps.codeFor(body.id) : null
-    if (code === null) return reply(response, 403, { error: 'no such code' })
+    if (code === null) {
+      // A code this Mac replaced is told so, with a proof its holder can check: "the code was changed, pair
+      // again" is then the Mac's word and not a relay's. Any other code is told no and nothing more.
+      // Over a hello that could have been one: its key is 32 bytes, spelled the one way.
+      const asked = typeof body.id === 'string' && typeof body.e === 'string' && /^[A-Za-z0-9_-]{43}$/.test(body.e)
+      const was = asked ? (deps.replacedKeyFor?.(body.id as string) ?? null) : null
+      if (was === null) return reply(response, 403, { error: 'no such code' })
+      return reply(response, 403, { error: 'code replaced', replaced: await proveReplaced(was, { id: body.id as string, e: body.e as string }) })
+    }
     const accepted = await acceptHandshake(code, body as unknown as SealHello)
     if (accepted === null) return reply(response, 400, { error: 'not a hello' })
     // A rotation during that await has already cleared `pending`, so this hello would outlive it.

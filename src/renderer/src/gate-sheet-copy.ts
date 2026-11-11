@@ -16,6 +16,7 @@ import {
   MKT_GATE,
   MKT_PAY,
   denialCopy,
+  denialCopyLenient,
   fillCopy,
   headlineAndWhy,
   purchaseModelLine
@@ -125,17 +126,18 @@ export function openBand(door: GateDoor): BandCopy {
 }
 
 /**
- * A refusal band. `balance_empty` is the one the buyer can clear, so it wears
- * the amber glyph and its action tops up; every other 403 stops, in rose. The
- * words come from `denialCopy`, which already falls back for a reason no client
- * has heard of rather than printing the token.
+ * A refusal band. `balance_empty` wears the amber glyph; every other 403 is
+ * rose. The words come from the deck, leniently: a reason no client has heard
+ * of gets the unknown pair rather than its token, and a reason whose sentence
+ * names facts the door did not send still paints — with its own button label,
+ * because the label is what the press does (import-gate-remedy.ts).
  */
 export function deniedBand(
   reason: string,
   remedy: string | undefined,
   vars: Readonly<Record<string, string | number>> = {}
 ): DeniedCopy {
-  const { title, body, action } = denialCopy(reason, remedy, vars)
+  const { title, body, action } = denialCopyLenient(reason, remedy, vars)
   return {
     glyph: reason === CREDIT_DENIAL ? '◔' : '✕',
     said: title,

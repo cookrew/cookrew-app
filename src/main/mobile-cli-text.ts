@@ -3,60 +3,63 @@
 
 import type { EndpointKind, MobileEndpoint } from './mobile-endpoints'
 import type { PairingHandout } from '../shared/account-v2'
-import { withoutConnectCode } from '../shared/pairing-url'
 
 /**
- * THE PAIRING URL, PRINTED FIRST — and the direct ones underneath, unchanged.
- *
- * The relay URL is the only address that reaches this Mac from a phone that is
- * not on this Wi-Fi, so it leads. The `?token=` URLs stay exactly where they
- * were, because two readers still need them: a phone that is not signed in to
- * cookrew.dev, and a Mac whose uplink is down.
- *
- * Only the RELAY handout is printed here. A `direct` handout is one of the
- * URLs already listed below it, and printing it twice under a heading that
- * says "from anywhere" would be a promise this Mac cannot keep.
+ * A MACHINE OF AN ACCOUNT PRINTS ONE LINK, AND IT IS NOT A KEY (0.6.0): its
+ * own level on the console. Nothing in it opens anything: the phone signs in
+ * to the account and proves it is the owner there.
  */
-const pairingLines = (pairing: PairingHandout | null | undefined): string[] => {
-  if (!pairing || pairing.via !== 'relay') return []
-  return [
-    '  From anywhere, through cookrew.dev',
-    `    ${withoutConnectCode(pairing.url)}`,
-    '    The token is after the # — cookrew.dev never sees it.',
-    ''
-  ]
-}
+const accountLines = (pairing: PairingHandout): string[] => [
+  '  With your account, from any network',
+  // The address alone: what rides after the # is for this machine's own screen, never for a pane.
+  `    ${pairing.url.split('#')[0]}`,
+  '    Open it on a phone or any browser and sign in. Prove it’s you once (a',
+  '    passkey, or the account password) and for twelve hours every machine of',
+  '    the account opens with no question.'
+]
 
 /**
- * THE ACCOUNT'S WAY IN, printed instead of a token (owner 2026-11-09).
- *
- * On a machine of an account the relay address needs no secret on it: a phone
- * signed in to the account opens it and enters with a passkey or the account
- * password, which this machine checks itself (account-pair.ts). The pairing
- * token is a bearer secret — one has leaked into an agent's log already — so a
- * terminal only shows it when somebody asks with --token.
+ * `--token` ON A MACHINE OF AN ACCOUNT PRINTS NO TOKEN (owner 2026-11-11). Its
+ * own address answers a browser with the way to the console
+ * (console-pointer.ts), so a link carrying the token would land there and
+ * open nothing; printing it would only put a secret on a screen. The token is
+ * still what the console's direct path and the watch present; neither reads it
+ * from here.
  */
-const accountLines = (pairing: PairingHandout): string[] => {
-  const address = pairing.url.split('#')[0]
-  const handle = /\/relay\/@([^/]+)\//.exec(address)?.[1]
-  return [
-    `  With your account${handle ? ` (@${handle})` : ''}, from any network`,
-    `    ${address}`,
-    `    Open it on a phone or browser signed in to cookrew.dev${handle ? ` as @${handle}` : ''},`,
-    '    then enter with a passkey or the account password. For twelve hours',
-    '    after that, every machine of the account opens with no question —',
-    '    or tap OPEN on cookrew.dev/me.',
-    '',
-    '  Without an account: `cookrew mobile --token` prints links that carry',
-    '  this machine’s pairing token. Treat them like a password.'
-  ]
-}
+const tokenAskedLines = (): string[] => [
+  '',
+  '  --token: this machine is signed in, so it prints no token links. Its own',
+  '  address shows a browser the way to the console, and a token link would',
+  '  open nothing. The console and the watch carry the token themselves.'
+]
+
+/**
+ * A MACHINE OF AN ACCOUNT WITH NO CONSOLE ADDRESS TO HAND OUT (its
+ * COOKREW_CONSOLE is not an address a phone can be sent to, so the handout is
+ * null: pairing-handout.ts). That is not "no account": it still prints no
+ * token.
+ */
+const noConsoleLines = (): string[] => [
+  '  This machine is signed in, but its console address is not one a phone can',
+  '  be sent to (COOKREW_CONSOLE). Nothing is printed here: a machine of an',
+  '  account does not hand out its token.'
+]
+
+/** True on a machine of an account, whether or not it has a console address to print. */
+const ofAnAccount = (signedIn: boolean | undefined, pairing: PairingHandout | null | undefined): boolean => signedIn ?? pairing?.via === 'console'
 
 export interface MobileHelpInput {
   endpoints: MobileEndpoint[]
   /**
-   * `cookrew mobile --token`: print the token links even on a machine of an
-   * account. Absent or false there = the account's way only.
+   * This machine is signed in to an account (the account's own answer, not
+   * read off the handout, which is null when there is no console address to
+   * print). Absent = judged by the handout.
+   */
+  signedIn?: boolean
+  /**
+   * `cookrew mobile --token`: asked to see the token links. A machine with no
+   * account prints them anyway; a machine of an account prints none and says
+   * why (tokenAskedLines).
    */
   showToken?: boolean
   /**
@@ -122,13 +125,13 @@ const mixed = (endpoints: readonly MobileEndpoint[]): boolean =>
   anyTrusted(endpoints) && endpoints.some((endpoint) => !isTrusted(endpoint))
 
 export function renderMobileHelp(input: MobileHelpInput): string {
-  if (input.pairing?.via === 'relay' && input.showToken !== true) {
-    return ['Cookrew Mobile — open on your phone:', '', ...accountLines(input.pairing)].join('\n')
+  if (ofAnAccount(input.signedIn, input.pairing)) {
+    const way = input.pairing?.via === 'console' ? accountLines(input.pairing) : noConsoleLines()
+    return ['Cookrew Mobile — open on your phone:', '', ...way, ...(input.showToken === true ? tokenAskedLines() : [])].join('\n')
   }
   const lines: string[] = [
     'Cookrew Mobile — open on your phone:',
-    '',
-    ...pairingLines(input.pairing)
+    ''
   ]
 
   for (const kind of GROUP_ORDER) {
@@ -201,23 +204,31 @@ export function renderMobileHelp(input: MobileHelpInput): string {
 }
 
 /**
- * Confirmation text after a rotation, including the fresh URLs.
+ * Confirmation text after a rotation, with the fresh URLs: the links that
+ * carry the token that just changed. The console link carries none and is not
+ * one of them.
  *
- * The pairing URL leads, because the token inside it is the thing that just
- * changed — a rotation that printed only the LAN addresses would leave the
- * owner re-scanning a QR that carries the credential they just revoked.
+ * On a machine of an account there is no link to print (tokenAskedLines), so
+ * it says who was shut out and how each comes back. The connect code goes
+ * with the token (connect-code.ts): a phone that unlocked this screen holds
+ * the old one, is told the code was changed, and scans again.
  */
-export function renderRotated(
-  endpoints: MobileEndpoint[],
-  pairing?: PairingHandout | null
-): string {
-  const relay = pairing && pairing.via === 'relay' ? [`  ${withoutConnectCode(pairing.url)}`] : []
+export function renderRotated(endpoints: MobileEndpoint[], pairing?: PairingHandout | null, signedIn?: boolean): string {
+  if (ofAnAccount(signedIn, pairing)) {
+    return [
+      'Pairing token and connect code rotated.',
+      '',
+      '  The watch is unpaired: pair it again from this machine.',
+      '  A phone that unlocked this machine’s screen is told the code was changed:',
+      '  scan the code on this machine’s screen again.',
+      '  Opening this machine from the console is not affected.'
+    ].join('\n')
+  }
   return [
     'Pairing token rotated. Every previously paired device is now unpaired',
     'and will ask to re-pair.',
     '',
     'New URLs:',
-    ...relay,
     ...endpoints.map((endpoint) => `  ${printed(endpoint)}`)
   ].join('\n')
 }

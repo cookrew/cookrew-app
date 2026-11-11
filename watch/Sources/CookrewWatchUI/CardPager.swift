@@ -47,8 +47,12 @@ public struct CardPager: View {
 }
 
 extension View {
-  /** A card uses the whole of the glass: its head sits beside the system's clock, not under it. */
+  /**
+   * A card uses the whole of the glass: its head sits beside the system's clock,
+   * not under it, and its box down in the bottom inset (boxFloor keeps it clear of
+   * the corners).
+   */
   func wholeGlass() -> some View {
-    ignoresSafeArea(.container, edges: .top)
+    ignoresSafeArea(.container, edges: [.top, .bottom])
   }
 }

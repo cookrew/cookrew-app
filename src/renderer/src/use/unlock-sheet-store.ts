@@ -1,5 +1,7 @@
 /** Whether the unlock sheet is up. A store, because the panels that open it come and go. */
 
+import { registerScopeState } from '../machine-scope'
+
 type Listener = () => void
 
 let done: (() => void) | null = null
@@ -22,6 +24,11 @@ export function closeUnlockSheet(unlocked: boolean): void {
 }
 
 export const unlockSheetOpen = (): boolean => open
+
+// The sheet unlocks ONE machine, and what it does when done is that machine's.
+registerScopeState('unlock sheet', () => {
+  if (open || done !== null) closeUnlockSheet(false)
+})
 
 export function subscribeUnlockSheet(listener: Listener): () => void {
   listeners.add(listener)

@@ -38,12 +38,28 @@ export function productOrigin(v2: V2Identity): string {
   return v2.origin.replace(/\/+$/, '')
 }
 
+/**
+ * Where the WEB client lives: the page whose session is a cookie. On a
+ * registry that splits its hosts (0.6.0) that is the account page on the auth
+ * origin, the one host with a cookie; on one host, the product origin.
+ */
+export function webOrigin(v2: V2Identity): string {
+  return v2.apiOrigin !== null && v2.auth !== null ? v2.auth.origin : productOrigin(v2)
+}
+
 /** The way back for this request, carrying the code or the error and nothing else. */
 export function handoffFor(v2: V2Identity, request: AuthRequest, outcome: { code: string } | { error: 'denied' | 'expired' }): AuthHandoff {
   if (request.client === 'cli') return { kind: 'cli' }
   if (request.client === 'web') {
     const params = new URLSearchParams({ ...outcome, state: request.clientState ?? '' })
-    return { kind: 'web', url: `${productOrigin(v2)}/auth/complete?${params.toString()}` }
+    return { kind: 'web', url: `${webOrigin(v2)}/auth/complete?${params.toString()}` }
+  }
+  // THE CONSOLE'S WAY BACK is its own fixed address, built from the configured
+  // origin and never from anything the request said. The page there spends the
+  // code with the verifier only it holds (POST /v2/auth/token).
+  if (request.client === 'console') {
+    const params = new URLSearchParams({ ...outcome, state: request.clientState ?? '' })
+    return { kind: 'web', url: `${v2.consoleOrigin ?? productOrigin(v2)}/auth/complete?${params.toString()}` }
   }
   const params = new URLSearchParams({ ...outcome, state: request.clientState ?? '' }).toString()
   const scheme = `cookrew://${OAUTH_SCHEME_HOST}#${params}`
@@ -86,15 +102,18 @@ export function authorizeSession(
 ): boolean {
   const { v2, response } = ctx
   if (!stillOpen(ctx, request)) return false
+  // A request the console's page opened ends in a console session: short tokens, a narrow reach.
+  const via = request.client === 'console' ? ('console' as const) : undefined
   const session = v2.accounts.startSession(username, deviceId, {
     ...(options.verifiedBy === undefined ? {} : { verifiedBy: options.verifiedBy }),
-    ...(options.trust === false ? { trust: false as const } : {})
+    ...(options.trust === false ? { trust: false as const } : {}),
+    ...(via === undefined ? {} : { via })
   })
   if (session === null) {
     refuse(response, 500, 'malformed')
     return false
   }
-  const minted = v2.tokens.mintSession(username, deviceId, session.jti, tokenExpiry(session, ctx.v2.now(), SESSION_TTL_MS))
+  const minted = v2.tokens.mintSession(username, deviceId, session.jti, tokenExpiry(session, ctx.v2.now(), SESSION_TTL_MS), via)
   const codes = options.codes === true ? v2.accounts.mintRecoveryCodes(username, session.jti) : null
   finishRequest(
     ctx,

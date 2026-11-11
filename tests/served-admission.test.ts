@@ -6,7 +6,6 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
-  atomicToUsd,
   openAdmission,
   signInToDoor,
   startStripeCheckout,
@@ -107,16 +106,6 @@ afterEach(async () => {
   open = null
 })
 
-describe('atomic USDC → decimal', () => {
-  it('is the inverse of the quote builder', () => {
-    expect(atomicToUsd('2500000')).toBe('2.5')
-    expect(atomicToUsd('1000000')).toBe('1')
-    expect(atomicToUsd('1')).toBe('0.000001')
-    expect(atomicToUsd('0')).toBe('0')
-    expect(atomicToUsd('not-a-number')).toBe('0')
-  })
-})
-
 describe('opening admission', () => {
   it('a 200 is an open session, and the stream is not held', async () => {
     open = await door(() => ({ status: 200 }))
@@ -192,6 +181,36 @@ describe('the card rail', () => {
       url: 'https://checkout.stripe.com/c/pay/cs_test_a1B2c3#fid',
       session: 'cs_test_a1B2c3'
     })
+  })
+
+  it('refuses any address that is not Stripe’s hosted Checkout — the door does not choose what the app opens', async () => {
+    // The URL is the DOOR's word, and the app goes on to open it in the real
+    // browser. A scheme the OS will launch, a look-alike host, a fragment that
+    // smuggles the session id past a regex: all of them end here, unopened.
+    for (const url of [
+      'file:///Applications/Calculator.app#/cs_x',
+      'smb://evil.example/share/cs_test_1',
+      'javascript:alert(1)//cs_test_1',
+      'http://checkout.stripe.com/c/pay/cs_test_1',
+      'https://checkout.stripe.com.evil.example/c/pay/cs_test_1',
+      'https://evil.example/#https://checkout.stripe.com/cs_x',
+      'https://checkout.stripe.com@evil.example/cs_x',
+      'https://user:pw@checkout.stripe.com/c/pay/cs_test_1',
+      42
+    ]) {
+      open = await door(() => ({ status: 200, body: { url } }))
+      await expect(startStripeCheckout(open.target, 'tok'), String(url)).rejects.toThrow(/unusable checkout link/)
+      await open.close()
+    }
+    open = null
+  })
+
+  it('reads the session from the PATH, never from a fragment or a query', async () => {
+    open = await door(() => ({ status: 200, body: { url: 'https://checkout.stripe.com/c/pay#/cs_test_smuggled' } }))
+    await expect(startStripeCheckout(open.target, 'tok')).rejects.toThrow(/unusable/)
+    await open.close()
+    open = await door(() => ({ status: 200, body: { url: 'https://checkout.stripe.com/c/pay?x=/cs_test_smuggled' } }))
+    await expect(startStripeCheckout(open.target, 'tok')).rejects.toThrow(/unusable/)
   })
 
   it('refuses a link with no session in it rather than guessing', async () => {

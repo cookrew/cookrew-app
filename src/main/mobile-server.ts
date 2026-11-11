@@ -66,7 +66,7 @@ import {
   type MobileIdentityDeps
 } from './mobile-identity-routes'
 import { companionAccount } from './companion-account'
-import { RELAY_BASE_HEADER, RELAY_MARKER, relayBaseOf } from './relay-base'
+import { RELAY_MARKER } from './relay-base'
 import { isSealPath, routeSeal, type SealTerminus } from './canvas-seal-terminus'
 import { takeRelayDevice, type RelayDevice } from './relay-device'
 import { certFingerprint, reachAnswer, reachCard, type PublishState } from './reach'
@@ -79,6 +79,9 @@ import { handleFleetRoutes } from './fleet/routes'
 import { fleetServiceFor, prewarmFleet, type FleetMountOptions } from './fleet/mount'
 import { readMachineDisplay } from './machine-display'
 import type { FleetService } from './fleet/service'
+import { consoleOrigin } from './registry-origin'
+import { CONSOLE_POINTER_CSP, consolePointerFor } from './console-pointer'
+import { machineCopy } from '../shared/machine-words'
 
 /** What the fleet feed needs from this server: its app version, and the token to scrub by value. */
 const levelsOptions = (deps: MobileServerDeps): FleetMountOptions => ({
@@ -800,14 +803,18 @@ export function trustedOrigins(): string[] {
 /**
  * EVERY ORIGIN THIS SERVER ANSWERS CROSS-ORIGIN FOR — and no others.
  *
- * Two families, both exact strings rather than patterns: the registry from
- * config (`COOKREW_REGISTRY`, so a test deployment and a self-hosted one are
- * not hard-coded out), and this Mac's own origins — bare addresses and, once a
- * certificate is held, their trusted names. Nothing is loosened for anybody
- * else; a suffix match is how `notcookrew.dev` gets in.
+ * Two families, both exact strings rather than patterns: THE CONSOLE from
+ * config (`COOKREW_CONSOLE`, so a test deployment and a self-hosted one are
+ * not hard-coded out), which since 0.6.0 is the one page that reaches a
+ * machine from another origin (its direct path: this machine's own name on
+ * the LAN or the tailnet); and this Mac's own origins — bare addresses and,
+ * once a certificate is held, their trusted names. The registry's hosts are
+ * not in it: the intro site and the sign-in page have no business here, and
+ * the API host serves no page. Nothing is loosened for anybody else; a suffix
+ * match is how `notcookrew.dev` gets in.
  */
-export function allowedCompanionOrigins(registryOrigin: string): string[] {
-  return [registryOrigin, ...mobileSelfOrigins()].filter((origin) => origin.length > 0)
+export function allowedCompanionOrigins(console: string): string[] {
+  return [console, ...mobileSelfOrigins()].filter((origin) => origin.length > 0)
 }
 
 /**
@@ -962,10 +969,15 @@ export function uncoveredCertHosts(): string[] {
  * The route splitter already allow-lists the minted slug shape, so this is the
  * second of two locks rather than the only one — but a lock that only works
  * because of the other lock is not a second lock.
+ *
+ * IT NAMES NO BASE, and nothing about the request decides what it says. A
+ * machine serves its page at its own root and nowhere else: the relay carries
+ * no page (shared/machine-relay.ts), and the console, which does reach a
+ * machine under a prefix, is another page that sets its own (renderer
+ * machine-scope.ts).
  */
-export const remoteBoot = (slug: string | null, base = ''): string => `<script>
+export const remoteBoot = (slug: string | null): string => `<script>
 window.COOKREW_SLUG = ${JSON.stringify(slug ?? '').replace(/</g, '\\u003c')}
-window.COOKREW_BASE = ${JSON.stringify(base).replace(/</g, '\\u003c')}
 window.COOKREW_MOBILE = 1
 document.addEventListener('DOMContentLoaded', () => {
   document.body.classList.add('cookrew-mobile')
@@ -973,26 +985,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (viewport) viewport.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-visual')
 })
 </script>`
-
-/**
- * The boot script for THIS request, base and all.
- *
- * The base is not a parameter of the route because it is not a decision the
- * route makes: it is a fact about where the request came from, and reading it
- * anywhere else would be a second place the trust rule could be got wrong.
- */
-export const remoteBootFor = (
-  request: http.IncomingMessage,
-  slug: string | null
-): string =>
-  remoteBoot(
-    slug,
-    relayBaseOf({
-      marker: request.headers[RELAY_MARKER],
-      base: request.headers[RELAY_BASE_HEADER],
-      remoteAddress: request.socket?.remoteAddress
-    })
-  )
 
 const STATIC_MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -1069,7 +1061,7 @@ function serveRendererIndex(
   if (!built) return false
   const html = readFileSync(built.index, 'utf8').replace(
     '<head>',
-    `<head>${remoteBootFor(request, slug)}${staleBanner(built.notice)}`
+    `<head>${remoteBoot(slug)}${staleBanner(built.notice)}`
   )
   // no-store, not no-cache: assets are hash-named, but iOS Safari's
   // crash-recovery reload ("因为出现问题,此网页已重新载入") reuses a cached
@@ -1097,6 +1089,10 @@ function serveRendererAsset(
   const root = path.resolve(deps.rendererDir)
   const file = path.resolve(root, '.' + pathname)
   if (!file.startsWith(root + path.sep) || !existsSync(file)) return false
+  // A PAGE IS NEVER SERVED AS AN ASSET. The app's page goes out by the one branch that decides
+  // who gets it (a machine of an account points at the console instead, console-pointer.ts); a
+  // spelling of its path that slips past that branch must not find it here.
+  if (path.extname(file).toLowerCase() === '.html') return false
   const mime = STATIC_MIME[path.extname(file).toLowerCase()]
   if (!mime) return false
   // Bundle assets carry a content hash in the name, so the answer can never
@@ -1138,7 +1134,7 @@ async function serveRendererDev(
   if (!resource) return false
   const body = injectRemoteBoot
     ? Buffer.from(
-        resource.body.toString('utf8').replace('<head>', `<head>${remoteBootFor(request, slug)}`)
+        resource.body.toString('utf8').replace('<head>', `<head>${remoteBoot(slug)}`)
       )
     : resource.body
   sendBody(
@@ -1254,11 +1250,11 @@ export async function handle(
    * header names, identical for every path here, so answering it early
    * reveals nothing. See companion-cors.ts for the allow-list rule.
    */
-  if (applyCompanionCors(request, response, allowedCompanionOrigins(deps.identity?.registryOrigin() ?? ''))) {
+  if (applyCompanionCors(request, response, allowedCompanionOrigins(consoleOrigin()))) {
     return
   }
 
-  // The sealed session reads the bridge's own device and base headers, so it goes
+  // The sealed session reads the bridge's own device headers, so it goes
   // first, and it answers nothing the bridge did not carry (canvas-seal-terminus.ts).
   if (isSealPath(url.pathname)) return routeSeal(request, response, deps.sealTerminus?.())
 
@@ -1398,6 +1394,26 @@ export async function handle(
   }
 
   if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+    // A machine of an account points at the console instead of handing out its app (console-pointer.ts).
+    const account = deps.identity?.account() ?? null
+    const pointer = consolePointerFor({
+      signedIn: account !== null,
+      remoteAddress: request.socket.remoteAddress,
+      viaRelay: request.headers[RELAY_MARKER] === '1',
+      consoleOrigin: consoleOrigin(),
+      machineId: account?.deviceId ?? null,
+      machineName: account?.name ?? machineCopy('This Mac', process.platform)
+    })
+    if (pointer !== null) {
+      sendBody(
+        response,
+        200,
+        { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': CONSOLE_POINTER_CSP, 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' },
+        Buffer.from(pointer, 'utf8'),
+        request.headers['accept-encoding']
+      )
+      return
+    }
     // Loopback (and ?renderer=dev) uses Vite's current transforms; every
     // other client gets the build — see rendererSource.
     if (rendererSource(request, deps, url) === 'dev') {

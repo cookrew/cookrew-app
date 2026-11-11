@@ -74,19 +74,15 @@ const queue = (
   )
 
 describe('the one queue (D11)', () => {
-  const html = queue([
-    pending(),
-    pending({ id: 'reach-1', kind: 'reach', device: 'iPhone', askKey: { kty: 'OKP' } }),
-    pending({ id: 'seat-1', kind: 'seat', account: 'jkim', team: '@drej/alpha', device: undefined }),
-  ])
+  const html = queue([pending()])
 
-  it('draws one row per kind, each with the buttons that kind has', () => {
+  it('draws the sign-in that is waiting, with the three buttons it has', () => {
     expect(html).toContain('Mac Studio wants to join @drej')
-    expect(html).toContain('iPhone wants to reach this Mac on Wi-Fi.')
-    expect(html).toContain('@jkim asks for a seat at @drej/alpha.')
-    for (const label of ['>APPROVE<', '>DENY<', '>NOT ME<', '>ALLOW<', '>NOT NOW<', '>SEAT THEM<', '>DECLINE<']) {
+    for (const label of ['>APPROVE<', '>DENY<', '>NOT ME<']) {
       expect(html, label).toContain(label)
     }
+    // No other kind (0.6.0): nothing here lets a phone in on Wi-Fi, or seats a guest who asked.
+    for (const gone of ['>ALLOW<', '>NOT NOW<', 'Wi-Fi', '>SEAT THEM<', '>DECLINE<', 'asks for a seat']) expect(html, gone).not.toContain(gone)
   })
 
   it('asks the join row for the number, and NOWHERE else', () => {
@@ -100,9 +96,8 @@ describe('the one queue (D11)', () => {
     // the other machine's screen, so it ships disabled and the field beside it
     // is the reason it will not move.
     expect(html).toMatch(/class="gs-primary"[^>]*disabled[^>]*>APPROVE/)
-    // ALLOW and SEAT THEM are one press: they need no number.
-    expect(html).toMatch(/class="gs-primary"[^>]*>ALLOW/)
-    expect(html).not.toMatch(/class="gs-primary"[^>]*disabled[^>]*>ALLOW/)
+    // It is the one primary button on the card: nothing beside it fires in one press.
+    expect(html.match(/class="gs-primary"/g)).toHaveLength(1)
   })
 
   it('weights the three answers to a sign-in: approve, deny, then the alarm', () => {
@@ -112,8 +107,9 @@ describe('the one queue (D11)', () => {
   })
 
   it('says what each button does, under the list', () => {
-    expect(html).toContain('ALLOW gives the phone this Mac')
+    expect(html).toContain('APPROVE needs the number.')
     expect(html).toContain('NOT ME signs every other device out')
+    expect(html).not.toContain('SEAT THEM')
   })
 
   it('draws a finished row with its chip and nothing to press', () => {
@@ -121,15 +117,13 @@ describe('the one queue (D11)', () => {
       [],
       [
         { id: 'a1', kind: 'join', outcome: 'joined', subject: 'Mac Studio', at: NOW - 120_000 },
-        { id: 'a2', kind: 'reach', outcome: 'allowed', subject: 'iPhone', at: NOW - 240_000 },
-        { id: 'a3', kind: 'seat', outcome: 'seated', subject: 'jkim', team: '@drej/alpha', at: NOW - 360_000 },
         { id: 'a4', kind: 'join', outcome: 'denied', subject: 'iPhone', at: NOW - 600_000 },
       ],
     )
     expect(over).toContain('Mac Studio joined @drej')
     expect(over).toContain('>DONE<')
-    expect(over).toContain('>LAN<')
-    expect(over).toContain('>SEATED<')
+    expect(over).not.toContain('>LAN<')
+    expect(over).not.toContain('>SEATED<')
     expect(over).toContain('A sign-in as @drej was denied on iPhone')
     expect(over).toContain('>NOT ME<')
     // A receipt offers nothing: the moment is past.

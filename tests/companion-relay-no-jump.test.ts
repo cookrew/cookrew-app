@@ -34,9 +34,11 @@
 // `replace`, so neither comes back by accident.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { inConsole, relayBaseFor } from './support/console-scope'
 
 const DEVICE = '11111111-2222-3333-4444-555555555555'
-const RELAY_BASE = `/relay/@owner/desktop/${DEVICE}`
+/** The machine's address on the relay, as the console reaches it. */
+const RELAY_BASE = relayBaseFor(DEVICE)
 
 interface Phone {
   /** Every way this page could leave the account's origin, in one list. */
@@ -107,8 +109,9 @@ const servedAt = async (base: string): Promise<{
   companion: typeof import('../src/renderer/src/path/companion')
   link: typeof import('../src/renderer/src/path-link')
 }> => {
-  Object.assign(globalThis, { COOKREW_BASE: base })
   vi.resetModules()
+  // '' is a machine's own page; anything else is the console with that machine in scope.
+  if (base !== '') await inConsole(DEVICE)
   return {
     companion: await import('../src/renderer/src/path/companion'),
     link: await import('../src/renderer/src/path-link')
@@ -119,7 +122,6 @@ const servedAt = async (base: string): Promise<{
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
 afterEach(() => {
-  delete (globalThis as { COOKREW_BASE?: unknown }).COOKREW_BASE
   delete (globalThis as { fetch?: unknown }).fetch
   delete (globalThis as { EventSource?: unknown }).EventSource
   vi.resetModules()

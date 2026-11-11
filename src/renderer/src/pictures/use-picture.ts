@@ -1,3 +1,4 @@
+import { registerScopeState } from '../machine-scope'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ImageRef } from '../../../shared/prompt-images'
 import { cookrew } from '../api'
@@ -17,6 +18,12 @@ const theCache = (): PictureCache => {
   }
   return cache
 }
+
+// A picture is read from ONE machine, by a path or an id that means nothing on another.
+registerScopeState('pictures', () => {
+  cache?.clear()
+  cache = null
+})
 
 export type PictureState = 'waiting' | 'loading' | 'shown' | 'missing'
 

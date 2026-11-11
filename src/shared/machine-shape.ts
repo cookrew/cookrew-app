@@ -1,8 +1,8 @@
 import type { MachineProfile } from './fleet'
 
 /**
- * THE LINE UNDER A MACHINE'S NAME on cookrew.dev/me (registry/src/site-machines.ts):
- * its model when it reports one, else its system. The drawings that once stood
+ * THE LINE UNDER A MACHINE'S NAME, as the registry's /me page drew it until
+ * 0.6.0 removed that page: its model when it reports one, else its system. The drawings that once stood
  * over it are gone (owner 2026-11-10): the Devices view is the drawing.
  */
 

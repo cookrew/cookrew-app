@@ -1,15 +1,20 @@
 // A CREDENTIAL ON THE RELAY RIDES A HEADER, NEVER THE URL.
 //
-// A URL through cookrew.dev reaches the ingress access log, so the pairing token
-// must not be in one. The streams the companion opens on the relay go by fetch,
-// which can set a header. The direct planes never touch the ingress and keep
-// what they had, so these tests hold both sides of that line.
+// A URL through the relay reaches the ingress access log, so the pairing token
+// must not be in one. The streams the console opens on the relay go by fetch,
+// which can set a header: the machine's token, and the account session the
+// relay wants beside it. The direct planes never touch the ingress and keep
+// what they had, and never see the account session: these tests hold both
+// sides of that line.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { bareWindow } from './support/memory-storage'
+import { inConsole, relayBaseFor } from './support/console-scope'
 
-const BASE = '/relay/@u/desktop/d'
+const MACHINE = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+const BASE = relayBaseFor(MACHINE)
+const SESSION = 'account-session-for-the-relay'
 const TOKEN = 'pairing-token-abcdefghijklmnop'
 const TAILNET = 'https://100-68-81-64.aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.d.cookrew.dev:8643'
 
@@ -35,8 +40,8 @@ beforeEach(async () => {
   vi.resetModules()
   fetched = []
   natives = []
-  vi.stubGlobal('COOKREW_BASE', BASE)
-  vi.stubGlobal('window', bareWindow(`https://cookrew.dev${BASE}/`))
+  vi.stubGlobal('window', bareWindow(`https://console.cookrew.dev/d/${MACHINE}`))
+  await inConsole(MACHINE, { session: () => SESSION })
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
     fetched.push({ url: String(url), init })
     return sse('event: hb\ndata: {}\n\n', 'data: {"hello":1}\n\n')
@@ -73,6 +78,10 @@ describe('on the relay', () => {
     expect(fetched).toHaveLength(1)
     expect(fetched[0].url).toBe(`${BASE}/api/events`)
     expect(new Headers(fetched[0].init.headers).get('authorization')).toBe(`Bearer ${TOKEN}`)
+    // The relay is another origin: the account session rides its own header, and no cookie travels.
+    expect(new Headers(fetched[0].init.headers).get('x-cookrew-session')).toBe(SESSION)
+    expect(fetched[0].init).toMatchObject({ mode: 'cors', credentials: 'omit' })
+    expect(fetched[0].url).not.toContain(SESSION)
   })
 
   it('bridges the browser card without the token in the socket path', async () => {
@@ -82,7 +91,9 @@ describe('on the relay', () => {
     expect(fetched[0].url).toContain('/api/socket-bridge?path=')
     expect(decodeURIComponent(fetched[0].url)).not.toContain('token')
     expect(fetched[0].url).not.toContain(TOKEN)
+    expect(fetched[0].url).not.toContain(SESSION)
     expect(new Headers(fetched[0].init.headers).get('authorization')).toBe(`Bearer ${TOKEN}`)
+    expect(new Headers(fetched[0].init.headers).get('x-cookrew-session')).toBe(SESSION)
   })
 
   it('reports a refused stream as closed, so it reconnects like any other', async () => {
@@ -107,12 +118,38 @@ describe('an answer that is not a stream', () => {
   })
 })
 
-describe('on a direct plane, which never meets the ingress', () => {
-  it('keeps the native stream with the token it needs', () => {
+describe('on a direct plane, the machine’s own name', () => {
+  it('opens the stream by fetch with the token in a header: no credential is ever in an address', () => {
     data.setDataPlane({ origin: TAILNET, kind: 'tailnet' })
     plane.openEventSource(`${TAILNET}/api/events`).close()
-    expect(fetched).toEqual([])
-    expect(natives).toEqual([`${TAILNET}/api/events?token=${TOKEN}`])
+    expect(natives).toEqual([])
+    expect(fetched).toHaveLength(1)
+    expect(fetched[0].url).toBe(`${TAILNET}/api/events`)
+    expect(fetched[0].url).not.toContain(TOKEN)
+    const sent = new Headers(fetched[0].init.headers)
+    expect(sent.get('authorization')).toBe(`Bearer ${TOKEN}`)
+    // Another origin, no cookie; and a machine is never handed the account's session.
+    expect(fetched[0].init).toMatchObject({ mode: 'cors', credentials: 'omit' })
+    expect(sent.get('x-cookrew-session')).toBeNull()
+    // Only what a machine's cross-origin rule lets through: its allow-list is authorization and content-type.
+    expect([...sent.keys()].sort()).toEqual(['accept', 'authorization'])
+  })
+
+  it('sends a request straight to the machine with its own token and without the account session', async () => {
+    const { planeFetch } = await import('../src/renderer/src/plane-fetch')
+    const { authHeaders } = await import('../src/renderer/src/auth-gate')
+    data.setDataPlane({ origin: TAILNET, kind: 'tailnet' })
+    await planeFetch(`${TAILNET}/api/state`, { headers: authHeaders() })
+    expect(fetched).toHaveLength(1)
+    const sent = new Headers(fetched[0].init.headers)
+    expect(sent.get('authorization')).toBe(`Bearer ${TOKEN}`)
+    expect(sent.get('x-cookrew-session')).toBeNull()
+    // Back on the relay the same call carries it again.
+    data.fallBackToRelay()
+    await planeFetch(`${BASE}/api/state`, { headers: authHeaders() })
+    const relayed = new Headers(fetched[1].init.headers)
+    expect(relayed.get('authorization')).toBe(`Bearer ${TOKEN}`)
+    expect(relayed.get('x-cookrew-session')).toBe(SESSION)
   })
 })
 

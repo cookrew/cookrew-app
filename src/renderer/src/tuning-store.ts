@@ -9,11 +9,15 @@
 // yet" — a fresh agent that has not replied, a harness that keeps no session
 // file, a plain shell — and an empty chip would be a claim of its own.
 
+import { registerScopeState } from './machine-scope'
 import { useCallback, useSyncExternalStore } from 'react'
 import { KeyedStore } from './keyed-store'
 import type { AgentTuning } from '../../shared/agent-tuning'
 
 export const tuningStore = new KeyedStore<AgentTuning>()
+
+// Each card's model and effort are ONE machine's agents'.
+registerScopeState('agent tuning', () => tuningStore.clear())
 
 /** One terminal's dials. Re-renders only when THIS id changes. */
 export function useTuning(id: string): AgentTuning | undefined {

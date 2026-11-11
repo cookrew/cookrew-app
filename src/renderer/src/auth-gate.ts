@@ -1,3 +1,4 @@
+import { registerScopeState, scopeEpoch, scopeNeedsMachine } from './machine-scope'
 import { V3_COPY, accountCopy } from '../../shared/account-copy'
 import { machineCopy } from '../../shared/machine-words'
 // Pairing credential + what happens when it stops working.
@@ -96,7 +97,7 @@ export interface AuthStore {
 /**
  * Lift a token out of whatever the user pasted. THREE FORMS, deliberately:
  *
- *   the canonical URL   https://cookrew.dev/relay/@me/desktop/<id>/#pair=<t>
+ *   a pairing link      https://<host>/…#pair=<t>
  *   the direct URL      https://192-168-2-40.<id>.d.cookrew.dev:8643/?token=<t>
  *   the bare token      <t>
  *
@@ -307,11 +308,15 @@ function browserStore(): AuthStore {
       return missing
     }
   }
+  // ON THE CONSOLE NO CREDENTIAL COMES FROM THE ADDRESS. A machine's key gets there through its
+  // door (console/console-wiring.ts); a `?token=` or `#pair=` on a console link is somebody
+  // else's idea of what this browser should hold for a machine, and is not taken.
+  const fromAddress = !scopeNeedsMachine()
   const store = createAuthStore({
     local: safe(() => window.localStorage),
     session: safe(() => window.sessionStorage),
-    search: window.location.search,
-    hash: window.location.hash
+    search: fromAddress ? window.location.search : '',
+    hash: fromAddress ? window.location.hash : ''
   })
   // THE CREDENTIAL MUST NOT SURVIVE THE BOOT. It is read above — before the
   // first authenticated request — and taken off the URL here, so it is in no
@@ -320,7 +325,7 @@ function browserStore(): AuthStore {
   // cookrew.dev never receives the token, and a fragment left in place would
   // hand it to the next person the page is shown to.
   try {
-    const clean = scrubPairingFromUrl(window.location.href)
+    const clean = fromAddress ? scrubPairingFromUrl(window.location.href) : null
     if (clean) window.history.replaceState(null, '', clean)
   } catch {
     // A history API that refuses is not worth failing the boot over.
@@ -328,13 +333,28 @@ function browserStore(): AuthStore {
   return store
 }
 
-let singleton: AuthStore | null = null
+let singleton: { readonly store: AuthStore; readonly epoch: number } | null = null
 
-/** The app-wide store; created on first use so tests can avoid the DOM. */
+/**
+ * The app-wide store; created on first use so tests can avoid the DOM.
+ *
+ * THE STORE IS FOR ONE MACHINE: its key names it (`cr_token:<machine id>`,
+ * pairing-scope.ts), chosen when the store is made. So it is good for the
+ * visit it was made in and no longer: one made while a machine was being left
+ * (something that let go late and asked for it) is not handed out once the
+ * next machine is in scope, whatever order things let go in. Nothing is
+ * erased: each machine's token stays under its own key for the next visit.
+ */
 export function authStore(): AuthStore {
-  if (!singleton) singleton = browserStore()
-  return singleton
+  const epoch = scopeEpoch()
+  if (singleton === null || singleton.epoch !== epoch) singleton = { store: browserStore(), epoch }
+  return singleton.store
 }
+
+// Dropped when the machine is left, so nothing of it is held past the change.
+registerScopeState('pairing token store', () => {
+  singleton = null
+})
 
 /**
  * The pairing token as a QUERY PARAM, for clients that cannot set a header.

@@ -25,7 +25,8 @@ const render = (over: Partial<LaunchSettingsViewProps> = {}): string =>
 describe('LaunchSettingsView', () => {
   it('shows the four settings at their defaults', () => {
     const html = render()
-    expect(html).toContain('value="https://cookrew.dev"')
+    // The registry's API host: cookrew.dev itself is a static site since 0.6.0.
+    expect(html).toContain('value="https://api.cookrew.dev"')
     expect(html).toContain('Run workspaces independently')
     expect(html).toContain('Run pages in Chrome')
     expect(html).toMatch(/<option value="herdr" selected/)

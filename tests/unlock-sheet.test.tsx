@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { UnlockSheetView, type UnlockSheetViewProps } from '../src/renderer/src/use/UnlockSheet'
+import { afterRefusal, UnlockSheetView, type UnlockSheetViewProps } from '../src/renderer/src/use/UnlockSheet'
+import { SealRefusedError } from '../src/renderer/src/path/seal-client'
 import { hostOutsideTheMac } from '../src/shared/remote-unlock'
 
 const noop = (): void => undefined
@@ -41,6 +42,28 @@ describe('UnlockSheetView', () => {
   it('says when the code it held has been replaced', () => {
     expect(draw({ needsCode: true })).not.toContain('out of date')
     expect(draw({ needsCode: true, stale: true })).toContain('out of date')
+    // The machine PROVED it changed the code: said as that, and it still asks for the new one.
+    const changed = draw({ needsCode: true, stale: true, changed: true })
+    expect(changed).toContain('was changed')
+    expect(changed).toContain('Pairing link')
+  })
+
+  it('a code the machine refuses, or proves it replaced, gives way to one scanned since; with none, the sheet asks for it', () => {
+    for (const why of ['code', 'replaced'] as const) {
+      expect(afterRefusal(new SealRefusedError(why), () => 'WAITED')).toEqual({ kind: 'try', code: 'WAITED' })
+      expect(afterRefusal(new SealRefusedError(why), () => null)).toEqual({ kind: 'needs-code', stale: true, changed: why === 'replaced' })
+    }
+  })
+
+  it('any other failure is said as it is, and no waiting code is spent on it', () => {
+    let taken = 0
+    const take = (): string | null => {
+      taken += 1
+      return 'WAITED'
+    }
+    expect(afterRefusal(new SealRefusedError('proof'), take)).toMatchObject({ kind: 'failed' })
+    expect(afterRefusal(new Error('The sealed session did not open (502).'), take)).toEqual({ kind: 'failed', message: 'The sealed session did not open (502).' })
+    expect(taken).toBe(0)
   })
 
   it('a changed key takes no password at all', () => {

@@ -11,7 +11,6 @@ import { RegistryStore } from '../registry/src/store'
 import { TransparencyLog } from '../registry/src/log'
 import { createV2 } from '../registry/src/v2-routes'
 import { FunnelCounts, funnelLimiterKey } from '../registry/src/funnel-counts'
-import { RESERVED_HANDLES } from '../registry/src/site'
 import { createTelemetry } from '../src/main/telemetry'
 import type { FunnelPayload } from '../src/shared/funnel-events'
 
@@ -333,10 +332,6 @@ describe('GET /v1/funnel', () => {
     expect(response.status).toBe(404)
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
-  })
-
-  it('no account can ever be named funnel-anything into this route: v1 stays reserved', () => {
-    expect(RESERVED_HANDLES.has('v1')).toBe(true)
   })
 })
 

@@ -14,7 +14,6 @@ import type { DoorRecord } from './doors'
 import type { DesktopPresence } from './v2-fleet'
 import type { NamesFeature } from './names'
 import { createHelloBurn, helloBurnTtlMs, type HelloBurn } from './hello-nonces'
-import { V2Requests } from './v2-requests'
 import { V2Events } from './v2-events'
 import { V2Links } from './v2-links'
 import { OAuthFlows } from './v2-oauth-flows'
@@ -94,12 +93,6 @@ export interface V2Identity {
     joinCodes: Limiter
     /** Renewing a session, per DEVICE — see v2-renew for why not per address. */
     renew: Limiter
-    /**
-     * Asking for a seat, per ACCOUNT; asking to reach a Mac, per DEVICE. One
-     * bucket, two keys — both write to a bounded account:changed feed, and a
-     * route that can be asked without bound is a way to flush it (H5).
-     */
-    requests: Limiter
     /** Starting and redeeming a provider trip, per address. */
     oauth: Limiter
   }
@@ -116,8 +109,6 @@ export interface V2Identity {
   trustedProxies: readonly string[]
   /** Phase 4: passkeys, authenticators, pending sign-ins and approvals. */
   factors: FactorState
-  /** Identity v3: the one queue — seat and reach requests over three stores. */
-  requests: V2Requests
   /** Identity v3: account:changed, the roster's own feed. */
   events: V2Events
   /** Which provider identities open which account. */
@@ -137,6 +128,20 @@ export interface V2Identity {
    * back to its own sheet.
    */
   auth: { origin: string; requests: AuthRequests; log: (message: string) => void } | null
+  /**
+   * CONSOLE.COOKREW.DEV, when this deployment answers one: the only origin a
+   * page may call the registry's API from (CORS, compared whole). The console
+   * is a static site hosted elsewhere and this process serves none of it. Null
+   * means no page is answered at all, only callers that are not browsers.
+   */
+  consoleOrigin: string | null
+  /**
+   * API.COOKREW.DEV, when this deployment splits its hosts (0.6.0): the one
+   * name /v1, /v2 and the relay path answer on (api-host.ts). Null is a
+   * registry that is one host, which is what a dev binary and the older suites
+   * run; then nothing is routed by this name.
+   */
+  apiOrigin: string | null
 }
 
 export interface V2Options {
@@ -150,8 +155,6 @@ export interface V2Options {
     joinPerMinute?: number
     joinCodesPerHour?: number
     renewPerMinute?: number
-    /** Seat and reach asks, per asker. Lowered by a test to reach the cap. */
-    requestsPerHour?: number
     oauthPerMinute?: number
   }
   trustedProxies?: readonly string[]
@@ -162,6 +165,10 @@ export interface V2Options {
   oauth?: OAuthConfig
   /** The auth origin (https://auth.cookrew.dev). Absent: the one sign-in page is off. */
   authOrigin?: string
+  /** The console's origin (https://console.cookrew.dev). Absent: no page may call the API. */
+  consoleOrigin?: string
+  /** The API's own origin (https://api.cookrew.dev). Absent: one host answers everything. */
+  apiOrigin?: string
   /**
    * AUTH UX 2026-11-09: 'required' (the default, and the only thing main.ts
    * ever builds) issues no session without a second step. 'legacy' is the
@@ -207,10 +214,6 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
       // handful of times in a life; the window that catches a device quietly
       // keeping a supply of live codes is a long one, not a fast one.
       joinCodes: new Limiter(options.limits?.joinCodesPerHour ?? 6, 60 * 60_000, options.now),
-      // TWENTY AN HOUR. A person asking for seats at twenty teams in one hour
-      // is not a person, and a guest who reloads a team page a few times is
-      // nowhere near it.
-      requests: new Limiter(options.limits?.requestsPerHour ?? 20, 60 * 60_000, options.now),
       renew: new Limiter(options.limits?.renewPerMinute ?? 5, 60_000, options.now),
       oauth: new Limiter(options.limits?.oauthPerMinute ?? 20, 60_000, options.now)
     },
@@ -219,7 +222,6 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
     helloNonces: createHelloBurn(helloBurnTtlMs(HELLO_SKEW_MS)),
     trustedProxies: options.trustedProxies ?? [],
     factors: createFactorState(base, { now: options.now }),
-    requests: new V2Requests(options.now),
     events: new V2Events(options.now),
     links: new V2Links(accounts, options.now),
     oauth: {
@@ -230,6 +232,8 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
     secondStep: options.secondStep ?? 'required',
     freshWindowMs: Math.min(options.freshWindowMs ?? FRESH_MS, FRESH_MS),
     now: options.now ?? Date.now,
+    consoleOrigin: options.consoleOrigin ?? null,
+    apiOrigin: options.apiOrigin ?? null,
     auth:
       options.authOrigin === undefined
         ? null
@@ -275,6 +279,12 @@ export interface V2Context {
    * desktop reads offline, which is the truth for a registry with no relay.
    */
   presence?: (username: string) => ReadonlyMap<string, DesktopPresence>
+  /**
+   * WHICH HOST THIS REQUEST ARRIVED ON, on a registry that splits them:
+   * 'api' (api-host.ts: no cookie, the console the only page) or 'auth'
+   * (auth-host.ts). Absent on a registry that is one host.
+   */
+  via?: 'api' | 'auth'
   /**
    * SET ONLY ON THE AUTH ORIGIN: the request this browser claimed. Its device
    * is the only device any sign-in here may attach, and a finished sign-in
@@ -350,12 +360,25 @@ export interface Signed {
  * The account behind a request, or null. The signature is checked by the token
  * layer (which also refuses a revoked device); the store answers the half a
  * signature cannot — was this session ended, is this device still attached.
+ *
+ * A CONSOLE SESSION IS NOT ONE, UNLESS THE CALLER ASKS FOR ITS KIND. Its token
+ * lives where a page's script could read it, so a route that never thought
+ * about the console must not find itself answering one: opening a passkey
+ * request, linking a provider, publishing, seating. The few routes that are
+ * the console's say so here (`console: true`); the allow-list ahead of every
+ * route (console-scope.ts) is the first lock, and this is the second.
  */
-export function signedIn(request: IncomingMessage, v2: V2Identity, mode: 'any' | 'bearer' = 'any'): Signed | null {
+export function signedIn(
+  request: IncomingMessage,
+  v2: V2Identity,
+  mode: 'any' | 'bearer' = 'any',
+  allow: { console?: boolean } = {}
+): Signed | null {
   const token = sessionTokenOf(request, mode)
   if (token === null) return null
   const claims = v2.tokens.verify(token, 'session')
   if (claims === null) return null
+  if (claims.via === 'console' && allow.console !== true) return null
   const found = v2.accounts.authenticate(claims)
   return found === null ? null : { claims, account: found.account, device: found.device }
 }
@@ -363,6 +386,20 @@ export function signedIn(request: IncomingMessage, v2: V2Identity, mode: 'any' |
 /** For server.ts's `accountOf`: the username a v2 session names, or null. */
 export function v2AccountOf(request: IncomingMessage, v2: V2Identity, mode: 'any' | 'bearer' = 'any'): string | null {
   return signedIn(request, v2, mode)?.account.username ?? null
+}
+
+/**
+ * MAY THIS WRITE BE CARRIED OUT, by where it says it came from.
+ *
+ * On the API host no cookie is read, so the question is only which PAGE may
+ * write: the console's, compared whole, and no other. No Origin at all is an
+ * app. Everywhere else it is the same-origin rule below.
+ */
+export function writeOriginOk(ctx: Pick<V2Context, 'request' | 'v2' | 'via'>): boolean {
+  if (ctx.via !== 'api') return sameOrigin(ctx.request)
+  const origin = ctx.request.headers.origin
+  if (origin === undefined) return true
+  return typeof origin === 'string' && ctx.v2.consoleOrigin !== null && origin === ctx.v2.consoleOrigin
 }
 
 /**

@@ -22,7 +22,7 @@ import {
   type SealTerminus,
   type SealTerminusDeps
 } from '../src/main/canvas-seal-terminus'
-import { connectCodeId, newConnectCode, startHandshake } from '../src/shared/canvas-seal'
+import { connectCodeId, newConnectCode, startHandshake, checkReplaced, replacedKeyOf } from '../src/shared/canvas-seal'
 import { createRecordReader, encodeRecord, type SealFrame } from '../src/shared/canvas-seal-wire'
 import { SealPhone as Phone, until } from './support/seal-phone'
 
@@ -113,7 +113,7 @@ async function bed(options: { auto?: boolean; deps?: Partial<SealTerminusDeps> }
   const terminus = createSealTerminus({ codeFor: (asked) => (asked === id ? code : null), dial, now: () => clock.now, ...options.deps })
   const server = createServer((request, response) => {
     const device = typeof request.headers['x-test-device'] === 'string' ? request.headers['x-test-device'] : 'device-1'
-    void terminus.handle(request, response, { base: '/relay/@me/desktop/d', device, deviceName: 'My phone' })
+    void terminus.handle(request, response, { device, deviceName: 'My phone' })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   servers.push(server)
@@ -138,6 +138,27 @@ describe('the handshake', () => {
     const { hello } = await startHandshake(newConnectCode())
     const answer = await fetch(`${origin}/~seal/hello`, { method: 'POST', body: JSON.stringify(hello) })
     expect(answer.status).toBe(403)
+    expect(((await answer.json()) as { replaced?: unknown }).replaced).toBeUndefined()
+  })
+
+  it('refuses a code it replaced, and proves to its holder that it was replaced', async () => {
+    const old = newConnectCode()
+    const oldId = await connectCodeId(old)
+    const key = await replacedKeyOf(old)
+    const { origin } = await bed({ deps: { replacedKeyFor: (asked) => (asked === oldId ? key : null) } })
+    const { hello } = await startHandshake(old)
+    const answer = await fetch(`${origin}/~seal/hello`, { method: 'POST', body: JSON.stringify(hello) })
+    expect(answer.status).toBe(403)
+    const said = (await answer.json()) as { replaced?: unknown }
+    expect(await checkReplaced(old, hello, said.replaced)).toBe(true)
+    // A hello whose key is not a key gets no proof made over it.
+    const bent = await fetch(`${origin}/~seal/hello`, { method: 'POST', body: JSON.stringify({ ...hello, e: 'x'.repeat(3000) }) })
+    expect(bent.status).toBe(403)
+    expect(((await bent.json()) as { replaced?: unknown }).replaced).toBeUndefined()
+    // Still nothing for a code it never held, with the same deps.
+    const stranger = await startHandshake(newConnectCode())
+    const other = await fetch(`${origin}/~seal/hello`, { method: 'POST', body: JSON.stringify(stranger.hello) })
+    expect(((await other.json()) as { replaced?: unknown }).replaced).toBeUndefined()
   })
 
   it('refuses what is not a hello', async () => {
@@ -193,16 +214,15 @@ describe('an exchange', () => {
     expect(phone.text(1)).toBe('you asked /api/workspace?x=1')
   })
 
-  it('names the phone as the relay did: nothing inside can claim a device, a base or a host', async () => {
+  it('names the phone as the relay did: nothing inside can claim a device or a host', async () => {
     const { phone: start, calls } = await bed()
     const phone = await start()
-    const forged = { 'x-cookrew-device': 'other', 'x-cookrew-device-name': 'Other', 'x-cookrew-base': '/evil', 'x-cookrew-relay': '0', 'x-forwarded-for': '1.2.3.4', host: 'evil', connection: 'close', 'content-length': '9' }
+    const forged = { 'x-cookrew-device': 'other', 'x-cookrew-device-name': 'Other', 'x-cookrew-relay': '0', 'x-forwarded-for': '1.2.3.4', host: 'evil', connection: 'close', 'content-length': '9' }
     await phone.send(open(1, '/api/x', forged), end(1))
     await until(() => calls.length === 1, 'the call')
     const { headers } = calls[0].input
     expect(headers['x-cookrew-device']).toBe('device-1')
     expect(headers['x-cookrew-device-name']).toBe('My phone')
-    expect(headers['x-cookrew-base']).toBe('/relay/@me/desktop/d')
     for (const name of ['x-cookrew-relay', 'x-forwarded-for', 'host', 'connection', 'content-length']) expect(headers[name], name).toBeUndefined()
   })
 
@@ -696,7 +716,8 @@ describe('the route', () => {
     expect(answers).toEqual([404, 404])
     expect(terminus.handle).not.toHaveBeenCalled()
     await routeSeal({ headers: { 'x-cookrew-relay': '1', 'x-cookrew-base': '/b', 'x-cookrew-device': 'd' }, socket: { remoteAddress: '127.0.0.1' } } as never, response, terminus)
-    expect(terminus.handle).toHaveBeenCalledWith(expect.anything(), response, { base: '/b', device: 'd', deviceName: undefined })
+    // A base the request names is read by nobody: the session is told who, and nothing about where.
+    expect(terminus.handle).toHaveBeenCalledWith(expect.anything(), response, { device: 'd', deviceName: undefined })
   })
 
   it('with no terminus there is no route', async () => {

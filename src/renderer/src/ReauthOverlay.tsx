@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AuthError, authStore, REAUTH_COPY, machineSentence, reauthMessage, tokenFromInput, connectCodeFromInput } from './auth-gate'
+import { AuthError, authStore, REAUTH_COPY, machineSentence, reauthMessage, tokenFromInput, connectCodeFromInput, type AuthScope } from './auth-gate'
 import { checkAuth } from './remote-api'
 import { clientBase } from './api-base'
+import { heldScope, scopeNeedsMachine } from './machine-scope'
 import { accountDevice } from './account-device'
 import { browserPairDeps, pairOffer } from './account-pair-client'
 import { ReauthAccountEntry } from './ReauthAccountEntry'
@@ -22,8 +23,6 @@ import './auth-gate.css'
  * the token moves under a fold, kept for a machine with no account.
  */
 
-/** The handle a relay prefix names (`/relay/@drej/desktop/<id>`), for the password manager. */
-const handleOfBase = (base: string): string | null => /\/relay\/@([^/]+)\/desktop\//.exec(base)?.[1] ?? null
 
 type AccountState =
   | { readonly kind: 'asking' }
@@ -35,10 +34,36 @@ type AccountState =
 async function readAccountState(base: string): Promise<AccountState> {
   const offer = await pairOffer(browserPairDeps(base, accountDevice).machine)
   if (offer === null || offer.desktopId === null || !offer.offered) return { kind: 'token-only', platform: offer?.platform ?? null }
-  // The account's way in signs with cookrew.dev's device key, which exists
-  // only under cookrew.dev: a direct address is another origin.
-  if (handleOfBase(base) === null) return { kind: 'elsewhere', offer }
+  // The account's way in signs with the console's device key, which exists
+  // only under the console's origin: a page a machine serves itself is
+  // another origin, and can only point there.
+  if (!scopeNeedsMachine()) return { kind: 'elsewhere', offer }
   return (await accountDevice()) === null ? { kind: 'sign-in', offer } : { kind: 'enter', offer }
+}
+
+/**
+ * Keep a token the machine in scope accepts; false when it does not.
+ *
+ * THE TOKEN IS FOR THE MACHINE IN SCOPE NOW, and is kept under that machine's
+ * key or not at all: the store is taken before the wait, and if another
+ * machine was entered meanwhile nothing is saved (the store asked for
+ * afterwards would be the next machine's, and this token is not its).
+ */
+export async function keepVerifiedToken(
+  token: string,
+  code: string | null,
+  check: (token: string) => Promise<AuthScope> = checkAuth
+): Promise<boolean> {
+  const store = authStore()
+  const sameMachine = heldScope()
+  // Verify BEFORE storing: a token that is saved and then rejected leaves
+  // the phone in the same silent-failure state, one screen later.
+  const scope = await check(token)
+  if (!sameMachine() || scope === 'none') return false
+  store.save(token)
+  store.saveConnectCode(code)
+  if (scope === 'read-only') store.report(new AuthError('Paired read-only.', 'read-only'))
+  return true
 }
 
 export function ReauthOverlay(): React.JSX.Element | null {
@@ -61,7 +86,11 @@ export function ReauthOverlay(): React.JSX.Element | null {
     }
   }, [])
 
-  const unpaired = blocked !== null && blocked.scope !== 'read-only'
+  // ON THE CONSOLE this card is never the way back in: no token is pasted there and no password typed
+  // (decision F5). A machine that refuses this browser's key has its door asked again with the device
+  // pass (console/console-runtime.ts · keyRefused), or the person is told at the machines.
+  const onConsole = scopeNeedsMachine()
+  const unpaired = blocked !== null && blocked.scope !== 'read-only' && !onConsole
   useEffect(() => {
     if (!unpaired) return
     setAccount({ kind: 'asking' })
@@ -77,16 +106,7 @@ export function ReauthOverlay(): React.JSX.Element | null {
   const platform =
     account.kind === 'asking' ? null : account.kind === 'token-only' ? account.platform : account.offer.platform
 
-  const keep = useCallback(async (token: string, code: string | null): Promise<boolean> => {
-    // Verify BEFORE storing: a token that is saved and then rejected leaves
-    // the phone in the same silent-failure state, one screen later.
-    const scope = await checkAuth(token)
-    if (scope === 'none') return false
-    authStore().save(token)
-    authStore().saveConnectCode(code)
-    if (scope === 'read-only') authStore().report(new AuthError('Paired read-only.', 'read-only'))
-    return true
-  }, [])
+  const keep = useCallback((token: string, code: string | null): Promise<boolean> => keepVerifiedToken(token, code), [])
 
   const entered = useCallback((token: string): Promise<boolean> => keep(token, null), [keep])
 
@@ -116,6 +136,7 @@ export function ReauthOverlay(): React.JSX.Element | null {
   }, [pasted, keep, platform])
 
   if (!blocked || dismissed) return null
+  if (onConsole && blocked.scope !== 'read-only') return null
   const readOnly = blocked.scope === 'read-only'
   const leadsWithAccount = !readOnly && account.kind !== 'asking' && account.kind !== 'token-only'
 
@@ -158,7 +179,7 @@ export function ReauthOverlay(): React.JSX.Element | null {
   const accountPart = (): React.JSX.Element | null => {
     if (account.kind === 'asking' || account.kind === 'token-only') return null
     if (account.kind === 'enter') {
-      return <ReauthAccountEntry offer={account.offer} deps={deps} handle={handleOfBase(base)} onEntered={entered} />
+      return <ReauthAccountEntry offer={account.offer} deps={deps} handle={null} onEntered={entered} />
     }
     const sentence = account.kind === 'sign-in' ? REAUTH_COPY.enterSignIn : REAUTH_COPY.enterElsewhere
     return <p className="cr-reauth-body">{machineSentence(sentence, account.offer.platform)}</p>

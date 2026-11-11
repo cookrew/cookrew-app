@@ -58,6 +58,7 @@ const BASE: AccountStatus = {
   fromTerminal: false,
   touchId: { available: false, on: false },
   registryMismatch: null,
+  signInAgainBecause: null,
   workspacesReachable: true,
   recoveryCodesSavedAt: null,
   recoveryCodesLeft: null,

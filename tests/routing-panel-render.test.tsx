@@ -250,10 +250,14 @@ describe('the setup card and the entry', () => {
     const naming = (word: RegExp): string[] => files.filter((file) => word.test(read(file)))
     expect(naming(/shouldAutoOpen|cr-routing-seen/)).toEqual([])
     expect(naming(/<RoutingPanel\b/)).toEqual(['renderer/src/App.tsx'])
-    expect(naming(/<App\b/)).toEqual(['renderer/src/main.tsx'])
+    // The app is mounted in two places and no third: the app's own entry, and the console's
+    // machine level (0.6.0), which mounts the same App for the machine in scope.
+    expect(naming(/<App\b/).sort()).toEqual(['renderer/src/console/ConsoleMachine.tsx', 'renderer/src/main.tsx'])
     expect(read('renderer/src/main.tsx').match(/createRoot\(/g)).toHaveLength(1)
+    expect(read('renderer/src/console-main.tsx').match(/createRoot\(/g)).toHaveLength(1)
     expect(read('main/mobile-server.ts')).toContain("const index = path.join(deps.rendererDir, 'index.html')")
-    expect(readdirSync(path.join(src, 'renderer')).filter((file) => file.endsWith('.html'))).toEqual(['index.html'])
+    // Two pages: the app's, and the console's static one (built on its own, vite.console.config.ts).
+    expect(readdirSync(path.join(src, 'renderer')).filter((file) => file.endsWith('.html')).sort()).toEqual(['console.html', 'index.html'])
   })
 
   it('does not use red for an optional tool that is simply absent', () => {

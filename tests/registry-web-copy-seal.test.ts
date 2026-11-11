@@ -7,9 +7,8 @@ import { WEB_V3_COPY, webCopy } from '../registry/src/v3-copy'
  *
  * The registry builds and ships separately and cannot import from src/shared,
  * so registry/src/v3-copy.ts writes the sentences out again by hand. The only
- * thing that makes that safe is this test, which is the same arrangement
- * registry-web-seal.test.ts uses for seal.js against relay-seal.ts: two
- * implementations, one contract, and a test standing between them.
+ * thing that makes that safe is this test: two copies, one contract, and a
+ * test standing between them.
  *
  * A person who reads one sentence on their Mac and a different one on their
  * phone learns that one of the two is lying to them. This is what stops that.

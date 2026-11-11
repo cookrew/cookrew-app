@@ -220,7 +220,7 @@ export function layoutOf(model: FrameModel, narrow: boolean): Layout {
   const screen = { w: device.screen.w * SDEV + 28, h: device.screen.h * SDEV + 28 }
   const machines = machinesAt(model.otherMachines, device.screen, narrow)
   // The other machines are part of the devices stop: the camera must frame them too, as wide as they stand.
-  const mBottom = machines.rows ? machines.top + machines.rows * (MACHINE_CARD.h + MACHINE_CARD.gap) : -Infinity
+  const mBottom = machines.rows ? machines.top + machines.rows * (MACHINE_CARD.h + MACHINE_CARD.rowGap) : -Infinity
   const half = Math.max(screen.h / 2 + 60, mBottom)
   return {
     stack: stackOf(model.agents),

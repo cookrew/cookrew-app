@@ -32,14 +32,20 @@ import type { ServedPaymentRail } from './served-payment-rails'
  * `ForbiddenBody.remedy` is OPTIONAL by shape and `scope` is the live case —
  * an old client meeting it would have pointed at an author who cannot fix a
  * disagreement between our client and our registry.
+ *
+ * THE BUTTON SAYS WHAT IT DOES (0.6.0). The author's page is gone, and nothing
+ * in the sheet ever copied details, opened a contact or topped anything up:
+ * the one forward act on these refusals is asking the door again, so that is
+ * the label. A button that names a destination it cannot reach was the G2
+ * defect, and a destination that no longer exists is the same defect.
  */
 export const MKT_DENIED = {
   'mkt.denied.unknown.title': "Your license doesn't cover this preset",
-  'mkt.denied.unknown.body': "{author}'s page has the details.",
-  'mkt.denied.unknown.action': "OPEN AUTHOR'S PAGE",
+  'mkt.denied.unknown.body': 'Only {author} can change that. Nothing was installed and nothing was charged.',
+  'mkt.denied.unknown.action': 'TRY AGAIN',
   'mkt.denied.unknown.noremedy.title': "Cookrew couldn't complete that",
   'mkt.denied.unknown.noremedy.body': 'Nothing was installed and nothing was charged.',
-  'mkt.denied.unknown.noremedy.action': 'COPY DETAILS'
+  'mkt.denied.unknown.noremedy.action': 'TRY AGAIN'
 } as const
 
 export type MktDeniedId = keyof typeof MKT_DENIED
@@ -253,6 +259,58 @@ export const MKT_PAY = {
   'mkt.pay.card.waiting.title': 'Waiting for your card payment',
   'mkt.pay.card.waiting.body':
     'Finish on the Stripe page that just opened. This unlocks itself when it lands — you can leave it.',
+  /**
+   * The wait is over and nothing landed. The page took a card for as long as
+   * the sheet listened, so this is said only once it no longer can — and the
+   * way on asks about the SAME payment, because a second one is a second charge.
+   */
+  'mkt.pay.card.ended.title': 'We stopped waiting for that card payment',
+  'mkt.pay.card.ended.body':
+    'The card page has run out of time. If you paid on it, check again — that asks the door about the same payment and never starts a new one.',
+  'mkt.pay.card.check': 'CHECK AGAIN',
+  /**
+   * The sheet was opened on a purchase already in flight: a card page made
+   * earlier that can still be paid. The way on is THAT page — a second one
+   * would be a second charge — so the button reopens it.
+   */
+  'mkt.pay.card.resume.title': 'A card payment for this seat is still open',
+  'mkt.pay.card.resume.body':
+    'You started it earlier and its card page can still be paid. Reopen that page to finish — a second payment is never started while this one is open.',
+  'mkt.pay.card.reopen': 'REOPEN CARD PAGE',
+  /**
+   * A REFUSAL WHILE A CARD PAGE EXISTS. The door's ordinary refusals end
+   * "nothing was charged", which is true of a person who has not paid and not
+   * known of one whose card page has been open. This goes under the refusal's
+   * own headline instead: what the door did NOT do, and the way on if the
+   * card was charged. A card payment is checked against the buyer's own
+   * sign-in at this door, which is why asking again is the right move.
+   */
+  /**
+   * A card page asked for while a signed wallet payment is still collectable
+   * (main/serve-gate.ts). The wallet may yet be charged, so the card is not
+   * offered beside it; the same press with the wallet sends the same payment.
+   */
+  'mkt.pay.wallet.unconfirmed.body':
+    'This door has not confirmed the wallet payment you signed, and it can still collect it for a few minutes. Press PAY with the wallet again to send the same payment, or pay by card once it has lapsed.',
+  'mkt.pay.card.unconfirmed.body':
+    'This door did not confirm the card payment. If your card was charged, press CHECK AGAIN; the payment is tied to your account at this door.',
+  /**
+   * A card payment stands and this Mac's session at cookrew.dev is not live:
+   * nothing can be asked of the door until it is. Said under the sign-in
+   * step — whose button is the one that leads anywhere.
+   */
+  'mkt.pay.card.signin.body':
+    'Sign in again to check on it. If your card was charged, the payment is tied to your account at this door.',
+  /**
+   * The card page's time is up and the door still does not confirm a payment
+   * on it — a new one may be started. It does NOT say the first took nothing:
+   * the door gives one answer for "unpaid" and for a payment it would not
+   * accept (already used, a different amount, a different buyer), and this
+   * sheet cannot tell them apart.
+   */
+  'mkt.pay.card.expired.title': 'That card payment was not confirmed',
+  'mkt.pay.card.expired.body':
+    'The card page has run out of time and this door did not confirm a payment on it. If your card was charged, the payment is tied to your account at this door: ask its owner before paying again. Otherwise you can pay again.',
   /** A settle the door refused: the accusation voice, per R-two-voices. */
   'mkt.pay.error.invalid.title': "That payment didn't verify",
   'mkt.pay.error.invalid.body':
@@ -261,6 +319,15 @@ export const MKT_PAY = {
   'mkt.pay.error.unverifiable.title': "We couldn't check that payment",
   'mkt.pay.error.unverifiable.body':
     'Your payment may be perfectly fine — our checker could not reach a verdict. Trying again will not charge you twice.',
+  /**
+   * The quote at the press is not the one on screen. Nothing was signed: the
+   * wallet is only ever asked about terms a person looked at. It does not say
+   * WHO changed them — the door may have, or another of this person's own
+   * screens asked again and was shown something newer.
+   */
+  'mkt.pay.error.changed.title': 'That price is out of date',
+  'mkt.pay.error.changed.body':
+    'The price on screen is no longer the one this door is asking, so nothing was signed and nothing was charged. Cancel and import again to see the current terms.',
   /** No wallet provisioned on this device. Not a refusal — a missing tool. */
   'mkt.pay.error.nowallet.title': 'No wallet on this device',
   'mkt.pay.error.nowallet.body':
@@ -303,7 +370,13 @@ export function headlineAndWhy(cell: string): { title: string; body: string } {
 const NO_SEAT = headlineAndWhy(V3_COPY['g2.no-seat'])
 const BUDGET = headlineAndWhy(V3_COPY['g2.budget'])
 
-/** 403 — six reasons, six next actions. One word for all of them was the bug. */
+/**
+ * 403 — each reason its own sentence. The ACTION is what the button does, and
+ * in the sheet that is one of two things: buy (a seat, or a refunded one
+ * again) or ask the door again. The sentence above it says who can change the
+ * answer; the button never promises a page, a contact or a top-up, because
+ * none of them exists behind it (import-gate-remedy.ts remedyFor).
+ */
 export const MKT_DENIED_REASONS = {
   /**
    * G2 — the registry's seat rung, the one 403 that stays on the rail. Both
@@ -317,12 +390,12 @@ export const MKT_DENIED_REASONS = {
 
   'mkt.denied.seat_limit.title': 'No seat available',
   'mkt.denied.seat_limit.body':
-    'All {n} seats on this licence are in use: {deviceList}. Manage them on {author}’s page.',
-  'mkt.denied.seat_limit.action': 'ASK {author} ↗',
+    'All {n} seats on this licence are in use: {deviceList}. Only {author} can free one.',
+  'mkt.denied.seat_limit.action': 'TRY AGAIN',
 
   'mkt.denied.version_gate.title': 'Your licence covers {from}–{to}',
   'mkt.denied.version_gate.body': 'This preset is {wanted}.',
-  'mkt.denied.version_gate.action': 'UPGRADE TO {wanted}',
+  'mkt.denied.version_gate.action': 'TRY AGAIN',
 
   'mkt.denied.refunded.title': 'This purchase was refunded',
   'mkt.denied.refunded.body': 'The licence ended on {date}.',
@@ -330,24 +403,24 @@ export const MKT_DENIED_REASONS = {
 
   'mkt.denied.revoked.title': '{author} revoked this licence',
   'mkt.denied.revoked.body': '{authorNote}',
-  'mkt.denied.revoked.action': 'CONTACT {author}',
+  'mkt.denied.revoked.action': 'TRY AGAIN',
 
   'mkt.denied.region.title': 'Not available in your region',
   'mkt.denied.region.body': "{author} hasn't published this preset where you are.",
-  'mkt.denied.region.action': 'LEARN WHY',
+  'mkt.denied.region.action': 'TRY AGAIN',
 
   /** R11/R12/R15 — the only 403 the buyer can clear, and the only one that may
    *  promise continuity. Past tense is true by R12, future by R13. */
   'mkt.denied.balance_empty.title': 'Out of credit',
   'mkt.denied.balance_empty.body':
     '{presetName} has {amount} {asset} left. Its last answer completed — nothing was lost. Topping up resumes the same conversation.',
-  'mkt.denied.balance_empty.action': 'TOP UP',
+  'mkt.denied.balance_empty.action': 'TRY AGAIN',
 
   /** R26 — retried silently once, then explained. Our defect, not their choice. */
   'mkt.denied.scope.title': "Cookrew couldn't get permission for that",
   'mkt.denied.scope.body':
     'It asked twice and was refused both times, so it stopped rather than keep asking. Nothing was installed and nothing was charged.',
-  'mkt.denied.scope.action': 'COPY DETAILS',
+  'mkt.denied.scope.action': 'TRY AGAIN',
 
   /**
    * ── A SERVED DOOR's refusals ──────────────────────────────────────────────
@@ -504,6 +577,34 @@ export function denialCopy(
   const at = (suffix: string): string =>
     fillCopy(MKT_DENIED_REASONS[`mkt.denied.${reason}.${suffix}` as MktDeniedReasonId], vars)
   return { title: at('title'), body: at('body'), action: at('action') }
+}
+
+/**
+ * `denialCopy` for a caller that may not hold every fact a sentence names.
+ *
+ * A served door sends a reason and nothing else — no date, no seat counts, no
+ * version range — and `fillCopy` throws on a brace nobody filled, which in a
+ * sheet is a refusal that paints nothing at all. Here each part is filled on
+ * its own, and a part missing its facts falls back to the plain statement of
+ * what did not happen. The ACTION keeps its own label whenever it can: a
+ * button must go on saying what it does even when the sentence above it had
+ * to be the general one.
+ */
+export function denialCopyLenient(
+  reason: string,
+  remedy: string | undefined,
+  vars: Readonly<Record<string, string | number>> = {}
+): { title: string; body: string; action: string } {
+  if (!(`mkt.denied.${reason}.title` in MKT_DENIED_REASONS)) return unknownDenialCopy(remedy)
+  const plain = unknownDenialCopy(undefined)
+  const part = (suffix: 'title' | 'body' | 'action'): string => {
+    try {
+      return fillCopy(MKT_DENIED_REASONS[`mkt.denied.${reason}.${suffix}` as MktDeniedReasonId], vars)
+    } catch {
+      return plain[suffix]
+    }
+  }
+  return { title: part('title'), body: part('body'), action: part('action') }
 }
 
 /** A verification refusal, resolved from the token the installer returned. */

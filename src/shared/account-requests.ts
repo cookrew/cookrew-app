@@ -2,14 +2,20 @@ import { accountCopy } from './account-copy'
 import { startedAgo } from './account-approvals'
 
 /**
- * THE ONE QUEUE (D11) — one shape for three kinds, and every decision about
- * how a row reads made HERE, where it can be tested without a window.
+ * THE ONE QUEUE (D11) — the row of a sign-in waiting for a nod, and every
+ * decision about how it reads made HERE, where it can be tested without a
+ * window.
  *
- * D11 replaces D6. A sign-in waiting for a nod, a phone asking for this Mac's
- * Wi-Fi and a guest asking for a seat were three surfaces in three places; the
- * design makes them three ROWS of one card, so the owner has one habit and one
- * destination — the avatar's badge, the notification, and this list all land
- * in the same place.
+ * D11 replaces D6: the owner has one habit and one destination. The avatar's
+ * badge, the notification, and this list all land in the same place.
+ *
+ * THE DESIGN DREW TWO MORE ROWS, and the pages that raised them are gone
+ * (0.6.0). A phone asking for this Mac's Wi-Fi, answered with ALLOW, was
+ * asked from the relay's page: a machine of an account is entered from the
+ * console now, with the account. A guest asking for a seat, answered with
+ * SEAT THEM, was asked from the team's web page: a seat is bought in the app
+ * or granted by the owner by username (Seats & Teams), and neither is a
+ * request. So there is no such row, button or receipt here.
  *
  * WHY THE VIEW MODEL IS SHARED AND NOT IN THE COMPONENT. Two processes say
  * these sentences: main writes them into a system notification, the tab draws
@@ -27,57 +33,44 @@ import { startedAgo } from './account-approvals'
 
 // ── the wire (V3-11's contract) ────────────────────────────────────────────
 
-/** One row of GET /v2/me/requests. The fields fill by kind. */
+/** One row of GET /v2/me/requests: a device waiting to sign in. */
 export interface QueueRow {
   id: string
-  kind: 'join' | 'reach' | 'seat'
-  /** join: the device asking to sign in. reach: the device asking for Wi-Fi. */
+  kind: 'join'
+  /** The device asking to sign in. */
   device?: string
-  /** seat: the guest's username. */
-  account?: string
-  /** seat: `@owner/team`. */
-  team?: string
   address: string
   at: number
   expiresAt: number
   state: string
-  /**
-   * reach only: the asking device's PUBLIC key. The Mac seals the pairing URL
-   * to it, so the registry relays a credential it cannot read, and the device
-   * id the token is minted for is this key's own thumbprint — the token and
-   * the seal therefore name the same device by construction.
-   */
-  askKey?: Record<string, string>
 }
 
 /** account:changed, as GET /v2/me/events?since= lists it. */
 export interface AccountEvent {
   seq: number
-  kind: 'joined' | 'revoked' | 'password-changed' | 'door-moved' | 'not-me' | 'request'
+  kind: 'joined' | 'revoked' | 'password-changed' | 'door-moved' | 'not-me'
   device?: string
   address?: string
   at: number
 }
 
 /** What this Mac DID about a request. The local half of the queue. */
-export type AnsweredOutcome = 'joined' | 'allowed' | 'seated' | 'denied'
+export type AnsweredOutcome = 'joined' | 'denied'
 
 /**
  * A row that is over, kept on this Mac for seven days.
  *
  * LOCAL BY NECESSITY, not by preference. Every sentence an over-state says is
- * first person — "approved here", "allowed here", "seated by you" — and the
- * registry's queue only lists what is still WAITING. The thing that knows this
- * Mac answered is this Mac.
+ * first person ("approved here", "denied here") and the registry's queue
+ * only lists what is still WAITING. The thing that knows this Mac answered is
+ * this Mac.
  */
 export interface AnsweredRow {
   id: string
-  kind: 'join' | 'reach' | 'seat'
+  kind: 'join'
   outcome: AnsweredOutcome
-  /** The subject as its sentence names it: a device name, or a username. */
+  /** The subject as its sentence names it: a device name. */
   subject: string
-  /** seat only, for the sentence that names the room. */
-  team?: string
   at: number
 }
 
@@ -91,44 +84,21 @@ export const KEEP_ANSWERED_MS = 7 * 24 * 60 * 60 * 1000
 export const MATCH_SHAPE = /^[1-9][0-9]$/
 export const isMatchComplete = (value: string): boolean => MATCH_SHAPE.test(value.trim())
 
-/**
- * The label the pairing URL is sealed under, and the one the phone opens with.
- * Part of the wire contract rather than an implementation detail: two sides
- * that disagree about it produce a seal that never opens and no way to see why.
- */
-export const reachSealInfo = (requestId: string): string => `reach:${requestId}`
-
 // ── the furniture the table does not own ───────────────────────────────────
 
 export const REQUEST_COPY = {
   /** The first clause of each detail line: which kind of asking this is. */
   JOIN_KIND: 'Sign-in',
-  REACH_KIND: 'Wi-Fi',
-  SEAT_KIND: 'Seat',
-  /**
-   * The reach row's second clause. It is the fact that makes ALLOW safe to
-   * consider: this is not a stranger, it is a device already on the account,
-   * asking for something the account alone does not give it.
-   */
-  ON_ACCOUNT: 'already on the account',
-  /** The three over-state clauses. First person: this Mac is the one that acted. */
+  /** The over-state clauses. First person: this Mac is the one that acted. */
   OVER_APPROVED: 'approved here',
-  OVER_ALLOWED: 'allowed here',
-  OVER_SEATED: 'seated by you',
   OVER_DENIED: 'denied here',
   /** The chip at the end of a finished row. */
   CHIP_DONE: 'DONE',
-  CHIP_LAN: 'LAN',
-  CHIP_SEATED: 'SEATED',
   CHIP_NOT_ME: 'NOT ME',
-  /** The buttons, by row kind. */
+  /** The buttons. */
   APPROVE: 'APPROVE',
   DENY: 'DENY',
   NOT_ME: 'NOT ME',
-  ALLOW: 'ALLOW',
-  NOT_NOW: 'NOT NOW',
-  SEAT_THEM: 'SEAT THEM',
-  DECLINE: 'DECLINE',
   /** The tab, and the notification's title. */
   TAB: 'REQUESTS',
   NOTIFY_TITLE: 'Cookrew',
@@ -158,19 +128,16 @@ export const ACCOUNT_EVENT_PLAIN = {
   passwordChanged: 'The password changed. Every other device was signed out.',
   anotherDevice: 'another device',
   someDoor: 'A door',
-  request: 'Something is waiting in Requests.',
 } as const
 
 /**
  * What an account:changed is ANNOUNCED as.
  *
- * Every kind has a sentence, and five of the six borrow one the table already
+ * Every kind has a sentence, and all but one borrow one the table already
  * owns — a revoke, a move and a disowned sign-in are moments a person has read
  * about elsewhere in this product, and reading them differently here would be
- * two accounts of the same event. `request` is the exception and is deliberately
- * the vaguest: a row arriving is announced by the ROW (rowNotice), which knows
- * what kind it is, so this sentence is only ever the fallback for an event with
- * no row behind it yet.
+ * two accounts of the same event. A row arriving is not an event here: it is
+ * announced by the ROW (rowNotice).
  */
 export function eventNotice(event: AccountEvent, username: string): string {
   const device = event.device ?? ACCOUNT_EVENT_PLAIN.anotherDevice
@@ -188,33 +155,31 @@ export function eventNotice(event: AccountEvent, username: string): string {
       return accountCopy('d14.moved', { door: event.address ?? ACCOUNT_EVENT_PLAIN.someDoor, device })
     case 'not-me':
       return accountCopy('d11.denied', { handle: username, device })
-    case 'request':
-      return ACCOUNT_EVENT_PLAIN.request
   }
 }
 
 // ── the view model ─────────────────────────────────────────────────────────
 
 export interface RowAction {
-  id: 'approve' | 'deny' | 'not-me' | 'allow' | 'not-now' | 'seat-them' | 'decline'
+  id: 'approve' | 'deny' | 'not-me'
   label: string
   /** primary is the common answer; revoke is the heavy one; ghost is the alarm. */
   tone: 'primary' | 'revoke' | 'ghost'
-  /** True when the button cannot fire until the number is filled (join only). */
+  /** True when the button cannot fire until the number is filled. */
   needsMatch?: boolean
 }
 
 export interface RequestRowView {
   id: string
-  kind: 'join' | 'reach' | 'seat'
+  kind: 'join'
   /** Two letters for the row's square: MS, iP, JK. */
   initials: string
   lead: string
   detail: string
-  /** The number field's label, on the join row and nowhere else. */
+  /** The number field's label, on a waiting row and nowhere else. */
   matchLabel: string | null
   actions: readonly RowAction[]
-  /** DONE · LAN · SEATED · NOT ME when the row is over; null while it waits. */
+  /** DONE · NOT ME when the row is over; null while it waits. */
   chip: string | null
 }
 
@@ -253,62 +218,28 @@ export interface RowInput {
 /**
  * One waiting row, as the card draws it.
  *
- * Every kind's lead comes from the copy table by id; what differs is which
- * facts the row HAS to put in its detail line. The design's mock has a price
- * and a seated count on the seat row and a device kind on the join row; the
- * queue's wire shape carries neither, so those clauses are absent rather than
- * guessed. A row that invents a "$4" nobody sent is worse than one that says
- * less.
+ * The lead comes from the copy table by id. The design's mock has a device
+ * kind on the row; the queue's wire shape does not carry one, so that clause
+ * is absent rather than guessed. A row that invents a fact nobody sent is
+ * worse than one that says less.
  */
 export function pendingRowView(row: QueueRow, input: RowInput): RequestRowView {
   const ago = agoClause(row.at, input.now)
-  if (row.kind === 'join') {
-    const device = row.device ?? ''
-    return {
-      id: row.id,
-      kind: 'join',
-      initials: rowInitials(device),
-      lead: accountCopy('d11.join-lead', { device, handle: input.username }),
-      detail: detail([REQUEST_COPY.JOIN_KIND, row.address, ago]),
-      matchLabel: accountCopy('d11.join-row'),
-      actions: [
-        // APPROVE IS DEAD UNTIL THE NUMBER IS TYPED (R3). The rung exists
-        // because a person can be nagged into tapping a button; it is worth
-        // nothing if the button can be tapped without reading the other screen.
-        { id: 'approve', label: REQUEST_COPY.APPROVE, tone: 'primary', needsMatch: true },
-        { id: 'deny', label: REQUEST_COPY.DENY, tone: 'revoke' },
-        { id: 'not-me', label: REQUEST_COPY.NOT_ME, tone: 'ghost' },
-      ],
-      chip: null,
-    }
-  }
-  if (row.kind === 'reach') {
-    const device = row.device ?? ''
-    return {
-      id: row.id,
-      kind: 'reach',
-      initials: rowInitials(device),
-      lead: leadOf(accountCopy('d11.wifi-row', { device })),
-      detail: detail([REQUEST_COPY.REACH_KIND, REQUEST_COPY.ON_ACCOUNT, ago]),
-      matchLabel: null,
-      actions: [
-        { id: 'allow', label: REQUEST_COPY.ALLOW, tone: 'primary' },
-        { id: 'not-now', label: REQUEST_COPY.NOT_NOW, tone: 'ghost' },
-      ],
-      chip: null,
-    }
-  }
-  const handle = row.account ?? ''
+  const device = row.device ?? ''
   return {
     id: row.id,
-    kind: 'seat',
-    initials: rowInitials(`@${handle}`),
-    lead: accountCopy('d11.seat-row', { handle, team: row.team ?? '' }),
-    detail: detail([REQUEST_COPY.SEAT_KIND, `@${handle}`, ago]),
-    matchLabel: null,
+    kind: 'join',
+    initials: rowInitials(device),
+    lead: accountCopy('d11.join-lead', { device, handle: input.username }),
+    detail: detail([REQUEST_COPY.JOIN_KIND, row.address, ago]),
+    matchLabel: accountCopy('d11.join-row'),
     actions: [
-      { id: 'seat-them', label: REQUEST_COPY.SEAT_THEM, tone: 'primary' },
-      { id: 'decline', label: REQUEST_COPY.DECLINE, tone: 'revoke' },
+      // APPROVE IS DEAD UNTIL THE NUMBER IS TYPED (R3). The rung exists
+      // because a person can be nagged into tapping a button; it is worth
+      // nothing if the button can be tapped without reading the other screen.
+      { id: 'approve', label: REQUEST_COPY.APPROVE, tone: 'primary', needsMatch: true },
+      { id: 'deny', label: REQUEST_COPY.DENY, tone: 'revoke' },
+      { id: 'not-me', label: REQUEST_COPY.NOT_ME, tone: 'ghost' },
     ],
     chip: null,
   }
@@ -317,11 +248,10 @@ export function pendingRowView(row: QueueRow, input: RowInput): RequestRowView {
 /** One finished row: what it became, said in the first person, with its chip. */
 export function answeredRowView(row: AnsweredRow, input: RowInput): RequestRowView {
   const ago = agoClause(row.at, input.now)
-  const person = row.outcome === 'seated'
   const base = {
     id: row.id,
     kind: row.kind,
-    initials: rowInitials(person ? `@${row.subject}` : row.subject),
+    initials: rowInitials(row.subject),
     matchLabel: null,
     actions: [],
   }
@@ -331,22 +261,6 @@ export function answeredRowView(row: AnsweredRow, input: RowInput): RequestRowVi
       lead: accountCopy('d11.join-done', { device: row.subject, handle: input.username }),
       detail: detail([REQUEST_COPY.OVER_APPROVED, ago]),
       chip: REQUEST_COPY.CHIP_DONE,
-    }
-  }
-  if (row.outcome === 'allowed') {
-    return {
-      ...base,
-      lead: accountCopy('d11.wifi-done', { device: row.subject }),
-      detail: detail([REQUEST_COPY.OVER_ALLOWED, ago]),
-      chip: REQUEST_COPY.CHIP_LAN,
-    }
-  }
-  if (row.outcome === 'seated') {
-    return {
-      ...base,
-      lead: accountCopy('d11.seat-done', { handle: row.subject, team: row.team ?? '' }),
-      detail: detail([REQUEST_COPY.OVER_SEATED, ago]),
-      chip: REQUEST_COPY.CHIP_SEATED,
     }
   }
   return {

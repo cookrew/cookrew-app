@@ -77,8 +77,12 @@ describe('the wiring', () => {
     const main = readFileSync('src/main/index.ts', 'utf8')
     expect(main).toContain("buildBus.emit('build', next)")
     expect(main).toContain('build: { id: () => buildId, bus: buildBus }')
-    const boot = readFileSync('src/renderer/src/main.tsx', 'utf8')
-    expect(boot).toContain('reload: () => window.location.reload()')
-    expect(boot).toContain("document.addEventListener('visibilitychange', cb)")
+    // Started with the machine in scope and stopped when it is left (machine-session.ts),
+    // and only on a machine's own page: there the page is that machine's build.
+    const session = readFileSync('src/renderer/src/machine-session.ts', 'utf8')
+    expect(session).toContain('reload: () => window.location.reload()')
+    expect(session).toContain("document.addEventListener('visibilitychange', cb)")
+    expect(session).toContain('!scopeNeedsMachine() && isRemoteMode() ? cookrew().onBuild : undefined')
+    expect(readFileSync('src/renderer/src/main.tsx', 'utf8')).toContain('startMachineSession()')
   })
 })

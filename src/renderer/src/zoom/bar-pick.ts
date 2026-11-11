@@ -1,3 +1,4 @@
+import { registerScopeState } from '../machine-scope'
 import { useSyncExternalStore } from 'react'
 
 /**
@@ -31,6 +32,9 @@ const listeners = new Set<() => void>()
 const emit = (): void => {
   for (const listener of listeners) listener()
 }
+
+// The open card is an agent or an item of ONE machine.
+registerScopeState('bar card', () => barCard.close())
 
 export const barCard = {
   get: (): BarCard | null => card,

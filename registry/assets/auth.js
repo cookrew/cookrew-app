@@ -153,7 +153,7 @@
     const s = summary
     const kind = kindOf(s.client)
     const device = s.device && s.device.name ? `Asked from “${s.device.name}”` : 'Asked from a new device'
-    const back = s.client === 'web' && s.returnHost ? ` · returns to ${s.returnHost}` : ''
+    const back = (s.client === 'web' || s.client === 'console') && s.returnHost ? ` · returns to ${s.returnHost}` : ''
     // The hero already draws web, desktop and terminal; the card borrows that drawing.
     const way = doc.querySelector(`.ways [data-way="${kind}"]`)
     $who.replaceChildren(
@@ -222,7 +222,9 @@
   /* A passkey request's screens live in auth-enrol.js, a step-up's in auth-step.js; these are the page's parts they borrow. */
   const passkeyIntent = () => Boolean(summary && summary.intent === 'passkey')
   const stepIntent = () => Boolean(summary && summary.intent === 'step-up')
-  const what = () => (passkeyIntent() ? 'request' : stepIntent() ? 'confirmation' : 'sign-in')
+  /* The account password, typed here to open the account's machines in the console (auth-grant.js). */
+  const grantIntent = () => Boolean(summary && summary.intent === 'grant')
+  const what = () => (passkeyIntent() ? 'request' : stepIntent() || grantIntent() ? 'confirmation' : 'sign-in')
   const setEnrol = (enrol) => (summary = { ...summary, enrol: enrol || null })
   const enrolUi = () => ({ call, screen, head, button, sayer, field, form, submitter, busy, badge, links, notNow, outcome, toProvider, label, setEnrol, first, rung, summary: () => summary })
 
@@ -230,6 +232,7 @@
     const intent = summary.intent
     if (intent === 'passkey') return window.cookrewAuthEnrol.start(enrolUi(), note)
     if (intent === 'step-up') return window.cookrewAuthStep.start(enrolUi(), note)
+    if (intent === 'grant') return window.cookrewAuthGrant.start(enrolUi(), note)
     if (intent === 'link') return linkScreen(note)
     if (intent === 'github' || intent === 'google') return providerScreen(intent, note)
     if (intent === 'create') return create(note)
@@ -813,8 +816,8 @@
     const kind = way && way.kind
     const passkey = passkeyIntent()
     if (kind === 'web' && safe(way.url)) {
-      const title = passkey ? 'Passkey made.' : stepIntent() ? 'Confirmed.' : 'Signed in.'
-      const onward = passkey ? ' to add it' : stepIntent() ? ' to finish' : ''
+      const title = passkey ? 'Passkey made.' : stepIntent() || grantIntent() ? 'Confirmed.' : 'Signed in.'
+      const onward = passkey ? ' to add it' : stepIntent() ? ' to finish' : grantIntent() ? ' to open your machines' : ''
       screen([badge('check'), ...head(null, title, `Taking you back to ${summary.returnHost || 'cookrew.dev'}${onward}…`), go('Continue', way.url, 'primary')])
       location.replace(way.url)
       return

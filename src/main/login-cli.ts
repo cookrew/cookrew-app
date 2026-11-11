@@ -3,6 +3,7 @@ import {
   ladderIsOver,
   normaliseUsername,
   registryMismatchSentence,
+  signInAgainSentence,
   type AccountDevice,
   type AccountRefusal,
   type AccountResult,
@@ -10,6 +11,7 @@ import {
   type LadderFactor,
   type ProviderSignInAnswer,
   type SecondFactorStep,
+  type SignInAgainReason,
   type SignInAnswer
 } from '../shared/account-v2'
 import { machineCopy, registryWord } from '../shared/machine-words'
@@ -114,6 +116,8 @@ export interface AccountWho {
   sessionLive: boolean
   registry: string | null
   mismatch: { signedInAt: string; pointedAt: string } | null
+  /** Why this machine must sign in again, when it is more than an ordinary ended session (0.6.0 moved the registry). */
+  signInAgainBecause: SignInAgainReason | null
 }
 
 /** The sheet's own account functions (account-ipc.ts · accountDoor). */
@@ -373,9 +377,10 @@ class Conversation {
       const sentence = machineCopy(registryMismatchSentence(who.mismatch), this.account.platform)
       return this.finish(LOGIN_EXIT.failed, [sentence], null)
     }
-    if (this.github) return this.askDevice()
-    if (this.pageOffered()) return this.askBrowser(who.username, true)
-    return this.renewByPassword(who.username, who.passwordless)
+    // Said first when there is a reason beyond "it ended": the person learns why they are asked.
+    const why = who.signInAgainBecause ? [signInAgainSentence(who.signInAgainBecause, this.account.platform)] : []
+    const turn = this.github ? this.askDevice() : this.pageOffered() ? this.askBrowser(who.username, true) : this.renewByPassword(who.username, who.passwordless)
+    return { ...turn, say: [...why, ...turn.say] }
   }
 
   /** The page is the default way in, unless `--password` asked for the old one. */
@@ -414,7 +419,9 @@ class Conversation {
     if (who.username === null) return this.finish(LOGIN_EXIT.ok, [this.say('said.not-signed-in')], null)
     // Leaving needs a live session to act under, and no password is the fix.
     if (!who.sessionLive) {
-      const sentence = this.say('said.session-ended', { handle: who.username, device: who.deviceName })
+      const sentence = who.signInAgainBecause
+        ? `${signInAgainSentence(who.signInAgainBecause, this.account.platform)} Run cookrew login.`
+        : this.say('said.session-ended', { handle: who.username, device: who.deviceName })
       return this.finish(LOGIN_EXIT.failed, [sentence], null)
     }
     // The proof would be a browser trip, and this machine may have no browser.
@@ -890,7 +897,10 @@ export class LoginDoor {
     const who = account.who()
     if (who.username === null) throw new LoginRefused(said('said.not-signed-in', platform), LOGIN_EXIT.failed)
     const vars = { handle: who.username, device: who.deviceName, registry: who.registry ?? 'cookrew.dev' }
-    if (!who.sessionLive) throw new LoginRefused(said('said.session-ended', platform, vars), LOGIN_EXIT.failed)
+    if (!who.sessionLive) {
+      const ended = who.signInAgainBecause ? `${signInAgainSentence(who.signInAgainBecause, platform)} Run cookrew login.` : said('said.session-ended', platform, vars)
+      throw new LoginRefused(ended, LOGIN_EXIT.failed)
+    }
     return said('said.whoami', platform, vars)
   }
 }

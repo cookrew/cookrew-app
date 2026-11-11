@@ -75,24 +75,32 @@ export const asking = (ctx: V2Context): string =>
  * arrived on, which is what a browser used and therefore what it signed over.
  */
 export function relyingParty(ctx: V2Context): { origin: string; rpId: string } {
+  const product = ctx.v2.origin === null || ctx.v2.origin === '' ? null : ctx.v2.origin
   // ON THE AUTH ORIGIN the browser signs over that origin, and the passkeys it
   // offers are the product's: their rpId is the product's host, a registrable
   // suffix of the auth host, so one passkey opens both.
-  const auth = ctx.auth === undefined ? null : ctx.v2.auth
-  if (auth !== null && ctx.v2.origin !== null && ctx.v2.origin !== '') {
-    return { origin: auth.origin, rpId: new URL(ctx.v2.origin).hostname }
+  const auth = ctx.auth !== undefined || ctx.via === 'auth' ? ctx.v2.auth : null
+  if (auth !== null && product !== null) return { origin: auth.origin, rpId: new URL(product).hostname }
+  // ON THE API HOST no page lives, and the one page that may call it is the
+  // console: a passkey checked here was touched there or nowhere. Never the
+  // product origin, which is a static site that asks for no passkey; with no
+  // console configured the origin is one no browser can sign over.
+  if (ctx.via === 'api' && product !== null) {
+    return { origin: ctx.v2.consoleOrigin ?? NO_PAGE_ORIGIN, rpId: new URL(product).hostname }
   }
   // An empty configured origin is NOT a configuration: it would make
   // `new URL('')` throw and quietly hand the rpId back to the Host header.
-  const configured = ctx.v2.origin === null || ctx.v2.origin === '' ? null : ctx.v2.origin
   const host = ctx.request.headers.host ?? 'localhost'
-  const origin = configured ?? `${ctx.secure ? 'https' : 'http'}://${host}`
+  const origin = product ?? `${ctx.secure ? 'https' : 'http'}://${host}`
   try {
     return { origin, rpId: new URL(origin).hostname }
   } catch {
     return { origin, rpId: host.split(':')[0] }
   }
 }
+
+/** An origin no page can have (RFC 6761), for a host that takes a passkey from no page at all. */
+const NO_PAGE_ORIGIN = 'https://no-page.invalid'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 

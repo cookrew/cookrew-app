@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { faqPage, jsonLd, robotsTxt, sitemapXml, softwareApplication, teamProduct } from '../registry/src/site-seo'
+import { faqPage, jsonLd, robotsTxt, sitemapXml, softwareApplication } from '../registry/src/site-seo'
 import { DEFINITION, FAQ, FEATURES, llmsText } from '../registry/src/site-content'
 import { parseCommits } from '../registry/src/github-commits'
 import { featurePage } from '../registry/src/site-features'
-import { homePage } from '../registry/src/site-home'
-import type { ListedDoor } from '../registry/src/site'
+import { staticHomePage } from '../registry/src/site-home'
+import { withStaticSite } from '../registry/src/site-shell'
 
 /**
  * WHAT A MACHINE READS. The structured data says what the page says, the
@@ -12,37 +12,11 @@ import type { ListedDoor } from '../registry/src/site'
  * definition sentence an answer engine would quote from the homepage.
  */
 
-const door: ListedDoor = {
-  handle: 'drej',
-  name: 'cookrew-alpha',
-  title: 'COOKREW Alpha',
-  door: 'Pilot',
-  agents: 3,
-  address: 'https://cookrew.dev/@drej/cookrew-alpha',
-  transport: 'relay',
-  access: 'paid',
-  priceUsd: '2.50',
-  rails: ['stripe'],
-  sealKey: 'MCowBQYDK2VuAyEApz6yO0AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ab',
-  seenAt: Date.UTC(2026, 8, 3),
-  live: true,
-  summary: 'The crew that builds Cookrew.'
-}
+/** The pages are the static site's (0.6.0): each is drawn the way the build draws it. */
+const CONSOLE = 'https://console.cookrew.dev'
+const drawn = <T>(render: () => T): T => withStaticSite({ console: CONSOLE, auth: 'https://auth.cookrew.dev' }, render)
 
 describe('structured data', () => {
-  it('a team is a Product with one Offer at its price, in stock while live', () => {
-    const product = teamProduct(door, 4) as { offers: Record<string, unknown>; aggregateRating: Record<string, unknown>; description: string }
-    expect(product.offers.price).toBe('2.50')
-    expect(product.offers.availability).toBe('https://schema.org/InStock')
-    expect((product as unknown as { interactionStatistic: { userInteractionCount: number } }).interactionStatistic.userInteractionCount).toBe(4)
-    expect('aggregateRating' in product).toBe(false)
-    expect(product.description).toBe('The crew that builds Cookrew.')
-    const off = teamProduct({ ...door, live: false, access: 'account', priceUsd: undefined }, 0) as { offers: Record<string, unknown> }
-    expect(off.offers.price).toBe('0')
-    expect(off.offers.availability).toBe('https://schema.org/OutOfStock')
-    expect('interactionStatistic' in off).toBe(false)
-  })
-
   it('the application carries the definition and the real version', () => {
     const app = softwareApplication({ version: '0.1.2', tag: 'v0.1.2', publishedAt: '2026-08-28T14:05:26Z', url: 'https://x', assets: [{ name: 'a.dmg', url: 'https://x/a.dmg', bytes: 1 }] }) as Record<string, unknown>
     expect(app.description).toBe(DEFINITION)
@@ -66,20 +40,19 @@ describe('the crawl files', () => {
     expect(robots).toContain('Sitemap: https://cookrew.dev/sitemap.xml')
   })
 
-  it('the sitemap names every page, with the door dated by when it was last seen', () => {
-    const xml = sitemapXml([door, { ...door, name: 'b<c', handle: 'mira' }])
-    expect(xml).toContain('<loc>https://cookrew.dev/</loc>')
-    expect(xml).toContain('<loc>https://cookrew.dev/market</loc>')
+  it('the sitemap names every page of the static site, and nothing the registry used to list', () => {
+    const xml = sitemapXml()
+    expect(xml).toContain('<loc>https://cookrew.dev/</loc><priority>1</priority>')
+    expect(xml).not.toContain('<loc>https://cookrew.dev/market</loc>')
     // /start and /features are sections of the homepage now; a fragment is
     // not a sitemap URL, and the old addresses redirect.
     expect(xml).not.toContain('<loc>https://cookrew.dev/start</loc>')
     expect(xml).not.toContain('<loc>https://cookrew.dev/features</loc>')
-    for (const f of FEATURES) expect(xml).toContain(`<loc>https://cookrew.dev/features/${f.slug}</loc>`)
-    expect(xml).toContain('<loc>https://cookrew.dev/drej/cookrew-alpha</loc><priority>0.8</priority>')
+    for (const f of FEATURES) expect(xml).toContain(`<loc>https://cookrew.dev/features/${f.slug}</loc><priority>0.7</priority>`)
     expect(xml).not.toContain('lastmod')
-    expect(xml).toContain('<loc>https://cookrew.dev/drej</loc>')
-    expect(xml).toContain('b&lt;c')
-    expect(xml).not.toContain('b<c')
+    // No person and no team: those pages are gone, so no address but the site's own is named.
+    const listed = [...xml.matchAll(/<loc>https:\/\/cookrew\.dev(\/[^<]*)<\/loc>/g)].map(([, at]) => at)
+    expect(listed.filter((at) => at !== '/' && !at.startsWith('/features/') && at !== '/privacy' && at !== '/terms')).toEqual([])
   })
 
   it('llms.txt opens with the definition and answers every FAQ', () => {
@@ -93,7 +66,7 @@ describe('the crawl files', () => {
 describe('the feature and start pages', () => {
   it('every feature page is a document with its intent, its definition, a FAQ and breadcrumbs', () => {
     for (const f of FEATURES) {
-      const rendered = featurePage(f.slug)
+      const rendered = drawn(() => featurePage(f.slug))
       expect(rendered, f.slug).not.toBeNull()
       expect(rendered!.status).toBe(200)
       expect(rendered!.headers['content-security-policy']).toContain("script-src 'none'")
@@ -110,15 +83,13 @@ describe('the feature and start pages', () => {
 
   // The features index and the start page are sections of the homepage now
   // (2026-09-06); what they promised a crawler, the homepage promises.
-  const home = homePage({
-    doors: [],
-    presets: [],
-    release: null,
-    commits: [{ sha: 'a7e1d0b', title: 'feat: the web line', date: '2026-09-03', url: 'https://github.com/cookrew/cookrew-app/commit/a7e1d0b' }],
-    stars: () => 0,
-    pulse: () => ({ lines: 0, calls: 0 }),
-    linesToday: 0
-  })
+  const home = drawn(() =>
+    staticHomePage({
+      release: null,
+      commits: [{ sha: 'a7e1d0b', title: 'feat: the web line', date: '2026-09-03', url: 'https://github.com/cookrew/cookrew-app/commit/a7e1d0b' }],
+      console: CONSOLE
+    })
+  )
 
   it('the homepage links every feature, with the questions and the commits', () => {
     for (const f of FEATURES) expect(home.body).toContain(`href="/features/${f.slug}"`)

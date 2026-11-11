@@ -2,14 +2,15 @@
  * WHICH REQUESTS RIDE THE DIRECT LINK (path/rtc-link.ts).
  *
  * The WebRTC plane keeps the relay's URLs: the page still composes
- * `/relay/@user/desktop/<id>/api/...`, and images, links and anything else
+ * `<relay address of the machine>/api/...`, and images, links and anything else
  * that is not a request this module carries keep loading over the relay. The
  * two openers that matter — the plane-aware fetch and the event streams —
  * ask here first, and when the plane is the link they strip the base and
  * send the Mac path over the data channel.
  */
 
-import { apiPath, clientBase } from './api-base'
+import { apiPath, apiRequestInit, clientBase } from './api-base'
+import { heldScope, machineLeft, registerScopeState, relayHeadersForUrl } from './machine-scope'
 import { authHeaders, tokenParam } from './auth-gate'
 import { BridgeWebSocket } from './path/bridge-socket'
 import { planeFetch } from './plane-fetch'
@@ -21,22 +22,34 @@ import { watchStream } from './stream-watch'
 let current: RtcLink | null = null
 
 export const rtcLink = (): RtcLink | null => (current?.isOpen() ? current : null)
+/** The link the page holds, open or not: what a link asks to learn whether it is still the one held. */
+export const heldRtcLink = (): RtcLink | null => current
 export const setRtcLink = (link: RtcLink | null): void => {
   current = link
 }
 
-/** What the registry strips before a relayed request reaches the Mac (v2-canvas-relay.ts). */
-const RELAY_PREFIX = /^\/relay\/@[^/]+\/desktop\/[^/]+(?=\/)/
+// The direct link is to ONE machine. Entering another closes it: left open it
+// would carry the next machine's requests to the last one.
+registerScopeState(
+  'rtc link',
+  () => {
+    const link = current
+    current = null
+    link?.close('another machine was entered')
+  },
+  'stop'
+)
 
 /**
- * The Mac path for a page URL, or null when the URL is not one the link
- * carries: an absolute URL (the registry, a direct origin), or a path outside
- * this page's relay base (cookrew.dev's own routes).
+ * The machine's own path for a request URL, or null when the URL is not one
+ * the link carries: a URL outside the machine's relay address (the registry's
+ * own routes, another origin), or on a page with no relay a URL that is not a
+ * path on this origin. What is left once the relay address is taken off is the
+ * path the machine sees, as the relay itself hands it on (v2-canvas-relay.ts).
  */
 export const linkPath = (url: string, base: string = clientBase()): string | null => {
-  if (!url.startsWith('/') || url.startsWith('//')) return null
-  if (base && !url.startsWith(`${base}/`)) return null
-  return url.replace(RELAY_PREFIX, '')
+  if (base) return url.startsWith(`${base}/`) ? url.slice(base.length) : null
+  return !url.startsWith('/') || url.startsWith('//') ? null : url
 }
 
 /** Is this page on cookrew.dev's relay right now? It is the one plane behind an ingress. */
@@ -129,27 +142,45 @@ const watchNetwork = (changed: () => void): (() => void) => {
  * header, and a URL through cookrew.dev reaches the ingress log, so here the
  * pairing token goes as a header and the reader is the one the link already has.
  */
-const headerStream = (url: string): Pick<RtcLink, 'request'> => ({
-  request: async ({ method, headers, signal }) => {
-    const response = await fetch(url, { method, signal, credentials: 'same-origin', headers: { ...headers, ...authHeaders() } })
-    // A page where a stream was due is a failed connect, as EventSource holds it.
-    const stream = response.headers.get('content-type')?.includes('text/event-stream') === true
-    return stream || !response.ok ? response : new Response(null, { status: 502 })
+const headerStream = (url: string): Pick<RtcLink, 'request'> => {
+  // The address names one machine and the token is read at each connect: a
+  // stream that redials after another machine was entered is not redialled.
+  const sameMachine = heldScope()
+  return {
+    request: async ({ method, headers, signal }) => {
+      if (!sameMachine()) throw machineLeft()
+      // The relay's own stream: the same request options as any relayed call, and the account session judged by its address.
+      const response = await fetch(url, { method, signal, ...apiRequestInit(), headers: { ...headers, ...authHeaders(), ...relayHeadersForUrl(url) } })
+      // A page where a stream was due is a failed connect, as EventSource holds it.
+      const stream = response.headers.get('content-type')?.includes('text/event-stream') === true
+      return stream || !response.ok ? response : new Response(null, { status: 502 })
+    }
   }
-})
+}
 
 /**
- * An event stream at a scoped URL with no credential on it: this adds one in the
- * way the plane allows. The direct link and the direct origins never meet the
- * ingress, so they keep the query a native EventSource needs.
+ * An event stream at a scoped URL with no credential on it: this adds one, IN A
+ * HEADER, on every path that leaves this origin.
+ *
+ *   the direct link   the machine's token rides the request's headers on the data channel
+ *   the relay         by fetch: the token and the account session in headers (a URL through
+ *                     the registry reaches its ingress log)
+ *   a direct origin   by fetch too: the machine's own name on the LAN or the tailnet, with the
+ *                     token in a header and no cookie. `new EventSource` cannot set a header,
+ *                     and a token in a URL is in a history entry, a log and a screenshot.
+ *
+ * A page a machine serves itself (no relay, no direct plane) opens its own origin's stream the
+ * browser's way, as it always did.
  */
+const linkStream = (link: RtcLink): Pick<RtcLink, 'request'> => ({
+  request: (asked) => link.request({ ...asked, headers: { ...asked.headers, ...authHeaders() } })
+})
+
 export const openEventSource = (url: string): EventSource => {
   const routed = viaLink(url)
   // Watched every way: a stream on a path that died without a reset looks open
   // for ever (stream-watch.ts).
-  if (routed) {
-    return watchStream(new RtcEventSource(routed.link, tokenParam(routed.path)), { native: false }) as unknown as EventSource
-  }
-  if (onRelay()) return watchStream(new RtcEventSource(headerStream(url), url), { native: false }) as unknown as EventSource
+  if (routed) return watchStream(new RtcEventSource(linkStream(routed.link), routed.path), { native: false }) as unknown as EventSource
+  if (onRelay() || dataPlane().origin !== '') return watchStream(new RtcEventSource(headerStream(url), url), { native: false }) as unknown as EventSource
   return watchStream(new EventSource(tokenParam(url)), { native: true })
 }

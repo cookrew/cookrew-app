@@ -24,8 +24,8 @@ import './gate-sheet.css'
  * so the sheet gets shorter as it succeeds.
  *
  * WHAT THIS COMPONENT DOES NOT DO. It mounts no ceremony. The account sheet,
- * the wallet transfer and the browser card a refusal opens happen in their own
- * machinery; this sheet calls back to them and paints their result. Keeping the
+ * the wallet transfer and the question a refusal puts to the door again happen
+ * in their own machinery; this sheet calls back to them and paints their result. Keeping the
  * ceremonies out is what lets the sheet be a pure projection of the gate,
  * testable without an account, a wallet or a network.
  *
@@ -75,9 +75,15 @@ export interface GateSheetProps {
   onIdentify?: () => void
   onSelectWallet?: (id: string) => void
   onPay?: () => void
+  /**
+   * Replaces the pay step's primary when paying is not what the step needs —
+   * a card payment already made and not yet confirmed, where the only safe
+   * act is asking about it again (CHECK AGAIN), never a second payment.
+   */
+  payAction?: { label: string; onClick: () => void } | null
   /** Acknowledge the served state — DONE. */
   onServe?: () => void
-  /** The one forward action on a 403 — including the seat rung's BUY. */
+  /** The one forward action on a 403 — including the seat rung's BUY, which leads to the pay step. */
   onRemedy?: (reason: string) => void
 }
 
@@ -226,6 +232,7 @@ function primaryFor(
         onClick: props.onRemedy ? () => props.onRemedy?.('no_seat') : undefined
       }
     case 'pay':
+      if (props.payAction) return props.payAction
       return pricing
         ? {
             label: props.selectedWallet

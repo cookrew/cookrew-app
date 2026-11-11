@@ -1,0 +1,363 @@
+/*
+ * THE CONSOLE'S OWN LEVELS: the way in, and the account's machines. Drawn on
+ * the app's palette (zoom/ink-theme.css) so a machine reads the same here as
+ * inside the app: an inked frame, a paper screen, its name under it.
+ */
+.cd-page {
+  box-sizing: border-box;
+  min-height: 100dvh;
+  padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  background: var(--sumi-paper);
+  color: var(--sumi-ink);
+  font: 14px/1.45 var(--font-serif);
+  overflow-y: auto;
+}
+
+.cd-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px 20px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+
+.cd-mark {
+  margin: 0;
+  font: 600 22px/1.1 var(--font-serif);
+  letter-spacing: 0.01em;
+}
+
+.cd-who {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.cd-user {
+  color: var(--sumi-ink-soft);
+}
+
+.cd-quiet {
+  appearance: none;
+  /* A finger's height, though it reads as a line of text. */
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--sumi-seal-text);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.cd-primary {
+  appearance: none;
+  min-height: 40px;
+  padding: 8px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--sumi-gold);
+  color: var(--sumi-on-gold);
+  font: 600 14px/1 var(--font-serif);
+  cursor: pointer;
+}
+
+.cd-primary:disabled,
+.cd-quiet:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.cd-primary:focus-visible,
+.cd-quiet:focus-visible,
+.cd-open:focus-visible,
+.cd-ws:focus-visible {
+  outline: 3px solid var(--sumi-seal);
+  outline-offset: 3px;
+}
+
+.cd-line,
+.cd-empty,
+.cd-opening {
+  margin: 12px 0 0;
+  color: var(--sumi-ink-soft);
+}
+
+.cd-notice {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--sumi-hair-2);
+  border-radius: 10px;
+  background: var(--sumi-card);
+}
+
+.cd-gate {
+  margin: 0 0 24px;
+  padding: 16px 18px;
+  border: 1px solid var(--sumi-hair-2);
+  border-radius: 12px;
+  background: var(--sumi-card);
+  box-shadow: var(--sumi-lift);
+}
+
+.cd-gate p {
+  margin: 0;
+}
+
+.cd-gate-ways {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+/* ── the machines: two to a row on a phone, one row on a desk ── */
+.cd-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 34px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 720px) {
+  .cd-grid {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 300px));
+    gap: 40px 34px;
+  }
+}
+
+.cd-tile {
+  min-width: 0;
+}
+
+.cd-frame {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  margin: 0 7% 22px;
+  border: 2px solid var(--sumi-ink);
+  border-radius: 12px;
+  background: var(--sumi-paper-2);
+  box-shadow: 0 10px 30px var(--sumi-shadow);
+}
+
+/* The whole bezel opens the machine; what is on its screen sits above it. */
+.cd-open {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  cursor: zoom-in;
+}
+
+.cd-open:disabled {
+  cursor: default;
+}
+
+.cd-screen {
+  position: absolute;
+  inset: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px;
+  border-radius: 5px;
+  background: var(--sumi-paper);
+  box-shadow: inset 0 0 0 1px var(--sumi-hair);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* A screen nobody may read yet, or that cannot be read: dark, as a lid closed. */
+.cd-tile[data-standing='locked'] .cd-screen,
+.cd-tile[data-standing='offline'] .cd-screen,
+.cd-tile[data-standing='outdated'] .cd-screen,
+.cd-tile[data-standing='blocked'] .cd-screen {
+  background: var(--sumi-paper-3);
+}
+
+.cd-tile[data-standing='offline'] .cd-frame,
+.cd-tile[data-standing='outdated'] .cd-frame,
+.cd-tile[data-standing='blocked'] .cd-frame {
+  opacity: 0.6;
+}
+
+.cd-deck {
+  position: absolute;
+  left: -9%;
+  right: -9%;
+  bottom: -16px;
+  height: 10px;
+  border: 2px solid var(--sumi-ink);
+  border-radius: 3px 3px 10px 10px;
+  background: var(--sumi-paper);
+  pointer-events: none;
+}
+
+.cd-ws {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--sumi-ink);
+  font: 12px/1.2 var(--font-serif);
+  text-align: left;
+  cursor: zoom-in;
+  pointer-events: auto;
+}
+
+.cd-ws:hover {
+  background: var(--sumi-wash);
+}
+
+.cd-ws-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cd-ws-count {
+  color: var(--sumi-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-ws-wait {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sumi-wait);
+}
+
+.cd-none {
+  padding: 1px 6px;
+  color: var(--sumi-muted);
+  font-size: 12px;
+}
+
+.cd-label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cd-label b {
+  font: 600 16px/1.15 var(--font-serif);
+  overflow-wrap: anywhere;
+}
+
+/* The path word beside a machine's name: quiet for the relay, the seal for a direct one. */
+.cd-path {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--sumi-hair-2);
+  border-radius: 999px;
+  color: var(--sumi-muted);
+  font: 500 10px/1.5 var(--font-serif);
+  letter-spacing: 0.06em;
+  vertical-align: 2px;
+}
+
+.cd-path[data-path='LAN'],
+.cd-path[data-path='TAILNET'] {
+  border-color: var(--sumi-seal);
+  color: var(--sumi-seal-text);
+}
+
+.cd-label small {
+  color: var(--sumi-ink-soft);
+  font-size: 12px;
+}
+
+.cd-label em {
+  color: var(--sumi-seal-text);
+  font-style: normal;
+  font-size: 13px;
+}
+
+.cd-page[data-entering] .cd-tile:not([data-opening]) {
+  opacity: 0.45;
+}
+
+/* ── the way in ── */
+.cd-signin {
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 14px;
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.cd-signin .cd-mark {
+  font-size: 34px;
+}
+
+.cd-lead {
+  margin: 0 0 6px;
+  color: var(--sumi-ink-soft);
+  font-size: 16px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cd-tile,
+  .cd-frame {
+    transition: opacity 160ms ease;
+  }
+}
+
+/* A newer build is out (NewerBuild.tsx): one line over whatever is on screen, out of the way of the thumb's row. */
+.cd-newer {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 4px 4px 4px 14px;
+  max-width: calc(100vw - 24px);
+  border: 1px solid var(--sumi-line, currentColor);
+  border-radius: 999px;
+  background: var(--sumi-paper, Canvas);
+  color: var(--sumi-ink, CanvasText);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.cd-newer-go {
+  /* As tall as the console's other controls (.cd-primary): it is the one thing on this line a finger goes for. */
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 4px 14px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { registryMismatchSentence } from '../../../shared/account-v2'
+import { registryMismatchSentence, signInAgainSentence } from '../../../shared/account-v2'
 import type { AccountProfile, AccountStatus, AdmittedPhone } from '../../../shared/account-v2'
 import type { WorkspaceMeta } from '../../../shared/model'
 import { cookrew } from '../api'
@@ -375,6 +375,14 @@ export function ProfileSheet({
           </p>
         )}
 
+        {/* WHY IT MUST SIGN IN AGAIN, when that is not an ordinary ended session (0.6.0 moved the
+            registry): said above the field that takes the password, so the two read as one thing. */}
+        {status.sessionExpired && status.signInAgainBecause && (
+          <p className="gs-paste-error" role="alert">
+            {signInAgainSentence(status.signInAgainBecause)}
+          </p>
+        )}
+
         {/* THE SESSION ENDED — the sentence comes WITH the field, in the
             header, so it is on screen whichever tab is open. Every tab's own
             reads are refused underneath it until this is answered. */}
@@ -606,9 +614,9 @@ export function ProfileSheet({
                     <p className="cr-acct-joincode">{minted.code}</p>
                     {/* THE QR IS THE LINK, NOT THE CODE. A camera that reads
                         eight characters has nowhere to put them; the link
-                        opens cookrew.dev/join, which hands the code to the
-                        app through `cookrew://join#…` — the fragment, so the
-                        code never reaches the site's server. */}
+                        opens the site's /join page, which says the code is
+                        typed into Cookrew on the machine that is joining. The
+                        code rides the fragment, so no server is sent it. */}
                     <QrCode rows={qrRows(minted.url)} label={addDeviceSentence(adding)} />
                     <p className="cr-acct-addlink">{minted.url}</p>
                     <p className="gs-hint">{codeExpirySentence(minted.expiresAt)}</p>

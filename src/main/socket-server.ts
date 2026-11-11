@@ -183,6 +183,8 @@ export interface SocketServerDeps {
    * the same command that prints it.
    */
   pairingHandout: () => PairingHandout | null
+  /** This machine is signed in to an account. Absent = judged by the handout (mobile-cli-text.ts). */
+  signedIn?: () => boolean
   /** LAN URLs of the TV wall (HTTP, wall-token bearing). */
   /** Workspace registry + switching (switching rebuilds PTYs). */
   listWorkspaces: () => WorkspaceList
@@ -2022,7 +2024,7 @@ export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
   if (request.flags.rotate === true) {
     deps.rotatePairingToken()
     // AFTER the rotation, so the URL carries the token that now works.
-    return renderRotated(deps.mobileEndpoints(), deps.pairingHandout())
+    return renderRotated(deps.mobileEndpoints(), deps.pairingHandout(), deps.signedIn?.())
   }
   const endpoints = deps.mobileEndpoints()
   const tailnetHosts = endpoints
@@ -2031,6 +2033,7 @@ export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
   return renderMobileHelp({
     endpoints,
     pairing: deps.pairingHandout(),
+    signedIn: deps.signedIn?.(),
     // `--token` alone or with any value: asking to see the secret is the act.
     showToken: request.flags.token !== undefined && request.flags.token !== false,
     secure: endpoints.some((endpoint) => endpoint.url.startsWith('https')),

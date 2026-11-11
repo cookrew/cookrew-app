@@ -18,82 +18,16 @@
  * feed closes (an open stream holds the board's sampler on main) and the
  * account is not asked; in sight again, both come back.
  */
+import { registerScopeState, scopeNeedsMachine, subscribeMachineScope } from '../machine-scope'
 import { useSyncExternalStore } from 'react'
-import type { WorkspaceList } from '../../../shared/model'
-import type { FleetAgent, FleetAttachment, FleetEvent, FleetSnapshot, FleetWorkspace, MachineDisplay, MachineProfile, WorkspaceTrait } from '../../../shared/fleet'
+import type { FleetEvent, FleetSnapshot, MachineDisplay } from '../../../shared/fleet'
 import type { AccountMachine, AccountMachines, AccountMachinesRefusal } from '../../../shared/zoom-fleet'
 import { foldFleet } from '../../../shared/fleet-fold'
-import { DECK_SHOWN } from './zoom-model'
+import { machineOutdated } from '../../../shared/machine-version'
 import { cookrew, type CookrewApi } from '../api'
+import { composeFleet, deckOf, snapshotOf, type FleetParts, type ZoomCounts, type ZoomFleet, type ZoomMachineDetail } from './fleet-compose'
 
-export type ZoomFleetAgent = FleetAgent
-export type ZoomFleetAttachment = FleetAttachment
-
-export interface ZoomCounts {
-  agents: number
-  notes: number
-  browsers: number
-  /** Agents waiting on the owner. */
-  waiting: number
-  /** Agents thinking right now. */
-  working: number
-}
-
-export interface ZoomFleetWorkspace {
-  id: string
-  name: string
-  icon: string | null
-  traits: WorkspaceTrait[]
-  /** The one its desktop shows (canvas in memory, browsers running). */
-  focused: boolean
-  /** Seated from the desktop's feed. False = a name only: no agents, no tray, counts null. */
-  live: boolean
-  /** Creation order, as the desktop keeps them. */
-  agents: ZoomFleetAgent[]
-  /** Notes and browsers wired to no agent. */
-  loose: ZoomFleetAttachment[]
-  counts: ZoomCounts | null
-  /** Its newest browser: the feed's, else the last one it lists. Null for a name only. */
-  newest: ZoomFleetAttachment | null
-}
-
-/**
- * live        seated from this desktop's feed
- * connecting  the feed is opening (or reopening): what is shown is the last
- *             snapshot, else the workspace names
- * listed      names only: another desktop, or a surface without a feed
- */
-export type ZoomMachineDetail = 'live' | 'connecting' | 'listed'
-
-export interface ZoomFleetMachine {
-  /** Registry desktop id; LOCAL_MACHINE_ID for this desktop when the account does not list it. */
-  id: string
-  name: string
-  /** The desktop this surface runs on, or the one the phone reads. */
-  local: boolean
-  online: boolean
-  lastSeenAt: number | null
-  appVersion: string | null
-  profile: MachineProfile | null
-  /** This desktop's display, from its own feed; another desktop's is not known. */
-  display?: MachineDisplay | null
-  detail: ZoomMachineDetail
-  focusedWorkspaceId: string | null
-  workspaces: ZoomFleetWorkspace[]
-  /** Summed over the workspaces; null unless every one is live. */
-  counts: ZoomCounts | null
-}
-
-export interface ZoomFleet {
-  /** This desktop first, then the account's others in the registry's order. */
-  machines: ZoomFleetMachine[]
-  /** A failure worth saying (not a missing feature, not being signed out); the rows still show what is known. */
-  error: string | null
-  loading: boolean
-}
-
-/** This desktop's id when the account does not list it (no account, or not registered yet). */
-export const LOCAL_MACHINE_ID = 'this-desktop'
+export * from './fleet-compose'
 
 export const LOAD_GRACE_MS = 2_500
 export const STOP_GRACE_MS = 1_000
@@ -102,164 +36,6 @@ export const ACCOUNT_REFRESH_MS = 60_000
 export const RETRY_MS = 2_000
 export const RETRY_MAX_MS = 30_000
 
-// ── composing ───────────────────────────────────────────────────────────────
-
-export type FeedLink = 'connecting' | 'live' | 'none'
-
-export interface FleetParts {
-  snapshot: FleetSnapshot | null
-  /** 'none' = this surface has no feed. */
-  link: FeedLink
-  list: WorkspaceList | null
-  /** This desktop's name from machineName, for when nothing better is known. */
-  name: string | null
-  account: AccountMachines | null
-  /**
-   * The account's other machines this desktop holds a key for (main ·
-   * machine-keys.ts), each as its own /api/fleet answers: read live, not by name.
-   */
-  remote?: Readonly<Record<string, FleetSnapshot>>
-}
-
-const countsOf = (workspace: FleetWorkspace): ZoomCounts => ({
-  ...workspace.counts,
-  waiting: workspace.agents.filter((a) => a.phase === 'waiting').length,
-  working: workspace.agents.filter((a) => a.phase === 'thinking').length
-})
-
-const sumCounts = (workspaces: readonly ZoomFleetWorkspace[]): ZoomCounts | null =>
-  workspaces.reduce<ZoomCounts | null>(
-    (sum, w) =>
-      sum && w.counts
-        ? {
-            agents: sum.agents + w.counts.agents,
-            notes: sum.notes + w.counts.notes,
-            browsers: sum.browsers + w.counts.browsers,
-            waiting: sum.waiting + w.counts.waiting,
-            working: sum.working + w.counts.working
-          }
-        : null,
-    { agents: 0, notes: 0, browsers: 0, waiting: 0, working: 0 }
-  )
-
-const liveWorkspace = (workspace: FleetWorkspace): ZoomFleetWorkspace => ({
-  id: workspace.id,
-  name: workspace.name,
-  icon: workspace.icon,
-  traits: workspace.traits ?? [],
-  focused: workspace.state === 'focused',
-  live: true,
-  agents: workspace.agents,
-  loose: workspace.loose,
-  counts: countsOf(workspace),
-  newest: workspace.newest ?? lastBrowserOf(workspace)
-})
-
-/**
- * WHAT A TILE'S DECK SHOWS (owner, 2026-11-04: artifacts on the same page as
- * the agents, not only numbers): the newest browser on top, then the newest
- * note, so a workspace of both shows both, then whatever came last. Each thing
- * once, however many agents wear it.
- */
-export function deckOf(w: Pick<ZoomFleetWorkspace, 'agents' | 'loose' | 'newest'>): ZoomFleetAttachment[] {
-  const listed = [...w.agents.flatMap((a) => a.attachments ?? []), ...w.loose].reverse()
-  const note = listed.find((a) => a.kind === 'note')
-  const order = [w.newest, note, ...listed].filter((a): a is ZoomFleetAttachment => !!a)
-  return [...new Map(order.map((a) => [a.id, a])).values()].slice(0, DECK_SHOWN)
-}
-
-/** A desktop older than the feed's `newest`: the last browser it lists, its tray before its agents'. */
-function lastBrowserOf(workspace: FleetWorkspace): FleetAttachment | null {
-  const listed = [...workspace.agents.flatMap((a) => a.attachments), ...workspace.loose]
-  return listed.findLast((a) => a.kind === 'browser') ?? null
-}
-
-const listedWorkspace = (workspace: { id: string; name: string }, focusedId: string | null): ZoomFleetWorkspace => ({
-  id: workspace.id,
-  name: workspace.name,
-  icon: null,
-  traits: [],
-  focused: workspace.id === focusedId,
-  live: false,
-  agents: [],
-  loose: [],
-  counts: null,
-  newest: null
-})
-
-const machineOf = (row: AccountMachine): ZoomFleetMachine => ({
-  id: row.id,
-  name: row.name,
-  local: false,
-  online: row.online,
-  lastSeenAt: row.lastSeenAt,
-  appVersion: row.appVersion,
-  profile: row.profile,
-  detail: 'listed',
-  focusedWorkspaceId: null,
-  workspaces: row.workspaces.map((w) => listedWorkspace(w, null)),
-  counts: null
-})
-
-function localMachine(parts: FleetParts, row: AccountMachine | undefined): ZoomFleetMachine {
-  const { snapshot, list } = parts
-  const focusedWorkspaceId = snapshot ? snapshot.focusedWorkspaceId : (list?.activeId || null)
-  const workspaces = snapshot
-    ? snapshot.workspaces.map(liveWorkspace)
-    : list
-      ? list.workspaces.map((w) => listedWorkspace(w, focusedWorkspaceId))
-      : (row?.workspaces ?? []).map((w) => listedWorkspace(w, null))
-  return {
-    id: row?.id ?? LOCAL_MACHINE_ID,
-    name: snapshot?.machine.name || row?.name || parts.name || 'This desktop',
-    local: true,
-    // Read by this surface right now: up, whatever the registry last heard.
-    online: true,
-    lastSeenAt: snapshot?.at ?? row?.lastSeenAt ?? null,
-    appVersion: snapshot?.machine.appVersion ?? row?.appVersion ?? null,
-    profile: snapshot?.machine.profile ?? row?.profile ?? null,
-    display: snapshot?.machine.display ?? null,
-    detail: parts.link === 'none' ? 'listed' : parts.link === 'live' && snapshot ? 'live' : 'connecting',
-    focusedWorkspaceId,
-    workspaces,
-    counts: snapshot ? sumCounts(workspaces) : null
-  }
-}
-
-/** Another machine of the account read through its own feed: drawn as this desktop is, but not this desktop. */
-const readMachine = (row: AccountMachine, snapshot: FleetSnapshot): ZoomFleetMachine => ({
-  ...localMachine({ snapshot, link: 'live', list: null, name: null, account: null }, row),
-  id: row.id,
-  local: false
-})
-
-/** Every machine the navigator can draw: this desktop first, then the account's others. */
-export function composeFleet(parts: FleetParts): ZoomFleetMachine[] {
-  const rows = parts.account?.ok ? parts.account.machines : []
-  const current = rows.find((row) => row.current)
-  const others = rows.filter((row) => row !== current).map((row) => {
-    const read = parts.remote?.[row.id]
-    if (!read) return machineOf(row)
-    // Another machine's answer, from another version perhaps: one it cannot draw is drawn by name, and nothing else stops.
-    try {
-      return readMachine(row, read)
-    } catch {
-      return machineOf(row)
-    }
-  })
-  return [localMachine(parts, current), ...others]
-}
-
-/** A fleet snapshot as another machine sent it, or null: only its shape is trusted. */
-const snapshotOf = (value: unknown): FleetSnapshot | null => {
-  if (typeof value !== 'object' || value === null) return null
-  const held = value as Partial<FleetSnapshot>
-  if (typeof held.machine !== 'object' || held.machine === null || !Array.isArray(held.workspaces)) return null
-  const readable = held.workspaces.every((w) => typeof w === 'object' && w !== null && Array.isArray(w.agents) && Array.isArray(w.loose))
-  return readable ? (value as FleetSnapshot) : null
-}
-
-/** How often another machine's feed is read while the navigator is in sight. */
 export const REMOTE_READ_MS = 5_000
 
 const ACCOUNT_SENTENCE: Partial<Record<AccountMachinesRefusal, string>> = {
@@ -288,11 +64,27 @@ export interface FleetStoreOptions {
   /** The first retry after a refused feed; each next one doubles, up to RETRY_MAX_MS. */
   retryMs?: number
   sight?: Sight | null
+  /**
+   * Which of the account's other machines may be asked for their fleet. Absent
+   * = every one that is online. The console passes its version floor
+   * (shared/machine-version.ts): a machine too old is drawn by name and asked
+   * nothing, here as on the console's own Devices level.
+   */
+  readable?: (row: AccountMachine) => boolean
 }
 
 export interface ZoomFleetStore {
   subscribe: (listener: () => void) => () => void
   get: () => ZoomFleet
+  /**
+   * The machine this page talks to is another one now (machine-scope.ts).
+   * What was read through the last one is let go of (its feed, its workspace
+   * list, its name, and the account's list as it answered it, which says
+   * which row is "this one"), the feed is closed, and answers still on their
+   * way are dropped; `resume` reads the one now in scope.
+   */
+  turn: () => void
+  resume: () => void
 }
 
 interface State extends FleetParts {
@@ -322,6 +114,12 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
   let readingRemote = false
   let unwatch: (() => void) | null = null
   let asking = false
+  /**
+   * Which machine's turn this is. Every question below is put to "this
+   * machine" or names which row is it; an answer that comes back after the
+   * machine changed (`turn`) belongs to the last one and is dropped.
+   */
+  let turns = 0
 
   const derive = (s: State): ZoomFleet => {
     const hasAccount = typeof api().zoomFleetMachines === 'function'
@@ -382,20 +180,27 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     }
     const mine = ++generation
     let refusedEarly = false
-    const opened = subscribe(
-      (event) => {
-        if (mine === generation) onEvent(event)
-      },
-      () => {
-        if (mine !== generation) return
-        if (release === null) {
-          refusedEarly = true
-          return
+    let opened: () => void
+    try {
+      opened = subscribe(
+        (event) => {
+          if (mine === generation) onEvent(event)
+        },
+        () => {
+          if (mine !== generation) return
+          if (release === null) {
+            refusedEarly = true
+            return
+          }
+          closeFeed()
+          retry()
         }
-        closeFeed()
-        retry()
-      }
-    )
+      )
+    } catch {
+      // Nobody to ask (the console, between machines): as a surface with no feed.
+      if (state.link !== 'none') set({ link: 'none' })
+      return
+    }
     if (refusedEarly) {
       opened()
       retry()
@@ -408,17 +213,19 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
   const askAccount = async (): Promise<void> => {
     const ask = api().zoomFleetMachines
     if (!ask || asking) return
+    const mine = turns
     asking = true
     let answer: AccountMachines
     try {
       const raw: unknown = await ask()
       answer = isAnswer(raw) ? raw : { ok: false, reason: 'malformed' }
     } catch (error) {
-      console.error('The account’s desktops could not be asked for:', error)
+      if (mine === turns) console.error('The account’s desktops could not be asked for:', error)
       answer = { ok: false, reason: 'failed' }
     } finally {
-      asking = false
+      if (mine === turns) asking = false
     }
+    if (mine !== turns) return
     // Asked again on a clock: an unchanged answer is no change, so readers keep the same fleet.
     const key = JSON.stringify(answer)
     if (key === accountKey) return
@@ -431,27 +238,38 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
   /** The account's other machines, each read through the key this desktop holds for it. */
   const askRemote = async (): Promise<void> => {
     const read = api().machineFleetOf
-    const rows = state.account?.ok ? state.account.machines.filter((row) => !row.current && row.online) : []
+    const mayRead = options.readable ?? ((): boolean => true)
+    const rows = state.account?.ok ? state.account.machines.filter((row) => !row.current && row.online && mayRead(row)) : []
     if (!read || readingRemote || rows.length === 0) return
+    const mine = turns
     readingRemote = true
     try {
       const answers = await Promise.all(rows.map(async (row) => [row.id, snapshotOf(await read(row.id).catch(() => null))] as const))
+      // Read through the last machine's keys, of the rows that were "the others" then.
+      if (mine !== turns) return
       const remote = Object.fromEntries(answers.filter((pair): pair is readonly [string, FleetSnapshot] => pair[1] !== null))
       const key = JSON.stringify(remote)
       if (key === remoteKey) return
       remoteKey = key
       set({ remote })
     } finally {
-      readingRemote = false
+      if (mine === turns) readingRemote = false
     }
   }
 
   const askLocal = async (): Promise<void> => {
     const { listWorkspaces, machineName } = api()
-    const [list, name] = await Promise.all([
-      listWorkspaces ? listWorkspaces().then((value) => value, () => null) : Promise.resolve(null),
-      machineName ? machineName().then((value) => value, () => null) : Promise.resolve(null)
-    ])
+    const mine = turns
+    // An api that refuses to be asked at all (nobody in scope) is no answer, like one that fails.
+    const asked = <T,>(ask: (() => Promise<T>) | undefined): Promise<T | null> => {
+      try {
+        return ask ? ask().then((value) => value, () => null) : Promise.resolve(null)
+      } catch {
+        return Promise.resolve(null)
+      }
+    }
+    const [list, name] = await Promise.all([asked(listWorkspaces), asked(machineName)])
+    if (mine !== turns) return
     set({ list: list ?? state.list, listFailed: list === null && state.list === null, name: name ?? state.name })
   }
 
@@ -482,18 +300,24 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     else wake()
   }
 
-  const start = (): void => {
-    if (stopTimer !== null) clearTimeout(stopTimer)
-    stopTimer = null
-    if (running) return
-    running = true
-    if (sight) unwatch = sight.watch(onSight)
+  /** How long a machine may take to say anything before the view stops saying it is loading. */
+  const startGrace = (): void => {
+    if (graceTimer !== null) clearTimeout(graceTimer)
     graceTimer = setTimeout(() => {
       graceTimer = null
       // Already loaded: the grace changes nothing a reader sees, so nobody is told.
       if (fleet.loading) set({ graceOver: true })
       else state = { ...state, graceOver: true }
     }, graceMs)
+  }
+
+  const start = (): void => {
+    if (stopTimer !== null) clearTimeout(stopTimer)
+    stopTimer = null
+    if (running) return
+    running = true
+    if (sight) unwatch = sight.watch(onSight)
+    startGrace()
     void askLocal()
     if (!sight?.hidden()) wake()
   }
@@ -520,7 +344,37 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
         if (listeners.size === 0) stop()
       }
     },
-    get: () => fleet
+    get: () => fleet,
+    turn: () => {
+      closeFeed()
+      retries = 0
+      // Questions still out were put to the last machine: their answers are dropped, and the next may ask at once.
+      turns += 1
+      asking = false
+      readingRemote = false
+      // The account is asked again, and its last answer let go of: it says
+      // which row is "this one", and kept, the next machine's own feed would
+      // be drawn under the last machine's id until the next answer.
+      accountKey = ''
+      remoteKey = ''
+      // Loading again, for a grace of its own, which ends whether or not anything is read next
+      // (with no machine in scope nothing is, and "loading" must still end).
+      state = { ...state, graceOver: false }
+      if (running) startGrace()
+      else if (graceTimer !== null) {
+        clearTimeout(graceTimer)
+        graceTimer = null
+      }
+      set({ snapshot: null, link: 'connecting', list: null, name: null, listFailed: false, account: null, remote: undefined })
+    },
+    resume: () => {
+      if (!running) return
+      void askLocal()
+      if (!sight?.hidden()) {
+        openFeed()
+        refresh()
+      }
+    }
   }
 }
 
@@ -535,12 +389,21 @@ export const documentSight: Sight = {
 }
 
 let shared: ZoomFleetStore | null = null
-const fleetStore = (): ZoomFleetStore => {
-  shared ??= createZoomFleetStore(() => cookrew(), { sight: documentSight })
+// Let go of while the old machine is in scope; read again once the new one
+// is. It closes a feed and tells its readers, so it goes with what stops.
+registerScopeState('zoom fleet', () => shared?.turn(), 'stop')
+// On the console with no machine in scope there is no "this machine" to read.
+subscribeMachineScope((scope) => {
+  if (!scopeNeedsMachine(scope) || scope.machineId !== null) shared?.resume()
+})
+/** The page's one fleet store, made when somebody first reads it. */
+export const sharedZoomFleet = (): ZoomFleetStore => {
+  // On the console, a machine below the floor is asked nothing (shared/machine-version.ts).
+  shared ??= createZoomFleetStore(() => cookrew(), { sight: documentSight, readable: (row) => !scopeNeedsMachine() || !machineOutdated(row.appVersion) })
   return shared
 }
-const subscribe = (listener: () => void): (() => void) => fleetStore().subscribe(listener)
-const getFleet = (): ZoomFleet => fleetStore().get()
+const subscribe = (listener: () => void): (() => void) => sharedZoomFleet().subscribe(listener)
+const getFleet = (): ZoomFleet => sharedZoomFleet().get()
 
 /** Every device of the owner, this one first and seated live; the same object until something changes. */
 export function useZoomFleet(): ZoomFleet {
@@ -563,6 +426,8 @@ export interface ZoomFleetView {
     local: boolean
     online: boolean
     detail: ZoomMachineDetail
+    /** The build it runs: what the console's floor is judged by on the devices stop (machine-why.ts). */
+    appVersion: string | null
     os: string | null
     display: MachineDisplay | null
     workspaces: { id: string; name: string; icon: string | null; agents: { harness: string; phase: string }[]; counts: ZoomCounts | null; deck: { id: string; kind: 'browser' | 'note'; title: string; host: string | null }[] }[]
@@ -577,6 +442,7 @@ export function fleetViewOf(fleet: ZoomFleet): ZoomFleetView {
       local: m.local,
       online: m.online,
       detail: m.detail,
+      appVersion: m.appVersion,
       os: m.profile?.os ?? null,
       display: m.display ?? null,
       workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, icon: w.icon, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts, deck: deckOf(w).map((d) => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? null })) }))

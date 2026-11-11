@@ -84,6 +84,51 @@ describe('POST /api/serve/*', () => {
     expect((await post(port, 'nonsense', { link })).status).toBe(404)
   })
 
+  it('BUY A SEAT reaches the gate as an intent, and only the exact word does', async () => {
+    const gated: unknown[][] = []
+    const port = await startApi({
+      inspect: async () => ({}),
+      browse: async () => ({}),
+      gate: async (...args) => (gated.push(args), { ok: true }),
+      checkout: async () => ({}),
+      settle: async () => ({}),
+      import: async () => ({})
+    })
+    const link = '@drej/cookrew-alpha'
+    await post(port, 'gate', { link })
+    await post(port, 'gate', { link, intent: 'buy' })
+    // Anything else is not a press of BUY: it is dropped, and the walk is a plain import.
+    await post(port, 'gate', { link, intent: 'BUY' })
+    await post(port, 'gate', { link, intent: true })
+    await post(port, 'gate', { link, intent: { buy: 1 } })
+    expect(gated).toEqual([[link, undefined], [link, 'buy'], [link, undefined], [link, undefined], [link, undefined]])
+  })
+
+  it('a wallet press carries the terms the phone displayed, as text and nothing else', async () => {
+    const settled: unknown[][] = []
+    const port = await startApi({
+      inspect: async () => ({}),
+      browse: async () => ({}),
+      gate: async () => ({}),
+      checkout: async () => ({}),
+      settle: async (...args) => (settled.push(args), { ok: true }),
+      import: async () => ({})
+    })
+    const link = '@drej/cookrew-alpha'
+    const key = 'x402-terms/1|base-sepolia|84532|1000000|0xpayee|0xasset|300|USDC|2'
+    await post(port, 'settle', { link, rail: 'x402', shown: key })
+    await post(port, 'settle', { link, rail: 'x402' })
+    // Not text, or absurdly long: dropped, and main will refuse the press for showing nothing.
+    await post(port, 'settle', { link, rail: 'x402', shown: { key } })
+    await post(port, 'settle', { link, rail: 'x402', shown: 'x'.repeat(2000) })
+    expect(settled).toEqual([
+      [link, 'x402', undefined, key],
+      [link, 'x402', undefined, undefined],
+      [link, 'x402', undefined, undefined],
+      [link, 'x402', undefined, undefined]
+    ])
+  })
+
   it('answers 503 when the desktop has not wired the operations, and refuses an unpaired caller', async () => {
     const port = await startApi()
     expect((await post(port, 'inspect', { link: 'https://cookrew.dev/drej/x' })).status).toBe(503)

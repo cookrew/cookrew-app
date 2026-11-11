@@ -1,3 +1,4 @@
+import { registerScopeState } from './machine-scope'
 import type { CableLink, Stub, Trunk } from './cable-route'
 import { isCableSignal, type CableSignal, type CableSignalKind } from '../../shared/cable-signal'
 
@@ -381,6 +382,13 @@ let connected: (() => void) | null = null
  * that arrives while the harness is unmounted is simply in flight when it
  * mounts, exactly as it would be on the phone.
  */
+// The signals in flight are ONE machine's cables, heard on its stream.
+registerScopeState('cable signals', () => {
+  connected?.()
+  connected = null
+  signalFeed.reset()
+})
+
 export function connectSignalFeed(bridge: {
   onCableSignal?: (cb: (signal: unknown) => void) => () => void
 }): void {

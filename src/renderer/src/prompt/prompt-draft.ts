@@ -1,3 +1,4 @@
+import { registerScopeState } from '../machine-scope'
 import { useCallback, useSyncExternalStore } from 'react'
 
 /**
@@ -22,6 +23,14 @@ export function setDraft(key: string, text: string): void {
   else drafts.delete(key)
   for (const cb of listeners) cb()
 }
+
+// A draft is for an agent of ONE machine, or for an agent about to be made on
+// it: typed for the last machine, it must not be sent on the next.
+registerScopeState('prompt drafts', () => {
+  if (drafts.size === 0) return
+  drafts.clear()
+  for (const cb of listeners) cb()
+})
 
 /** The agents that hold a draft now (the new agent's draft is no agent's). */
 export const draftedAgents = (): string[] => [...drafts.keys()].filter((key) => key !== NEW_AGENT)

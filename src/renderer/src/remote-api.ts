@@ -22,7 +22,8 @@ import type { VersionPinRecord } from '../../shared/version-pin'
 import type { RenameOutcome } from '../../shared/rename-plan'
 import type { FleetEvent } from '../../shared/fleet'
 import type { UnlockAnswer, UnlockBegin } from '../../shared/remote-unlock'
-import { apiPath, clientBase } from './api-base'
+import { apiPath } from './api-base'
+import { machineScope, registerScopeState, scopeNeedsMachine, heldScope, machineLeft, relayRefusedSession } from './machine-scope'
 import { USE_SOURCES_PATH, type UseSourceList, type UseSourceOpened, type UseSourceSettings } from '../../shared/use-sources'
 import type { SetupLineNow, SetupLineRun, SetupStart } from '../../shared/setup-line'
 import { parseRemoteState, type RemoteAccess, type RemoteAnswer } from '../../shared/remote-access'
@@ -41,6 +42,7 @@ import type { WorkspaceMeta } from '../../shared/model'
 import { fetchGauges } from './relay-gauges'
 import { relayMachines, relayMachineWhy } from './relay-machine-call'
 import { parseMachineGauges } from '../../shared/machine-gauges'
+import { isStripeCheckoutUrl } from '../../shared/stripe-checkout'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -69,6 +71,13 @@ interface ParseOptions {
   passive?: boolean
   /** Abort the request (raw-input-queue.ts gives up on a hung keystroke). */
   signal?: AbortSignal
+  /**
+   * Is the machine this was asked of still the one in scope (machine-scope.ts
+   * · heldScope, taken before the request). An answer's body is read after
+   * its head, and another machine can be entered in between: what the body
+   * says is then acted on for nobody.
+   */
+  sameMachine?: () => boolean
 }
 
 /** Turn a server answer into a value, or into the right kind of failure. */
@@ -86,9 +95,14 @@ export class HttpStatusError extends Error {
 }
 
 async function parse<T>(response: Response, options: ParseOptions = {}): Promise<T> {
+  const sameMachine = options.sameMachine ?? heldScope()
   if (!response.ok) {
     const detail = await response.json().catch(() => ({ error: String(response.status) }))
+    // Before the refusal is reported or a seat settled: both would land on the next machine.
+    if (!sameMachine()) throw machineLeft()
     const message = (detail as { error?: string }).error ?? `HTTP ${response.status}`
+    // The relay's own no to the account session: the machine said nothing, and is not unpaired.
+    if (relayRefusedSession(response.status, (detail as { error?: unknown }).error)) throw new HttpStatusError(message, response.status, detail)
     if (response.status === 401) {
       // A stale credential is the most likely error this client will ever
       // see. Raise it as its own type so it reaches the re-pair screen
@@ -102,6 +116,7 @@ async function parse<T>(response: Response, options: ParseOptions = {}): Promise
     throw new HttpStatusError(message, response.status, detail)
   }
   const text = await response.text()
+  if (!sameMachine()) throw machineLeft()
   return (text ? JSON.parse(text) : undefined) as T
 }
 
@@ -173,7 +188,11 @@ async function req<T>(route: string, method = 'GET', body?: unknown, parseOption
  * own signal, which keeps its own deadline and its own retries.
  */
 async function reqOnce<T>(path: string, method: string, body: unknown, parseOptions: ParseOptions): Promise<T> {
-  const attempt = (): Promise<T> => reqAttempt<T>(path, method, body, parseOptions)
+  // THE PATH NAMES ONE MACHINE AND THE TOKEN IS READ AT EACH TRY. A try made
+  // after another machine was entered would send that machine's token to this
+  // path's address, so there is none: the read ends where its machine did.
+  const sameMachine = heldScope()
+  const attempt = (): Promise<T> => (sameMachine() ? reqAttempt<T>(path, method, body, { ...parseOptions, sameMachine }) : Promise.reject(machineLeft()))
   try {
     return await (method === 'GET' && !parseOptions.signal ? waitOutRelayFull(attempt) : attempt())
   } catch (error) {
@@ -196,7 +215,7 @@ async function reqAttempt<T>(path: string, method: string, body: unknown, parseO
   const started = Date.now()
   try {
     // planeFetch, not fetch: it supplies the credential mode the current data
-    // plane needs (cookies same-origin through the relay, none at all
+    // plane needs (same-origin on a machine's own page, no cookie at all
     // cross-origin to the Mac) and reports the transport failures that are the
     // only evidence a direct plane has died.
     return parse<T>(await planeFetch(path, options), parseOptions)
@@ -223,12 +242,14 @@ async function upload(name: string, body: Blob): Promise<string> {
   const headers: Record<string, string> = { 'content-type': 'application/octet-stream' }
   const token = authStore().token()
   if (token) headers.authorization = `Bearer ${token}`
+  const sameMachine = heldScope()
   const result = await parse<{ path: string }>(
     await planeFetch(apiPath(`/api/attachments?name=${encodeURIComponent(name)}`), {
       method: 'POST',
       headers,
       body
-    })
+    }),
+    { sameMachine }
   )
   return result.path
 }
@@ -245,9 +266,10 @@ async function speakAudio(text: string, lang?: 'zh' | 'en', requestId?: string):
   if (token) headers.authorization = `Bearer ${token}`
   const controller = new AbortController()
   if (requestId) speaking.set(requestId, controller)
+  const sameMachine = heldScope()
   try {
     const response = await planeFetch(apiPath('/api/speak'), { method: 'POST', headers, body: JSON.stringify({ text, ...(lang ? { lang } : {}) }), signal: controller.signal })
-    if (!response.ok) await parse(response)
+    if (!response.ok) await parse(response, { sameMachine })
     return await response.blob()
   } finally {
     if (requestId) speaking.delete(requestId)
@@ -267,8 +289,10 @@ async function hearRecording(audio: Blob, signal?: AbortSignal): Promise<{ text:
   const headers: Record<string, string> = { 'content-type': audio.type || 'audio/wav' }
   const token = authStore().token()
   if (token) headers.authorization = `Bearer ${token}`
+  const sameMachine = heldScope()
   const heard = await parse<{ text?: string; alternates?: Record<string, string> }>(
-    await planeFetch(apiPath('/api/listen'), { method: 'POST', headers, body: audio, ...(signal ? { signal } : {}) })
+    await planeFetch(apiPath('/api/listen'), { method: 'POST', headers, body: audio, ...(signal ? { signal } : {}) }),
+    { sameMachine }
   )
   return { text: heard.text ?? '', alternates: heard.alternates ?? {} }
 }
@@ -365,11 +389,14 @@ const rawInput = createRawInputQueue(
  */
 export async function checkAuth(candidate?: string): Promise<AuthScope> {
   const token = candidate ?? authStore().token()
+  const sameMachine = heldScope()
   const response = await planeFetch(apiPath('/api/auth/status'), {
     headers: token ? { authorization: `Bearer ${token}` } : undefined
   })
   if (!response.ok) throw new Error(`Auth check failed (HTTP ${response.status})`)
   const body = (await response.json()) as { scope?: AuthScope; required?: boolean }
+  // What this machine made of the credential is no word on the next one's.
+  if (!sameMachine()) throw machineLeft()
   // A server with no token configured authorizes everything; report that as
   // full access rather than as "none", which would strand the UI behind a
   // re-pair screen it can never satisfy.
@@ -385,6 +412,8 @@ export async function checkAuth(candidate?: string): Promise<AuthScope> {
  * whatever it last drew, which after a reload is nothing at all.
  */
 let events: ReconnectingStream | null = null
+/** Takes the shared stream off the plane's list of streams to restart. */
+let eventsOffPlane: (() => void) | null = null
 /** Whether the shared stream has connected before. See `open` below. */
 let streamOpenedOnce = false
 
@@ -452,9 +481,9 @@ function sharedEvents(): ReconnectingStream {
     })
     events = stream
     // A live stream does not re-read its own URL, so a plane switch has to
-    // push it. It is never torn down, so the unsubscribe is deliberately
-    // dropped rather than stored.
-    registerPlaneStream({ restart: () => stream.restart(), revive: () => stream.revive() })
+    // push it. It lives as long as the machine is in scope: the unsubscribe
+    // is kept for the day another machine is entered (leaveMachine).
+    eventsOffPlane = registerPlaneStream({ restart: () => stream.restart(), revive: () => stream.revive() })
     // A workspace removed from under this phone: back to following the desktop.
     stream.on('workspaces', (e) => {
       if (settleSeat(parseOnce<WorkspaceList>(e))) stream.restart()
@@ -539,13 +568,49 @@ function checkAuthOnBoot(): void {
  * so a stalled Mac gets tapped again: six POSTs in six seconds on 2026-11-05,
  * each holding a relay exchange.
  */
-const switchTo = joinInFlight(async (id: string) => {
-  const list = await req<WorkspaceList>(apiPath('/api/workspaces/switch'), 'POST', { id })
-  // The Mac gave this phone a seat instead of moving its focus. The stream's
-  // scope is fixed when it opens, so it re-dials; its first frames are the new
-  // workspace, which is how the screen changes.
-  return sitAt(list)
-}, RELAY_ANSWER_MS)
+const joinedSwitch = (): ((id: string) => Promise<WorkspaceList>) =>
+  joinInFlight(async (id: string) => {
+    const list = await req<WorkspaceList>(apiPath('/api/workspaces/switch'), 'POST', { id })
+    // The Mac gave this phone a seat instead of moving its focus. The stream's
+    // scope is fixed when it opens, so it re-dials; its first frames are the new
+    // workspace, which is how the screen changes.
+    return sitAt(list)
+  }, RELAY_ANSWER_MS)
+let switchTo = joinedSwitch()
+
+/**
+ * THE MACHINE IN SCOPE IS BEING LEFT (machine-scope.ts). Everything this
+ * module holds is that machine's, and is let go of here, in the phase that
+ * stops what talks:
+ *
+ *   THE EVENT STREAM IS CLOSED, NOT RESTARTED. A restart keeps the old stream
+ *   until the new one delivers (live-stream.ts), which is right for a change
+ *   of path and wrong for a change of machine: the old machine's events would
+ *   go on arriving. Whoever listened on it is the old machine's view and is
+ *   remounted for the next; the next reader opens a new stream.
+ *
+ *   KEYSTROKES NOT YET TYPED ARE DROPPED, never sent to the next machine.
+ *
+ *   Reads in flight are forgotten, so a read for the next machine never joins
+ *   one for the last; a voice being fetched is stopped.
+ */
+function leaveMachine(): void {
+  eventsOffPlane?.()
+  eventsOffPlane = null
+  events?.close()
+  events = null
+  streamOpenedOnce = false
+  streamConnectedOrFailed = false
+  rawInput.drop()
+  inFlightGets.clear()
+  seedStreamIds.clear()
+  for (const waiting of seedStreamWaiters.values()) for (const answer of waiting) answer(null)
+  seedStreamWaiters.clear()
+  for (const abort of speaking.values()) abort.abort()
+  speaking.clear()
+  switchTo = joinedSwitch()
+}
+registerScopeState('machine api', leaveMachine, 'stop')
 
 /** Stand where the Mac's answer says: a workspace made here, or one Sous went to. */
 function sitAt<T extends { seat?: string }>(answer: T): T {
@@ -557,7 +622,9 @@ function sitAt<T extends { seat?: string }>(answer: T): T {
 }
 
 export function createRemoteApi(): CookrewApi {
-  checkAuthOnBoot()
+  // Asked of the machine in scope. On the console with none (its Devices
+  // level) there is nobody to ask; the question is put when one is entered.
+  if (!scopeNeedsMachine() || machineScope().machineId !== null) checkAuthOnBoot()
   return {
     getWorkspace: () => req<WorkspaceState>(apiPath('/api/workspace')),
     onWorkspaceState: (cb) => subscribe<WorkspaceState>('workspace', cb),
@@ -566,7 +633,7 @@ export function createRemoteApi(): CookrewApi {
     checkWorkspace: (name, dir) => req<WorkspaceCheck>(apiPath('/api/workspaces/check'), 'POST', { name, dir }),
     templateImport: (team, position) =>
       req(apiPath('/api/templates/import'), 'POST', { team, position }),
-    switchWorkspace: switchTo,
+    switchWorkspace: (id) => switchTo(id),
     renameWorkspace: (id, name) => req<WorkspaceList>(apiPath('/api/workspaces/rename'), 'POST', { id, name }),
     setWorkspaceBrief: (id, brief) => req<WorkspaceList>(apiPath('/api/workspaces/brief'), 'POST', { id, brief }),
     setWorkspaceIcon: (id, icon) => req<WorkspaceList>(apiPath('/api/workspaces/icon'), 'POST', { id, icon }),
@@ -816,7 +883,7 @@ export function createRemoteApi(): CookrewApi {
         stream.close()
       }
     },
-    zoomFleetMachines: () => relayAccountMachines(clientBase()),
+    zoomFleetMachines: () => relayAccountMachines(machineScope()),
     // Off `req`: a refused gauge must not reach the re-pair screen (relay-gauges.ts).
     machineGauges: () => fetchGauges(apiPath('/api/fleet/gauges'), authStore().token(), planeFetch),
     // EVERY MACHINE OF THE ACCOUNT, FROM HERE (relay-machine-call.ts): with this browser's own key for each,
@@ -931,6 +998,7 @@ export function createRemoteApi(): CookrewApi {
         // and the desktop's screen; a phone reading the companion cannot know
         // it and must not guess.
         registryMismatch: null,
+        signInAgainBecause: null,
         envUsername: null,
         sessionExpired: false,
         workspacesReachable: true,
@@ -1007,18 +1075,27 @@ export function createRemoteApi(): CookrewApi {
     serveBrowse: (link) => req(apiPath('/api/serve/browse'), 'POST', { link }),
     serveImport: (link, position, paid) =>
       req(apiPath('/api/serve/import'), 'POST', { link, position, paid }),
-    serveGate: (link) => req(apiPath('/api/serve/gate'), 'POST', { link }),
+    serveGate: (link, intent) =>
+      req(apiPath('/api/serve/gate'), 'POST', { link, ...(intent === 'buy' ? { intent } : {}) }),
     serveCheckout: async (link) => {
       const checkout = await req<
-        { ok: true; session: string; url: string } | { ok: false; reason: string; detail?: string }
+        | { ok: true; session: string; url: string; startedAt?: number; resumed?: boolean }
+        | { ok: false; reason: string; detail?: string }
       >(apiPath('/api/serve/checkout'), 'POST', { link })
+      if (!checkout.ok) return checkout
+      // The address came from a door, by way of the desktop. Checked again
+      // here, where it is opened: Stripe's hosted Checkout or nothing.
+      if (!isStripeCheckoutUrl(checkout.url)) {
+        return { ok: false, reason: 'unavailable', detail: 'the door returned an unusable checkout link' }
+      }
       // The hosted page opens HERE, on the phone — the desktop must not raise
       // a browser on a machine the person is not sitting at.
-      if (checkout.ok) window.open(checkout.url, '_blank', 'noopener')
+      // The canonical form of what was just checked, not the string as it arrived.
+      window.open(new URL(checkout.url).href, '_blank', 'noopener')
       return checkout
     },
-    serveSettle: (link, rail, session) =>
-      req(apiPath('/api/serve/settle'), 'POST', { link, rail, session }),
+    serveSettle: (link, rail, session, shown) =>
+      req(apiPath('/api/serve/settle'), 'POST', { link, rail, session, ...(shown === undefined ? {} : { shown }) }),
     /**
      * THE PHONE READS THE MAC'S PICTURES, AND NEVER ASKS FOR ONE.
      *

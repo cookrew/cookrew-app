@@ -25,7 +25,8 @@ export const machineWord = (platform: string): 'Mac' | 'PC' | 'machine' => {
   return platform === 'win32' ? 'PC' : 'machine'
 }
 
-const HOME_REGISTRY = 'cookrew.dev'
+/** The home registry's hosts: its API's own name, and the name the sentences already say. */
+const HOME_REGISTRY = new Set(['api.cookrew.dev', 'cookrew.dev'])
 const REGISTRY_FLAG = '--cookrew-registry='
 
 /** What a registry is called in a sentence: its host. Undefined when that is what the sentences say already. */
@@ -33,7 +34,7 @@ export function registryWord(origin: string | undefined): string | undefined {
   if (!origin) return undefined
   try {
     const { host } = new URL(origin)
-    return host === '' || host === HOME_REGISTRY ? undefined : host
+    return host === '' || HOME_REGISTRY.has(host) ? undefined : host
   } catch {
     return undefined
   }

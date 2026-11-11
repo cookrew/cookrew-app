@@ -10,14 +10,19 @@ import { TransparencyLog } from '../registry/src/log'
 import { IdentityService } from '../registry/src/identity'
 import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
-import { createV2 } from '../registry/src/v2-routes'
+import { createV2, type V2Identity } from '../registry/src/v2-routes'
 import { ASSETS } from '../registry/src/assets-bundle'
 import { WEB_V3_COPY, webCopy } from '../registry/src/v3-copy'
 import { esc } from '../registry/src/site-shell'
+import { accountPageOf, signedOutAccountPage } from './support/account-page'
 
 /**
- * W4 · W5 ON cookrew.dev — joining by code, the number on both sides, and the
- * two ADD buttons.
+ * W4 · W5 ON THE ACCOUNT PAGE — joining by code, the number on both sides, and
+ * the ADD button.
+ *
+ * Since 0.6.0 the page is the auth host's and the registry's own /me and
+ * market are gone, so the markup is read off the page as the auth host draws
+ * it (tests/support/account-page.ts), for an account a real registry made.
  *
  * WHAT THIS FILE ASSERTS IS THE MARKUP AND THE BUNDLE, not the browser. The
  * CSP forbids an inline script, so a control that is not in the HTML we serve
@@ -42,10 +47,12 @@ let dir = ''
 let origin = ''
 let close: () => Promise<void> = async () => undefined
 let session = ''
+let v2: V2Identity
+let mineId = ''
 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'w4-w5-'))
-  const v2 = createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
+  v2 = createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
   const server = createRegistry({
     store: new RegistryStore(dir),
     log: new TransparencyLog(dir),
@@ -67,6 +74,7 @@ beforeAll(async () => {
     })
 
   const mine = device('This Mac')
+  mineId = mine.id
   const made = await fetch(`${origin}/v2/accounts`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -82,10 +90,13 @@ const get = (p: string, headers: Record<string, string> = {}): Promise<Response>
   fetch(`${origin}${p}`, { headers, redirect: 'manual' })
 
 const signedIn = () => ({ cookie: `__Host-cr_session=${session}` })
+/** The signed-in reader's own page, and the page a stranger gets: both carry the sheet. */
+const mine = () => accountPageOf(v2, 'drej', mineId)
 
 describe('W4 · join with a code, in the sheet', () => {
-  it('offers the join line and a code field on every app page', async () => {
-    const body = await (await get('/market')).text()
+  it('offers the join line and a code field on every app page', () => {
+    const body = signedOutAccountPage().body
+    expect(mine().body).toContain('data-acct-mode="join"')
     expect(body).toContain('data-acct-mode="join"')
     expect(body).toContain('id="acct-code"')
     expect(body).toContain(esc(WEB_V3_COPY['w4.join-offer']))
@@ -96,8 +107,8 @@ describe('W4 · join with a code, in the sheet', () => {
     expect(body).toMatch(/id="acct-join-back"[^>]*hidden/)
   })
 
-  it('carries the join lede and the asked sentence as data, not as a second copy', async () => {
-    const body = await (await get('/market')).text()
+  it('carries the join lede and the asked sentence as data, not as a second copy', () => {
+    const body = signedOutAccountPage().body
     // The scripts cannot import the copy table, so the sentences come down on
     // the element. If these ever disappear the script falls back to a written
     // -out string, which is the drift the one table exists to stop.
@@ -200,9 +211,9 @@ describe('W4 · the number, on the asking side', () => {
   })
 })
 
-describe('W5 · /me — requests above devices, and the two ADD buttons', () => {
-  it('puts Requests before Devices, and hides the section while it is empty', async () => {
-    const body = await (await get('/me', signedIn())).text()
+describe('W5 · the account page — requests above devices, and the ADD button', () => {
+  it('puts Requests before Devices, and hides the section while it is empty', () => {
+    const body = mine().body
     expect(body).toMatch(/id="me-requests"[^>]*hidden/)
     expect(body.indexOf('id="me-requests"')).toBeLessThan(body.indexOf('id="me-devices"'))
     // The queue is a thing to answer, so it is the first thing under the head.
@@ -210,8 +221,8 @@ describe('W5 · /me — requests above devices, and the two ADD buttons', () => 
     expect(ASSETS['factors.js'].body).toContain('me-requests')
   })
 
-  it('asks the approver for the number, in the row, from the copy table', async () => {
-    const body = await (await get('/me', signedIn())).text()
+  it('asks the approver for the number, in the row, from the copy table', () => {
+    const body = mine().body
     expect(body).toContain(`data-join-row="${esc(WEB_V3_COPY['w5.join-row'])}"`)
     const shipped = ASSETS['factors.js'].body
     expect(shipped).toContain('dataset.joinRow')
@@ -219,10 +230,11 @@ describe('W5 · /me — requests above devices, and the two ADD buttons', () => 
     expect(shipped).toMatch(/decision === 'approve' \? \{ decision, match/)
   })
 
-  it('offers ADD A MAC and ADD A PHONE under the devices, both minting one code', async () => {
-    const body = await (await get('/me', signedIn())).text()
+  it('offers ADD A MACHINE under the devices, minting one code', () => {
+    const body = mine().body
     expect(body).toContain('data-add-device="desktop"')
-    expect(body).toContain('data-add-device="phone"')
+    // ADD A PHONE went with the registry's /me: the account page adds a machine, the app adds a phone.
+    expect(body).not.toContain('data-add-device="phone"')
     expect(body).toContain(`data-add-lede="${esc(WEB_V3_COPY['w5.add-lede'])}"`)
     expect(body.indexOf('id="me-devices"')).toBeLessThan(body.indexOf('data-add-device="desktop"'))
     const shipped = ASSETS['factors.js'].body
@@ -232,19 +244,19 @@ describe('W5 · /me — requests above devices, and the two ADD buttons', () => 
     expect(shipped).toMatch(/proven\('mint-join-code', 'POST', '\/v2\/me\/join-codes'/)
   })
 
-  it('describes the queue it actually has, naming no button that is not there', async () => {
-    const body = await (await get('/me', signedIn())).text()
+  it('describes the queue it actually has, naming no button that is not there', () => {
+    const body = mine().body
     expect(body).toContain(esc(webCopy('w5.requests-footer', { handle: 'drej' })))
-    // SEAT THEM arrived with the unified queue (V3-11/V3-14) and the footer
-    // names it now. ALLOW has NOT arrived and the footer still must not
-    // promise it: a reach row is only ever handed to the Mac it names, so a
-    // browser has no ALLOW to press.
-    expect(body).toContain('SEAT THEM')
+    // The queue this page reads is the sign-ins waiting for a nod. SEAT THEM
+    // and ALLOW answered two kinds the registry no longer opens (0.6.0), so
+    // the footer promises neither.
+    expect(body).toContain('APPROVE needs the number showing on that device')
+    expect(body).not.toContain('SEAT THEM')
     expect(body).not.toContain('ALLOW gives')
   })
 
-  it('leaves the CSP alone — everything above is markup and one same-origin script', async () => {
-    const csp = (await get('/me', signedIn())).headers.get('content-security-policy') ?? ''
+  it('leaves the CSP alone — everything above is markup and one same-origin script', () => {
+    const csp = mine().headers['content-security-policy'] ?? ''
     // SCRIPT is the one that matters here. `style-src 'unsafe-inline'` is the
     // shell's own long-standing allowance for the inline stylesheet; widening
     // it was never on the table and asserting against it would only be this

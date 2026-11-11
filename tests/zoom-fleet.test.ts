@@ -1,7 +1,11 @@
 // THE ZOOM NAVIGATOR'S DEVICES, renderer side: this desktop from its own
 // fleet feed (or, without one, its workspace list by name), the account's
 // other desktops from the registry, joined per machine. Every name invented.
+import type { MachineScope } from '../src/renderer/src/machine-scope'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { machineOutdated } from '../src/shared/machine-version'
 import type { FleetAgent, FleetEvent, FleetSnapshot, FleetWorkspace } from '../src/shared/fleet'
 import type { AccountMachine, AccountMachines } from '../src/shared/zoom-fleet'
 import type { WorkspaceList } from '../src/shared/model'
@@ -126,7 +130,7 @@ describe('composeFleet', () => {
 })
 
 /** A fake bridge: the feed's subscriber and refusal are kept so a test can drive them. */
-const fakeApi = (options: { feed?: boolean; machines?: () => Promise<AccountMachines>; list?: () => Promise<WorkspaceList> } = {}) => {
+const fakeApi = (options: { feed?: boolean; machines?: () => Promise<AccountMachines>; list?: () => Promise<WorkspaceList>; read?: (id: string) => Promise<unknown> } = {}) => {
   const feed = {
     cb: null as ((event: FleetEvent) => void) | null,
     refused: null as (() => void) | null,
@@ -148,7 +152,8 @@ const fakeApi = (options: { feed?: boolean; machines?: () => Promise<AccountMach
           },
     zoomFleetMachines: options.machines ?? (async () => ({ ok: false, reason: 'signed-out' })),
     listWorkspaces: options.list ?? (async () => ({ workspaces: [], activeId: '' })),
-    machineName: async () => 'Studio.local'
+    machineName: async () => 'Studio.local',
+    ...(options.read ? { machineFleetOf: options.read as FleetApi['machineFleetOf'] } : {})
   }
   return { api, feed }
 }
@@ -188,6 +193,204 @@ describe('the zoom fleet store', () => {
       ['Laptop', 'listed']
     ])
     expect(seen).toHaveBeenCalled()
+  })
+
+  it('reads the account’s other machines that are online and new enough, and asks an old or unread-version one nothing', async () => {
+    const OLD = '33333333-3333-4333-8333-333333333333'
+    const UNKNOWN = '44444444-4444-4444-8444-444444444444'
+    const AWAY = '55555555-5555-4555-8555-555555555555'
+    const read = vi.fn(async (_id: string) => snapshot(4))
+    const { api, feed } = fakeApi({
+      read,
+      machines: async () => ({
+        ok: true,
+        machines: [
+          machine(ME, 'Studio', true, { appVersion: '0.6.0' }),
+          machine(OTHER, 'Laptop', false, { appVersion: '0.6.0' }),
+          machine(OLD, 'Attic', false, { appVersion: '0.5.8' }),
+          machine(UNKNOWN, 'Shed', false, { appVersion: null }),
+          machine(AWAY, 'Road', false, { appVersion: '0.6.0', online: false })
+        ]
+      })
+    })
+    // As the console makes it: with its version floor.
+    const store = createZoomFleetStore(() => api, { readable: (row) => !machineOutdated(row.appVersion) })
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(read.mock.calls.map(([id]) => id)).toEqual([OTHER])
+    const drawn = Object.fromEntries(store.get().machines.map((m) => [m.id, m.detail]))
+    expect(drawn[OTHER]).toBe('live')
+    expect(drawn[OLD]).toBe('listed')
+    expect(drawn[UNKNOWN]).toBe('listed')
+
+    // As the desktop app makes it: no floor, every machine that is online is read, as before.
+    read.mockClear()
+    const desktop = createZoomFleetStore(() => api)
+    desktop.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(read.mock.calls.map(([id]) => id).sort()).toEqual([OTHER, OLD, UNKNOWN].sort())
+  })
+
+  it('the page’s own store applies the floor on the console and nowhere else', () => {
+    const source = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'zoom', 'use-zoom-fleet.ts'), 'utf8')
+    expect(source).toContain('readable: (row) => !scopeNeedsMachine() || !machineOutdated(row.appVersion)')
+  })
+
+  it('lets go of the machine it read as "this one" when another is entered, and reads the next', async () => {
+    let asked = 0
+    const { api, feed } = fakeApi({
+      machines: async () => {
+        asked += 1
+        return { ok: true, machines: [machine(ME, 'Studio', asked === 1), machine(OTHER, 'Laptop', asked !== 1)] }
+      }
+    })
+    const store = createZoomFleetStore(() => api)
+    const seen = vi.fn()
+    store.subscribe(seen)
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    expect(store.get().machines[0]).toMatchObject({ name: 'Studio', local: true, detail: 'live' })
+    const opened = feed.opens
+
+    store.turn()
+    // The feed is closed, not left feeding the page the last machine's deltas.
+    expect(feed.releases).toBe(1)
+    expect(feed.cb).toBeNull()
+    expect(store.get().machines.some((m) => m.local && m.detail === 'live')).toBe(false)
+    expect(seen).toHaveBeenCalled()
+
+    store.resume()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(feed.opens).toBe(opened + 1)
+    // The account is asked again: which row is "this one" has changed.
+    expect(asked).toBe(2)
+    // The next machine's own feed says who it is.
+    const first = snapshot(1)
+    feed.cb?.({ type: 'snapshot', snapshot: { ...first, machine: { ...first.machine, name: 'Laptop' } } })
+    expect(store.get().machines[0]).toMatchObject({ id: OTHER, name: 'Laptop', local: true, detail: 'live' })
+    // And the one that was "this machine" is now one of the account's others.
+    expect(store.get().machines.slice(1).map((m) => [m.id, m.local])).toEqual([[ME, false]])
+  })
+
+  it('does not take an account answer that was asked for the last machine and landed after the turn', async () => {
+    const answers: ((answer: AccountMachines) => void)[] = []
+    const { api, feed } = fakeApi({ machines: () => new Promise<AccountMachines>((resolve) => void answers.push(resolve)) })
+    const store = createZoomFleetStore(() => api)
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(answers).toHaveLength(1)
+
+    store.turn()
+    store.resume()
+    await vi.advanceTimersByTimeAsync(0)
+    // The next machine's question is put at once, not held behind the last one's.
+    expect(answers).toHaveLength(2)
+    // The last machine's answer names itself as "this one": late, it is nobody's.
+    answers[0]({ ok: true, machines: [machine(ME, 'Studio', true), machine(OTHER, 'Laptop', false)] })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.get().machines.map((m) => m.id)).toEqual([LOCAL_MACHINE_ID])
+    answers[1]({ ok: true, machines: [machine(ME, 'Studio', false), machine(OTHER, 'Laptop', true)] })
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    expect(store.get().machines.map((m) => [m.id, m.local])).toEqual([[OTHER, true], [ME, false]])
+  })
+
+  it('keeps no row saying which machine is "this one" across the turn: the next machine’s feed is never filed under the last one’s id', async () => {
+    let asked = 0
+    const later: ((answer: AccountMachines) => void)[] = []
+    const { api, feed } = fakeApi({
+      machines: () => {
+        asked += 1
+        if (asked === 1) return Promise.resolve({ ok: true, machines: [machine(ME, 'Studio', true), machine(OTHER, 'Laptop', false)] })
+        return new Promise<AccountMachines>((resolve) => void later.push(resolve))
+      }
+    })
+    const store = createZoomFleetStore(() => api)
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    expect(store.get().machines[0]).toMatchObject({ id: ME, local: true })
+
+    store.turn()
+    store.resume()
+    await vi.advanceTimersByTimeAsync(0)
+    // The next machine's feed answers before the account does.
+    const first = snapshot(1)
+    feed.cb?.({ type: 'snapshot', snapshot: { ...first, machine: { ...first.machine, name: 'Laptop' } } })
+    const local = store.get().machines[0]
+    expect(local).toMatchObject({ name: 'Laptop', local: true })
+    expect(local.id).not.toBe(ME)
+  })
+
+  it('does not file a list or a name read of the last machine as the next one’s', async () => {
+    const lists: ((list: WorkspaceList) => void)[] = []
+    const { api } = fakeApi({ feed: false, list: () => new Promise<WorkspaceList>((resolve) => void lists.push(resolve)) })
+    const store = createZoomFleetStore(() => api)
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(lists.length).toBeGreaterThan(0)
+    const asked = lists.length
+
+    store.turn()
+    store.resume()
+    await vi.advanceTimersByTimeAsync(0)
+    for (const answer of lists.slice(0, asked)) answer({ workspaces: [{ id: 'w-of-last', name: 'Last machine’s work' } as never], activeId: 'w-of-last' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.get().machines[0].workspaces).toEqual([])
+    expect(lists.length).toBeGreaterThan(asked)
+  })
+
+  it('is loading again for the next machine, for its own grace', async () => {
+    const { api, feed } = fakeApi({ machines: () => new Promise(() => undefined) })
+    const store = createZoomFleetStore(() => api, { graceMs: 2_500 })
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(store.get().loading).toBe(false)
+    store.turn()
+    store.resume()
+    expect(store.get().loading).toBe(true)
+    await vi.advanceTimersByTimeAsync(2_499)
+    expect(store.get().loading).toBe(true)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(store.get().loading).toBe(false)
+    void feed
+  })
+
+  it('stops saying it is loading after the grace even when no machine is read next (the console back at its devices)', async () => {
+    const { api } = fakeApi({ machines: () => new Promise(() => undefined) })
+    const store = createZoomFleetStore(() => api, { graceMs: 2_500 })
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(3_000)
+    store.turn()
+    expect(store.get().loading).toBe(true)
+    await vi.advanceTimersByTimeAsync(2_500)
+    expect(store.get().loading).toBe(false)
+  })
+
+  it('an api that refuses to be asked (nobody in scope) is no answer, and nothing is thrown at the page', async () => {
+    const refusing = (): never => {
+      throw new Error('no machine is in scope')
+    }
+    const api: FleetApi = { subscribeZoomFleet: refusing, listWorkspaces: refusing, machineName: refusing, zoomFleetMachines: async () => ({ ok: true, machines: [] }) }
+    const store = createZoomFleetStore(() => api)
+    const rejected = vi.fn()
+    process.on('unhandledRejection', rejected)
+    expect(() => store.subscribe(() => undefined)).not.toThrow()
+    await vi.advanceTimersByTimeAsync(3_000)
+    process.off('unhandledRejection', rejected)
+    expect(rejected).not.toHaveBeenCalled()
+    expect(store.get().loading).toBe(false)
+  })
+
+  it('reads nothing on resume while nobody is looking', async () => {
+    const { api, feed } = fakeApi()
+    const store = createZoomFleetStore(() => api)
+    store.turn()
+    store.resume()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(feed.opens).toBe(0)
   })
 
   it('folds deltas, and reopens on a gap so the next frame is a snapshot', async () => {
@@ -312,27 +515,51 @@ describe('the zoom fleet store', () => {
   })
 })
 
-describe('relayAccountMachines (the phone, through cookrew.dev)', () => {
-  const BASE = `/relay/@me/desktop/${ME}`
+describe('relayAccountMachines (the console, from the registry)', () => {
+  const API = 'https://api.cookrew.dev'
+  const scopeWith = (machineId: string | null, session: string | null = 'account-session'): MachineScope => ({
+    machineId,
+    relay: { origin: API, session: () => session },
+    slug: ''
+  })
 
-  it('reads the account’s desktops same-origin, with the cookie, and marks the desktop it is served for', async () => {
+  it('reads the account’s machines from the API host with the session as a bearer, and no cookie', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify([{ id: ME, name: 'Studio', workspaces: [] }, { id: OTHER, name: 'Laptop', workspaces: [] }]), { status: 200 }))
-    const answer = await relayAccountMachines(BASE, fetchImpl)
-    expect(fetchImpl).toHaveBeenCalledWith('/v2/me/desktops', { credentials: 'same-origin', cache: 'no-store' })
+    const answer = await relayAccountMachines(scopeWith(ME), fetchImpl)
+    expect(fetchImpl).toHaveBeenCalledWith(`${API}/v2/me/desktops`, {
+      mode: 'cors',
+      credentials: 'omit',
+      cache: 'no-store',
+      headers: { authorization: 'Bearer account-session' }
+    })
     expect(answer.ok && answer.machines.map((m) => [m.name, m.current])).toEqual([['Studio', true], ['Laptop', false]])
   })
 
-  it('does not ask from a page the Mac serves itself: no account cookie there', async () => {
+  it('marks none as current at the Devices level, where no machine is in scope', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify([{ id: ME, name: 'Studio' }, { id: OTHER, name: 'Laptop' }]), { status: 200 }))
+    const answer = await relayAccountMachines(scopeWith(null), fetchImpl)
+    // The rows a console session gets carry no workspace names at all: they are read as none.
+    expect(answer.ok && answer.machines.map((m) => [m.name, m.current, m.workspaces])).toEqual([['Studio', false, []], ['Laptop', false, []]])
+  })
+
+  it('does not ask from a page a machine serves itself: no account there', async () => {
     const fetchImpl = vi.fn()
-    expect(await relayAccountMachines('', fetchImpl)).toEqual({ ok: false, reason: 'unavailable' })
+    expect(await relayAccountMachines({ machineId: null, relay: null, slug: '' }, fetchImpl)).toEqual({ ok: false, reason: 'unavailable' })
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('does not ask signed out: there is no session to send', async () => {
+    const fetchImpl = vi.fn()
+    expect(await relayAccountMachines(scopeWith(ME, null), fetchImpl)).toEqual({ ok: false, reason: 'signed-out' })
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
   it('names a refusal, a dropped network and a body it cannot read', async () => {
-    expect(await relayAccountMachines(BASE, async () => new Response('{}', { status: 401 }))).toEqual({ ok: false, reason: 'signed-out' })
-    expect(await relayAccountMachines(BASE, async () => new Response('{}', { status: 500 }))).toEqual({ ok: false, reason: 'refused' })
-    expect(await relayAccountMachines(BASE, async () => Promise.reject(new TypeError('Load failed')))).toEqual({ ok: false, reason: 'offline' })
-    expect(await relayAccountMachines(BASE, async () => new Response('not json', { status: 200 }))).toEqual({ ok: false, reason: 'malformed' })
+    const scope = scopeWith(ME)
+    expect(await relayAccountMachines(scope, async () => new Response('{}', { status: 401 }))).toEqual({ ok: false, reason: 'signed-out' })
+    expect(await relayAccountMachines(scope, async () => new Response('{}', { status: 500 }))).toEqual({ ok: false, reason: 'refused' })
+    expect(await relayAccountMachines(scope, async () => Promise.reject(new TypeError('Load failed')))).toEqual({ ok: false, reason: 'offline' })
+    expect(await relayAccountMachines(scope, async () => new Response('not json', { status: 200 }))).toEqual({ ok: false, reason: 'malformed' })
   })
 })
 

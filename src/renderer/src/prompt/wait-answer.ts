@@ -1,3 +1,4 @@
+import { registerScopeState } from '../machine-scope'
 import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import { useActivity } from '../activity-thumb-store'
 import { cookrew } from '../api'
@@ -78,6 +79,13 @@ export const waitAnswers = {
     answers = new Map()
   }
 }
+
+// An answer on its way is to a menu of ONE machine's agent.
+registerScopeState('menu answers', () => {
+  if (answers.size === 0) return
+  answers = new Map()
+  emit()
+})
 
 /** The menu a waiting agent shows, read off its whole screen in the main process; null unless it waits on one. */
 export function useWaitChoice(agentId: string | null): WaitChoice | null {

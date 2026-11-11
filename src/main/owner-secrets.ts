@@ -178,6 +178,10 @@ export function ownerSecretPaths(
     // What the owner's browser cards saved (browser-downloads.ts): chat files
     // from logged-in sites, as private as the profiles they came out of.
     path.join(base, 'downloads'),
+    // Card payments in flight (pending-checkout.ts): which doors the owner is
+    // buying a seat at, and the Checkout page for each.
+    path.join(base, 'checkout-pending.json'),
+    path.join(base, 'checkout-pending.json.tmp'),
     // Stop's hold and who is waiting to hear (remote-desk.ts).
     path.join(base, 'remote-control.json'),
     // The sealed switch (remote-switch-memory.ts): a copy could be put back after it is off.
@@ -191,6 +195,9 @@ export function ownerSecretPaths(
     path.join(base, 'unlock-key.json.tmp'),
     // What the sealed session's keys rest on (connect-code.ts).
     path.join(base, 'connect-code'),
+    // What replaced codes leave behind (an id and a one-way key each).
+    path.join(base, 'connect-code.was'),
+    path.join(base, 'connect-code.was.tmp'),
     // writeFileAtomic's way there: a seat that polls could catch it, and a crash leaves it.
     path.join(base, 'connect-code.tmp'),
     // THE ROUTE (HP round, audit §11): Magpie's own config — providers.json,

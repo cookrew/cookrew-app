@@ -1,3 +1,5 @@
+import type { ScreenBox } from './remote-entry'
+import { registerScopeState } from '../machine-scope'
 import { useSyncExternalStore } from 'react'
 
 /**
@@ -14,6 +16,8 @@ export interface RemoteMachineRef {
   readonly id: string
   readonly name: string
   readonly os: string | null
+  /** Where its frame stood on the devices stop when it was entered: its view opens from there (remote-entry.ts). */
+  readonly from?: ScreenBox
 }
 
 export interface RemoteItemRef {
@@ -80,6 +84,11 @@ export const remotePlace = {
     if (place !== OUTSIDE) set(OUTSIDE)
   }
 }
+
+// "Inside another machine" was said from the machine in scope: from the next
+// one it may be the very machine it stands on. The words typed for a machine
+// are kept by that machine's own id and stay.
+registerScopeState('inside another machine', () => remotePlace.leave())
 
 const drafts = new Map<string, string>()
 const draftKeyOf = (machineId: string, box: string): string => `${machineId}\u0000${box}`

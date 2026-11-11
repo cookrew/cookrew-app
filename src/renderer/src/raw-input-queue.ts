@@ -68,7 +68,20 @@ interface Batch {
   readonly data: string
   readonly id: string
   readonly firstAt: number
+  /** The queue's generation when this batch was made: a batch from before a drop is never sent again. */
+  readonly generation: number
   tries: number
+}
+
+/** The queue: push keystrokes for a terminal; `drop` lets go of everything not yet typed. */
+export interface RawInputQueue {
+  (terminalId: string, data: string): void
+  /**
+   * Everything waiting is forgotten and everything on its way is stopped and
+   * never retried. For when the page turns to another machine: a keystroke
+   * typed for the last one must not be sent to the next.
+   */
+  drop(): void
 }
 
 interface Lane {
@@ -89,7 +102,7 @@ const pageNonce = (): string =>
 export function createRawInputQueue(
   send: SendRaw,
   options: RawInputQueueOptions = {}
-): (terminalId: string, data: string) => void {
+): RawInputQueue {
   const deadlineMs = options.deadlineMs ?? RAW_INPUT_DEADLINE_MS
   const giveUpMs = options.giveUpMs ?? RAW_INPUT_GIVE_UP_MS
   const retryable = options.retryable ?? ((): boolean => false)
@@ -97,15 +110,23 @@ export function createRawInputQueue(
   const nonce = options.nonce ?? pageNonce()
   const lanes = new Map<string, Lane>()
   let serial = 0
+  /** Bumped by `drop`: what was made under an older one is over. */
+  let generation = 0
+  const flying = new Set<AbortController>()
 
   const attempt = (terminalId: string, lane: Lane, batch: Batch): void => {
+    if (batch.generation !== generation) return
     batch.tries += 1
     const abort = new AbortController()
+    flying.add(abort)
     let settled = false
     const finish = (again: boolean): void => {
       if (settled) return
       settled = true
       clearTimeout(deadline)
+      flying.delete(abort)
+      // Dropped while it was out: no retry, and its lane is gone with the rest.
+      if (batch.generation !== generation) return
       if (again && now() - batch.firstAt < giveUpMs) {
         const wait = RAW_INPUT_RETRY_MS[Math.min(batch.tries - 1, RAW_INPUT_RETRY_MS.length - 1)]
         setTimeout(() => attempt(terminalId, lane, batch), wait)
@@ -130,7 +151,7 @@ export function createRawInputQueue(
       () => finish(false),
       (error: unknown) => {
         const again = retryable(error)
-        if (!again && !settled) options.refused?.(terminalId, batch.data, error)
+        if (!again && !settled && batch.generation === generation) options.refused?.(terminalId, batch.data, error)
         finish(again)
       }
     )
@@ -148,14 +169,21 @@ export function createRawInputQueue(
       }
     }
     lane.inFlight = true
-    attempt(terminalId, lane, { data, id: `${nonce}.${(serial += 1).toString(36)}`, firstAt: now(), tries: 0 })
+    attempt(terminalId, lane, { data, id: `${nonce}.${(serial += 1).toString(36)}`, firstAt: now(), generation, tries: 0 })
   }
 
-  return (terminalId, data) => {
+  const push = (terminalId: string, data: string): void => {
     if (data === '') return
     const lane = lanes.get(terminalId) ?? { chunks: [], inFlight: false }
     lanes.set(terminalId, lane)
     lane.chunks.push(data)
     pump(terminalId, lane)
   }
+  const drop = (): void => {
+    generation += 1
+    lanes.clear()
+    for (const abort of [...flying]) abort.abort(new DOMException('the queue was dropped', 'AbortError'))
+    flying.clear()
+  }
+  return Object.assign(push, { drop })
 }

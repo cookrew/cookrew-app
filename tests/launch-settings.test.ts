@@ -21,7 +21,7 @@ const at = (values = LAUNCH_DEFAULTS, over: object = {}) => ({ values, running: 
 
 describe('the defaults', () => {
   it('are the launch line the owner runs', () => {
-    expect(LAUNCH_DEFAULTS).toEqual({ registry: 'https://cookrew.dev', interactiveBrowser: true, multiInstance: true, multiplexer: 'herdr' })
+    expect(LAUNCH_DEFAULTS).toEqual({ registry: 'https://api.cookrew.dev', interactiveBrowser: true, multiInstance: true, multiplexer: 'herdr' })
   })
 
   it('apply with no file and no variables, and nothing is pinned', () => {
@@ -45,7 +45,7 @@ describe('what is kept', () => {
   })
 
   it('keeps only what differs from the default, so a later default still arrives', () => {
-    expect(settings().save({ multiInstance: false, multiplexer: 'herdr', registry: 'https://cookrew.dev', interactiveBrowser: true }).ok).toBe(true)
+    expect(settings().save({ multiInstance: false, multiplexer: 'herdr', registry: 'https://api.cookrew.dev', interactiveBrowser: true }).ok).toBe(true)
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ multiInstance: false })
   })
 })
@@ -75,7 +75,7 @@ describe('a registry', () => {
   })
 
   it('does not stop a signed-in save that leaves it alone', () => {
-    expect(settings({}, true).save({ registry: 'https://cookrew.dev/', multiInstance: false }).ok).toBe(true)
+    expect(settings({}, true).save({ registry: 'https://api.cookrew.dev/', multiInstance: false }).ok).toBe(true)
   })
 
   it('moves freely when signed out', () => {

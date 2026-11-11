@@ -10,11 +10,11 @@ import '../grant-surface.css'
 /**
  * PAIR A PHONE — the popout, in v2.1 shape.
  *
- * ONE QR, of the one URL. It is the same string `cookrew mobile` prints: the
- * relay address for this desktop with the pairing token in its fragment, so a
- * phone scanning it lands on cookrew.dev, stays there, and reaches this Mac
- * from any network. A Mac with no account shows its direct `?token=` URL and
- * says that is what it is.
+ * ONE QR. For a machine of an account it is this machine's address on the
+ * console (0.6.0): whoever scans it signs in and proves it is them there, so
+ * it lets nobody in by itself; after its # it carries this machine's unlock
+ * code, which is why it is drawn here and printed nowhere. A Mac with no
+ * account shows its direct `?token=` URL and says that is what it is.
  *
  * NO CLOCK. The six-character key rotated every two minutes and the sheet had
  * a one-second interval to count it down; there is nothing to count now. The

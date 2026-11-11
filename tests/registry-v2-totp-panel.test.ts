@@ -67,14 +67,19 @@ interface Page {
 }
 
 /** /me as the registry renders it, with both scripts running over it. */
+/** The page lives on the auth host only (0.6.0): it is always drawn standalone. */
+const STANDALONE = { site: 'https://cookrew.dev', console: 'https://console.cookrew.dev', home: '/account' }
 function openMe(route: (method: string, url: string, body: Record<string, unknown>) => Answer, totp = false): Page {
   const doc = new MiniDocument()
-  const rendered = mePage({
-    account: account(),
-    currentDeviceId: '11111111-2222-4333-8444-555555555555',
-    factors: { passkeys: [], totp }
-  })
-  const body = /<body>([\s\S]*)<\/body>/.exec(rendered.body)?.[1] ?? ''
+  const rendered = mePage(
+    {
+      account: account(),
+      currentDeviceId: '11111111-2222-4333-8444-555555555555',
+      factors: { passkeys: [], totp }
+    },
+    STANDALONE
+  )
+  const body = /<body[^>]*>([\s\S]*)<\/body>/.exec(rendered.body)?.[1] ?? ''
   for (const node of parseHtml(body, doc)) doc.body.append(node)
 
   const calls: string[] = []

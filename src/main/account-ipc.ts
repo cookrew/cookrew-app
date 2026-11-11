@@ -60,9 +60,8 @@ export interface AccountIpcDeps {
    */
   onAccountPassword?: (password: string) => void
   /**
-   * THE ONE QUEUE (D11) — sign-ins, phones asking for Wi-Fi, guests asking for
-   * a seat. The producer of `status.requests`, which is now a count of all
-   * three rather than of sign-ins alone.
+   * THE ONE QUEUE (D11) — the sign-ins waiting for a nod. The producer of
+   * `status.requests`, the count the avatar's badge shows.
    */
   requests: Requests
   /** The second-factor ladder (D3): passkeys, the authenticator app. */
@@ -140,8 +139,6 @@ export interface SeatsIpcDeps {
   door: DoorSeats | null
   /** The teams this desktop is serving right now. */
   serving: () => readonly ServedTeamRef[]
-  /** Where a held seat's OPEN goes — the registry origin. */
-  origin: string
 }
 
 /** An IPC handler as this module writes them: args in, a value or promise out. */
@@ -256,7 +253,7 @@ const asRecord = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
 
 /**
- * Seven verbs and no eighth: a button this build has never heard of is
+ * Three verbs and no fourth: a button this build has never heard of is
  * refused, never guessed at. They are the row actions' own ids (D11), so what
  * arrives here is exactly what was pressed.
  */
@@ -264,10 +261,6 @@ const ROW_ACTIONS: readonly RowAction['id'][] = [
   'approve',
   'deny',
   'not-me',
-  'allow',
-  'not-now',
-  'seat-them',
-  'decline',
 ]
 const isRowAction = (value: unknown): value is RowAction['id'] =>
   typeof value === 'string' && (ROW_ACTIONS as readonly string[]).includes(value)
@@ -356,6 +349,7 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
     // Non-null only when account.json names one registry and this process is
     // talking to another — the state in which a 401 means nothing at all.
     registryMismatch: account === null ? null : deps.accounts.registryMismatch(),
+    signInAgainBecause: account === null ? null : deps.accounts.signInAgainBecause(),
     workspacesReachable: account?.workspacesReachable ?? false,
   }
 }
@@ -793,7 +787,7 @@ async function seats(deps: AccountIpcDeps): Promise<AccountResult<SeatsSurface>>
   if (wired === null) return { ok: false, reason: 'no_account' }
   return {
     ok: true,
-    value: await seatsSurface({ seats: wired.door, serving: wired.serving, origin: wired.origin }),
+    value: await seatsSurface({ seats: wired.door, serving: wired.serving }),
   }
 }
 
@@ -1200,8 +1194,7 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     // would just be a third clock disagreeing with the other two.
     /**
      * THE DEVICES WAITING TO JOIN, in the shape the lock screen reads (D13).
-     * A seat request is not a device at the door, so it has no name worth
-     * showing from under a lock — the queue's own channel is next door.
+     * The queue's own channel, with what is over beside it, is next door.
      */
     'account:approvals': (): readonly ApprovalRequest[] => deps.requests.joinRequests(),
     /**
@@ -1384,6 +1377,7 @@ export function accountDoor(deps: AccountIpcDeps, platform: string = process.pla
         sessionLive: deps.accounts.sessionLive(),
         registry: account?.registry ?? null,
         mismatch: account === null ? null : deps.accounts.registryMismatch(),
+        signInAgainBecause: account === null ? null : deps.accounts.signInAgainBecause(),
       }
     },
     signIn: (input) => terminal(() => signIn(deps, input)),

@@ -10,6 +10,9 @@ import {
 } from './caller-identity'
 import type { PaymentRequirements } from './x402-rail'
 import { teamPath } from './door-seats'
+import { checkoutSessionOf, isStripeCheckoutUrl } from '../shared/stripe-checkout'
+import { x402TermsKey, x402TermsPrice } from '../shared/x402-terms'
+import { readX402Quote } from './x402-caller'
 
 /**
  * THE CALLER'S SIDE OF THE GATE — what the import sheet asks a door.
@@ -54,19 +57,16 @@ export type AdmissionRail =
       /** Epoch ms this quote stops being valid. */
       expiry: number
       requirements: PaymentRequirements
+      /**
+       * Every signed field of this quote as one line (shared/x402-terms.ts
+       * x402TermsKey). The surface that displays this rail sends it back with
+       * the PAY press, and the press signs only a quote that still has it.
+       */
+      shown: string
     }
   | { rail: 'stripe'; price: string; asset: 'USD'; chain: 'Stripe'; expiry: number }
 
 const TIMEOUT_MS = 8000
-
-/** Atomic USDC → decimal, the inverse of x402-rail's usdToAtomic. */
-export function atomicToUsd(atomic: string, decimals = 6): string {
-  if (!/^\d+$/.test(atomic)) return '0'
-  const padded = atomic.padStart(decimals + 1, '0')
-  const whole = padded.slice(0, padded.length - decimals)
-  const fraction = padded.slice(padded.length - decimals).replace(/0+$/, '')
-  return fraction.length > 0 ? `${whole}.${fraction}` : whole
-}
 
 async function api(
   target: ServeTargetRef,
@@ -175,22 +175,28 @@ export async function signInToDoor(
 }
 
 /** Read the rails out of a 402 body, newest terms first. */
-function railsFromTerms(terms: unknown, priceUsdHint: string | null): AdmissionRail[] {
+export function railsFromTerms(terms: unknown, priceUsdHint: string | null): AdmissionRail[] {
   const accepts = (terms as { accepts?: unknown[] } | null)?.accepts
   if (!Array.isArray(accepts)) return []
   const rails: AdmissionRail[] = []
   for (const entry of accepts) {
     const item = entry as Record<string, unknown>
-    if (item.scheme === 'exact' && typeof item.maxAmountRequired === 'string') {
-      const requirements = item as unknown as PaymentRequirements
+    if (item.scheme === 'exact') {
+      // ONE READING (x402-caller.ts readX402Quote). The label below and the signature
+      // later are both made from `terms`; a quote the reader refuses — an
+      // amount that is not plain digits, a token that is not USDC, a network
+      // this app cannot name — is not a rail, so there is no chip to press.
+      const terms = readX402Quote(item)
+      if (terms === null) continue
       rails.push({
         rail: 'x402',
-        price: atomicToUsd(requirements.maxAmountRequired),
+        price: x402TermsPrice(terms),
         asset: 'USDC',
-        chain: String(requirements.network),
-        payTo: String(requirements.payTo),
-        expiry: Date.now() + Math.max(0, Number(requirements.maxTimeoutSeconds ?? 0)) * 1000,
-        requirements
+        chain: terms.network,
+        payTo: terms.payTo,
+        expiry: Date.now() + terms.maxTimeoutSeconds * 1000,
+        requirements: item as unknown as PaymentRequirements,
+        shown: x402TermsKey(terms)
       })
     } else if (item.scheme === 'stripe-checkout') {
       rails.push({
@@ -275,6 +281,12 @@ export async function openAdmission(
  * Ask the door for a hosted Checkout page. Returns the URL and the session id
  * inside it — the id is what a settled card payment is presented as, and the
  * URL is the only place it exists (the door hands back a URL, not an id).
+ *
+ * THE URL IS THE DOOR'S WORD, AND THE APP GOES ON TO OPEN IT. So it is held to
+ * the one rule (shared/stripe-checkout.ts): https, Stripe's Checkout host
+ * exactly, the session id in its path. Anything else — a scheme the OS would
+ * launch, a look-alike host, an id smuggled into a fragment — is refused here
+ * and never reaches a browser.
  */
 export async function startStripeCheckout(
   target: ServeTargetRef,
@@ -288,9 +300,11 @@ export async function startStripeCheckout(
         : `the door refused to start a card payment (${res.status})`
     )
   }
-  const url = (res.body as { url?: string } | null)?.url ?? ''
-  const session = /\/(cs_[A-Za-z0-9_]+)/.exec(url)?.[1] ?? ''
-  if (!url || !session) throw new Error('the door returned an unusable checkout link')
+  const url: unknown = (res.body as { url?: unknown } | null)?.url
+  const session = checkoutSessionOf(url)
+  if (!isStripeCheckoutUrl(url) || session === null) {
+    throw new Error('the door returned an unusable checkout link')
+  }
   return { url, session }
 }
 
@@ -302,16 +316,31 @@ export function stripePaymentHeader(session: string): string {
 /**
  * ── THE INSTALL WALK: the account at a listed door (identity v3, G1) ─────────
  *
- * What the web's line.js already does, done here for the desktop: ask
+ * What the web's line.js did until 0.6.0 removed it, done here for the desktop: ask
  * cookrew.dev for a CALL TOKEN with this Mac's session, present it at the door
  * as `{v2Token}`, and read the ladder — 401 (no account here) → 403 (no seat
  * at a paid team) → the door's 402 at session start → open.
  *
  * The seat follows the ACCOUNT, so the token names the person: the door seats
- * `acct-<username>`, the same sub the web seated, and a session bought on the
- * web is the session this Mac opens. That is the whole reason the caller key
- * is not offered here.
+ * `acct-<username>`, and a seat bought on one device admits every device the
+ * account signs in on. That is the whole reason the caller key is not offered
+ * here.
+ *
+ * BUYING IS THIS WALK TOO (0.6.0). The team's page was the one place a seat
+ * could be bought, and it is gone. With `intent: 'buy'` cookrew.dev mints a
+ * token that carries NO seat; the door admits it as far as its 402 and no
+ * further, so the walk lands on the same pay phase a dialled paid door shows —
+ * the price and the rails, with nothing charged until the person pays there.
  */
+
+/** How a listed door is asked. Absent means "open": a seat, or the refusal. */
+export interface AdmitOptions {
+  /**
+   * The person pressed BUY A SEAT. Never a default: without it an account
+   * with no seat is told so, and an import is never quietly a purchase.
+   */
+  intent?: 'buy'
+}
 
 /** The account, as this module needs it — the one authed call, and who. */
 export interface AccountForDoors {
@@ -339,15 +368,19 @@ export type CallTokenAnswer =
  * POST /v2/teams/@owner/team/call-token — 201 with the seat that admits us, 403
  * no_seat for a paid team the account is not seated at. A refusal from the
  * session itself (no account, expired, 401) is `identify`: the next step is
- * the account sheet, not a retry.
+ * the account sheet, not a retry. With `intent: 'buy'` an unseated account is
+ * answered 201 too, with `seat: null` — a token to go and be quoted on.
  */
 export async function mintCallToken(
   account: AccountForDoors,
-  team: string
+  team: string,
+  options: AdmitOptions = {}
 ): Promise<CallTokenAnswer> {
   const sent = await account.authedResponse(`${teamPath(team)}/call-token`, {
     method: 'POST',
-    body: '{}'
+    // `{ intent: 'buy' }` and nothing else means it (v2-seat-routes.ts
+    // intendsToBuy); an empty body means open.
+    body: JSON.stringify(options.intent === 'buy' ? { intent: 'buy' } : {})
   })
   if (!sent.ok) {
     return sent.reason === 'offline' ? { kind: 'offline' } : { kind: 'identify' }
@@ -381,6 +414,14 @@ export interface AccountAdmission {
   /** The username the token names, when the registry answered. */
   account: string | null
   seat: string | null
+  /**
+   * WHAT COOKREW.DEV SAID TO THE MINT — kept because the phase alone cannot
+   * tell two refusals apart. `denied/no_seat` is the registry refusing to mint
+   * (`no_seat`) AND a door turning a minted token away (`token`); only the
+   * first is "the seat has not been recorded yet", and only that one may be
+   * answered by a Bearer a purchase was admitted on (door-bearer.ts).
+   */
+  minted: CallTokenAnswer['kind']
 }
 
 /**
@@ -390,39 +431,38 @@ export interface AccountAdmission {
 export async function admitWithAccount(
   target: ServeTargetRef,
   team: string,
-  account: AccountForDoors
+  account: AccountForDoors,
+  options: AdmitOptions = {}
 ): Promise<AccountAdmission> {
   const username = account.account()?.username ?? null
-  const minted = await mintCallToken(account, team)
+  const minted = await mintCallToken(account, team, options)
+  const refusedAtMint = (phase: AdmissionPhase): AccountAdmission => ({
+    phase,
+    token: null,
+    account: username,
+    seat: null,
+    minted: minted.kind
+  })
   switch (minted.kind) {
     case 'identify':
-      return { phase: { kind: 'identify' }, token: null, account: username, seat: null }
+      return refusedAtMint({ kind: 'identify' })
     case 'offline':
-      return { phase: { kind: 'error', status: 0 }, token: null, account: username, seat: null }
+      return refusedAtMint({ kind: 'error', status: 0 })
     case 'refused':
-      return { phase: { kind: 'error', status: minted.status }, token: null, account: username, seat: null }
+      return refusedAtMint({ kind: 'error', status: minted.status })
     case 'no_seat':
-      return {
-        phase: { kind: 'denied', reason: 'no_seat', retryable: false },
-        token: null,
-        account: username,
-        seat: null
-      }
+      return refusedAtMint({ kind: 'denied', reason: 'no_seat', retryable: false })
     case 'token':
       break
   }
+  const atDoor = { account: minted.account, seat: minted.seat, minted: minted.kind }
 
   // The token is the whole body — a token beside a key is two claims about
   // who is knocking, and the door refuses both (served-endpoints v2Assert).
   const asserted = await api(target, '/api/call/assert', { body: { v2Token: minted.token } })
   const said = asserted.body as { token?: unknown; reason?: unknown } | null
   if (asserted.status === 200 && typeof said?.token === 'string') {
-    return {
-      phase: await openAdmission(target, said.token),
-      token: said.token,
-      account: minted.account,
-      seat: minted.seat
-    }
+    return { phase: await openAdmission(target, said.token), token: said.token, ...atDoor }
   }
   if (asserted.status === 403) {
     // The door's own seat rung — it re-reads the token's seat claim rather
@@ -430,11 +470,10 @@ export async function admitWithAccount(
     return {
       phase: { kind: 'denied', reason: typeof said?.reason === 'string' ? said.reason : 'no_seat', retryable: false },
       token: null,
-      account: minted.account,
-      seat: minted.seat
+      ...atDoor
     }
   }
   // 401 here is a door whose app predates accounts (no v2 verifier wired), or
   // one the registry does not know: nothing this Mac can do about either.
-  return { phase: { kind: 'error', status: asserted.status }, token: null, account: minted.account, seat: minted.seat }
+  return { phase: { kind: 'error', status: asserted.status }, token: null, ...atDoor }
 }

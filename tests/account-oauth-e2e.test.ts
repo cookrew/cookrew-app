@@ -927,7 +927,7 @@ describe('review: acts that were left out', () => {
       envUsername: null,
       workspaces: () => [],
       saveCodes: () => Promise.resolve({ ok: false }),
-      seats: { door, origin, serving: () => [{ serviceId: 's', slug: 'alpha', team: '@octo/alpha', title: 'Alpha' } as ServedTeamRef] }
+      seats: { door, serving: () => [{ serviceId: 's', slug: 'alpha', team: '@octo/alpha', title: 'Alpha' } as ServedTeamRef] }
     })
     expect(await handlers['account:endSeat']({ slug: 'alpha', id: 'seat-1' })).toMatchObject({ ok: true })
     expect(ended).toMatchObject([{ stepUp: expect.any(String) }])

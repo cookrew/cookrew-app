@@ -1,9 +1,10 @@
+import { readFileSync } from 'node:fs'
 // WHICH REQUESTS RIDE THE DIRECT LINK (rtc-plane.ts), AND WHEN THE PLANE
 // MOVES ONTO IT AND BACK (path/rtc-adopt.ts).
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { bareWindow } from './support/memory-storage'
 import { dataPlane, resetDataPlane, setDataPlane, subscribeDataPlane, fallBackToRelay } from '../src/renderer/src/data-plane'
-import { linkPath, openEventSource, rtcLink, setRtcLink, viaLink } from '../src/renderer/src/rtc-plane'
+import { linkPath, openEventSource, rtcLink, setRtcLink, viaLink, heldRtcLink } from '../src/renderer/src/rtc-plane'
 import { adoptRtcLink } from '../src/renderer/src/path/rtc-adopt'
 import { RtcEventSource, type RtcLink } from '../src/renderer/src/path/rtc-link'
 
@@ -169,5 +170,58 @@ describe('adopting the link', () => {
     const row = await adoptRtcLink(deps(null))
     expect(row.outcome).toBe('timeout')
     expect(dataPlane().kind).toBe('relay')
+  })
+
+  it('falls back when its link ends by itself, wired as the page wires it: the link it holds is asked for, open or not', async () => {
+    // The link says it is closed before it tells anyone (rtc-link.ts · shut), so "the open link" is
+    // already nobody by then: asked that way, the close would be taken for some other link's.
+    const link = fakeLink()
+    await adoptRtcLink({ ...deps(link), current: heldRtcLink })
+    expect(dataPlane()).toEqual({ origin: '', kind: 'lan', transport: 'rtc' })
+    link.fireClose()
+    expect(dataPlane()).toEqual({ origin: '', kind: 'relay' })
+    expect(heldRtcLink()).toBeNull()
+  })
+
+  it('is wired that way in the switcher', () => {
+    const src = readFileSync('src/renderer/src/path/companion.ts', 'utf8')
+    expect(src).toContain('current: heldRtcLink')
+    expect(src).not.toContain('current: rtcLink')
+  })
+
+  it('adopts nothing when the machine it was opening to was left meanwhile, and lets the link go', async () => {
+    const link = fakeLink()
+    const setLink = vi.fn()
+    let left = false
+    const row = await adoptRtcLink({
+      ...deps(link),
+      setLink,
+      live: () => !left,
+      connect: async () => {
+        // Another machine was entered while this one's link was opening.
+        left = true
+        return link
+      }
+    })
+    expect(row.outcome).toBe('closed')
+    expect(link.closed).toBe(true)
+    expect(setLink).not.toHaveBeenCalled()
+    expect(dataPlane()).toEqual({ origin: '', kind: 'relay' })
+  })
+
+  it('a link of the machine that was left, closing late, takes nothing from the next machine', async () => {
+    const old = fakeLink()
+    let left = false
+    const ended = vi.fn()
+    await adoptRtcLink({ ...deps(old), live: () => !left, current: heldRtcLink, ended })
+    // The next machine is in scope, on a link of its own.
+    left = true
+    const next = fakeLink('192.168.2.41')
+    setRtcLink(next)
+    setDataPlane({ origin: '', kind: 'lan', transport: 'rtc' })
+    old.fireClose()
+    expect(rtcLink()).toBe(next)
+    expect(dataPlane()).toEqual({ origin: '', kind: 'lan', transport: 'rtc' })
+    expect(ended).not.toHaveBeenCalled()
   })
 })

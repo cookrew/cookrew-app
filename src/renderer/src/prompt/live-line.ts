@@ -1,3 +1,4 @@
+import { registerScopeState } from '../machine-scope'
 import { useEffect } from 'react'
 import type { TerminalActivity } from '../../../shared/turn'
 import { useActivity, activityStore } from '../activity-thumb-store'
@@ -51,6 +52,14 @@ let lines = new Map<string, Line>()
 const withLine = (agentId: string, line: Line): void => {
   lines = new Map(lines).set(agentId, line)
 }
+
+// What the app believes is typed into each agent's line, and which lines have
+// nothing behind them, is about terminals of ONE machine. Kept across a
+// change, a later send would count backspaces for a line it never typed.
+registerScopeState('typed lines', () => {
+  lines = new Map()
+  held = new Set()
+})
 
 // Keys refused never reached the line: it holds what was last seen on it, so
 // the next send types the words again instead of a bare Enter.

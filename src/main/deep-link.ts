@@ -1,4 +1,4 @@
-import { cookrewRegistry, parseServeAddress } from './import-session'
+import { isPageOrigin, parseServeAddress } from './import-session'
 import type { DeepLink } from '../shared/deep-link'
 import { normaliseJoinCode } from '../shared/join-code'
 
@@ -70,14 +70,14 @@ function fromScheme(url: URL): DeepLink | null {
 }
 
 /**
- * `https://<registry>/@drej/team` and the @-less form the site prints.
+ * `https://<site>/@drej/team` and the @-less form the site prints.
  *
- * The origin is the registry THIS APP is pointed at, not a compile-time one:
+ * The origin is the site (or registry) THIS APP is pointed at, not a compile-time one:
  * a self-hosted deployment's own page must open in its own app, and a test
  * instance must not treat production's pages as its own.
  */
 function fromRegistryPage(url: URL): DeepLink | null {
-  if (url.origin !== cookrewRegistry() || url.search.length > 0) return null
+  if (!isPageOrigin(url.origin) || url.search.length > 0) return null
   const segments = decodedSegments(url.pathname)
   if (segments === null || segments.length !== 2) return null
   const first = segments[0].startsWith('@') ? segments[0] : `@${segments[0]}`

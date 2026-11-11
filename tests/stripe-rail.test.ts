@@ -104,9 +104,9 @@ describe('Checkout creation', () => {
     await stripeCreateCheckout({ config: CONFIG, post, now: () => 3_000_000 }, input)
     expect(calls[2].headers['idempotency-key']).not.toBe(calls[0].headers['idempotency-key'])
     expect(calls[2].form.get('expires_at')).not.toBe(calls[0].form.get('expires_at'))
-    // And a different return page inside the SAME window is a different body,
-    // so it must be a different key too, or Stripe refuses it outright.
-    await stripeCreateCheckout({ config: CONFIG, post, now: () => 1_000_000 }, { ...input, returnUrl: 'https://cookrew.dev/drej/alpha' })
+    // And a different body inside the SAME window — the receipt names a
+    // published team — must be a different key too, or Stripe refuses it outright.
+    await stripeCreateCheckout({ config: CONFIG, post, now: () => 1_000_000 }, { ...input, team: '@drej/alpha' })
     expect(calls[3].headers['idempotency-key']).not.toBe(calls[0].headers['idempotency-key'])
   })
 
@@ -191,7 +191,7 @@ describe('Checkout creation', () => {
     expect(success).toBe('http://127.0.0.1:8639/crew-one?source=checkout&payment=received')
   })
 
-  it('sends the buyer back to the team page with the session id, raw placeholder and all', async () => {
+  it('a listed door’s Checkout names the seat at the team and returns to the door’s own face, nowhere else', async () => {
     let form = new URLSearchParams()
     const post: StripePost = async (_url, request) => {
       form = new URLSearchParams(request.body)
@@ -204,17 +204,16 @@ describe('Checkout creation', () => {
         serviceId: 'svc-1',
         sub: 'acct-lin',
         slug: 'crew-one',
-        successUrl: 'https://crews.example.test/crew-one?payment=received',
-        returnUrl: 'https://cookrew.dev/drej/alpha',
+        successUrl: 'https://crews.example.test/crew-one',
         team: '@drej/alpha'
       }
     )
-    // The placeholder is Stripe's to fill: it must reach the wire as braces,
-    // form-encoded ONCE by the body encoding and never percent-encoded into
-    // the URL itself (which Stripe would not substitute).
-    expect(form.get('success_url')).toBe('https://cookrew.dev/drej/alpha?paid={CHECKOUT_SESSION_ID}')
-    expect(form.toString()).toContain('success_url=https%3A%2F%2Fcookrew.dev%2Fdrej%2Falpha%3Fpaid%3D%7BCHECKOUT_SESSION_ID%7D')
-    expect(form.get('cancel_url')).toBe('https://cookrew.dev/drej/alpha')
+    // 0.6.0: there is no team page to go back to. The buyer pays from the app,
+    // which reads the session off the Checkout URL, so Stripe's way back is the
+    // door's face with its marker — no session placeholder, no cancel page.
+    expect(form.get('success_url')).toBe('https://crews.example.test/crew-one?payment=received')
+    expect(form.toString()).not.toContain('CHECKOUT_SESSION_ID')
+    expect(form.has('cancel_url')).toBe(false)
     // The receipt names the seat at the published door.
     expect(form.get('line_items[0][price_data][product_data][name]')).toBe('A seat at @drej/alpha')
   })
@@ -233,7 +232,7 @@ describe('Checkout creation', () => {
       { ...base, serviceId: '' },
       { ...base, sub: '' },
       { ...base, slug: '' },
-      { ...base, returnUrl: 'javascript:alert(1)' }
+      { ...base, successUrl: 'javascript:alert(1)' }
     ]) {
       expect(await stripeCreateCheckout({ config: CONFIG, post }, input)).toEqual({
         ok: false,
@@ -305,6 +304,77 @@ describe('settlement', () => {
   ])('refuses %s and leaves the id unburned', async (_name, over) => {
     const file = ledger()
     const get: StripeGet = async () => ({ ok: true, status: 200, json: paidSession(over) })
+    await expect(run(get, file)).resolves.toBe('refused')
+    expect(createStripeRedemptionStore(file).has(SESSION)).toBe(false)
+  })
+
+  /**
+   * THE BUYER WHO OWES TAX (G). Checkout is created with automatic tax on, and
+   * where the owner's prices are tax-EXCLUSIVE Stripe adds the tax on top: the
+   * session's `amount_total` is "after discounts and taxes", `amount_subtotal`
+   * is before. The door compared the TOTAL with its own price, so every taxed
+   * buyer was charged and then refused. The price is the subtotal; the tax is
+   * Stripe's own figure on the same session, and the three must add up.
+   */
+  const taxed = (over: Record<string, unknown> = {}): Record<string, unknown> =>
+    paidSession({
+      amount_subtotal: 250,
+      amount_total: 300,
+      total_details: { amount_discount: 0, amount_shipping: 0, amount_tax: 50 },
+      ...over
+    })
+
+  it('accepts a buyer charged the price PLUS tax, once', async () => {
+    const file = ledger()
+    const get: StripeGet = async () => ({ ok: true, status: 200, json: taxed() })
+    await expect(run(get, file)).resolves.toBe('ok')
+    await expect(run(get, file)).resolves.toBe('refused')
+  })
+
+  it('still accepts the untaxed session Stripe reports in full', async () => {
+    const get: StripeGet = async () => ({
+      ok: true,
+      status: 200,
+      json: paidSession({
+        amount_subtotal: 250,
+        amount_total: 250,
+        total_details: { amount_discount: 0, amount_shipping: 0, amount_tax: 0 }
+      })
+    })
+    await expect(run(get)).resolves.toBe('ok')
+  })
+
+  it('a total that IS the price is accepted as before — untaxed, or tax the owner included in it', async () => {
+    // Nothing that settled yesterday is refused today: the old rule stands,
+    // and the taxed case is added beside it.
+    for (const over of [
+      { amount_subtotal: 250, amount_total: 250, total_details: { amount_discount: 0, amount_tax: 42 } },
+      { amount_subtotal: undefined, total_details: undefined, amount_total: 250 }
+    ]) {
+      const get: StripeGet = async () => ({ ok: true, status: 200, json: taxed(over) })
+      await expect(run(get)).resolves.toBe('ok')
+    }
+  })
+
+  it.each([
+    ['a subtotal below the price with tax on top of it', { amount_subtotal: 200, amount_total: 240, total_details: { amount_discount: 0, amount_tax: 40 } }],
+    ['a subtotal above the price', { amount_subtotal: 300, amount_total: 350 }],
+    ['a total that is not price plus tax', { amount_total: 310 }],
+    ['a total below the price', { amount_total: 240, total_details: { amount_discount: 0, amount_tax: 50 } }],
+    ['a discount beside the tax', { amount_total: 280, total_details: { amount_discount: 20, amount_tax: 50 } }],
+    ['any discount at all', { total_details: { amount_discount: 1, amount_tax: 50 }, amount_total: 299 }],
+    ['negative tax', { amount_total: 200, total_details: { amount_discount: 0, amount_tax: -50 } }],
+    ['tax that is not a whole number', { amount_total: 300.5, total_details: { amount_discount: 0, amount_tax: 50.5 } }],
+    ['tax written as text', { total_details: { amount_discount: 0, amount_tax: '50' } }],
+    ['no tax breakdown to add up', { total_details: null }],
+    ['no subtotal to compare', { amount_subtotal: null }],
+    ['an unpaid taxed session', { payment_status: 'unpaid' }],
+    ['a taxed session in another currency', { currency: 'eur' }],
+    ['a taxed session for another account', { metadata: { serviceId: 'svc-1', sub: 'ben' } }],
+    ['a taxed session for another service', { metadata: { serviceId: 'svc-2', sub: 'ana' } }]
+  ])('refuses %s and leaves the id unburned', async (_name, over) => {
+    const file = ledger()
+    const get: StripeGet = async () => ({ ok: true, status: 200, json: taxed(over) })
     await expect(run(get, file)).resolves.toBe('refused')
     expect(createStripeRedemptionStore(file).has(SESSION)).toBe(false)
   })

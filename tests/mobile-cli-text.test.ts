@@ -20,23 +20,25 @@ const withTailnet = mobileEndpoints({
   token: 'tok'
 })
 
-describe('the connect code stays out of a pane', () => {
+describe('a signed-in machine’s link is an address', () => {
   const pairing: PairingHandout = {
-    via: 'relay',
-    url: 'https://cookrew.dev/relay/@drej/desktop/mac-1/#pair=tok&code=SECRET',
-    desktopName: 'Mac'
+    via: 'console',
+    url: 'https://console.cookrew.dev/d/0189d0f2-9a4c-8f31-9c0e-2b7a5d6e1f40',
+    desktopName: 'Mac',
+    deviceId: '0189d0f2-9a4c-8f31-9c0e-2b7a5d6e1f40'
   }
 
-  it('the help prints the pairing link without it', () => {
+  it('the help prints it with no token and no code on it, even when the token links are asked for', () => {
     const text = renderMobileHelp({ endpoints: withTailnet, pairing, secure: true, uncovered: [], tailnet: true, showToken: true })
-    expect(text).toContain('#pair=tok')
-    expect(text).not.toContain('SECRET')
+    expect(text).not.toContain('#pair=')
+    expect(text).not.toContain('code=')
+    expect(text).not.toContain('/relay/')
   })
 
-  it('a rotation prints the pairing link without it', () => {
-    const text = renderRotated(withTailnet, pairing)
-    expect(text).toContain('#pair=tok')
-    expect(text).not.toContain('SECRET')
+  it('a rotation prints the links that carry the token that changed, and no other', () => {
+    const text = renderRotated(withTailnet)
+    expect(text).not.toContain('console.cookrew.dev')
+    expect(text).toContain('token=tok')
   })
 })
 
@@ -201,60 +203,47 @@ describe('renderMobileHelp', () => {
  * stay exactly as they were: a phone with no account, or a Mac with no
  * internet, still has to be able to pair.
  */
-const RELAY_URL =
-  'https://cookrew.dev/relay/@drej/desktop/0189d0f2-9a4c-8f31-9c0e-2b7a5d6e1f40/#pair=tok'
+const RELAY_URL = 'https://console.cookrew.dev/d/0189d0f2-9a4c-8f31-9c0e-2b7a5d6e1f40'
 
 const RELAY: PairingHandout = {
   url: RELAY_URL,
-  via: 'relay',
+  via: 'console',
   desktopName: 'This Mac',
   deviceId: '0189d0f2-9a4c-8f31-9c0e-2b7a5d6e1f40'
 }
 
 describe('the pairing URL', () => {
-  it('is printed FIRST, above every address that only works on this Wi-Fi', () => {
-    const text = renderMobileHelp({
-      endpoints: withTailnet,
-      secure: true,
-      uncovered: [],
-      tailnet: true,
-      pairing: RELAY,
-      // The token links are what --token asks for (owner 2026-11-09).
-      showToken: true
-    })
-    const relayAt = text.indexOf(RELAY_URL)
-    expect(relayAt).toBeGreaterThan(-1)
-    expect(relayAt).toBeLessThan(text.indexOf('workbench.example-tailnet.ts.net'))
-    expect(relayAt).toBeLessThan(text.indexOf('192.168.2.13'))
-    expect(text).toContain('From anywhere')
+  it('on a machine of an account is its console address, and the only one printed', () => {
+    const text = renderMobileHelp({ endpoints: withTailnet, secure: true, uncovered: [], tailnet: true, pairing: RELAY })
+    expect(text.match(/https?:\/\/\S+/g)).toEqual([RELAY_URL])
+    expect(text).toContain('from any network')
   })
 
-  it('says why the token is after the # — cookrew.dev never receives it', () => {
+  it('with --token prints no token link on a machine of an account, and says why', () => {
+    // Owner 2026-11-11: this machine's own address answers a browser with the way to the
+    // console, so a token link would land there and open nothing.
     const text = renderMobileHelp({
       endpoints: withTailnet,
       secure: true,
       uncovered: [],
       tailnet: true,
       pairing: RELAY,
-      // The token links are what --token asks for (owner 2026-11-09).
       showToken: true
     })
-    expect(text).toContain('#')
-    expect(text).toContain('never sees')
+    expect(text).not.toContain('?token=')
+    expect(text.match(/https?:\/\/\S+/g)).toEqual([RELAY_URL])
+    expect(text).toMatch(/--token/)
+    expect(text).toMatch(/signed in/)
   })
 
-  it('still prints the direct URLs, for a phone with no account or no internet', () => {
-    const text = renderMobileHelp({
-      endpoints: withTailnet,
-      secure: true,
-      uncovered: [],
-      tailnet: true,
-      pairing: RELAY,
-      // The token links are what --token asks for (owner 2026-11-09).
-      showToken: true
-    })
-    expect(text).toContain('https://192.168.2.13:8643/?token=tok')
-    expect(text).toContain(machineCopy('Same Wi-Fi as this Mac', process.platform))
+  it('a rotation on a machine of an account prints no link, and says who has to come back and how', () => {
+    const text = renderRotated(withTailnet, RELAY)
+    expect(text).not.toMatch(/https?:\/\//)
+    expect(text).not.toContain('?token=')
+    expect(text).toMatch(/watch/i)
+    // The connect code goes with the token: a phone that unlocked this screen scans again.
+    expect(text).toMatch(/scan/i)
+    expect(text).toMatch(/console/i)
   })
 
   it('is absent entirely when this Mac has no account', () => {
@@ -321,11 +310,5 @@ describe('renderRotated', () => {
     expect(text).toContain('unpaired')
     expect(text.indexOf('unpaired')).toBeLessThan(text.indexOf('New URLs'))
     expect(text).toContain('workbench.example-tailnet.ts.net')
-  })
-
-  it('leads with the new pairing URL, because rotation is what changed it', () => {
-    const text = renderRotated(withTailnet, RELAY)
-    expect(text).toContain(RELAY_URL)
-    expect(text.indexOf(RELAY_URL)).toBeLessThan(text.indexOf('workbench.example-tailnet.ts.net'))
   })
 })

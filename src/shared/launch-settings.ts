@@ -10,7 +10,21 @@ import { originOf } from './pairing-url'
  * take effect.
  */
 
-export const DEFAULT_REGISTRY = 'https://cookrew.dev'
+export const DEFAULT_REGISTRY = 'https://api.cookrew.dev'
+
+/**
+ * WHERE THE REGISTRY WAS until 0.6.0, when cookrew.dev became a static site
+ * and the registry moved to a host of its own. A launch line or a saved choice
+ * that still names it would point the app at a site that answers nothing, so
+ * it is READ as the registry's address now (`registryNamed`). That is about
+ * where to dial, and only that: an account signed in at the old address is not
+ * thereby signed in at the new one (main/account-v2.ts · signedOutByTheMove).
+ */
+export const REGISTRY_WAS = 'https://cookrew.dev'
+
+/** A configured registry address, as the app dials it. Anything but the old home is what it says. */
+export const registryNamed = (configured: string): string =>
+  configured.trim().toLowerCase().replace(/\/+$/, '') === REGISTRY_WAS ? DEFAULT_REGISTRY : configured.trim()
 export const DEFAULT_MULTIPLEXER = 'herdr'
 
 /** The hosts a person can pick. A variable may still name something else. */

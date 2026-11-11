@@ -1,3 +1,4 @@
+import { registerScopeState } from './machine-scope'
 import { useEffect, useState } from 'react'
 import { isUseSignal, useFraction, type UsePoint, type UseSignal } from '../../shared/use-signal'
 import { cookrew } from './api'
@@ -62,6 +63,13 @@ export function ageCursors(list: readonly CardCursor[], now: number): readonly C
 type Listener = (signal: UseSignal) => void
 const listeners = new Set<Listener>()
 let connected: (() => void) | null = null
+
+// Subscribed on ONE machine's stream. Let go of, so the next card to mount
+// subscribes on the stream of the machine then in scope.
+registerScopeState('use cursors', () => {
+  connected?.()
+  connected = null
+})
 
 function connect(): void {
   if (connected) return

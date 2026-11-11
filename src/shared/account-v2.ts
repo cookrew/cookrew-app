@@ -148,6 +148,13 @@ export interface AccountStatus {
    * rather than leaving the owner with an account that answers nothing.
    */
   registryMismatch: { signedInAt: string; pointedAt: string } | null
+  /**
+   * Why this machine must sign in again, when the reason is not an ordinary
+   * ended session. `registry-moved`: 0.6.0 moved the registry's API to a host
+   * of its own and keeps no compatibility, so a machine signed in before it
+   * signs in again. Null otherwise.
+   */
+  signInAgainBecause: SignInAgainReason | null
   /** Workspaces of THIS Mac may be offered to the account's other devices. */
   workspacesReachable: boolean
   /**
@@ -462,9 +469,15 @@ export interface ApprovalAsked {
  */
 export interface PairingHandout {
   url: string
-  via: 'relay' | 'direct'
+  /**
+   * `console`: this machine's address on the console (`<console>/d/<machine id>`), for a machine
+   * of an account. It carries NO credential: whoever opens it signs in and proves it is them.
+   * `direct`: this machine's own address on the network, with its pairing token, for a machine
+   * with no account.
+   */
+  via: 'console' | 'direct'
   desktopName: string
-  /** Present only on the relay URL — a Mac with no account has no device id. */
+  /** Present only on the console link: a machine with no account has no device id. */
   deviceId?: string
 }
 
@@ -481,6 +494,12 @@ export interface AdmittedPhone {
   admittedAt: number
   lastSeenAt: number
 }
+
+export type SignInAgainReason = 'registry-moved'
+
+/** The one sentence for a machine that must sign in again, said the same way in the app and in the terminal. */
+export const signInAgainSentence = (reason: SignInAgainReason, platform: string | undefined = hostPlatform()): string =>
+  reason === 'registry-moved' ? machineCopy('Cookrew 0.6.0 moved its registry to api.cookrew.dev. Sign in again on this Mac.', platform) : ''
 
 /**
  * The one sentence for a registry mismatch, said the same way wherever it is

@@ -7,23 +7,32 @@ import { webCopy } from './v3-copy'
 import { LEGAL_PUBLISHED } from './site-legal-entity'
 
 /**
- * THE SITE'S ONE SHELL — cookrew.dev in the app's own dress.
+ * THE ONE SHELL — the app's own dress, for the two places a page is still drawn.
  *
- * Every page on cookrew.dev is generated from what the registry already knows
- * and wears the app's chrome: cream header with a 2px ink rule, square
- * corners, hard bevel shadows, pixel labels, phosphor screens. One stylesheet,
- * one header, one footer; a second copy of any of them would drift.
+ * Cream header with a 2px ink rule, square corners, hard bevel shadows, pixel
+ * labels, phosphor screens. One stylesheet, one header and footer per mode; a
+ * second copy of any of them would drift.
+ *
+ * TWO MODES, AND NO THIRD (0.6.0). The registry serves no site of its own any
+ * more, so `page()` draws exactly one of:
+ *
+ *   the static site   cookrew.dev, built into files (site-static.ts) inside
+ *                     `withStaticSite`: the front page, a page per feature,
+ *                     the legal pages, the pages an old link lands on.
+ *   standalone        the account page on the auth host (site-account.ts,
+ *                     auth-host.ts): one page, with its own header and footer
+ *                     and every link out spelled as a whole address.
+ *
+ * Called in neither, `page()` throws: that is a mistake in the code, and a
+ * page drawn anyway would be a page of a site that does not exist.
  *
  * TWO KINDS OF PAGE, told apart by their CSP.
  *
- *   document  the front page and an owner's page. No script, no form handler,
- *             no external fetch: a document cannot express "open this for
- *             me", and must not pretend to.
- *   app       the market and a team's page. They act — a star is a passkey
- *             ceremony, the line is a terminal — so they load exactly one
- *             script from this origin and may talk only to this origin.
- *             Everything a link may never do (install, pay, open a session)
- *             is still one deliberate click after the facts are on screen.
+ *   document  every page of the static site. No script, no form handler, no
+ *             external fetch: a document cannot express "open this for me",
+ *             and must not pretend to.
+ *   app       the account page. It acts, so it loads its scripts from its own
+ *             origin and may talk only to that origin.
  *
  * Fonts are the ink theme's two webfonts (JetBrains Mono, Inter; the serif is the reader's own), served
  * from this origin out of the bundle; recorded frames come from this
@@ -145,7 +154,7 @@ export interface ShellOptions {
   kind: PageKind
   /** One sentence for the snippet and the share card; ≤ 160 characters is what engines show. */
   description?: string
-  /** The canonical path of this page, e.g. `/market`. Absent means no canonical. */
+  /** The canonical path of this page, e.g. `/features/canvas`. Absent means no canonical. */
   path?: string
   /** An absolute image URL for the share card; the site's own when absent. */
   image?: string
@@ -156,7 +165,7 @@ export interface ShellOptions {
   /** Pages that must not be indexed — a 404, a page rendered for one reader. */
   noindex?: boolean
   /** Which header button is lit. */
-  active?: 'home' | 'market' | 'features' | 'start' | 'download'
+  active?: 'home' | 'features' | 'download'
   /** Scripts from /assets, app pages only. */
   scripts?: string[]
   /** Stylesheets from /assets, app pages only. */
@@ -170,16 +179,55 @@ export interface ShellOptions {
   cache?: number
   status?: number
   /**
-   * WHO IS READING, when the server knows. The header names them and links to
-   * /me; absent or null, it offers sign in. A DOCUMENT page has no script and
-   * so no other way to ever learn this — the front page said "Sign in" to a
-   * person who was, for as long as this field did not exist. A page rendered
+   * WHO IS READING, when the server knows (the standalone account page). The
+   * header names them; absent or null, it offers sign in. A page rendered
    * with an account is rendered for one reader: its caller sets `cache: 0`.
    */
   account?: string | null
+  /**
+   * A PAGE THAT STANDS ALONE ON THE AUTH HOST (0.6.0: the account page). The
+   * site and the console are other origins from here, so every link to them
+   * is their whole address and none is a path on this host; the site's own
+   * navigation is left out. `home` is where this page's script goes when it
+   * has nowhere else to (after signing out).
+   */
+  standalone?: { site: string; console: string | null; home: string }
+}
+
+/**
+ * THE STATIC SITE (0.6.0). cookrew.dev is built into files (site-static.ts)
+ * and served by a static host: it has no account, no marketplace and no page
+ * for a person. While its pages are being rendered the shell draws the header
+ * and footer of that site: HOME, the app, and the way to the console, where
+ * the reader's machines are. Set for the length of one build and no longer.
+ */
+export interface StaticSite {
+  /** The console's origin: where "your machines" are. */
+  readonly console: string
+  /** The auth host's origin: where the account is. */
+  readonly auth: string
+}
+
+let staticSite: StaticSite | null = null
+
+/** `render` is finished when it returns: a page drawn after an await is drawn for nobody, and `page()` throws. */
+export function withStaticSite<T>(site: StaticSite, render: () => T): T {
+  const was = staticSite
+  staticSite = site
+  try {
+    return render()
+  } finally {
+    staticSite = was
+  }
 }
 
 export function page(options: ShellOptions, main: string): Page {
+  // A mistake in the code, never a reader's: said before a header is built.
+  if (staticSite === null && options.standalone === undefined) {
+    throw new Error(
+      `page(${JSON.stringify(options.title)}) was called outside both modes: a page is drawn for the static site (inside withStaticSite) or standalone, for the auth host. The registry serves no other page.`
+    )
+  }
   return {
     status: options.status ?? 200,
     headers: {
@@ -188,22 +236,13 @@ export function page(options: ShellOptions, main: string): Page {
         options.kind === 'app' ? withConnect(CSP.app, options.connect ?? []) : CSP.document,
       'x-content-type-options': 'nosniff',
       'referrer-policy': 'no-referrer',
-      // Everything here describes mutable state — a team can be served or
-      // withdrawn between two refreshes — so it is cached briefly or not at all.
+      // Cached briefly, or not at all when the page is one reader's.
       ...(options.cache === 0
         ? { 'cache-control': 'private, no-store', vary: 'cookie' }
         : { 'cache-control': `public, max-age=${options.cache ?? 60}` })
     },
     body: shell(options, main)
   }
-}
-
-/** A 404 that is a document: a crawler following a stale link reads a page, not JSON. */
-export function notFoundPage(what: string): Page {
-  return page(
-    { title: 'Not found — Cookrew', kind: 'document', cache: 0, status: 404, noindex: true },
-    `<div class="wrap" style="padding-top:44px"><h1>Not found</h1><p class="lede">There is no ${esc(what)} at that address.</p><p class="row"><a class="btn" href="/">Home</a><a class="btn" href="/market">Marketplace</a><a class="btn" href="/#features">Features</a></p></div>`
-  )
 }
 
 /** A generated document, with the headers that make it inert. */
@@ -244,8 +283,10 @@ function head(options: ShellOptions): string {
     description ? `<meta name="twitter:description" content="${esc(description)}">` : '',
     `<meta name="twitter:image" content="${esc(image)}">`,
     `<meta name="theme-color" content="#f4efe4" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#15130f" media="(prefers-color-scheme: dark)">`,
-    `<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="manifest" href="/site.webmanifest">`,
-    `<link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">`,
+    options.standalone
+      ? `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`
+      : `<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="manifest" href="/site.webmanifest">`,
+    options.standalone ? '' : `<link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">`,
     PRECONNECT,
     (options.preload ?? []).map((href) => `<link rel="preload" as="image" href="${esc(href)}">`).join(''),
     options.jsonLd && options.jsonLd.length > 0 ? jsonLd(options.jsonLd) : ''
@@ -253,59 +294,74 @@ function head(options: ShellOptions): string {
 }
 
 function shell(options: ShellOptions, main: string): string {
-  // HOME, the MARKET, the app and the account. The two things a visitor came
-  // for — the canvas and the marketplace — are one click from every page, and
-  // the header is sticky, so they never scroll to find them again. The
-  // homepage's sections are its own catalog, on the right rail (site-home.ts);
-  // GitHub is in the footer with the rest of the outbound links.
-  const nav = [
-    ['/', 'Home', 'home'],
-    ['/market', 'Marketplace', 'market'],
-    ['/#download', 'Get the app', 'download']
-  ]
-    .map(
-      ([href, label, key]) =>
-        `<a class="btn sm${options.active === key ? ' primary' : ''}" href="${href}"${href.startsWith('http') ? ' target="_blank" rel="noopener"' : ''}>${label}</a>`
-    )
-    .join('')
-  // The reader, when the request said who they were. An app page keeps the
-  // button (site.js turns `me` into a visit to /me); a document page, which
-  // may run nothing, is a link — and it is the ONLY way the front page can
-  // ever name the person reading it.
-  const who = options.account ?? null
-  const account =
-    who !== null
-      ? options.kind === 'app'
-        ? `<button class="btn sm" id="signin" data-signin="me">@${esc(who)}</button>`
-        : `<a class="btn sm" href="/me">@${esc(who)}</a>`
-      : options.kind === 'app'
-        ? `<button class="btn sm" id="signin" data-signin>${icon('key')} Sign in</button><button class="btn sm" id="create-account" data-signin="create">Create account</button>`
-        : `<a class="btn sm" href="/market#account">${icon('key')} Sign in</a><a class="btn sm" href="/market#create">Create account</a>`
-  // The ladder's screens travel with the account sheet: every page that
-  // carries site.js is a page a second factor can be asked on.
-  const scripts = (options.kind === 'app' ? options.scripts ?? [] : [])
-    .flatMap((s) => (s === 'site.js' ? [s, 'factors.js'] : [s]))
-    .map((s) => `<script src="/assets/${esc(s)}?v=${ASSET_VERSION}" defer></script>`)
-    .join('')
-  const styles = (options.kind === 'app' ? options.styles ?? [] : [])
-    .map((s) => `<link rel="stylesheet" href="/assets/${esc(s)}?v=${ASSET_VERSION}">`)
-    .join('')
-  return `<!doctype html>
-<html lang="en"><head>${head(options)}${styles}<style>${FONT_FACES}${SITE_STYLE}${ACCOUNT_STYLE}</style>${scripts}</head>
+  if (staticSite !== null) {
+    const top = [
+      ['/', 'Home', 'home'],
+      ['/#download', 'Get the app', 'download']
+    ]
+      .map(([href, label, key]) => `<a class="btn sm${options.active === key ? ' primary' : ''}" href="${href}">${label}</a>`)
+      .join('')
+    return `<!doctype html>
+<html lang="en"><head>${head(options)}<style>${FONT_FACES}${SITE_STYLE}</style></head>
 <body>
 <header class="hdr"><div class="wrap">
 <a class="mark" href="/" aria-label="Cookrew home">${LOGO}</a>
 <span class="chip">an open-source spatial workspace for AI agents</span>
-<nav class="top">${nav}${account}</nav>
+<nav class="top">${top}<a class="btn sm" href="${esc(staticSite.console)}/">${icon('mac')} Open console</a></nav>
 </div></header>
 ${main}
 <footer><div class="wrap">
-<nav class="row" aria-label="Site"><a href="/market">Marketplace</a><a href="/#features">Features</a><a href="/#start">Get started</a><a href="/#download">Download</a><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a><a href="/v1/doors">Directory as data</a><a href="/sitemap.xml">Sitemap</a><a href="/llms.txt">llms.txt</a>${LEGAL_PUBLISHED ? '<a href="/privacy">Privacy</a><a href="/terms">Terms</a>' : ''}</nav>
-<p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. Every page here is generated from the registry's live directory; nothing is staged, and every number carries its date.</p>
+<nav class="row" aria-label="Site"><a href="/#features">Features</a><a href="/#start">Get started</a><a href="/#download">Download</a><a href="${esc(staticSite.console)}/">Console</a><a href="${esc(staticSite.auth)}/account">Account</a><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a>${LEGAL_PUBLISHED ? '<a href="/privacy">Privacy</a><a href="/terms">Terms</a>' : ''}</nav>
+<p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. This site is static: no script runs on it and nothing here signs you in. Your machines are in the console; your account is at ${esc(new URL(staticSite.auth).host)}.</p>
+</div></footer>
+</body></html>`
+  }
+  if (options.standalone) {
+    const { site, console: consoleOrigin, home } = options.standalone
+    // The reader, when the request said who they were: site.js turns `me` into
+    // a visit to /me, which the auth host sends on to this page (auth-host.ts).
+    // A document runs nothing, so it is given no button to press.
+    const who = options.account ?? null
+    const account =
+      options.kind !== 'app'
+        ? ''
+        : who !== null
+          ? `<button class="btn sm" id="signin" data-signin="me">@${esc(who)}</button>`
+          : `<button class="btn sm" id="signin" data-signin>${icon('key')} Sign in</button><button class="btn sm" id="create-account" data-signin="create">Create account</button>`
+    // The ladder's screens travel with the account sheet: every page that
+    // carries site.js is a page a second factor can be asked on.
+    const scripts = (options.kind === 'app' ? options.scripts ?? [] : [])
+      .flatMap((s) => (s === 'site.js' ? [s, 'factors.js'] : [s]))
+      .map((s) => `<script src="/assets/${esc(s)}?v=${ASSET_VERSION}" defer></script>`)
+      .join('')
+    const styles = (options.kind === 'app' ? options.styles ?? [] : [])
+      .map((s) => `<link rel="stylesheet" href="/assets/${esc(s)}?v=${ASSET_VERSION}">`)
+      .join('')
+    const out = [
+      ...(consoleOrigin === null ? [] : [[`${consoleOrigin}/`, 'Console']]),
+      [`${site}/`, 'cookrew.dev']
+    ]
+      .map(([href, label]) => `<a class="btn sm" href="${esc(href)}">${label}</a>`)
+      .join('')
+    return `<!doctype html>
+<html lang="en"><head>${head(options)}${styles}<style>${FONT_FACES}${SITE_STYLE}${ACCOUNT_STYLE}</style>${scripts}</head>
+<body data-home="${esc(home)}">
+<header class="hdr"><div class="wrap">
+<a class="mark" href="${esc(site)}/" aria-label="Cookrew home">${LOGO}</a>
+<span class="chip">account &amp; security</span>
+<nav class="top">${out}${account}</nav>
+</div></header>
+${main}
+<footer><div class="wrap">
+<nav class="row" aria-label="Cookrew"><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a></nav>
+<p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. This page is your account: it reaches none of your machines. Those are in the console.</p>
 </div></footer>
 <div class="toast" id="toast" hidden></div>
 ${options.kind === 'app' ? ACCOUNT_SHEET : ''}
 </body></html>`
+  }
+  // Unreachable: page() refuses a call in neither mode before it gets here.
+  throw new Error('shell() was asked for a page in neither mode')
 }
 
 

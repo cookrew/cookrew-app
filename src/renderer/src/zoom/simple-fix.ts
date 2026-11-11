@@ -1,3 +1,4 @@
+import { registerScopeState } from '../machine-scope'
 import { useSyncExternalStore } from 'react'
 import { activityStore } from '../activity-thumb-store'
 import type { AccessSimpleAnswer } from '../../../shared/agent-access'
@@ -38,6 +39,8 @@ export interface SimpleFixes {
   subscribe: (listener: () => void) => () => void
   press: (terminalId: string, raw: string, send: () => Promise<AccessSimpleAnswer>) => Promise<void>
   forget: (terminalId: string) => void
+  /** Every fix let go of: the terminals were another machine's. */
+  forgetAll: () => void
 }
 
 /** A card with no mirror reports only a phase, straight to `waiting` sometimes, so its word is taken. */
@@ -89,7 +92,12 @@ export function createSimpleFixes({ turnStarted, watch }: SimpleFixDeps): Simple
       const state = await send().then(stateOf, (): SimpleFixState => 'failed')
       put(terminalId, { state, raw })
     },
-    forget
+    forget,
+    forgetAll: () => {
+      if (fixes.size === 0) return
+      fixes = new Map()
+      tell()
+    }
   }
 }
 
@@ -97,6 +105,9 @@ export const simpleFixes = createSimpleFixes({
   turnStarted: (terminalId) => askedTurn(activityStore.get(terminalId)),
   watch: (changed) => activityStore.subscribeGlobal(changed)
 })
+
+// A fix in progress is on a terminal of ONE machine.
+registerScopeState('simple fixes', () => simpleFixes.forgetAll())
 
 export function useSimpleFix(terminalId: string): SimpleFix | null {
   const read = (): SimpleFix | null => simpleFixes.get(terminalId)

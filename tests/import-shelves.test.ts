@@ -34,8 +34,7 @@ const seat = (patch: Partial<HeldSeatRow['seat']> = {}): HeldSeatRow => ({
     source: 'bought',
     createdAt: NOW - 3 * 86_400_000,
     ...patch
-  },
-  url: 'https://cookrew.dev/@drej/cookrew-alpha'
+  }
 })
 
 describe('import shelves — what can be placed without an address', () => {

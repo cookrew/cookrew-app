@@ -52,6 +52,34 @@ describe('gateWalk — the install door (a listed team, the account)', () => {
     expect(walk.pin).toBe('V4')
   })
 
+  it('a BUYER at the pay step has no seat yet: the seat tick is ahead, never a receipt', () => {
+    // 0.6.0: a seat is bought at this pay step. The person reached the 402 on
+    // a token that carries no seat, so "You have a seat here." would be a lie
+    // told on the sheet that is about to take their money.
+    const walk = gateWalk(scene({ pricing: PRICED, phase: { kind: 'pay' }, buying: true }))
+    if (walk.kind !== 'walk') throw new Error('expected walk')
+    expect(stateOf(walk.steps, 'identify')?.state).toBe('done')
+    expect(stateOf(walk.steps, 'seat')).toEqual({ id: 'seat', state: 'todo', band: null })
+    expect(stateOf(walk.steps, 'pay')?.state).toBe('now')
+    // Exactly one step is live, and it is the one that takes the money.
+    expect(walk.steps.filter((s) => s.state === 'now').map((s) => s.id)).toEqual(['pay'])
+  })
+
+  it('once the door opens, the seat a buyer paid for is cleared like any other', () => {
+    const walk = gateWalk(scene({ pricing: PRICED, phase: { kind: 'open' }, buying: true }))
+    if (walk.kind !== 'walk') throw new Error('expected walk')
+    expect(stateOf(walk.steps, 'seat')).toEqual({ id: 'seat', state: 'done', band: '403-seat' })
+    expect(stateOf(walk.steps, 'pay')?.state).toBe('done')
+  })
+
+  it('buying changes nothing before the pay step: the seat rung is still where BUY is pressed', () => {
+    const walk = gateWalk(
+      scene({ pricing: PRICED, phase: { kind: 'denied', reason: 'no_seat', retryable: false }, buying: true })
+    )
+    if (walk.kind !== 'walk') throw new Error('expected walk')
+    expect(stateOf(walk.steps, 'seat')?.state).toBe('now')
+  })
+
   it('DASHES the seat and pay steps for a free team — it never hides what it did not ask', () => {
     const walk = gateWalk(scene({ pricing: null, phase: { kind: 'open' }, pin: 'V2' }))
     if (walk.kind !== 'walk') throw new Error('expected walk')

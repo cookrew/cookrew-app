@@ -1,3 +1,4 @@
+import { DEFAULT_REGISTRY, REGISTRY_WAS } from '../shared/launch-settings'
 import {
   createHash,
   createPrivateKey,
@@ -12,13 +13,16 @@ import {
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { registryOrigin } from './registry-origin'
+import { registryOrigin, siteOriginOf } from './registry-origin'
+import { joinLink } from '../shared/join-code'
+import { RELAY_SESSION_HEADER, machineRelayPath } from '../shared/machine-relay'
 import {
   DEFAULT_LOCK_AFTER_MS,
   MIN_PASSCODE,
   MIN_PASSWORD,
   RESERVED_PREFIXES,
   normaliseUsername,
+  type SignInAgainReason,
   usernameProblem,
   type AccountDevice,
   type AccountDeviceInput,
@@ -122,6 +126,8 @@ export interface AccountSession {
    * `sessionLive()` can answer with what the registry actually said.
    */
   endedAt?: number
+  /** Why it ended, when the reason is one the person should be told (shared/account-v2.ts · SignInAgainReason). */
+  endedWhy?: SignInAgainReason
 }
 
 /** Offline unlock: scrypt over the password, salt and hash both base64url. */
@@ -372,6 +378,8 @@ export interface AccountsDeps {
   fetch?: FetchLike
   now?: () => number
   origin?: string
+  /** Where the site's pages are (the /join link a code is shown with). Default: registry-origin.ts · siteOriginOf. */
+  site?: string
   /** This Mac's name, for the Devices tab. */
   deviceName?: string
   /** `process.platform`, for the sentences that name this machine. */
@@ -415,6 +423,34 @@ function sessionFrom(body: Record<string, unknown>): AccountSession | null {
   return { token: body.token, exp: body.exp }
 }
 
+/** Two origins, compared as origins: case and a trailing slash are not differences. */
+const plainOrigin = (origin: string): string => origin.toLowerCase().replace(/\/+$/, '')
+const sameRegistry = (a: string, b: string): boolean => plainOrigin(a) === plainOrigin(b)
+
+/**
+ * 0.6.0 MOVED THE HOME REGISTRY'S API to a host of its own, and keeps no
+ * compatibility (owner, 2026-11-11): a machine that signed in before it signs
+ * in again. These two names are how that one move is recognised, so the
+ * machine can be TOLD ("the registry moved, sign in again") instead of being
+ * left looking signed in at a registry that is "somewhere else". They are not
+ * an alias: nothing signed in at the old name is treated as signed in at the
+ * new one.
+ */
+const HOME_REGISTRY = DEFAULT_REGISTRY
+const HOME_REGISTRY_WAS = REGISTRY_WAS
+
+/**
+ * An account file from before the move, opened by an app pointed at the new
+ * home: the same account, at its new address, with no session. The old token
+ * is not kept (nothing may use it, and nothing may find it "still honoured"
+ * and quietly lift the ending). Any other file is returned as it is.
+ */
+function signedOutByTheMove(account: AccountFile | null, origin: string, now: number): AccountFile | null {
+  if (account === null || typeof account.registry !== 'string') return account
+  if (plainOrigin(account.registry) !== HOME_REGISTRY_WAS || plainOrigin(origin) !== HOME_REGISTRY) return account
+  return { ...account, registry: HOME_REGISTRY, session: { token: '', exp: 0, endedAt: now, endedWhy: 'registry-moved' } }
+}
+
 /**
  * The account, as the rest of main uses it.
  *
@@ -427,6 +463,7 @@ export class Accounts {
   private readonly http: FetchLike
   private readonly now: () => number
   private readonly origin: string
+  private readonly site: string
   private readonly deviceName: string
   private readonly platform: string
   private cached: AccountFile | null
@@ -470,9 +507,14 @@ export class Accounts {
     this.http = deps.fetch ?? ((input, init) => fetch(input, init))
     this.now = deps.now ?? (() => Date.now())
     this.origin = deps.origin ?? registryOrigin()
+    this.site = deps.site ?? siteOriginOf(this.origin)
     this.platform = deps.platform ?? process.platform
     this.deviceName = deps.deviceName ?? machineCopy('This Mac', this.platform)
-    this.cached = loadAccount(deps.base)
+    // NOTHING IS WRITTEN HERE. Building this must never be able to stop a boot (a folder that
+    // cannot be written to), and a second process that opens the file on its way to quitting must
+    // not rewrite what the running one holds. The same file and the same address give the same
+    // answer every time, so a restart says it again; the next sign-in writes the new form.
+    this.cached = signedOutByTheMove(loadAccount(deps.base), this.origin, this.now())
     this.legacy = deps.legacy ?? ((): RegistryAccount | null => legacyKey(this.origin, this.base))
     this.changed = deps.onChange
     this.ladder = new LadderPasswords(this.now)
@@ -904,6 +946,12 @@ export class Accounts {
     return next
   }
 
+  /** Why this machine must sign in again, when it is more than an ordinary ended session. */
+  signInAgainBecause(): SignInAgainReason | null {
+    const session = this.cached?.session
+    return session?.endedAt !== undefined && session.endedWhy !== undefined ? session.endedWhy : null
+  }
+
   /**
    * WHERE THE ACCOUNT LIVES vs WHERE THE APP IS POINTED, when they differ.
    *
@@ -915,8 +963,7 @@ export class Accounts {
   registryMismatch(): { signedInAt: string; pointedAt: string } | null {
     const pinned = this.cached?.registry
     if (typeof pinned !== 'string' || pinned.length === 0) return null
-    const same = (origin: string): string => origin.toLowerCase().replace(/\/+$/, '')
-    if (same(pinned) === same(this.origin)) return null
+    if (sameRegistry(pinned, this.origin)) return null
     return { signedInAt: pinned, pointedAt: this.origin }
   }
 
@@ -1243,8 +1290,9 @@ export class Accounts {
    *
    * The password rides in the body because the registry asks for it again on
    * this route — a session alone must not widen what the account opens from.
-   * The answer is the code, when it dies, and the link the site's /join page
-   * turns into `cookrew://join#<code>`.
+   * The answer is the code, when it dies, and the link it is shown with: the
+   * site's /join page, which says the code is typed into the app (join-code.ts
+   * · joinLink). Never the registry's address: that is the API host.
    */
   async mintJoinCode(
     proof: StepUpProof,
@@ -1259,7 +1307,7 @@ export class Accounts {
     if (typeof code !== 'string' || typeof expiresAt !== 'number') {
       return { ok: false, reason: 'unknown' }
     }
-    return { ok: true, value: { code, expiresAt, url: `${this.origin}/join#${code}` } }
+    return { ok: true, value: { code, expiresAt, url: joinLink(this.site, code) } }
   }
 
   /**
@@ -1739,10 +1787,11 @@ export class Accounts {
   /**
    * ONE CALL TO ANOTHER MACHINE OF THE ACCOUNT, DOWN THE RELAY.
    *
-   * The relay opens only for the session cookie (registry v2-http.ts ·
-   * SESSION_COOKIE), so this sends it as one; what the other machine sees is
-   * its own key, if one is passed as `Authorization`, and the bridge's word
-   * for which device asked. The session still never leaves this class.
+   * The one relay path every client uses (shared/machine-relay.ts): the
+   * account is named by this session, sent in the relay's own header, and what
+   * the other machine sees is its own key, if one is passed as
+   * `Authorization`, and the relay's word for which device asked. The session
+   * still never leaves this class, and never reaches the other machine.
    */
   async relayed(
     desktopId: string,
@@ -1752,16 +1801,17 @@ export class Accounts {
     const account = this.cached
     if (!account) return { ok: false, reason: 'no_account' }
     if (!this.sessionLive()) return { ok: false, reason: 'session-expired' }
-    if (!/^[0-9a-f-]{36}$/i.test(desktopId)) return { ok: false, reason: 'unknown' }
+    const path = machineRelayPath(desktopId, route)
+    if (path === null) return { ok: false, reason: 'unknown' }
     const token = account.session?.token ?? ''
-    const url = `${this.origin}/relay/@${account.username}/desktop/${desktopId.toLowerCase()}/${route.replace(/^\/+/, '')}`
     try {
-      const response = await this.http(url, {
+      const response = await this.http(`${this.origin}${path}`, {
         ...init,
         headers: {
           ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
           ...(init.headers as Record<string, string> | undefined),
-          cookie: `__Host-cr_session=${token}`,
+          // LAST: nothing a caller passed may stand in for the session.
+          [RELAY_SESSION_HEADER]: token,
         },
       })
       return { ok: true, response }
@@ -1814,7 +1864,7 @@ export class Accounts {
     // The file may have moved under the request (a sign-in landed). Only the
     // session that was checked is cleared.
     if (this.cached?.session?.token !== session.token) return false
-    const { endedAt: _lifted, ...kept } = session
+    const { endedAt: _lifted, endedWhy: _why, ...kept } = session
     this.save({ ...account, session: kept })
     console.error(
       "[cookrew] this Mac's session was marked ended here but the registry still honours it; the mark is lifted",
@@ -1941,7 +1991,7 @@ export class Accounts {
   async forgetIfDeleted(): Promise<boolean> {
     const account = this.cached
     // A 410 from another registry says nothing about the account in this file.
-    if (account === null || account.registry !== this.origin) return false
+    if (account === null || !sameRegistry(account.registry ?? '', this.origin)) return false
     try {
       const asked = await this.http(`${this.origin}/v2/accounts/${encodeURIComponent(account.username)}`)
       if (asked.status !== 410) return false

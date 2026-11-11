@@ -23,6 +23,9 @@ struct WordsField<Label: View>: View {
   }
 }
 
+/** The box's height on the glass: the face, the words and the gold key in one slim line. */
+let boxHeight: CGFloat = 32
+
 public struct PromptBox: View {
   let store: WatchStore
   /** The card it speaks to; nil on the new agent's page. */
@@ -55,9 +58,10 @@ public struct PromptBox: View {
       }
       trailing
     }
-    .padding(.leading, 6)
-    .padding(.trailing, 5)
-    .frame(height: 40)
+    .padding(.leading, 5)
+    .padding(.trailing, 4)
+    // Slim (owner, 11-10): the card's words read in what the head and the box leave.
+    .frame(height: boxHeight)
     .background(Capsule().fill(ink.card))
     .overlay(Capsule().strokeBorder(ink.hair2, lineWidth: 1))
     .accessibilityElement(children: .contain)
@@ -65,12 +69,12 @@ public struct PromptBox: View {
 
   @ViewBuilder private var chip: some View {
     if let card {
-      InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: 26, weight: .mini)
+      InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: 22, weight: .mini)
     } else {
       Text("＋")
-        .font(.system(size: 15, weight: .medium))
+        .font(.system(size: 14, weight: .medium))
         .foregroundStyle(ink.sealText)
-        .frame(width: 26, height: 26)
+        .frame(width: 22, height: 22)
     }
   }
 
@@ -80,9 +84,9 @@ public struct PromptBox: View {
         Task { await store.send(page: page) }
       } label: {
         Image(systemName: "arrow.right")
-          .font(.system(size: 14, weight: .bold))
+          .font(.system(size: 13, weight: .bold))
           .foregroundStyle(ink.onGold)
-          .frame(width: 30, height: 30)
+          .frame(width: 25, height: 25)
           .background(Circle().fill(ink.gold))
       }
       .buttonStyle(.plain)
@@ -95,7 +99,7 @@ public struct PromptBox: View {
         Text(armed ? "Stop?" : "Esc")
           .font(InkType.word(11))
           .foregroundStyle(armed ? ink.onSeal : ink.soft)
-          .frame(height: 30)
+          .frame(height: 25)
           .padding(.horizontal, 8)
           .background(Capsule().fill(armed ? ink.wait : ink.hair))
       }

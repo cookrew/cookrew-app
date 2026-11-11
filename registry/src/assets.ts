@@ -1,17 +1,13 @@
 import type { ServerResponse } from 'node:http'
-import { gunzipSync } from 'node:zlib'
 import { ASSETS, type BundledAsset } from './assets-bundle'
 
-/** Decoded once: a gzipped asset is inflated on first use and kept. */
+/** Decoded once, on first use, and kept. */
 const decoded = new Map<string, Buffer>()
 
 function bytesOf(name: string, asset: BundledAsset): Buffer {
   const held = decoded.get(name)
   if (held !== undefined) return held
-  const bytes =
-    asset.encoding === 'gzip'
-      ? gunzipSync(Buffer.from(asset.body, 'base64'))
-      : Buffer.from(asset.body, asset.encoding === 'base64' ? 'base64' : 'utf8')
+  const bytes = Buffer.from(asset.body, asset.encoding === 'base64' ? 'base64' : 'utf8')
   decoded.set(name, bytes)
   return bytes
 }
@@ -19,7 +15,7 @@ function bytesOf(name: string, asset: BundledAsset): Buffer {
 /**
  * STATIC ASSETS, from inside the bundle.
  *
- * The registry is one file, so its scripts and stylesheets are string
+ * The registry is one file, so its scripts and fonts are string
  * constants generated from registry/assets/ (scripts/registry-assets.mjs).
  * Served by exact name, never by path walk: there is no directory to walk.
  * Cached long — a change to a script ships as a new bundle, and the pages

@@ -1,12 +1,11 @@
 /**
- * THE CURRENT BUILD, from GitHub, cached.
+ * THE CURRENT BUILD, as GitHub names it.
  *
- * The homepage's download buttons and the /download redirect name a real
- * release: whatever `releases/latest` says right now. The answer is cached
- * for an hour and the last good one is kept when GitHub is unreachable, so a
- * GitHub outage degrades to a slightly old link rather than a page with no
- * download on it. Before the first successful read there is nothing to show,
- * and the page says so instead of inventing a version.
+ * The static site's download buttons name a real release: whatever
+ * `releases/latest` said when the site was built (scripts/site-build.mjs).
+ * This is how that answer is read, and how the installable for a platform is
+ * picked out of it. Before a successful read there is nothing to show, and
+ * the page says so instead of inventing a version.
  */
 
 export interface ReleaseAsset {
@@ -29,64 +28,12 @@ export interface Release {
 export const RELEASES_API = 'https://api.github.com/repos/cookrew/cookrew-app/releases/latest'
 export const RELEASES_PAGE = 'https://github.com/cookrew/cookrew-app/releases/latest'
 
-/** GitHub's URLs are emitted into a Location header and a page; only https ones are. */
+/** GitHub's URLs are emitted into a page; only https ones are. */
 const HTTPS = /^https:\/\/[a-z0-9.-]+\//i
 const INSTALLABLE = /\.(dmg|zip|exe|AppImage|deb|rpm|msi)$/i
 
-export class ReleaseCache {
-  private readonly fetchImpl: (url: string, init?: RequestInit) => Promise<Response>
-  private readonly ttlMs: number
-  /** How long a failed read is remembered before GitHub is asked again. */
-  private readonly missTtlMs: number
-  private last: Release | null = null
-  private readAt = 0
-  private inflight: Promise<Release | null> | null = null
-
-  constructor(options: { fetch?: typeof fetch; ttlMs?: number; missTtlMs?: number } = {}) {
-    this.fetchImpl = options.fetch ?? fetch
-    this.ttlMs = options.ttlMs ?? 60 * 60 * 1000
-    this.missTtlMs = options.missTtlMs ?? Math.min(this.ttlMs, 60 * 1000)
-  }
-
-  /**
-   * The latest release, or null when nothing has ever been read.
-   *
-   * A stale answer is served at once while a refresh runs behind it; only a
-   * cold cache waits on GitHub. The ATTEMPT is what is timestamped, so an
-   * outage or a rate limit is asked again after the (shorter) miss interval,
-   * not on every page view — a page must not block on a third party.
-   */
-  async latest(): Promise<Release | null> {
-    const age = Date.now() - this.readAt
-    const due = this.last === null ? age >= this.missTtlMs : age >= this.ttlMs
-    if (!due) return this.last
-    if (!this.inflight) {
-      this.inflight = this.read().finally(() => {
-        this.inflight = null
-      })
-    }
-    return this.last === null ? this.inflight : this.last
-  }
-
-  private async read(): Promise<Release | null> {
-    this.readAt = Date.now()
-    try {
-      const res = await this.fetchImpl(RELEASES_API, {
-        headers: { accept: 'application/vnd.github+json', 'user-agent': 'cookrew-registry' },
-        signal: AbortSignal.timeout(8000)
-      })
-      if (!res.ok) return this.last
-      const parsed = parseRelease(await res.json())
-      if (!parsed) return this.last
-      this.last = parsed
-      return parsed
-    } catch {
-      return this.last
-    }
-  }
-}
-
-function parseRelease(body: unknown): Release | null {
+/** GitHub's answer for one release, read as far as it is one. */
+export function parseRelease(body: unknown): Release | null {
   if (typeof body !== 'object' || body === null) return null
   const raw = body as {
     tag_name?: unknown

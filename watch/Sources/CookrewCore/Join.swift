@@ -48,7 +48,7 @@ private func findMac(code: String, account: WatchAccount, api: RegistryAPI) asyn
   }
   var heard: [RegistryError] = []
   for desktop in desktops {
-    guard let relay = relayBase(registry: account.registry, username: account.username, desktop: desktop.deviceId) else { continue }
+    guard let relay = relayBase(registry: account.registry, desktop: desktop.deviceId) else { continue }
     do {
       return .mac(relay, try await api.claim(relay: relay, code: code, token: account.token))
     } catch RegistryError.signedOut {

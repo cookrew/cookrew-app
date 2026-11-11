@@ -16,6 +16,8 @@ export type PictureReader = (ref: ImageRef) => Promise<ImageBytes | null>
 /** The cache: key → the object URL on its way (null: nothing to draw). Oldest first. */
 export interface PictureCache {
   load: (ref: ImageRef) => Promise<string | null>
+  /** Every picture is let go of, and its object URL given back. */
+  clear: () => void
 }
 
 export function createPictureCache(
@@ -48,6 +50,10 @@ export function createPictureCache(
       for (const k of oldest) next.delete(k)
       held = next
       return loading
+    },
+    clear() {
+      letGo([...held.values()])
+      held = new Map()
     }
   }
 }

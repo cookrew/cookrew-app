@@ -1,4 +1,5 @@
 import { clientBase, clientSlug } from './api-base'
+import { registerScopeState } from './machine-scope'
 
 /**
  * WHICH WORKSPACE THIS PHONE IS ON (box user test 2, bug 10; ruling 11-04).
@@ -25,12 +26,30 @@ function stored(): string | null {
   }
 }
 
-let seat = stored()
+/**
+ * The seat, with the key it was read under. A seat is a workspace of ONE
+ * machine, so it is kept per machine (the key carries the machine's relay
+ * address) and read again whenever the machine in scope is another one.
+ */
+let held: { key: string; seat: string | null } | null = null
 
-export const deviceSeat = (): string | null => seat
+const current = (): string | null => {
+  const at = key()
+  if (held === null || held.key !== at) held = { key: at, seat: stored() }
+  return held.seat
+}
+
+/** The workspace this device looks at on the machine in scope, or null: the one that machine has in front. */
+export const deviceSeat = (): string | null => current()
+
+// Read again under the next machine's key (above); said here so the list of
+// what belongs to a machine is in one place.
+registerScopeState('device seat', () => {
+  held = null
+})
 
 export function takeSeat(id: string): void {
-  seat = id
+  held = { key: key(), seat: id }
   try {
     localStorage.setItem(key(), id)
   } catch {
@@ -39,7 +58,7 @@ export function takeSeat(id: string): void {
 }
 
 function leaveSeat(): void {
-  seat = null
+  held = { key: key(), seat: null }
   try {
     localStorage.removeItem(key())
   } catch {
@@ -49,12 +68,14 @@ function leaveSeat(): void {
 
 /** A request path, carrying this device's seat. */
 export function seated(path: string): string {
+  const seat = current()
   if (seat === null) return path
   return `${path}${path.includes('?') ? '&' : '?'}seat=${encodeURIComponent(seat)}`
 }
 
 /** Give the seat up if its workspace has gone. True when the seat just went. */
 export function settleSeat(list: { workspaces: readonly { id: string }[] }): boolean {
+  const seat = current()
   if (seat === null || list.workspaces.some((w) => w.id === seat)) return false
   leaveSeat()
   return true

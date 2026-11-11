@@ -35,6 +35,8 @@ export type PathBadgeInput = {
   readonly link: PathLink
   /** Where cookrew.dev lives, so its host can be recognised as the relay. */
   readonly registryOrigin?: string
+  /** Where the account's other machines are: the console's first level, on the console. Absent anywhere else. */
+  readonly machinesUrl?: string
   readonly desktopName?: string
   readonly latencyMs?: number | null
   /**
@@ -90,12 +92,12 @@ export type PathBadgeView = {
  * ONLY FOR RECOGNISING THE RELAY, never for building a link.
  *
  * Classifying an origin needs a guess about where the relay lives and a wrong
- * guess costs one word on a badge. Sending somebody to "switch desktop" needs
- * a FACT, and a wrong one sends a self-hosting owner to a site that has never
- * heard of them — so `switchDesktopUrl` is null until the desktop says where
- * its account lives, and the sheet then offers nothing rather than a lie.
+ * guess costs one word on a badge. Sending somebody to another machine needs
+ * a FACT: `switchDesktopUrl` is the console's own first level when the page is
+ * the console (`machinesUrl`), and null everywhere else, where the sheet
+ * offers nothing rather than a guess at a site.
  */
-export const DEFAULT_REGISTRY_ORIGIN = 'https://cookrew.dev'
+export const DEFAULT_REGISTRY_ORIGIN = 'https://api.cookrew.dev'
 
 const PATH_SENTENCES: Record<PathState, string> = {
   LAN: 'Direct over this Wi-Fi.',
@@ -208,8 +210,6 @@ export const pathBadgeView = (input: PathBadgeInput): PathBadgeView => {
     sentence: PATH_SENTENCES[state],
     desktopName: input.desktopName ?? null,
     latencyMs: typeof input.latencyMs === 'number' ? input.latencyMs : null,
-    switchDesktopUrl: input.registryOrigin
-      ? `${input.registryOrigin.replace(/\/+$/, '')}/me/account`
-      : null
+    switchDesktopUrl: input.machinesUrl ?? null
   }
 }

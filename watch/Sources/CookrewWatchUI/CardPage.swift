@@ -8,6 +8,16 @@ import SwiftUI
 
 /** The system clock has the top right of the screen; the head leaves it room. */
 let clockRoom: CGFloat = 46
+/**
+ * The box sits down in the glass's bottom inset (the pages ignore it, CardPager's
+ * wholeGlass): its floor and its sides keep the capsule's ends clear of the rounded
+ * corners, which is all that inset is for.
+ */
+let boxFloor: CGFloat = 14
+let boxSides: CGFloat = 13
+/** The card's head, drawn: as slim as its two lines of words. */
+let headHeight: CGFloat = 30
+let headFace: CGFloat = 26
 
 /** Crown-scrolled on a watch; flat where a drawing is made of it. */
 struct CardScroll<Content: View>: View {
@@ -43,22 +53,22 @@ struct CardHead: View {
 
   var body: some View {
     HStack(alignment: .center, spacing: 5) {
-      // Out of this agent, to its crew: the chevron says it, and the face does it too.
-      // Out of this agent: the chevron and the face, one target a finger finds (44 pt tall,
-      // clear of the glass's rounded corner), and a swipe right anywhere on the card does the same.
+      // Out of this agent: the chevron and the face, one target a finger finds, and a
+      // swipe right anywhere on the card does the same. Drawn slim (owner, 11-10: the
+      // words need the room), the face the size of the box's own; the TARGET stays a
+      // finger's 44 pt, reaching past the drawing rather than growing the head.
       Button(action: onFace) {
         HStack(spacing: 2) {
           OutChevron()
-          InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: 34, weight: .large)
+          InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: headFace, weight: .large)
         }
-        .padding(.vertical, 5)
         .padding(.trailing, 4)
-        .frame(minHeight: 44)
-        .contentShape(Rectangle())
+        .frame(minHeight: headHeight)
+        .contentShape(Rectangle().inset(by: -(44 - headHeight) / 2))
       }
       .buttonStyle(.plain)
       .accessibilityLabel("Back to the crew")
-      VStack(alignment: .leading, spacing: 1) {
+      VStack(alignment: .leading, spacing: 0) {
         Text(card.name)
           .font(InkType.name())
           .foregroundStyle(ink.ink)
@@ -436,7 +446,8 @@ public struct CardPage: View {
       // touched before them. A watch's scroll view neither clips its content nor
       // stops it catching touches above itself, and it comes later in this stack.
       CardHead(card: card, onFace: onFace)
-        .padding(.top, 4)
+        // The name level with the system's clock, as before: only the face grew smaller.
+        .padding(.top, 9)
         .background(ink.paper)
         .zIndex(1)
       ScrollViewReader { reader in
@@ -448,8 +459,8 @@ public struct CardPage: View {
       }
       if !rowsOnly {
         PromptBox(store: store, card: card, page: card.id)
-          .padding(.horizontal, 5)
-          .padding(.bottom, 5)
+          .padding(.horizontal, boxSides)
+          .padding(.bottom, boxFloor)
       }
     }
     .background(ink.paper)
@@ -489,7 +500,7 @@ public struct CardPage: View {
       }
     }
     .padding(.horizontal, 10)
-    .padding(.top, 7)
+    .padding(.top, 4)
     .padding(.bottom, 6)
     .id(cardTop)
   }
@@ -562,8 +573,8 @@ public struct NewAgentPage: View {
       }
       Spacer(minLength: 0)
       PromptBox(store: store, card: nil, page: newAgentPage)
-        .padding(.horizontal, 5)
-        .padding(.bottom, 5)
+        .padding(.horizontal, boxSides)
+        .padding(.bottom, boxFloor)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(ink.paper)

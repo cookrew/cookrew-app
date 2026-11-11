@@ -10,9 +10,11 @@
 // push like a press of TRY AGAIN: the same race, now, with no prompt.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { inConsole, relayBaseFor } from './support/console-scope'
 
 const DEVICE = '11111111-2222-3333-4444-555555555555'
-const RELAY_BASE = `/relay/@owner/desktop/${DEVICE}`
+/** The machine's address on the relay, as the console reaches it. */
+const RELAY_BASE = relayBaseFor(DEVICE)
 
 type Listener = (event: unknown) => void
 
@@ -76,7 +78,6 @@ const stubPhone = () => {
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
 afterEach(() => {
-  delete (globalThis as { COOKREW_BASE?: unknown }).COOKREW_BASE
   delete (globalThis as { fetch?: unknown }).fetch
   delete (globalThis as { EventSource?: unknown }).EventSource
   vi.resetModules()
@@ -85,8 +86,8 @@ afterEach(() => {
 describe('a reach push from the Mac', () => {
   it('starts a race at once, and the race is the switcher’s own (one at a time, no prompt)', async () => {
     const phone = stubPhone()
-    Object.assign(globalThis, { COOKREW_BASE: RELAY_BASE })
     vi.resetModules()
+    await inConsole(DEVICE)
     const companion = await import('../src/renderer/src/path/companion')
     const stop = companion.startCompanionPathSwitch()
     await settle()

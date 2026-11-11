@@ -45,6 +45,20 @@ describe('the picture cache', () => {
     await cache.load({ path: '/a.png' })
     expect(read).toHaveBeenCalledTimes(3)
   })
+
+  it('cleared, every picture is let go and its URL given back: they were another machine’s', async () => {
+    const u = urls()
+    const read = vi.fn(async () => BYTES)
+    const cache = createPictureCache(read, u)
+    await cache.load({ path: '/a.png' })
+    await cache.load({ path: '/b.png' })
+    cache.clear()
+    await Promise.resolve()
+    expect(u.revoke.mock.calls.map(([url]) => url).sort()).toEqual(['blob:1', 'blob:2'])
+    // The same path is read again: on the next machine it names another file, or none.
+    await cache.load({ path: '/a.png' })
+    expect(read).toHaveBeenCalledTimes(3)
+  })
 })
 
 describe('which pictures a turn and a draft carry', () => {

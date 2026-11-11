@@ -14,7 +14,9 @@
  */
 import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { gaugeCells, NO_GPU, NO_READING, type GaugeCell } from '../../../shared/machine-gauges'
+import { scopeNeedsMachine } from '../machine-scope'
 import { atDevicesStop, gaugeStore, type GaugeReading } from './gauge-store'
+import { gaugedMachines } from './gauged-machines'
 import { useZoomFleetView } from './use-zoom-fleet'
 import { zoomStore } from './zoom-store'
 import './gauges.css'
@@ -77,6 +79,7 @@ interface ListedMachine {
   name: string
   local: boolean
   online: boolean
+  appVersion?: string | null
 }
 
 /**
@@ -105,7 +108,7 @@ export function GaugeList({ localName, machines }: { localName: string; machines
     <section className="zv-gauge-panel" ref={box} data-scrolls={scrolls ? '' : undefined} aria-label="Machine gauges">
       <div className="zv-gauge-grid" ref={list}>
         <MachineLine machineId="local" name={localName} local />
-        {machines.filter((m) => !m.local).map((m) => <MachineLine key={m.id} machineId={m.id} name={m.name} online={m.online} />)}
+        {gaugedMachines(machines, scopeNeedsMachine()).map((m) => <MachineLine key={m.id} machineId={m.id} name={m.name} online={m.online} />)}
       </div>
     </section>
   )

@@ -12,6 +12,7 @@ import type { TurnViewModel } from '../turn-view-model'
 import { activeBrowserTab, type CanvasNode, type Connection, type WorkspaceMeta } from '../../../shared/model'
 import type { AttachmentIndex } from '../terminal-attachments'
 import { hostOf, screenAspectOf, tintOf } from './zoom-layout'
+import { DECK_SHOWN } from './fleet-compose'
 import type { FrameModel, LinkModel, TieModel } from './zoom-frame'
 import { inkStatusOfRow, statusWord, type InkStatus } from './ink-status'
 import type { LaunchFailure } from '../../../shared/launch-failure'
@@ -93,6 +94,8 @@ export interface MachineView {
   local: boolean
   online: boolean
   detail: 'live' | 'connecting' | 'listed'
+  /** The build it runs, as the account's list says; null when unknown. What the console's floor is judged by (machine-why.ts). */
+  appVersion?: string | null
   /** Its platform as its profile says it; null or absent when it publishes none. */
   os?: string | null
   workspaces: { id: string; name: string; presets: string[]; waiting: boolean }[]
@@ -194,6 +197,8 @@ export interface ZoomInput {
     local: boolean
     online: boolean
     detail: 'live' | 'connecting' | 'listed'
+    /** The build it runs, when the fleet says. */
+    appVersion?: string | null
     /** Its platform (darwin, win32, linux…): what to call it. */
     os?: string | null
     /** Its display in points, as its own feed tells it: the screen it is drawn with. */
@@ -217,7 +222,7 @@ export interface DeckSource {
   host?: string | null
 }
 /** How many things a tile's deck shows by name; the rest is its depth. */
-export const DECK_SHOWN = 3
+export { DECK_SHOWN }
 const deckView = (d: DeckSource): ItemView => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? '', tint: tintOf(d.id), initial: itemInitial(d.title), line: '', owners: [] })
 
 /** The word over a card that is not resting but stuck. */
@@ -352,6 +357,7 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       local: m.local,
       online: m.online,
       detail: m.detail,
+      appVersion: m.appVersion ?? null,
       os: m.os ?? null,
       workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, presets: w.agents.map((a) => a.harness), waiting: w.agents.some((a) => a.phase === 'waiting') })),
       agents: m.workspaces.length && m.workspaces.every((w) => w.counts) ? m.workspaces.reduce((a, w) => a + (w.counts?.agents ?? 0), 0) : null,

@@ -19,6 +19,8 @@
  * nothing about React.
  */
 
+import { registerScopeState } from './machine-scope'
+
 /**
  * THE WAYS ONE CANDIDATE CAN END, and each of them is a different story.
  *
@@ -105,6 +107,13 @@ export const subscribePathAttempts = (listener: (next: PathAttempts) => void): (
   listeners.add(listener)
   return () => void listeners.delete(listener)
 }
+
+// What the last race tried, and where it settled, was a race for ONE machine.
+registerScopeState('path attempts', () => {
+  if (state === EMPTY) return
+  state = EMPTY
+  for (const listener of listeners) listener(state)
+})
 
 /** Test seam: the module is a singleton and a test needs a clean one. */
 export const resetPathAttempts = (): void => {

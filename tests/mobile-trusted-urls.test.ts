@@ -135,7 +135,7 @@ describe('the URLs a Mac with a certificate prints', () => {
 describe('the one URL the popout draws', () => {
   const deps = (trusted: boolean): Parameters<typeof pairingHandout>[0] => ({
     account: () => null,
-    registryOrigin: () => 'https://cookrew.dev',
+    consoleOrigin: () => 'https://console.cookrew.dev',
     endpoints: () => endpoints(trusted),
     pairingToken: () => 'tok'
   })

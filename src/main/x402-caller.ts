@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { isAddress } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { parseX402Terms, type X402Terms } from '../shared/x402-terms'
 import type { PaymentRequirements } from './x402-rail'
 
 /**
@@ -80,57 +81,54 @@ export function deviceWallet(): { address: string } | null {
   }
 }
 
-function chainIdFor(network: string): number {
-  if (network === 'base-sepolia') return 84532
-  if (network === 'base') return 8453
-  throw new X402CallerError(`no chain id is configured for the x402 network '${network}'`)
+/**
+ * THE ONE READING OF A DOOR'S QUOTE IN THIS PROCESS — the label's and the
+ * signer's alike (served-admission.ts railsFromTerms, buildX402Payment below).
+ *
+ * It is the shared reader (shared/x402-terms.ts) plus the one check that
+ * needs a hash: a mixed-case address must carry its EIP-55 checksum. A payee
+ * mistyped by one character is a real address somebody else may hold, and the
+ * checksum is what catches it before money is sent there.
+ */
+export function readX402Quote(raw: unknown): X402Terms | null {
+  const terms = parseX402Terms(raw)
+  if (terms === null || !isAddress(terms.payTo) || !isAddress(terms.asset)) return null
+  return terms
 }
 
 /**
  * Build the `X-PAYMENT` header for one quote. Throws rather than returning a
  * header the door will refuse: an unpayable quote is the door's problem to
  * fix, and a signature over a guess is the one failure that costs money.
+ *
+ * THE QUOTE IS READ BY THE SAME READER THE LABEL USED (shared/x402-terms.ts),
+ * and every value signed below comes from what it returned — never from the
+ * door's strings a second time. A quote it refuses is refused here before the
+ * key is so much as read.
  */
 export async function buildX402Payment(requirements: PaymentRequirements): Promise<string> {
-  if (
-    requirements?.scheme !== 'exact' ||
-    typeof requirements.network !== 'string' ||
-    typeof requirements.maxAmountRequired !== 'string' ||
-    !isAddress(requirements.payTo) ||
-    !isAddress(requirements.asset) ||
-    typeof requirements.maxTimeoutSeconds !== 'number' ||
-    typeof requirements.extra?.name !== 'string' ||
-    typeof requirements.extra?.version !== 'string'
-  ) {
+  const terms = readX402Quote(requirements)
+  if (terms === null) {
     throw new X402CallerError('this quote is malformed — nothing was signed')
-  }
-  let value: bigint
-  try {
-    value = BigInt(requirements.maxAmountRequired)
-  } catch {
-    throw new X402CallerError('this quote has an invalid amount — nothing was signed')
-  }
-  if (value <= 0n || !Number.isFinite(requirements.maxTimeoutSeconds) || requirements.maxTimeoutSeconds <= 0) {
-    throw new X402CallerError('this quote has invalid payment bounds — nothing was signed')
   }
 
   const account = privateKeyToAccount(callerPrivateKey())
   const now = Math.floor(Date.now() / 1000)
   const authorization = {
     from: account.address,
-    to: requirements.payTo as `0x${string}`,
-    value,
+    to: terms.payTo,
+    value: terms.amount,
     // A minute of slack absorbs clock skew between this machine and the chain.
     validAfter: BigInt(Math.max(0, now - 60)),
-    validBefore: BigInt(now + Math.floor(requirements.maxTimeoutSeconds)),
+    validBefore: BigInt(now + terms.maxTimeoutSeconds),
     nonce: `0x${randomBytes(32).toString('hex')}` as `0x${string}`
   }
   const signature = await account.signTypedData({
     domain: {
-      name: requirements.extra.name,
-      version: requirements.extra.version,
-      chainId: chainIdFor(requirements.network),
-      verifyingContract: requirements.asset as `0x${string}`
+      name: terms.name,
+      version: terms.version,
+      chainId: terms.chainId,
+      verifyingContract: terms.asset
     },
     types: {
       TransferWithAuthorization: [
@@ -149,8 +147,8 @@ export async function buildX402Payment(requirements: PaymentRequirements): Promi
   return Buffer.from(
     JSON.stringify({
       x402Version: 1,
-      scheme: requirements.scheme,
-      network: requirements.network,
+      scheme: 'exact',
+      network: terms.network,
       payload: {
         signature,
         authorization: {

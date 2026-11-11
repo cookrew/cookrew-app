@@ -79,7 +79,7 @@ private func pair(_ api: FakeRegistry, code: String = "K7QM2XPD", held: WatchAcc
     let kept = Kept()
     let outcome = await pair(api, kept: kept)
     guard case .paired(let session, let account) = outcome else { Issue.record("\(outcome)"); return }
-    #expect(api.log == ["join K7QM-2XPD", "desktops session", "claim https://cookrew.dev/relay/@drej/desktop/\(macId) K7QM-2XPD"])
+    #expect(api.log == ["join K7QM-2XPD", "desktops session", "claim https://cookrew.dev/api/m/\(macId) K7QM-2XPD"])
     #expect(kept.steps == [.joining, .finding])
     #expect(account.username == "drej")
     #expect(session.token == "mac-token")
@@ -371,7 +371,7 @@ private final class Ticks: @unchecked Sendable {
 
 @Suite struct BasesTests {
   @Test func testTheRelayIsTheLastRoadTakenAndCardsStayHomeWhenTheyCan() {
-    let relay = URL(string: "https://cookrew.dev/relay/@drej/desktop/\(macId)")!
+    let relay = URL(string: "https://cookrew.dev/api/m/\(macId)")!
     let bases = basesAfterJoin(relay: relay, named: [
       Base(kind: "lan", url: "http://192.168.2.40:8639"),
       Base(kind: "name", url: "https://mac.d.cookrew.dev:8643"),
@@ -435,7 +435,7 @@ private final class Pass: RelayPass, @unchecked Sendable {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [Scripted.self]
     return HTTPWatchAPI(
-      bases: [URL(string: "http://192.168.2.40:8639")!, URL(string: "https://cookrew.dev/relay/@drej/desktop/\(macId)")!],
+      bases: [URL(string: "http://192.168.2.40:8639")!, URL(string: "https://cookrew.dev/api/m/\(macId)")!],
       token: "mac-token",
       session: URLSession(configuration: config),
       relay: pass
@@ -452,9 +452,10 @@ private final class Pass: RelayPass, @unchecked Sendable {
     Scripted.seen.filter { $0.url?.path().hasSuffix("api/watch/hello") != true }.filter(request)
   }
 
-  @Test func testTheAccountCookieGoesToTheRelayAndNowhereElse() async throws {
+  @Test func testTheAccountSessionGoesToTheRelayAndNowhereElse() async throws {
     Scripted.answers = [("192.168.2.40", 200, cardsBody)]
     _ = try await line(Pass()).cards(tag: nil)
+    #expect(relayed()[0].value(forHTTPHeaderField: "x-cookrew-session") == nil)
     #expect(relayed()[0].value(forHTTPHeaderField: "cookie") == nil)
 
     Scripted.seen = []
@@ -463,7 +464,7 @@ private final class Pass: RelayPass, @unchecked Sendable {
     let api = line(Pass())
     _ = try await api.cards(tag: nil)
     let carried = try #require(relayed().last)
-    #expect(carried.value(forHTTPHeaderField: "cookie") == "__Host-cr_session=stale")
+    #expect(carried.value(forHTTPHeaderField: "x-cookrew-session") == "stale")
     #expect(carried.value(forHTTPHeaderField: "authorization") == "Bearer mac-token")
     #expect(api.line == .relay)
   }
@@ -486,7 +487,7 @@ private final class Pass: RelayPass, @unchecked Sendable {
     _ = try await line(pass).cards(tag: nil)
     #expect(pass.asked == 1)
     let last = relayed().last
-    #expect(last?.value(forHTTPHeaderField: "cookie") == "__Host-cr_session=fresh")
+    #expect(last?.value(forHTTPHeaderField: "x-cookrew-session") == "fresh")
   }
 
   @Test func testARefusedTokenWithNothingNewerIsSignedOut() async {
@@ -575,7 +576,7 @@ private final class Pass: RelayPass, @unchecked Sendable {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [Scripted.self]
     let api = HTTPWatchAPI(
-      bases: [URL(string: "https://cookrew.dev/relay/@drej/desktop/\(macId)")!, URL(string: "http://192.168.2.40:8639")!],
+      bases: [URL(string: "https://cookrew.dev/api/m/\(macId)")!, URL(string: "http://192.168.2.40:8639")!],
       token: "mac-token",
       session: URLSession(configuration: config),
       relay: Pass()
@@ -603,7 +604,7 @@ private final class Pass: RelayPass, @unchecked Sendable {
   @Test func testAWriteThatTheRelayCouldNotDeliverMovesOn() async throws {
     Scripted.answers = [("cookrew.dev", 503, "{}"), ("192.168.2.40", 200, "{}")]
     let api = HTTPWatchAPI(
-      bases: [URL(string: "https://cookrew.dev/relay/@drej/desktop/\(macId)")!, URL(string: "http://192.168.2.40:8639")!],
+      bases: [URL(string: "https://cookrew.dev/api/m/\(macId)")!, URL(string: "http://192.168.2.40:8639")!],
       token: "mac-token",
       session: { let c = URLSessionConfiguration.ephemeral; c.protocolClasses = [Scripted.self]; return URLSession(configuration: c) }(),
       relay: Pass()
@@ -615,7 +616,7 @@ private final class Pass: RelayPass, @unchecked Sendable {
 
 // One suite with the tests above: Scripted is shared, and suites run side by side.
 extension RelayLineTests {
-  private var relay: URL { URL(string: "https://cookrew.dev/relay/@drej/desktop/\(macId)")! }
+  private var relay: URL { URL(string: "https://cookrew.dev/api/m/\(macId)")! }
 
   private func claim(_ status: Int, _ body: String) async -> RegistryError? {
     Scripted.seen = []

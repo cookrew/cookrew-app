@@ -1,11 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { FRESH_MS, freshlyVerified, type SessionAge } from './v2-session-age'
-import { standing } from './v2-fleet'
 import { PRESET_VERSION_HEADER, type PresetManifest } from '../../src/shared/preset-manifest'
 import { RegistryStore, isAddress } from './store'
 import { TransparencyLog } from './log'
-import { installPageHtml, originOf } from './install-page'
-import { html, json, readJsonBody } from './http'
+import { json, readJsonBody } from './http'
 import { handlePublish, handleRotate } from './publish-routes'
 import type { PricingDeps } from './authorize'
 import { publicKeyFromId, verifyManifest } from '../../src/main/preset-publish'
@@ -13,24 +10,19 @@ import type { IdentityService, TokenScope } from './identity'
 import type { Terms } from './terms'
 import type { PaymentFailure } from './payment'
 import { DoorStore, doorPath, type DoorInput, type DoorRecord } from './doors'
-import type { V2Seat } from './v2-seats'
 import { createRelayHttp, type RelayHttp } from './relay-http'
-import { RESERVED_HANDLES, handlePage, homePage, marketPage, marketQuery, teamPage } from './site'
-import { handleSiteRoute } from './site-routes'
 import type { Pulse } from './pulse'
-import type { CommitsCache } from './github-commits'
-import { respondPage } from './site-shell'
 import type { StarStore } from './stars'
-import type { Release, ReleaseCache } from './releases'
 import { handleV2Route, signedIn, v2AccountOf, type V2Identity } from './v2-routes'
 import type { V2Account } from './v2-accounts'
 import { sameOrigin } from './v2-http'
 import type { NamesFeature } from './names'
-import { teamAddress } from './v2-seats'
-import { mePage } from './site-account'
 import { createCanvasRelay, type CanvasRelay } from './v2-canvas-relay'
 import { createFunnelRoute, type FunnelMount } from './funnel-routes'
 import { authHostOf, handleAuthHost } from './auth-host'
+import { apiHostOf, enterApiHost } from './api-host'
+import { consoleScopeRefuses } from './console-scope'
+import { v2Error } from './v2-copy'
 import { completeWeb } from './v2-auth-routes'
 import type { V2Context } from './v2-http'
 
@@ -104,22 +96,16 @@ export interface RegistryDeps {
   /** Operational notes — a refused stream, a name already held. Never a body. */
   note?: (message: string) => void
   /**
-   * The canonical public origin, for addresses printed on a page.
-   *
-   * Taken from the request's Host header when absent — which is right for a
-   * dev registry reached by several names, and wrong for a deployment behind a
-   * proxy, where Host is whatever the caller sent. A published address is
-   * something a person will copy, so it is configured rather than reflected.
+   * The canonical public origin. Read here for one thing: whether a browser
+   * reaches this registry over https, which decides the Secure flag on the
+   * session cookie when no proxy header says so. Configured rather than
+   * reflected from Host, which is whatever the caller sent.
    */
   origin?: string
   /** Stars on served teams — a sort key for the market, never a gate. */
   stars?: StarStore
-  /** The current build, from GitHub — the homepage's download buttons and /download. */
-  releases?: ReleaseCache
-  /** Today's counts — lines opened per door, pages viewed. Never who. */
+  /** Today's counts — lines opened and calls carried, per door. Never who. */
   pulse?: Pulse
-  /** The dev branch's latest commits, for the homepage's built-in-the-open feed. */
-  commits?: CommitsCache
   /**
    * IDENTITY v2 — accounts a PERSON holds: a username, a password, and the
    * devices attached to them. Present → everything under /v2 is served and a
@@ -278,8 +264,6 @@ export function createRegistry(deps: RegistryDeps): Server {
     stars: deps.stars?.count(door.handle, door.name) ?? 0,
     today: deps.pulse?.doorToday(`@${door.handle}/${door.name}`) ?? { lines: 0, calls: 0 }
   })
-  const pulseOf = (handle: string, name: string): { lines: number; calls: number } =>
-    deps.pulse?.doorToday(`@${handle}/${name}`) ?? { lines: 0, calls: 0 }
 
   // NO REQUEST TIMEOUT. Node's default (300s) sends 408 to any request whose
   // body has not finished — and a door's uplink is a POST whose body never
@@ -288,9 +272,8 @@ export function createRegistry(deps: RegistryDeps): Server {
   // exchange in flight died 'door-gone' — a five-minute zombie metronome.
   // Header parsing keeps its own bound; only the body may take forever.
   /**
-   * WHO IS READING A PAGE. The site's script keeps the account token in a
-   * cookie so the market can render stars and the starred tab on the server;
-   * the JSON routes take it as a Bearer. Either way it is the identity
+   * WHO IS ASKING. The JSON routes take the account token as a Bearer; the
+   * older cookie that carried it is still read. Either way it is the identity
    * service's own token, verified here, never trusted from its shape. A
    * `call` token is for one door, not for this registry, and does not count.
    */
@@ -314,7 +297,6 @@ export function createRegistry(deps: RegistryDeps): Server {
     if (!claims || claims.scope === 'call') return null
     return claims.sub
   }
-  const starsOf = (handle: string, name: string): number => deps.stars?.count(handle, name) ?? 0
 
   /**
    * WHAT A DELETED ACCOUNT HOLDS OUTSIDE /v2 (v2-delete.ts). Live lines go by
@@ -373,6 +355,8 @@ export function createRegistry(deps: RegistryDeps): Server {
 
   // The auth origin's exact host, when this registry serves the sign-in page.
   const authHost = authHostOf(deps.v2)
+  // The API origin's exact host, when this registry splits its hosts (0.6.0).
+  const apiHost = apiHostOf(deps.v2)
 
   return createServer({ requestTimeout: 0, headersTimeout: 60_000 }, (request, response) => {
     try {
@@ -402,6 +386,9 @@ export function createRegistry(deps: RegistryDeps): Server {
       // which says nothing behind a terminator.
       secure: request.headers['x-forwarded-proto'] === 'https' || (deps.origin?.startsWith('https://') ?? false),
       decode,
+      // Which of its two names a split registry was asked on. The auth host
+      // builds its own contexts (auth-host.ts); everything else here is the API.
+      ...(apiHost !== null && (request.headers.host ?? '').toLowerCase() === apiHost ? { via: 'api' as const } : {}),
       // The directory, for the seat routes: a seat is held at a TEAM, and
       // the team's own terms (free or priced, and on which rails) are the
       // door's to state, never the seat's.
@@ -426,9 +413,39 @@ export function createRegistry(deps: RegistryDeps): Server {
     //
     // The exact configured host answers the sign-in page and nothing else:
     // no relay, no door, no profile is reachable through it.
-    if (authHost !== null && deps.v2 && (request.headers.host ?? '').toLowerCase() === authHost) {
+    const host = (request.headers.host ?? '').toLowerCase()
+    if (authHost !== null && deps.v2 && host === authHost) {
       const v2 = deps.v2
       handleAuthHost(v2, request, response, url, (p) => v2Context(request, response, p) as V2Context)
+      return
+    }
+
+    // ── API.COOKREW.DEV, and no other name ────────────────────────────────
+    //
+    // A registry that splits its hosts answers the auth host above and the API
+    // host here. Every other name is a static site hosted elsewhere, or
+    // nobody's: nothing is served on it. On the API host no cookie is read or
+    // set, no page is served, and the console's is the one page that may call
+    // (api-host.ts states and enforces all four before any route runs).
+    if (apiHost !== null && deps.v2) {
+      // ONE EXCEPTION, the liveness question: a cluster's probe asks the pod by
+      // its address, with no name of ours in Host. It is answered as on the
+      // API host (no cookie read, none set) and says nothing but that the
+      // process is up.
+      const probe = url.pathname === '/v1/health' && method === 'GET'
+      if (host !== apiHost && !probe) {
+        json(response, 404, { error: 'not_found' })
+        return
+      }
+      if (enterApiHost(deps.v2, request, response, url)) return
+    }
+
+    // ── A CONSOLE SESSION IS FOR THE CONSOLE'S FEW ROUTES ─────────────────
+    //
+    // Ahead of every route, the relay's included: a token a page holds must
+    // open nothing a page was not given (console-scope.ts).
+    if (deps.v2 && consoleScopeRefuses(request, method, url.pathname)) {
+      json(response, 403, v2Error('console_scope'), { 'cache-control': 'private, no-store' })
       return
     }
 
@@ -441,10 +458,9 @@ export function createRegistry(deps: RegistryDeps): Server {
 
     // ── THE PRIVATE RELAY SESSION, beside it ─────────────────────────────
     //
-    // Owns /v2/canvas, /v2/me/desktops/:id/relay-status and the whole of
-    // /relay/@user/desktop/:id — a canvas arriving through one address is a
-    // whole origin's worth of app, so the prefix is claimed here rather than
-    // route by route below.
+    // Owns /v2/canvas (a machine's own line), /v2/me/presence,
+    // /v2/me/desktops/:id/relay-status and the one relay path every client
+    // uses, /api/m/<machine id>/… (v2-canvas-relay.ts).
     if (canvas && canvas.handle(request, response, parts, url)) return
 
     // ── IDENTITY v2 ──────────────────────────────────────────────────────
@@ -464,42 +480,6 @@ export function createRegistry(deps: RegistryDeps): Server {
 
     // ── THE ONBOARDING FUNNEL: POST an event, GET the owner's totals ──────
     if (funnel && funnel.handle(request, response, url.pathname)) return
-
-    // GET /install/:presetId — R21 Option A, the page for a reader with no app.
-    //
-    // Outside /v1 on purpose: this is a URL people SHARE, and a version prefix
-    // in a link someone pastes into a message is a promise to keep that link
-    // working when the API moves on. The API is versioned because clients bind
-    // to it; a shared link is bound to by humans.
-    if (method === 'GET' && parts.length === 2 && parts[0] === 'install') {
-      // Content addresses compare by value: the app's recogniser lowercases,
-      // so a link with a capitalised digest that the APP accepts must not 404
-      // here. Two spellings of one digest are one preset or the halves of R21
-      // disagree about what a link is.
-      const id = decodeURIComponent(parts[1]).toLowerCase()
-      const summary = isAddress(id) ? store.list().find((p) => p.id === id) : undefined
-      html(
-        response,
-        summary === undefined ? 404 : 200,
-        summary === undefined
-          ? installPageHtml({ kind: 'unknown' })
-          : installPageHtml({
-              kind: 'preset',
-              name: summary.name,
-              author: summary.author,
-              // THIS address's version, never the lineage's latest. The id in
-              // the link is the content address of one specific team, and it
-              // is what the app will download — a page that advertised the
-              // newest version would be describing a different preset than the
-              // one the link actually hands over.
-              version: summary.version,
-              gated: store.gateOf(summary.id) === 'identified',
-              origin: originOf(request.headers.host),
-              id: summary.id
-            })
-      )
-      return
-    }
 
     // POST /v1/presets — PUBLISH. The write side of the gate (A3), mounted.
     //
@@ -811,10 +791,6 @@ export function createRegistry(deps: RegistryDeps): Server {
         // list that named routes this deployment answers 404 for would be worse
         // than no list, because a harness would trust it.
         routes: [
-          // Outside /v1 because people share it (R21 Option A). Listed anyway:
-          // a harness reconciling against this must not have to guess that the
-          // page exists.
-          'GET /install/:presetId',
           'GET /v1/health',
           'GET /v1/presets?q=',
           'GET /v1/presets/:id/manifest',
@@ -894,193 +870,10 @@ export function createRegistry(deps: RegistryDeps): Server {
       return
     }
 
-    // ── THE SITE'S OWN ROUTES — crawl files, features, start, assets, /download ──
-    if (
-      handleSiteRoute({
-        method,
-        parts,
-        url,
-        request,
-        response,
-        decode,
-        doors: () => (deps.doors?.list() ?? []).map(withLive),
-        release: () => (deps.releases?.latest() ?? Promise.resolve<Release | null>(null)).catch(() => null),
-        commits: () => (deps.commits?.latest() ?? Promise.resolve(null)).catch(() => null),
-        pulse: deps.pulse,
-        note: deps.note
-      })
-    )
-      return
-
-    // GET /me and /me/account — the reader's own account:
-    // devices, security, desktops. A page rather than a JSON route because it
-    // is where a person GOES; signed out it is a 401 that is still a page,
-    // since somebody following a link deserves a sentence and a way in.
-    if (deps.v2 && method === 'GET' && parts[0] === 'me' && parts.length <= 4) {
-      const signed = signedIn(request, deps.v2)
-      // Plain /me goes on into the Devices view (machines.js); /me/account, and a /me that carries a
-      // return (a step-up's, a passkey added) or a section, is the account page and stays.
-      const plain = parts.length === 1 && url.search === ''
-      respondPage(
-        response,
-        mePage(
-          signed === null
-            ? null
-            : {
-                view: plain ? 'devices' : 'account',
-                freshForMs: freshForMsOf(deps.v2.accounts.session(signed.account.username, signed.claims.jti), deps.v2.now()),
-                account: signed.account,
-                currentDeviceId: signed.claims.dev,
-                // The console: each machine with whether it holds its line now (v2-fleet.ts · standing).
-                machines: signed.account.desktops.map((desktop) => {
-                  const line = canvas?.presence(signed.account.username).get(desktop.deviceId)
-                  const { online, lastSeenAt } = standing(desktop, line, Date.now())
-                  return { id: desktop.deviceId, name: desktop.name, online, lastSeenAt, profile: desktop.profile ?? null }
-                }),
-                // Phase 4's posture: which passkeys, and whether an
-                // authenticator is active. Never a secret.
-                factors: deps.v2.factors.store.summary(signed.account.username)
-              }
-        )
-      )
-      return
-    }
-
-    // ── THE PUBLIC FACE, last ────────────────────────────────────────────
-    //
-    // Last because an owner's page lives at /<handle>, which would otherwise
-    // shadow every route above it. Reaching here means nothing more specific
-    // claimed the path — and RESERVED_HANDLES keeps that true even for a route
-    // added tomorrow, so a handle can never capture one.
-    if (deps.doors && method === 'GET') {
-      const site = deps.doors
-      // The @ is optional everywhere a person types a name. `@drej/alpha` is
-      // what the app passes around; `/drej/alpha` is what somebody reads out.
-      const bare = (value: string): string => (decode(value) ?? '').replace(/^@/, '')
-
-      if (parts.length === 0) {
-        deps.pulse?.page('/')
-        // The front page is a document and can never ask who is reading; the
-        // request already said. With an account the page is that person's and
-        // is served private (site-home decides the cache from the field).
-        const reader = accountOf(request)
-        // The release and the commits are two GitHub reads; neither may hold
-        // the page, and either missing renders as "not answered yet".
-        void Promise.all([
-          (deps.releases?.latest() ?? Promise.resolve<Release | null>(null)).catch(() => null),
-          (deps.commits?.latest() ?? Promise.resolve(null)).catch(() => null)
-        ])
-          .then(([release, commits]) => {
-            respondPage(
-              response,
-              homePage({
-                doors: site.list().map(withLive),
-                presets: store.list(),
-                release,
-                commits,
-                stars: starsOf,
-                pulse: pulseOf,
-                linesToday: deps.pulse?.linesToday() ?? 0,
-                account: reader
-              })
-            )
-          })
-          .catch((error: unknown) => {
-            deps.note?.(`render failed: ${error instanceof Error ? error.message : String(error)}`)
-            if (!response.headersSent) json(response, 500, { error: 'server' })
-          })
-        return
-      }
-      if (parts.length === 1 && parts[0] === 'market') {
-        deps.pulse?.page('/market')
-        const account = accountOf(request)
-        respondPage(
-          response,
-          marketPage({
-            doors: site.list().map(withLive),
-            presets: store.list(),
-            query: marketQuery(url.searchParams),
-            stars: starsOf,
-            account,
-            starredTeams: account === null ? [] : (deps.stars?.byAccount(account) ?? []),
-            // THE SHOP KNOWS ONE NAME. The seats this account holds decide what
-            // every card is to the reader (market-shelf.ts); a v1 handle with
-            // no v2 account holds none and reads the market as a stranger would.
-            seats: account === null || !deps.v2 ? [] : deps.v2.seats.heldBy(account)
-          })
-        )
-        return
-      }
-      if (parts.length === 1 && !RESERVED_HANDLES.has(parts[0].toLowerCase())) {
-        const handle = bare(parts[0])
-        respondPage(
-          response,
-          handlePage(handle, site.list().filter((d) => d.handle === handle).map(withLive), starsOf)
-        )
-        return
-      }
-      if (parts.length === 2 && !RESERVED_HANDLES.has(parts[0].toLowerCase())) {
-        const at = deps.origin ?? originOf(request.headers.host) ?? ''
-        const handle = bare(parts[0])
-        const name = bare(parts[1])
-        const found = site.get(handle, name)
-        const account = accountOf(request)
-        if (found) deps.pulse?.page(`/${handle}/${name}`)
-        respondPage(
-          response,
-          teamPage({
-            door: found === null ? null : withLive(found),
-            origin: at,
-            stars: starsOf(handle, name),
-            starred: account !== null && (deps.stars?.starred(account, handle, name) ?? false),
-            account,
-            // W2: the page's state is decided HERE, by what the request holds.
-            // A seated guest may see the room; only the owner sees the list.
-            ...seatState(deps.v2, found, account, url.searchParams.get('ask'))
-          })
-        )
-        return
-      }
-    }
-
+    // NO PAGE IS SERVED HERE (0.6.0). cookrew.dev is a static site, the account
+    // page is the auth host's, and the machines are the console's: a path that
+    // is no route above is nothing on this registry, whatever it used to be.
     json(response, 404, { error: 'not_found' })
-  }
-}
-
-
-/**
- * WHAT A TEAM PAGE MAY SAY TO THIS READER (W2).
- *
- * One function so the five states cannot drift apart: signed out holds
- * nothing; a signed-in stranger holds no seat; a seated guest holds a seat and
- * may see the room; the owner holds the list and the grant form. The `?ask=`
- * on the link a guest copied is only ever read back as a username, and only
- * for the owner — it is a prefill, never an instruction.
- */
-function seatState(
-  v2: V2Identity | undefined,
-  door: DoorRecord | null,
-  account: string | null,
-  ask: string | null
-): {
-  seat: V2Seat | null
-  seated: readonly string[]
-  seats: readonly V2Seat[]
-  owner: boolean
-  ask: string | null
-} {
-  const none = { seat: null, seated: [], seats: [], owner: false, ask: null }
-  if (!v2 || door === null || account === null) return none
-  const team = teamAddress(door.handle, door.name)
-  const owner = account === door.handle
-  const seat = v2.seats.activeFor(team, account)
-  const asked = typeof ask === 'string' && /^@?[a-z0-9][a-z0-9-]{0,31}$/.test(ask) ? ask.replace(/^@/, '') : null
-  return {
-    seat,
-    seated: owner || seat !== null ? v2.seats.seatedAt(team) : [],
-    seats: owner ? v2.seats.forTeam(team) : [],
-    owner,
-    ask: owner ? asked : null
   }
 }
 
@@ -1137,12 +930,4 @@ async function handleDoorRegistration(
     return
   }
   json(response, 200, { door: result.door, path: doorPath(result.door.handle, result.door.name) })
-}
-
-/**
- * How much longer a session counts as just proved (v2-session-age.ts), in ms, or undefined when it does not
- * now. A span, not a moment: the reader's clock is not cookrew.dev's.
- */
-function freshForMsOf(session: SessionAge | null | undefined, now: number): number | undefined {
-  return session && freshlyVerified(session, now) && typeof session.verifiedAt === 'number' ? Math.max(0, session.verifiedAt + FRESH_MS - now) : undefined
 }

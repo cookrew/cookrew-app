@@ -8,6 +8,7 @@
 // refused outright: the desktop never sends one, so one arriving is a bug or a
 // forgery, and either way it is not filed.
 
+import { MACHINE_RELAY_PREFIX } from '../../src/shared/machine-relay'
 import type { FleetMachine, FleetPresence, MachineKind, MachineProfile } from '../../src/shared/fleet'
 import type { V2Desktop } from './v2-accounts'
 
@@ -95,9 +96,8 @@ export interface DesktopPresence {
   lastSeenAt: number | null
 }
 
-/** Where the shell reaches a desktop, same-origin. */
-export const desktopBase = (username: string, deviceId: string): string =>
-  `/relay/@${encodeURIComponent(username)}/desktop/${encodeURIComponent(deviceId)}/`
+/** Where a desktop's API is reached down the relay: the one path every client uses (shared/machine-relay.ts). */
+export const desktopBase = (deviceId: string): string => `${MACHINE_RELAY_PREFIX}/${encodeURIComponent(deviceId)}`
 
 /**
  * WHERE A DESKTOP STANDS, one answer for the list row and the presence row, so
@@ -113,7 +113,7 @@ export function standing(desktop: V2Desktop, line: DesktopPresence | undefined, 
 }
 
 /** A level-0 row. */
-export function fleetRow(username: string, desktop: V2Desktop, line: DesktopPresence | undefined, now: number): FleetMachine {
+export function fleetRow(desktop: V2Desktop, line: DesktopPresence | undefined, now: number): FleetMachine {
   const { id, online, lastSeenAt } = standing(desktop, line, now)
   return {
     id,
@@ -122,7 +122,7 @@ export function fleetRow(username: string, desktop: V2Desktop, line: DesktopPres
     lastSeenAt,
     appVersion: desktop.appVersion ?? null,
     profile: desktop.profile ?? null,
-    base: desktopBase(username, desktop.deviceId)
+    base: desktopBase(desktop.deviceId)
   }
 }
 

@@ -22,10 +22,12 @@ private final class NoAPI: WatchAPI, @unchecked Sendable {
 private let ws = CardWorkspace(id: "w", name: "Cookrew Dev", active: true)
 private let paragraph = "Text selection on the phone works now: hold, then drag. It is merged into dev and the app is restarted. The phone sends touch to the card's Chrome, and headless Chrome never turns a touch into a text selection."
 private let reply = Array(repeating: paragraph, count: 5).joined(separator: "\n\n")
+/** -mine: the long card carries the owner's real reply (Chinese, markdown) instead. */
+private let longReply = ProcessInfo.processInfo.arguments.contains("-mine") ? mineReply : reply
 private let short = "All 109 checks pass at 412, 375 and 1440."
 private func fixture() -> [Card] {
   [
-    Card(id: "a1", name: "Longer", preset: "Claude Code", workspace: ws, status: .done, word: "done", words: CardWords(text: "Text selection works now.", tone: .done, full: reply)),
+    Card(id: "a1", name: "Longer", preset: "Claude Code", workspace: ws, status: .done, word: "done", words: CardWords(text: "Text selection works now.", tone: .done, full: longReply)),
     Card(id: "a2", name: "Shorty", preset: "Claude Code", workspace: ws, status: .idle, word: "resting", words: CardWords(text: short, tone: .done)),
     Card(id: "a3", name: "Third", preset: "Codex", workspace: ws, status: .idle, word: "resting", words: CardWords(text: short, tone: .done))
   ] + (1...30).map { n in
@@ -42,9 +44,20 @@ private let onNewAgent = arguments.contains("-new-agent")
 private let stale = arguments.contains("-stale")
 private let firstPage: String? = onNewAgent ? newAgentPage : (restore || stale) ? "f30" : nil
 
+/** -small: lay the wrist out at a 41 mm Series 8's 176 x 215 points (no simulator for it on watchOS 27). */
+private let small = ProcessInfo.processInfo.arguments.contains("-small")
+
 @main
 struct ProbeApp: App {
-  var body: some Scene { WindowGroup { Probe() } }
+  var body: some Scene {
+    WindowGroup {
+      if small {
+        Probe().frame(width: 176, height: 215).clipped().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      } else {
+        Probe()
+      }
+    }
+  }
 }
 
 private enum Route: Hashable { case agents, cards }

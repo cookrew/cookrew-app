@@ -1,3 +1,4 @@
+import { registerScopeState } from './machine-scope'
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { KeyedStore } from './keyed-store'
 import type { TerminalActivity, TurnPhase } from '../../shared/turn'
@@ -26,6 +27,19 @@ export const ACTIVITY_SEED_DEADLINE_MS = 3_000
 
 let activitySeeded = false
 const seedListeners = new Set<() => void>()
+
+// Every agent's activity and every page's picture is ONE machine's. The
+// pictures are object URLs and are given back to the browser; "the snapshot
+// has landed" is said again by the next machine's own snapshot.
+registerScopeState('agent activity', () => {
+  activityStore.clear()
+  activitySeeded = false
+})
+registerScopeState('browser thumbs', () => {
+  thumbStore.clear((url) => {
+    if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+  })
+})
 
 export function markActivitySeeded(): void {
   if (activitySeeded) return

@@ -1,6 +1,8 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useMachineScopeEpoch } from './use-machine-scope'
 import { attachmentIndex, sameAttachmentIndex, TerminalAttachmentsContext, type AttachmentIndex } from './terminal-attachments'
 import { requestJoin } from './account/open-request'
+import { onImportRequest } from './import-request'
 import {
   Background,
   BackgroundVariant,
@@ -646,6 +648,18 @@ function Canvas(): React.JSX.Element {
         }
         // 'serve' would open the share sheet for a saved template; that sheet
         // exists only on a selection today, so the link is set aside.
+      }),
+    []
+  )
+
+  // The same arrival for a team opened from INSIDE the app (import-request.ts):
+  // the Seats tab's OPEN lands on the import sheet with the team's address in
+  // its field, exactly as a `cookrew://import/…` link does.
+  useEffect(
+    () =>
+      onImportRequest((address) => {
+        setImportPrefill(address)
+        setImportServedOpen(true)
       }),
     []
   )
@@ -1742,8 +1756,13 @@ function Canvas(): React.JSX.Element {
 const NO_NODES: readonly CanvasNode[] = []
 
 export default function App(): React.JSX.Element {
+  // The whole view is one machine's. Entering another (the console) remounts
+  // it: every subscription below is made again on the next machine's stream,
+  // and nothing drawn for the last one is carried over (machine-scope.ts).
+  // The crash screen too: one machine's view failing says nothing of the next.
+  const machine = useMachineScopeEpoch()
   return (
-    <ErrorBoundary>
+    <ErrorBoundary key={machine}>
       <ReactFlowProvider>
         <Canvas />
       </ReactFlowProvider>

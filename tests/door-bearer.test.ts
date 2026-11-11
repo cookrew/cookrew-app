@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { doorBearer, type DoorBearerPort } from '../src/main/door-bearer'
+import { doorBearer, withPaidBearer, type DoorBearerPort } from '../src/main/door-bearer'
 import type { AdmissionPhase, ServeTargetRef } from '../src/main/served-admission'
 
 /**
@@ -49,5 +49,53 @@ describe('doorBearer', () => {
       const deps = port({ admit: vi.fn(async () => ({ token: null, phase: { kind, status: 0 } as AdmissionPhase })) })
       await expect(doorBearer(deps, target, '@mira/alpha')).rejects.toThrow(`(${kind})`)
     }
+  })
+})
+
+/**
+ * THE GAP AFTER A PURCHASE (0.6.0). The door admits a buyer the moment the 402
+ * is paid; cookrew.dev hears of the seat a round trip later. The card placed
+ * in between signs in with an ordinary mint and is told no_seat — so the
+ * Bearer the door itself admitted stands in, for that answer and no other.
+ */
+describe('withPaidBearer', () => {
+  const noSeat: AdmissionPhase = { kind: 'denied', reason: 'no_seat', retryable: false }
+  /** cookrew.dev itself refused the mint: the account is real and holds no seat there. */
+  const registrySaidNo = { token: null, phase: noSeat, minted: 'no_seat' as const }
+
+  it('offers the Bearer a seat was bought on when cookrew.dev still says no_seat', () => {
+    expect(withPaidBearer(registrySaidNo, 'paid-bearer')).toEqual({ ...registrySaidNo, token: 'paid-bearer' })
+  })
+
+  it('offers nothing where nothing was bought', () => {
+    expect(withPaidBearer(registrySaidNo, null)).toBe(registrySaidNo)
+  })
+
+  it('never stands in when it was the DOOR that refused — a 403 there is the door’s own no (L2)', () => {
+    // cookrew.dev minted a token and the door turned it away. The phase reads
+    // no_seat because that is what an unexplained 403 at the seat rung is
+    // called, but nobody is waiting on a seat report here: the door itself
+    // said no, and a Bearer it issued earlier must not answer for it.
+    const doorSaidNo = { token: null, phase: noSeat, minted: 'token' as const }
+    expect(withPaidBearer(doorSaidNo, 'paid-bearer')).toBe(doorSaidNo)
+  })
+
+  it('never stands in for any other refusal — no account, a dead registry, another 403', () => {
+    const others: Array<{ phase: AdmissionPhase; minted: 'identify' | 'offline' | 'refused' | 'token' }> = [
+      { phase: { kind: 'identify' }, minted: 'identify' },
+      { phase: { kind: 'error', status: 0 }, minted: 'offline' },
+      { phase: { kind: 'error', status: 404 }, minted: 'refused' },
+      { phase: { kind: 'gone' }, minted: 'token' },
+      { phase: { kind: 'denied', reason: 'workspace', retryable: false }, minted: 'token' },
+      { phase: { kind: 'denied', reason: 'budget', retryable: false }, minted: 'token' }
+    ]
+    for (const other of others) {
+      expect(withPaidBearer({ token: null, ...other }, 'paid-bearer').token, other.phase.kind).toBeNull()
+    }
+  })
+
+  it('leaves an admitted sign-in exactly as it was', () => {
+    const admitted = { token: 'account-bearer', phase: open, minted: 'token' as const }
+    expect(withPaidBearer(admitted, 'paid-bearer')).toBe(admitted)
   })
 })

@@ -1,6 +1,10 @@
-// BOX ROUND 3, BUG 9. The avatar's count showed a sign-in and not a Wi-Fi ask, so
-// a phone could wait on ALLOW unseen. Every link is real here but the window: a
-// loopback registry, the desktop's queue on its own wire, and the avatar's view.
+// THE AVATAR'S COUNT, OVER THE REAL WIRE. Every link is real here but the window:
+// a loopback registry, the desktop's queue on its own wire, and the avatar's view.
+//
+// It was written for box round 3, bug 9: the count showed a sign-in and not a
+// phone asking for Wi-Fi. That ask is gone (0.6.0: the registry has no route
+// for it), so what is held here is the other side of the same wire: asking
+// changes nothing on the desktop, and a device waiting to sign in still counts.
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import type { Server } from 'node:http'
@@ -94,14 +98,35 @@ function queueOf(token: string): { requests: Requests; changes: () => number } {
 const status = (requests: number): AccountStatus => ({ username: 'mira', displayName: '', avatar: null, requests }) as AccountStatus
 
 describe('a phone asking for Wi-Fi', () => {
-  it('reaches the avatar’s count on the desktop it asked', async () => {
+  it('is refused by the registry, and the desktop it named sees nothing', async () => {
     const { desktop, desktopId, phone } = await desktopAndPhone()
     const { requests, changes } = queueOf(desktop)
     await requests.refresh()
     expect(requests.count).toBe(0)
-    expect((await send('POST', `/v2/me/desktops/${desktopId}/reach-requests`, {}, phone)).status).toBe(201)
+    expect((await send('POST', `/v2/me/desktops/${desktopId}/reach-requests`, {}, phone)).status).toBe(404)
     await requests.refresh()
-    expect(requests.list().map((row) => row.kind)).toEqual(['reach'])
+    expect(requests.list()).toEqual([])
+    expect(requests.count).toBe(0)
+    expect(changes()).toBe(0)
+    // No badge at all: a count of nothing is not drawn.
+    expect(avatarView(status(requests.count)).badge).toBeNull()
+  })
+})
+
+describe('a device waiting to sign in', () => {
+  it('reaches the avatar’s count on a desktop of the account', async () => {
+    const { desktop } = await desktopAndPhone()
+    const { requests, changes } = queueOf(desktop)
+    await requests.refresh()
+    expect(requests.count).toBe(0)
+    const started = await send('POST', '/v2/sessions', {
+      username: 'mira', password: PASSWORD, device: { id: randomUUID(), kind: 'browser', name: 'A new browser', jwk: JWK }
+    })
+    expect(started.status).toBe(401)
+    const { pending } = (await started.json()) as { pending: string }
+    expect((await send('POST', `/v2/sessions/${pending}/approve`)).status).toBeLessThan(300)
+    await requests.refresh()
+    expect(requests.list().map((row) => row.kind)).toEqual(['join'])
     expect(requests.count).toBe(1)
     expect(changes()).toBe(1)
     expect(avatarView(status(requests.count)).badge).toBe(1)

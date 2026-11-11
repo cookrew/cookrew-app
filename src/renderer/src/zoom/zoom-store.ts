@@ -7,6 +7,7 @@
  *   agent, item  who holds the focus: the open card / full view on each side
  *   full         set by the view once it has handed over to the real full view
  */
+import { registerScopeState, scopeNeedsMachine } from '../machine-scope'
 import { useSyncExternalStore } from 'react'
 import { clampTo, type ZoomDir } from './zoom-path'
 
@@ -23,7 +24,13 @@ export interface ZoomState {
 
 const KEY = 'cookrew.zoom'
 
+/**
+ * ON THE CONSOLE THE LEVEL IS THE ADDRESS (console/console-router.ts), so
+ * nothing of it is kept here: a level in storage would fight the address on
+ * every load and carry one machine's place into the next.
+ */
 const read = (): Pick<ZoomState, 'dir' | 'v'> => {
+  if (scopeNeedsMachine()) return { dir: 'agents', v: -1 }
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) ?? 'null') as { dir?: unknown; v?: unknown } | null
     const dir: ZoomDir = raw?.dir === 'items' ? 'items' : 'agents'
@@ -42,6 +49,7 @@ const emit = (): void => {
   for (const cb of listeners) cb()
 }
 const persist = (): void => {
+  if (scopeNeedsMachine()) return
   try {
     localStorage.setItem(KEY, JSON.stringify({ dir: state.dir, v: state.v }))
   } catch {
@@ -92,6 +100,14 @@ export const zoomStore = {
     emit()
   }
 }
+
+// WHO holds the focus is an agent or an item of ONE machine. Where the view
+// stands (dir, v) is the person's place in the app and stays.
+registerScopeState('zoom focus', () => {
+  if (state.agent === null && state.item === null && state.full === null) return
+  state = { ...state, agent: null, item: null, full: null }
+  emit()
+})
 
 export function useZoom(): ZoomState {
   return useSyncExternalStore(zoomStore.subscribe, zoomStore.get)

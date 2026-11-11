@@ -1,13 +1,12 @@
 import type { AccountResult } from '../shared/account-v2'
 import type { Accounts } from './account-v2'
-import {
-  teamPageUrl,
-  type HeldSeatRow,
-  type SeatFace,
-  type SeatSource,
-  type SeatedCaller,
-  type SeatsSurface,
-  type ServingSeatsRow
+import type {
+  HeldSeatRow,
+  SeatFace,
+  SeatSource,
+  SeatedCaller,
+  SeatsSurface,
+  ServingSeatsRow
 } from '../shared/seats'
 import type { V2Seated } from './served-endpoints'
 
@@ -280,8 +279,6 @@ export interface SeatsSurfaceDeps {
   /** Null on a desktop with no account: there is nothing to ask cookrew.dev. */
   seats: DoorSeats | null
   serving: () => readonly ServedTeamRef[]
-  /** Where a held seat's OPEN goes. */
-  origin: string
 }
 
 /**
@@ -314,7 +311,7 @@ export async function seatsSurface(deps: SeatsSurfaceDeps): Promise<SeatsSurface
       : mine.value
           // A seat the owner ENDED is history, not a row with an OPEN button.
           .filter((seat) => seat.endedAt === undefined)
-          .map((seat) => ({ seat, url: teamPageUrl(deps.origin, seat.team) }))
+          .map((seat) => ({ seat }))
   return { serving, held }
 }
 
