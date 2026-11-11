@@ -46,10 +46,12 @@ describe('a quiet agent’s preview', () => {
     expect(plan.due(['a'], {}, 1_000 + TAIL_MISS_RETRY_MS)).toEqual(['a'])
   })
 
-  it('reads the activity’s phase, clock and turn count as its version, and nothing as the empty one', () => {
+  it('reads the activity’s phase and turn count as its version, not its clock, and nothing as the empty one', () => {
     expect(tailVersionOf(undefined)).toBe('')
-    expect(tailVersionOf({ phase: 'idle', updatedAt: 5, turnCount: 2 })).toBe('idle|5|2')
-    expect(tailVersionOf({ phase: 'idle', updatedAt: 5 })).toBe('idle|5|0')
+    expect(tailVersionOf({ phase: 'idle', turnCount: 2 })).toBe('idle|2')
+    // The tracker stamps its clock on every push: a push that changed nothing is no change.
+    expect(tailVersionOf({ phase: 'idle', updatedAt: 5, turnCount: 2 } as never)).toBe(tailVersionOf({ phase: 'idle', updatedAt: 9, turnCount: 2 } as never))
+    expect(tailVersionOf({ phase: 'idle' })).toBe('idle|0')
   })
 
   it('in a simulated idle minute of the owner’s Mac (22 quiet agents, a tick every 3 s): 22 reads, not 147', () => {

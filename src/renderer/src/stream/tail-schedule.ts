@@ -37,9 +37,14 @@ export interface TailSchedule {
   missed(id: string, now: number): void
 }
 
-/** What of an agent's activity says its last turn may have changed. */
-export const tailVersionOf = (activity: Pick<TerminalActivity, 'phase' | 'updatedAt'> & { turnCount?: number } | undefined): string =>
-  activity === undefined ? '' : `${activity.phase}|${activity.updatedAt}|${activity.turnCount ?? 0}`
+/**
+ * What of an agent's activity says its last turn may have changed: its phase and
+ * how many turns it has had. Not its clock: the tracker stamps `updatedAt` on every
+ * push, and an idle pane that pushes would put its preview back on a 3 s read
+ * (review, bytes 0.6.2). Anything else is the backstop's.
+ */
+export const tailVersionOf = (activity: Pick<TerminalActivity, 'phase'> & { turnCount?: number } | undefined): string =>
+  activity === undefined ? '' : `${activity.phase}|${activity.turnCount ?? 0}`
 
 export function createTailSchedule(backstopMs = TAIL_BACKSTOP_MS, missRetryMs = TAIL_MISS_RETRY_MS): TailSchedule {
   let last = new Map<string, { readonly version: string; readonly at: number }>()

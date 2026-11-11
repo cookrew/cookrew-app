@@ -1438,13 +1438,26 @@ async function collectMachineKeys(): Promise<void> {
 }
 
 /** Another machine's own answer, read with the key this machine holds for it. */
-/** Another machine's answers, asked for again only if they changed (remote-revalidate.ts, bytes 0.6.2). */
+/**
+ * Another machine's answers, asked for again only if they changed (remote-revalidate.ts, bytes 0.6.2):
+ * its fleet and gauges as parsed JSON, and its card reads as call answers, apart so a route one day
+ * read both ways never hands one shape back as the other. Never a picture: a frame is megabytes.
+ */
 const remoteReads = createRemoteRevalidation()
+const remoteCalls = createRemoteRevalidation()
+
+/** What this machine held from those machines goes with the key it held for them. */
+function forgetRemoteAnswers(machineIds: readonly string[]): void {
+  for (const id of machineIds) {
+    remoteReads.forget(id)
+    remoteCalls.forget(id)
+  }
+}
 
 /** That machine no longer takes this key (forgotten there, or its admission lost): drop it and what it said, so the next round asks again. */
 function keyRefused(machineId: string): void {
   machineKeys.forget([machineId])
-  remoteReads.forget(machineId)
+  forgetRemoteAnswers([machineId])
 }
 
 async function readAccountMachine(machineId: string, route: RemoteRead): Promise<unknown | null> {
@@ -1490,9 +1503,9 @@ async function callAccountMachine(machineId: string, call: RemoteMachineCall, bo
     })
     return sent.ok ? sent.response : null
   }
-  // A read is asked for again only if it changed (remote-revalidate.ts); a write goes once, as it is.
-  if (call.method === 'GET') {
-    const read = await remoteReads.get(machineId, call.route, send, (response) => answerOf(call, response))
+  // A read is asked for again only if it changed (remote-revalidate.ts); a picture and a write go as they are.
+  if (call.method === 'GET' && !call.binary) {
+    const read = await remoteCalls.get(machineId, call.route, send, (response) => answerOf(call, response))
     if (read.response?.status === 401) keyRefused(machineId)
     return read.value ?? NO_ANSWER
   }
@@ -1891,6 +1904,7 @@ const v2CallTokens = RELAY_ORIGIN
         if (watchPairing.revoked(revoked)) console.error('Watch withdrawn: it was revoked at the registry')
         // A machine revoked at the account: the key this one held for it goes too.
         machineKeys.forget(revoked)
+        forgetRemoteAnswers(revoked)
         for (const device of admittedDevices.prune(revoked)) {
           remoteDesk.forgetDevice(`device:${device.deviceId}`)
           // One line per phone, named. "Withdrew 1 admission" would leave the

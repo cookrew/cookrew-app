@@ -132,7 +132,9 @@ describe('one idle minute: a console inside the owner’s Mac (at its crew) + So
     const fleetsRead = await otherFleetsAtTheCrew()
     const solis = await solisWatchingTheMac()
     const asks = await accountAsks()
-    const thumbsAfter = zoomThumbClaim({ dir: 'agents', v: 1, deck: ['b1'], seen: ['b1', 'b2'] }).length > 0 ? MINUTE / 5_000 : 0
+    // The crew draws neither the deck nor the grid. Its own pictures (the coins) are still claimed where it
+    // has them; this crew has none on screen, so the 5 s batch is not asked for at all.
+    const thumbsAfter = zoomThumbClaim({ dir: 'agents', v: 1, deck: ['b1'], seen: ['b1', 'b2'], crew: [] }).length > 0 ? MINUTE / 5_000 : 0
 
     const before: Tally = [
       tails.before,

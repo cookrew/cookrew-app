@@ -55,9 +55,12 @@ export function createRemoteRevalidation(max = REVALIDATE_MAX): RemoteRevalidati
       if (response.status === 304) {
         await response.body?.cancel().catch(() => undefined)
         if (!mine) return { response, value: null, reused: false }
-        // Most recently used goes last: the oldest is what the bound lets go of.
-        held.delete(key)
-        held.set(key, mine)
+        // The machine vouched for the tag that was sent, so it is that entry that is handed back. Moved
+        // to the end (the bound lets the oldest go) only if nothing newer took its place meanwhile.
+        if (held.get(key) === mine) {
+          held.delete(key)
+          held.set(key, mine)
+        }
         return { response, value: mine.value as never, reused: true }
       }
       const value = await read(response)

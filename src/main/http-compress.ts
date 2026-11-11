@@ -183,14 +183,21 @@ const VALIDATOR_MAX = 256
 export function validatorOf(request: http.IncomingMessage | undefined): string | undefined {
   const header = request?.headers['if-none-match']
   const said = Array.isArray(header) ? header.join(',') : header
-  let param: string | null = null
+  // THE HEADER WINS when there is one (review, bytes 0.6.2). A page on the machine's own
+  // origin may get one added by its browser for the copy IT keeps; answering a 304 for the
+  // page's ?etag= then would let the browser hand back its own copy under the page's tag.
+  if (typeof said === 'string' && said !== '') return said.length <= VALIDATOR_MAX ? said : undefined
+  const param = etagParamOf(request)
+  return param !== null && param !== '' && param.length <= VALIDATOR_MAX ? param : undefined
+}
+
+/** The `?etag=` a page put in the address, or null. */
+export function etagParamOf(request: http.IncomingMessage | undefined): string | null {
   try {
-    param = new URL(request?.url ?? '/', 'http://validator.invalid').searchParams.get('etag')
+    return new URL(request?.url ?? '/', 'http://validator.invalid').searchParams.get('etag')
   } catch {
-    param = null
+    return null
   }
-  const parts = [said, param].filter((one): one is string => typeof one === 'string' && one !== '' && one.length <= VALIDATOR_MAX)
-  return parts.length > 0 ? parts.join(',') : undefined
 }
 
 /** Does an If-None-Match header name this tag? Weak comparison, `*` matches. */

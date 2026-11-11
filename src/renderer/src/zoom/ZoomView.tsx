@@ -532,9 +532,16 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const swallowClick = useRef(false)
   const deckBrowsers = model.openMark.deck.filter((i) => i.kind === 'browser').map((i) => i.id).join(' ')
   // Only what is drawn where the zoom is (thumb-claim.ts): the open tile's deck on the tiles, the grid in
-  // view at the artifacts, nothing at the crew or a card. Keyed on that answer, so the zoom moving within one
-  // stretch claims nothing again.
-  const claimed = zoomThumbClaim({ dir: zoom.dir, v: zoom.v, deck: deckBrowsers.split(' '), seen: seenBrowsers.split(' ') }).join(' ')
+  // view at the artifacts, the crew's coins past the tiles. Keyed on that answer, so the zoom moving within
+  // one stretch claims nothing again.
+  // The crew's own pictures: the browsers its coins wear, and the newest one when it is drawn on its own.
+  const crewBrowsers = useMemo(() => {
+    const items = new Map([...model.items, ...model.coinItems].map((i) => [i.id, i]))
+    const worn = model.frame.links.map((l) => items.get(l.item)).filter((i) => i?.kind === 'browser').map((i) => i!.id)
+    const alone = model.frame.newest === null && model.newestItem?.kind === 'browser' ? [model.newestItem.id] : []
+    return [...worn, ...alone].join(' ')
+  }, [model.items, model.coinItems, model.frame.links, model.frame.newest, model.newestItem])
+  const claimed = zoomThumbClaim({ dir: zoom.dir, v: zoom.v, deck: deckBrowsers.split(' '), seen: seenBrowsers.split(' '), crew: crewBrowsers.split(' ') }).join(' ')
   useEffect(() => {
     thumbWants.claim('zoom', claimed === '' ? [] : claimed.split(' '))
     return () => thumbWants.release('zoom')

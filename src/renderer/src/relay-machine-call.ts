@@ -162,9 +162,12 @@ export function createRelayMachines(deps: RelayMachineDeps): RelayMachines {
     if (token === null) return NOTHING
     // Only a read is asked again with its tag; a picture changes with every frame and is not held.
     const heldKey = (bearer: string): string | null => (method === 'GET' && !binary ? `${bearer}\n${id.toLowerCase()}\n${route}` : null)
-    const go = (bearer: string): Promise<Response> => {
+    /** The entry whose tag the last request named: a 304 vouches for that one and no other. */
+    let vouched: { readonly tag: string; readonly answer: RemoteMachineAnswer } | undefined
+    const go = (bearer: string, whole = false): Promise<Response> => {
       const mine = heldKey(bearer)
-      const tag = mine === null ? undefined : held.get(mine)?.tag
+      vouched = mine === null || whole ? undefined : held.get(mine)
+      const tag = vouched?.tag
       const asked = tag === undefined ? route : `${route}${route.includes('?') ? '&' : '?'}etag=${encodeURIComponent(tag)}`
       return deps.fetch(`${target}/${asked}`, {
         method,
@@ -194,13 +197,21 @@ export function createRelayMachines(deps: RelayMachineDeps): RelayMachines {
       }
       blocks.delete(id.toLowerCase())
       const mine = heldKey(token)
-      const kept = mine === null ? undefined : held.get(mine)
       if (response.status === 304) {
         await response.body?.cancel().catch(() => undefined)
-        if (mine === null || kept === undefined) return NOTHING
-        held.delete(mine)
-        held.set(mine, kept)
-        return kept.answer
+        const kept = vouched
+        // Nothing was named (a 304 nobody asked for), so ask once for the whole answer.
+        if (mine === null || kept === undefined) {
+          response = await go(token, true)
+          if (response.status === 304) return NOTHING
+        } else {
+          // Moved to the end only if nothing newer took its place while this was out (review, bytes 0.6.2).
+          if (held.get(mine) === kept) {
+            held.delete(mine)
+            held.set(mine, kept)
+          }
+          return kept.answer
+        }
       }
       const answer = await answerOf(binary, response)
       const tag = response.headers.get('etag')

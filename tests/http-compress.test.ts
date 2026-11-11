@@ -325,7 +325,8 @@ describe('what a client says it already holds (bytes 0.6.2)', () => {
     expect(validatorOf(asked('/api/fleet', { 'if-none-match': '"a"' }))).toBe('"a"')
     // A browser page puts it in the address: a header it sets makes Chrome preflight every call (measured 2026-11-11).
     expect(validatorOf(asked(`/api/fleet?etag=${encodeURIComponent('W/"b"')}`))).toBe('W/"b"')
-    expect(validatorOf(asked('/api/fleet?etag=%22b%22', { 'if-none-match': '"a"' }))).toBe('"a","b"')
+    // The header wins: a browser's own copy is the one its If-None-Match names (review, bytes 0.6.2).
+    expect(validatorOf(asked('/api/fleet?etag=%22b%22', { 'if-none-match': '"a"' }))).toBe('"a"')
     expect(validatorOf(asked('/api/fleet'))).toBeUndefined()
     expect(validatorOf(undefined)).toBeUndefined()
   })

@@ -20,7 +20,7 @@ import { hasLatestPush, subscribeLatestChanged } from '../latest-changed-bus'
 import { cookrew, isRemoteMode } from '../api'
 import { pickStreamTransport } from './use-stream'
 import { readEach } from './read-each'
-import { createTailSchedule, tailVersionOf } from './tail-schedule'
+import { createTailSchedule, tailVersionOf, type TailSchedule } from './tail-schedule'
 import type { TerminalActivity } from '../../../shared/turn'
 import type { StreamTransport } from './stream-transport'
 import { closingMessage } from '../../../shared/trace-blocks'
@@ -143,6 +143,9 @@ export function useStreamTails(
   const key = ids.join('\n')
   const activitiesRef = useRef(activities)
   activitiesRef.current = activities
+  // One plan for the hook's life: a change of who is quiet keeps what is known of the rest
+  // (`due` forgets the ids that left), rather than reading the whole board again (review).
+  const planRef = useRef<TailSchedule | null>(null)
 
   useEffect(() => {
     const wanted = key.length === 0 ? [] : key.split('\n')
@@ -163,7 +166,7 @@ export function useStreamTails(
     // changed and at most a minute apart, not every agent every 3 s
     // (tail-schedule.ts, bytes 0.6.2). With one (the desktop) every push reads
     // its card at once and the sweep is the backstop, over IPC, as before.
-    const plan = push ? null : createTailSchedule()
+    const plan = push ? null : (planRef.current ??= createTailSchedule())
     const readOne = async (id: string): Promise<void> => {
       if (document.hidden) return
       try {

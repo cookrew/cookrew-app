@@ -26,7 +26,14 @@ describe('the zoom view’s pictures', () => {
     expect(zoomThumbClaim({ dir: 'items', v: -0.52, deck: DECK, seen: SEEN })).toEqual(['d1', 'd2', 'g1', 'g2'])
   })
 
-  it('at the crew, a card or a full view: nothing, for neither is drawn there', () => {
+  it('at the crew, a card or a full view: neither the deck nor the grid, which are not drawn there', () => {
     for (const v of [0, 1, 2, 3]) expect(zoomThumbClaim({ dir: 'agents', v, deck: DECK, seen: SEEN }), `v ${v}`).toEqual([])
+  })
+
+  it('but the crew’s own pictures, the coins and the newest browser on its own, wherever they are drawn (review)', () => {
+    for (const v of [1, 2, 3]) expect(zoomThumbClaim({ dir: 'agents', v, deck: DECK, seen: SEEN, crew: ['c1', 'n1'] }), `v ${v}`).toEqual(['c1', 'n1'])
+    expect(zoomThumbClaim({ dir: 'items', v: 0, deck: DECK, seen: SEEN, crew: ['c1', 'g1'] })).toEqual(['g1', 'g2', 'd1', 'c1'])
+    // On the tiles the crew is not drawn.
+    expect(zoomThumbClaim({ dir: 'agents', v: -1, deck: DECK, seen: SEEN, crew: ['c1'] })).toEqual(['d1', 'd2'])
   })
 })

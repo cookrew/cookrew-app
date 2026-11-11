@@ -83,6 +83,29 @@ describe('a read of another machine, made again', () => {
     expect(mac.asked[1]).toEqual({})
   })
 
+  it('a 304 hands back the answer whose tag was sent, and does not put it back over a newer one (review)', async () => {
+    const reads = createRemoteRevalidation()
+    const mac = machine('{"rev":1}')
+    await reads.get('m1', 'api/fleet', mac.send, json)
+    let release: (() => void) | null = null
+    const slow = reads.get(
+      'm1',
+      'api/fleet',
+      async (headers) => {
+        await new Promise<void>((resolve) => void (release = resolve))
+        return mac.send(headers)
+      },
+      json
+    )
+    mac.body = '{"rev":2}'
+    await reads.get('m1', 'api/fleet', mac.send, json)
+    mac.body = '{"rev":1}'
+    release!()
+    expect((await slow).value).toEqual({ rev: 1 })
+    mac.body = '{"rev":2}'
+    expect(await reads.get('m1', 'api/fleet', mac.send, json)).toMatchObject({ value: { rev: 2 }, reused: true })
+  })
+
   it('nothing came back is nothing', async () => {
     const reads = createRemoteRevalidation()
     expect(await reads.get('m1', 'api/fleet', async () => null, json)).toEqual({ response: null, value: null, reused: false })
