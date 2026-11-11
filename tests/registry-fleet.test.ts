@@ -92,6 +92,41 @@ describe('a FleetMachine row', () => {
     expect(fleetRow(desktop, undefined, 9_000)).toMatchObject({ online: false, lastSeenAt: 1_000 })
   })
 
+  it('says whether the desktop is signed in, when it is told the account’s sessions', () => {
+    const DAY = 24 * 60 * 60 * 1000
+    const now = 100 * DAY
+    const new060 = { ...desktop, appVersion: '0.6.0' }
+    const live = [{ dev: 'd1', issuedAt: now - DAY, signedInAt: now - DAY }]
+    // Not told: it says nothing either way (a caller that has no sessions to hand it).
+    expect('signedIn' in fleetRow(new060, undefined, now)).toBe(false)
+    expect(fleetRow(new060, undefined, now, live).signedIn).toBe(true)
+    // No session of its own: it signed out there, was signed out by "Not me" or a password change, or never came back.
+    expect(fleetRow(new060, undefined, now, []).signedIn).toBe(false)
+    expect(fleetRow(new060, undefined, now, [{ dev: 'another', issuedAt: now - DAY, signedInAt: now - DAY }]).signedIn).toBe(false)
+    // A sign-in that has run out is no sign-in.
+    expect(fleetRow(new060, undefined, now, [{ dev: 'd1', issuedAt: now - 31 * DAY, signedInAt: now - 31 * DAY }]).signedIn).toBe(false)
+    // Nor is one left unused past the idle limit: the registry would refuse it, so the machine has to sign in.
+    expect(fleetRow(new060, undefined, now, [{ dev: 'd1', issuedAt: now - 9 * DAY, signedInAt: now - 9 * DAY, lastUsedAt: now - 8 * DAY }]).signedIn).toBe(false)
+    expect(fleetRow(new060, undefined, now, [{ dev: 'd1', issuedAt: now - 9 * DAY, signedInAt: now - 9 * DAY, lastUsedAt: now - DAY }]).signedIn).toBe(true)
+    // A console page's session on that device id is not the machine's.
+    expect(fleetRow(new060, undefined, now, [{ dev: 'd1', issuedAt: now - 1000, signedInAt: now - 1000, via: 'console' as const }]).signedIn).toBe(false)
+  })
+
+  it('a desktop last heard from on a build before 0.6.0 is signed out here, whatever old session it left: the registry moved', () => {
+    // 0.6.0 put the registry on its own host and every machine starts signed out on it. A 0.5.x build cannot
+    // reach this host at all, and a 0.6.0 build drops the sign-in it had (owner 2026-11-11: Solis-Core ran
+    // 0.6.0 with Cookrew open, was not signed in, and was told "Open Cookrew on Solis-Core.").
+    const DAY = 24 * 60 * 60 * 1000
+    const now = 100 * DAY
+    const live = [{ dev: 'd1', issuedAt: now - DAY, signedInAt: now - DAY }]
+    expect(fleetRow({ ...desktop, appVersion: '0.5.10' }, undefined, now, live).signedIn).toBe(false)
+    expect(fleetRow({ ...desktop, appVersion: '0.6.1' }, undefined, now, live).signedIn).toBe(true)
+    // A record with no version on it says nothing about the move: judged by its session alone.
+    expect(fleetRow(desktop, undefined, now, live).signedIn).toBe(true)
+    // Holding its line is being signed in, whatever the record still says.
+    expect(fleetRow({ ...desktop, appVersion: '0.5.10' }, { online: true, lastSeenAt: now }, now, []).signedIn).toBe(true)
+  })
+
   it('draws an older desktop as unknown and names its base', () => {
     const row = fleetRow(desktop, undefined, 9_000)
     expect(row).toEqual({ id: 'd1', name: 'Invented Mac', online: false, lastSeenAt: 1_000, appVersion: null, profile: null, base: '/api/m/d1' })
@@ -266,6 +301,24 @@ describe('the desktop record carries profile and appVersion', () => {
     expect((await put(site.origin, mac, { profile: null, appVersion: null })).status).toBe(204)
     ;[row] = await desktops(site.origin, mac.token)
     expect(row).toMatchObject({ appVersion: null, profile: null })
+  })
+
+  it('each row says whether the desktop is signed in: by its own session, and not on a build from before the move', async () => {
+    const mac = await claim(site.origin, 'sol')
+    expect((await put(site.origin, mac, { appVersion: '0.6.0' })).status).toBe(204)
+    let [row] = await desktops(site.origin, mac.token)
+    // Not holding its line, and signed in: the app is simply not running there.
+    expect(row).toMatchObject({ online: false, signedIn: true })
+    // The same desktop as a build before 0.6.0 last described it: signed out here, old session and all.
+    expect((await put(site.origin, mac, { appVersion: '0.5.10' })).status).toBe(204)
+    ;[row] = await desktops(site.origin, mac.token)
+    expect(row).toMatchObject({ online: false, signedIn: false })
+    // Holding its line is being signed in.
+    const line = holdLine(site.origin, mac)
+    await line.ready
+    ;[row] = await desktops(site.origin, mac.token)
+    expect(row).toMatchObject({ online: true, signedIn: true })
+    line.close()
   })
 
   it('refuses a bad profile and keeps the one filed', async () => {

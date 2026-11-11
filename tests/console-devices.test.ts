@@ -374,6 +374,17 @@ describe('a machine that cannot be read says the one thing to do', () => {
     stop()
   })
 
+  it('a machine that is signed out is told to sign in, not to open Cookrew', () => {
+    const linux = { kind: 'server', model: null, label: null, vendor: null, os: 'linux', osVersion: null, arch: 'x64', cpus: null, memoryGb: null, evidence: [] } as never
+    expect(standingOf(row(A, 'Solis-Core', { online: false, signedIn: false, profile: linux }), { open: true, read: false, block: null })).toEqual({ standing: 'offline', say: 'Solis-Core is signed out. Run cookrew login on it.' })
+    expect(standingOf(row(A, 'Studio Mac', { online: false, signedIn: false }), { open: false, read: false, block: null })).toEqual({ standing: 'offline', say: 'Studio Mac is signed out. Open Cookrew on it and sign in.' })
+    // Signed in and not running, or a registry that does not say: as before.
+    expect(standingOf(row(A, 'Studio Mac', { online: false, signedIn: true }), { open: true, read: false, block: null }).say).toBe('Open Cookrew on Studio Mac.')
+    expect(standingOf(row(A, 'Studio Mac', { online: false }), { open: true, read: false, block: null }).say).toBe('Open Cookrew on Studio Mac.')
+    // Signed out comes before "update": a machine that has not signed in since 0.6.0 still lists its old build.
+    expect(standingOf(row(A, 'Solis-Core', { online: false, signedIn: false, appVersion: '0.5.10', profile: linux }), { open: true, read: false, block: null }).say).toBe('Solis-Core is signed out. Run cookrew login on it.')
+  })
+
   it('it refused this browser: its own words, said as its own and cut to a sentence’s length', () => {
     expect(standingOf(row(A, 'Studio Mac'), { open: true, read: false, block: { kind: 'refused', message: 'Remote access is off on this Mac.' } })).toEqual({
       standing: 'blocked',

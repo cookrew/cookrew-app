@@ -1,6 +1,7 @@
-import { machineCopy } from '../../../shared/machine-words'
+import { machineCopy, signedOutThen, signedOutWords } from '../../../shared/machine-words'
 import { machineOutdated } from '../../../shared/machine-version'
 import type { MachineBlock } from '../relay-machine-call'
+import { TRUST_BUTTON } from './machine-trust'
 
 /**
  * A machine the console is too new for (shared/machine-version.ts). `floor` is
@@ -44,13 +45,29 @@ export function machineWhyShows(v: number, full: boolean): boolean {
   return !full && v < -1.5
 }
 
-export function machineWhyWords(machine: { readonly name: string; readonly online: boolean; readonly appVersion?: string | null }, ctx: WhyContext): string {
+/**
+ * What the registry says of a machine that holds no line, read off the row:
+ * `signedIn === false` is a machine nobody is signed in on (it signed out, was
+ * signed out, or has not signed in since the registry moved at 0.6.0). Absent
+ * or true, it is simply not running there.
+ */
+interface OffMachine {
+  readonly name: string
+  readonly online: boolean
+  readonly signedIn?: boolean
+  readonly os?: string | null
+}
+
+const signedOut = (machine: OffMachine): boolean => !machine.online && machine.signedIn === false
+
+export function machineWhyWords(machine: OffMachine & { readonly appVersion?: string | null }, ctx: WhyContext): string {
   const { name } = machine
+  if (signedOut(machine)) return signedOutThen(name, machine.os, 'and it opens here.')
   if (!machine.online) return `${name} is offline. It opens here once it is back.`
   if (machineTooOld(machine, ctx.floor)) return `Update Cookrew on ${name}, and it opens here.`
   if (ctx.surface === 'none') return `Open console.cookrew.dev to go into ${name} from here.`
   if (ctx.surface === 'desktop' && ctx.trusted === false) {
-    return `Press “${machineCopy('Sign this Mac in again to see your other machines', ctx.platform ?? 'darwin')}” below, and ${name} opens here.`
+    return `Press “${machineCopy(TRUST_BUTTON, ctx.platform ?? 'darwin')}” below, and ${name} opens here.`
   }
   switch (ctx.block?.kind) {
     case 'needs-proof':
@@ -73,16 +90,17 @@ export function machineWhyWords(machine: { readonly name: string; readonly onlin
  * sentence, with what a press would find, is `machineWhyWords`.
  */
 export function machineSays(
-  machine: { readonly name: string; readonly online: boolean; readonly detail: 'live' | 'connecting' | 'listed'; readonly appVersion?: string | null },
+  machine: OffMachine & { readonly detail: 'live' | 'connecting' | 'listed'; readonly appVersion?: string | null },
   ctx: Pick<WhyContext, 'surface' | 'trusted' | 'platform' | 'floor'> & { readonly block?: MachineBlock | null }
 ): string | null {
+  if (signedOut(machine)) return signedOutWords(machine.name, machine.os)
   if (!machine.online) return `Open Cookrew on ${machine.name}.`
   // Before anything it could be asked: an old machine is asked nothing.
   if (machineTooOld(machine, ctx.floor)) return `Update Cookrew on ${machine.name}.`
   if (machine.detail === 'live') return null
   if (machine.detail === 'connecting') return 'Reading…'
   // The button is at the foot of the view (ZoomView · zv-trust-bar), under the machines.
-  if (ctx.surface === 'desktop' && ctx.trusted === false) return machineCopy('Sign this Mac in again, below, to read it.', ctx.platform ?? 'darwin')
+  if (ctx.surface === 'desktop' && ctx.trusted === false) return machineCopy('Prove it’s you on this Mac, below, to read it.', ctx.platform ?? 'darwin')
   if (ctx.surface === 'none') return 'Open console.cookrew.dev to read it.'
   // A page that enters machines with the account's pass knows what stood in the way the last time it asked.
   switch (ctx.block?.kind) {

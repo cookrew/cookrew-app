@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { hostPlatform } from '../../../shared/machine-words'
 import { cookrew } from '../api'
-import { machineTrustLine, type MachineTrustState } from './machine-trust'
+import { blockedByTrust, machineTrustLine, type MachineTrustState } from './machine-trust'
 
 /**
  * Has this machine given its one proof. Asked once and again now and then, and
@@ -32,13 +32,16 @@ export function useMachineTrust(): readonly [MachineTrustState | null, (next: Ma
   return [state, setState]
 }
 
-/** At the foot of the devices stop while this machine cannot read the account's others yet: its one proof, or how to give it. */
-export function MachineTrustRow({ others, trust }: { others: number; trust: ReturnType<typeof useMachineTrust> }): React.JSX.Element | null {
+/**
+ * At the foot of the devices stop while the registry asks this machine for its one proof AND another machine is
+ * online behind it: the proof, said as what it is. With nothing it would open, it is not there.
+ */
+export function MachineTrustRow({ machines, trust }: { machines: Parameters<typeof blockedByTrust>[0]; trust: ReturnType<typeof useMachineTrust> }): React.JSX.Element | null {
   const [state, setState] = trust
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
 
-  const line = machineTrustLine(state, others, hostPlatform())
+  const line = machineTrustLine(state, blockedByTrust(machines), hostPlatform())
   if (line === null) return null
   const prove = (): void => {
     const ask = cookrew().proveMachine
@@ -59,7 +62,8 @@ export function MachineTrustRow({ others, trust }: { others: number; trust: Retu
   }
   return (
     <button type="button" className="zv-trust zv-trust-go" onClick={prove} disabled={busy}>
-      {busy ? 'Waiting for your sign-in…' : failed ? `${line.text} · try again` : line.text}
+      <span className="zv-trust-ask">{busy ? 'Waiting for you in the browser…' : failed ? `${line.text} · try again` : line.text}</span>
+      {!busy && <span className="zv-trust-how">{line.how}</span>}
     </button>
   )
 }

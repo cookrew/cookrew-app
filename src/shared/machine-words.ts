@@ -25,6 +25,22 @@ export const machineWord = (platform: string): 'Mac' | 'PC' | 'machine' => {
   return platform === 'win32' ? 'PC' : 'machine'
 }
 
+/**
+ * A MACHINE THAT IS SIGNED OUT IS NOT ONE THAT IS OFF (owner 2026-11-11).
+ * "Open Cookrew on Solis-Core." was said of a machine with Cookrew open on it
+ * and nobody signed in. What to do there depends on what THAT machine is, not
+ * on the one the sentence is read on: a Mac or a PC has a window to sign in
+ * from; anything else (a Linux box, or a machine that never said what it is)
+ * has the command, which works wherever the CLI does.
+ */
+const signInStep = (os: string | null | undefined): string => (os === 'darwin' || os === 'win32' ? 'Open Cookrew on it and sign in' : 'Run cookrew login on it')
+
+/** Under a machine's name. */
+export const signedOutWords = (name: string, os: string | null | undefined): string => `${name} is signed out. ${signInStep(os)}.`
+
+/** The whole sentence, with what follows the step. */
+export const signedOutThen = (name: string, os: string | null | undefined, then: string): string => `${name} is signed out. ${signInStep(os)}, ${then}`
+
 /** The home registry's hosts: its API's own name, and the name the sentences already say. */
 const HOME_REGISTRY = new Set(['api.cookrew.dev', 'cookrew.dev'])
 const REGISTRY_FLAG = '--cookrew-registry='

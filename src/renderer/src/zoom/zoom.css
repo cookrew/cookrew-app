@@ -2173,6 +2173,29 @@
   color: var(--ink-ink, #1d1a16);
   cursor: pointer;
 }
+.zv-trust-bar {
+  /* As wide as the two lines want, up to the view: a box placed at the middle would otherwise get half of it.
+     Only the button takes a press; the rest of the row lets one through to what is under it. */
+  width: min(calc(64ch + 26px), calc(100% - 24px));
+  pointer-events: none;
+}
+.zv-trust-go {
+  /* Two lines: what it asks, and how. A pill's ends would cut the second. */
+  border-radius: 16px;
+  max-width: 100%;
+  pointer-events: auto;
+}
+.zv-trust-ask,
+.zv-trust-how {
+  display: block;
+}
+.zv-trust-how {
+  margin-top: 2px;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--ink-muted, #6f675b);
+  white-space: normal;
+}
 .zv-trust-go:disabled {
   cursor: progress;
   opacity: 0.7;

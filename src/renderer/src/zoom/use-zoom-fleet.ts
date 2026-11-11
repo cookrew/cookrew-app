@@ -428,6 +428,8 @@ export interface ZoomFleetView {
     detail: ZoomMachineDetail
     /** The build it runs: what the console's floor is judged by on the devices stop (machine-why.ts). */
     appVersion: string | null
+    /** False when the registry says nobody is signed in on it (machine-why.ts says what to do then). */
+    signedIn?: boolean
     os: string | null
     display: MachineDisplay | null
     workspaces: { id: string; name: string; icon: string | null; agents: { harness: string; phase: string }[]; counts: ZoomCounts | null; deck: { id: string; kind: 'browser' | 'note'; title: string; host: string | null }[] }[]
@@ -443,6 +445,7 @@ export function fleetViewOf(fleet: ZoomFleet): ZoomFleetView {
       online: m.online,
       detail: m.detail,
       appVersion: m.appVersion,
+      ...(m.signedIn === undefined ? {} : { signedIn: m.signedIn }),
       os: m.profile?.os ?? null,
       display: m.display ?? null,
       workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, icon: w.icon, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts, deck: deckOf(w).map((d) => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? null })) }))

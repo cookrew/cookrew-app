@@ -10,7 +10,10 @@
 
 import { MACHINE_RELAY_PREFIX } from '../../src/shared/machine-relay'
 import type { FleetMachine, FleetPresence, MachineKind, MachineProfile } from '../../src/shared/fleet'
-import type { V2Desktop } from './v2-accounts'
+import { machineOutdated } from '../../src/shared/machine-version'
+import type { V2Desktop, V2Session } from './v2-accounts'
+import { sessionEnded, tokenExpiry } from './v2-session-age'
+import { SESSION_TTL_MS } from './v2-tokens'
 
 export const PROFILE_STRING_MAX = 64
 export const PROFILE_EVIDENCE_MAX = 12
@@ -112,8 +115,36 @@ export function standing(desktop: V2Desktop, line: DesktopPresence | undefined, 
   return { id: desktop.deviceId, online, lastSeenAt: online ? now : seen > 0 ? seen : null }
 }
 
-/** A level-0 row. */
-export function fleetRow(desktop: V2Desktop, line: DesktopPresence | undefined, now: number): FleetMachine {
+/** What a row needs of a session to tell whether it is that desktop's, and still good. */
+export type DeviceSession = Pick<V2Session, 'dev' | 'issuedAt' | 'signedInAt' | 'lastUsedAt' | 'via'>
+
+/**
+ * IS ANYBODY SIGNED IN ON THIS DESKTOP, as far as this registry can know. A
+ * desktop that holds no line is either off or signed out, and the two ask a
+ * person for different things ("open Cookrew on it" was said of a machine with
+ * Cookrew open and nobody signed in: owner 2026-11-11).
+ *
+ *   holding its line     signed in: the line is opened with its session
+ *   no session of its    signed out there, signed out by "Not me" or a
+ *   own that is good     password change, or its sign-in ran out (thirty
+ *                        days, or a week unused: v2-session-age.ts)
+ *   last record from a   signed out by THE MOVE. 0.6.0 put this registry on
+ *   build before 0.6.0   its own host and every machine starts signed out on
+ *                        it: a 0.5.x build cannot reach this host at all, and
+ *                        a 0.6.0 build drops the sign-in it had. The session
+ *                        it left is still in the list and will never be used.
+ *                        A record with no version on it says nothing of this.
+ *
+ * A console page's session is the page's, whatever device id it carries.
+ */
+export function desktopSignedIn(desktop: V2Desktop, line: DesktopPresence | undefined, sessions: readonly DeviceSession[], now: number): boolean {
+  if (line?.online === true) return true
+  if (typeof desktop.appVersion === 'string' && machineOutdated(desktop.appVersion)) return false
+  return sessions.some((session) => session.dev === desktop.deviceId && session.via !== 'console' && sessionEnded(session, now) === null && tokenExpiry(session, session.issuedAt, SESSION_TTL_MS) > now)
+}
+
+/** A level-0 row. With the account's sessions, it also says whether the desktop is signed in. */
+export function fleetRow(desktop: V2Desktop, line: DesktopPresence | undefined, now: number, sessions?: readonly DeviceSession[]): FleetMachine {
   const { id, online, lastSeenAt } = standing(desktop, line, now)
   return {
     id,
@@ -122,7 +153,8 @@ export function fleetRow(desktop: V2Desktop, line: DesktopPresence | undefined, 
     lastSeenAt,
     appVersion: desktop.appVersion ?? null,
     profile: desktop.profile ?? null,
-    base: desktopBase(desktop.deviceId)
+    base: desktopBase(desktop.deviceId),
+    ...(sessions === undefined ? {} : { signedIn: desktopSignedIn(desktop, line, sessions, now) })
   }
 }
 
