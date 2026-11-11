@@ -70,6 +70,7 @@ import {
 } from './board-index'
 import { createBoardHolds } from './board-hold'
 import { answerOf, callMachine, NO_ANSWER, registerZoomFleetIpc, type RemoteAnswer, type RemoteRead } from './zoom-fleet'
+import { createRemoteRevalidation } from './remote-revalidate'
 import type { RemoteMachineCall } from '../shared/remote-machine-calls'
 import { setShellObserver } from './multiplexer'
 import { createLoopHealth } from './loop-health'
@@ -1437,6 +1438,15 @@ async function collectMachineKeys(): Promise<void> {
 }
 
 /** Another machine's own answer, read with the key this machine holds for it. */
+/** Another machine's answers, asked for again only if they changed (remote-revalidate.ts, bytes 0.6.2). */
+const remoteReads = createRemoteRevalidation()
+
+/** That machine no longer takes this key (forgotten there, or its admission lost): drop it and what it said, so the next round asks again. */
+function keyRefused(machineId: string): void {
+  machineKeys.forget([machineId])
+  remoteReads.forget(machineId)
+}
+
 async function readAccountMachine(machineId: string, route: RemoteRead): Promise<unknown | null> {
   const key = machineKeys.token(machineId)
   if (key === null) {
@@ -1444,12 +1454,21 @@ async function readAccountMachine(machineId: string, route: RemoteRead): Promise
     void collectMachineKeys().catch(() => undefined)
     return null
   }
-  const sent = await accounts.relayed(machineId, route, { headers: { authorization: `Bearer ${key}` } })
-  if (!sent.ok) return null
-  // That machine no longer takes this key (forgotten there, or its admission lost): drop it, so the next round asks again.
-  if (sent.response.status === 401) machineKeys.forget([machineId])
-  if (!sent.response.ok) return null
-  return sent.response.json().catch(() => null)
+  const read = await remoteReads.get(
+    machineId,
+    route,
+    async (headers) => {
+      const sent = await accounts.relayed(machineId, route, { headers: { ...headers, authorization: `Bearer ${key}` } })
+      return sent.ok ? sent.response : null
+    },
+    async (response) => {
+      if (response.ok) return (await response.json().catch(() => null)) as unknown
+      await response.body?.cancel().catch(() => undefined)
+      return null
+    }
+  )
+  if (read.response?.status === 401) keyRefused(machineId)
+  return read.value
 }
 
 /**
@@ -1463,14 +1482,24 @@ async function callAccountMachine(machineId: string, call: RemoteMachineCall, bo
     void collectMachineKeys().catch(() => undefined)
     return NO_ANSWER
   }
-  const sent = await accounts.relayed(machineId, call.route, {
-    method: call.method,
-    headers: { authorization: `Bearer ${key}` },
-    ...(body !== undefined ? { body } : {})
-  })
-  if (!sent.ok) return NO_ANSWER
-  if (sent.response.status === 401) machineKeys.forget([machineId])
-  return answerOf(call, sent.response)
+  const send = async (headers: Record<string, string>): Promise<Response | null> => {
+    const sent = await accounts.relayed(machineId, call.route, {
+      method: call.method,
+      headers: { ...headers, authorization: `Bearer ${key}` },
+      ...(body !== undefined ? { body } : {})
+    })
+    return sent.ok ? sent.response : null
+  }
+  // A read is asked for again only if it changed (remote-revalidate.ts); a write goes once, as it is.
+  if (call.method === 'GET') {
+    const read = await remoteReads.get(machineId, call.route, send, (response) => answerOf(call, response))
+    if (read.response?.status === 401) keyRefused(machineId)
+    return read.value ?? NO_ANSWER
+  }
+  const response = await send({})
+  if (response === null) return NO_ANSWER
+  if (response.status === 401) keyRefused(machineId)
+  return answerOf(call, response)
 }
 
 /**

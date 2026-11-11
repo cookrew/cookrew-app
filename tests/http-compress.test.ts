@@ -9,7 +9,9 @@ import {
   etagMatches,
   MIN_COMPRESS_BYTES,
   negotiateEncoding,
-  sendBody
+  sendBody,
+  sendTagged,
+  validatorOf
 } from '../src/main/http-compress'
 
 /**
@@ -313,5 +315,53 @@ describe('a dynamic body is compressed once while its bytes keep coming back', (
     expect(etagMatches('*', 'abc')).toBe(true)
     expect(etagMatches('W/"abd"', 'abc')).toBe(false)
     expect(etagMatches(undefined, 'abc')).toBe(false)
+  })
+})
+
+describe('what a client says it already holds (bytes 0.6.2)', () => {
+  const asked = (url: string, headers: Record<string, string> = {}): http.IncomingMessage => ({ url, headers }) as unknown as http.IncomingMessage
+
+  it('is If-None-Match, or ?etag= in the address, or both', () => {
+    expect(validatorOf(asked('/api/fleet', { 'if-none-match': '"a"' }))).toBe('"a"')
+    // A browser page puts it in the address: a header it sets makes Chrome preflight every call (measured 2026-11-11).
+    expect(validatorOf(asked(`/api/fleet?etag=${encodeURIComponent('W/"b"')}`))).toBe('W/"b"')
+    expect(validatorOf(asked('/api/fleet?etag=%22b%22', { 'if-none-match': '"a"' }))).toBe('"a","b"')
+    expect(validatorOf(asked('/api/fleet'))).toBeUndefined()
+    expect(validatorOf(undefined)).toBeUndefined()
+  })
+
+  it('takes no word for a tag that is not one', () => {
+    expect(validatorOf(asked(`/api/fleet?etag=${'x'.repeat(300)}`))).toBeUndefined()
+    expect(validatorOf(asked('/api/fleet?etag='))).toBeUndefined()
+  })
+
+  it('a tagged answer is compressed for a reader that takes it and is a 304 when it is the one held, by either spelling', () => {
+    const body = Buffer.from(JSON.stringify({ cards: Array.from({ length: 60 }, (_, i) => ({ id: `a${i}`, words: 'the same reply, again and again' })) }))
+    const { response, captured } = stubResponse()
+    sendTagged(response, { 'content-type': 'application/json', 'cache-control': 'no-store' }, body, 'br, gzip', 'tag1', undefined)
+    expect(captured.status).toBe(200)
+    expect(captured.headers.etag).toBe('W/"tag1"')
+    expect(captured.headers['content-encoding']).toBe('br')
+    expect(captured.headers['cache-control']).toBe('no-store')
+    expect(Buffer.concat(captured.chunks).length).toBeLessThan(body.length / 4)
+    for (const held of ['W/"tag1"', '"tag1"']) {
+      const again = stubResponse()
+      sendTagged(again.response, { 'content-type': 'application/json' }, body, 'br', 'tag1', held)
+      expect(again.captured.status, held).toBe(304)
+      expect(again.captured.chunks).toEqual([])
+      expect(again.captured.headers['content-length']).toBeUndefined()
+    }
+  })
+
+  it('a picture or a small answer goes as it is, still tagged', () => {
+    const jpeg = Buffer.alloc(4096, 1)
+    const pic = stubResponse()
+    sendTagged(pic.response, { 'content-type': 'image/jpeg' }, jpeg, 'gzip', 'p1', undefined)
+    expect(pic.captured.headers['content-encoding']).toBeUndefined()
+    expect(pic.captured.headers.etag).toBe('W/"p1"')
+    const small = stubResponse()
+    sendTagged(small.response, { 'content-type': 'application/json' }, Buffer.from('{"cards":[]}'), 'gzip', 's1', undefined)
+    expect(small.captured.headers['content-encoding']).toBeUndefined()
+    expect(small.captured.headers.etag).toBe('W/"s1"')
   })
 })

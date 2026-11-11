@@ -21,7 +21,8 @@ export interface RemoteMachineCall {
 
 const ID = '[A-Za-z0-9_-]{1,128}'
 const ALLOWED: readonly { method: 'GET' | 'POST'; pattern: RegExp; binary?: true }[] = [
-  { method: 'GET', pattern: new RegExp(`^api/watch/cards(\\?workspace=${ID})?$`) },
+  // The tiles alone (?cards=0), or a crew with at most one card's whole reply (&full=): watch-routes.ts · cardsShapeOf.
+  { method: 'GET', pattern: new RegExp(`^api/watch/cards(\\?cards=0|\\?workspace=${ID}(&full=${ID})?)?$`) },
   { method: 'POST', pattern: new RegExp(`^api/terminal/${ID}/(input|menu|seen)$`) },
   { method: 'POST', pattern: new RegExp(`^api/watch/card/${ID}/stop$`) },
   { method: 'POST', pattern: new RegExp(`^api/watch/new(\\?seat=${ID})?$`) },

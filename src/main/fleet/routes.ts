@@ -15,7 +15,7 @@
 import type http from 'node:http'
 import { createGzip, constants as zlibConstants } from 'node:zlib'
 import type { FleetEvent } from '../../shared/fleet'
-import { acceptsGzip, etagMatches, sendBody } from '../http-compress'
+import { acceptsGzip, etagMatches, sendBody, validatorOf } from '../http-compress'
 import { respondJson } from '../mobile-http'
 import type { GaugeReader } from '../machine-gauges'
 import { handleGaugeRoute } from './gauges-route'
@@ -73,7 +73,8 @@ export function handleFleetRoutes(
 function answerSnapshot(request: http.IncomingMessage, response: http.ServerResponse, service: FleetService): void {
   const { body, etag } = service.current()
   const headers = { 'content-type': 'application/json', 'cache-control': 'no-cache', etag: `"${etag}"` }
-  if (etagMatches(request.headers['if-none-match'], etag)) {
+  // The tag the reader holds, in a header or in the address (http-compress.ts · validatorOf).
+  if (etagMatches(validatorOf(request), etag)) {
     response.writeHead(304, { etag: headers.etag, 'cache-control': headers['cache-control'], vary: 'accept-encoding, origin' })
     response.end()
     return

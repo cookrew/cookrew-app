@@ -33,6 +33,7 @@ describe('the zoom fleet bridge', () => {
     expect(remote).toMatch(/new ReconnectingStream\(\{[\s\S]{0,400}\/api\/fleet\/stream/)
     expect(remote).toMatch(/registerPlaneStream\(\{ restart: \(\) => stream\.restart\(\), revive: \(\) => stream\.revive\(\) \}\)/)
     // The account's machines come from the registry, by the scope's relay access (machine-scope.ts).
-    expect(remote).toMatch(/zoomFleetMachines: \(\) => relayAccountMachines\(machineScope\(\)\)/)
+    // Taking the Devices list's answer when it is recent (relay-machines.ts, bytes 0.6.2).
+    expect(remote).toMatch(/zoomFleetMachines: \(\) => relayAccountMachines\(machineScope\(\), undefined, \{ maxAgeMs: ZOOM_ACCOUNT_MAX_AGE_MS \}\)/)
   })
 })

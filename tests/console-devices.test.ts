@@ -168,6 +168,36 @@ describe('past the gate', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('asks nobody while the tab is hidden, and asks at once when it is shown again (bytes 0.6.2)', async () => {
+    const w = world({ open: true, snapshots: { [A]: snapshot('Studio Mac') }, account: { ok: true, machines: [row(A, 'Studio Mac')] } })
+    let hidden = false
+    let changed = null as (() => void) | null
+    let accountAsks = 0
+    const store = createConsoleDevices({
+      ...w.deps,
+      account: async () => (accountAsks++, { ok: true, machines: [row(A, 'Studio Mac')] }),
+      sight: { hidden: () => hidden, watch: (cb) => ((changed = cb), () => void (changed = null)) }
+    })
+    const stop = shown(store)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+    const reads = w.asked.length
+    const lists = accountAsks
+    hidden = true
+    changed?.()
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(w.asked.length).toBe(reads)
+    expect(accountAsks).toBe(lists)
+    hidden = false
+    changed?.()
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(accountAsks).toBe(lists + 1)
+    expect(w.asked.length).toBeGreaterThan(reads)
+    stop()
+    expect(changed).toBeNull()
+  })
+
   it('never has two questions out to one machine', async () => {
     const w = world({ open: true, account: { ok: true, machines: [row(A, 'Studio Mac')] } })
     const store = createConsoleDevices({ ...w.deps, fleetOf: (id) => (w.asked.push(id), new Promise(() => undefined)) })

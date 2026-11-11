@@ -165,6 +165,34 @@ export function dynamicCompressionStats(): { hits: number; misses: number; entri
   return { hits: stats.hits, misses: stats.misses, entries: dynamic.size, bytes: dynamicBytes }
 }
 
+/** The longest tag a client may hand back: ours are a hash, a few dozen characters. */
+const VALIDATOR_MAX = 256
+
+/**
+ * WHAT A CLIENT SAYS IT ALREADY HOLDS: If-None-Match, or `?etag=` in the
+ * address, or both (bytes 0.6.2).
+ *
+ * The address is a browser page's way. A request whose If-None-Match the page
+ * sets itself is one Chrome sends past its cache, and past its CORS preflight
+ * cache with it: measured 2026-11-11, four conditional calls to one URL asked
+ * four preflights, each a round trip through the relay. In the address it
+ * rides the relay's one address (shared/machine-relay.ts) and nothing is
+ * preflighted again. A machine before 0.6.2 ignores the parameter and answers
+ * whole, which is what it always did.
+ */
+export function validatorOf(request: http.IncomingMessage | undefined): string | undefined {
+  const header = request?.headers['if-none-match']
+  const said = Array.isArray(header) ? header.join(',') : header
+  let param: string | null = null
+  try {
+    param = new URL(request?.url ?? '/', 'http://validator.invalid').searchParams.get('etag')
+  } catch {
+    param = null
+  }
+  const parts = [said, param].filter((one): one is string => typeof one === 'string' && one !== '' && one.length <= VALIDATOR_MAX)
+  return parts.length > 0 ? parts.join(',') : undefined
+}
+
 /** Does an If-None-Match header name this tag? Weak comparison, `*` matches. */
 export function etagMatches(ifNoneMatch: string | string[] | undefined, tag: string): boolean {
   const raw = Array.isArray(ifNoneMatch) ? ifNoneMatch.join(',') : ifNoneMatch
@@ -291,5 +319,40 @@ export function sendBody(
     vary: 'accept-encoding, origin',
     'content-length': String(out.length)
   })
+  response.end(out)
+}
+
+/**
+ * A BODY UNDER A TAG ITS CALLER COMPUTED (watch-routes.ts): the same rules as
+ * `sendBody` — a 304 when the reader holds it, compressed when that helps and
+ * the reader takes it — under the caller's own hash rather than this file's.
+ *
+ * The tag goes out weak (`W/"…"`): the compressed and the plain answer are
+ * one resource, not two byte-identical ones. A reader holding the strong
+ * `"…"` an older build sent is still a match (`etagMatches` compares weakly).
+ */
+export function sendTagged(
+  response: http.ServerResponse,
+  headers: Record<string, string>,
+  body: Buffer,
+  acceptEncoding: string | string[] | undefined,
+  tag: string,
+  ifNoneMatch: string | string[] | undefined
+): void {
+  const named = { ...headers, etag: `W/"${tag}"` }
+  if (etagMatches(ifNoneMatch, tag)) {
+    response.writeHead(304, { ...withoutBodyHeaders(named), vary: 'accept-encoding, origin' })
+    response.end()
+    return
+  }
+  const worth = body.length >= MIN_COMPRESS_BYTES && compressible(headers['content-type'] ?? '')
+  const encoding = worth ? negotiateEncoding(acceptEncoding) : null
+  if (!encoding) {
+    response.writeHead(200, { ...named, 'content-length': String(body.length), ...(worth ? { vary: 'accept-encoding, origin' } : {}) })
+    response.end(body)
+    return
+  }
+  const out = packDynamic(`tagged:${tag}`, body, encoding)
+  response.writeHead(200, { ...named, 'content-encoding': encoding, vary: 'accept-encoding, origin', 'content-length': String(out.length) })
   response.end(out)
 }

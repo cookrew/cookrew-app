@@ -43,6 +43,8 @@ const REGISTERED: Record<string, readonly string[]> = {
   'remote-api.ts': ['machine api'],
   'rtc-plane.ts': ['rtc link'],
   'stage/stage-select.ts': ['stage selection'],
+  // Each card's last tail and its tag (bytes 0.6.2): one machine's, let go of on a change of machine.
+  'stream/stream-http.ts': ['stream tails held'],
   'tuning-store.ts': ['agent tuning'],
   'use-cursors.ts': ['use cursors'],
   'use/source-picker-store.ts': ['source picker'],

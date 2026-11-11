@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import { timingSafeEqual, createHash } from 'node:crypto'
 import { createGzip, constants as zlibConstants } from 'node:zlib'
-import { acceptsGzip, sendBody } from './http-compress'
+import { acceptsGzip, sendBody, validatorOf } from './http-compress'
 
 /** Small HTTP helpers shared by the mobile server's route modules. */
 
@@ -36,7 +36,8 @@ export function respondJson(
     acceptEncodingOf(response),
     // The client's revalidation, when it sent one: the same canvas it last
     // saw is a 304, not another 750 KB.
-    { ifNoneMatch: response.req?.headers['if-none-match'] }
+    // In a header or, from a browser page, in the address (http-compress.ts · validatorOf).
+    { ifNoneMatch: validatorOf(response.req) }
   )
 }
 

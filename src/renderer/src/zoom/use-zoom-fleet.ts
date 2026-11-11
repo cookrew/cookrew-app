@@ -25,6 +25,7 @@ import type { AccountMachine, AccountMachines, AccountMachinesRefusal } from '..
 import { foldFleet } from '../../../shared/fleet-fold'
 import { machineOutdated } from '../../../shared/machine-version'
 import { cookrew, type CookrewApi } from '../api'
+import { zoomStore } from './zoom-store'
 import { composeFleet, deckOf, snapshotOf, type FleetParts, type ZoomCounts, type ZoomFleet, type ZoomMachineDetail } from './fleet-compose'
 
 export * from './fleet-compose'
@@ -71,6 +72,14 @@ export interface FleetStoreOptions {
    * nothing, here as on the console's own Devices level.
    */
   readable?: (row: AccountMachine) => boolean
+  /**
+   * Are the other machines drawn right now? Absent = always. They are read on
+   * REMOTE_READ_MS only while they are, and at once when they come into sight
+   * (bytes 0.6.2): the page's own store passes the zoom's Devices side
+   * (devicesInSight), the one place another machine's fleet is drawn since
+   * every device moved onto one canvas. What was read stays drawn meanwhile.
+   */
+  remoteWanted?: { now: () => boolean; watch: (changed: () => void) => () => void }
 }
 
 export interface ZoomFleetStore {
@@ -231,8 +240,8 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     if (key === accountKey) return
     accountKey = key
     set({ account: answer })
-    // The machines are known now: read the ones this desktop holds a key for.
-    void askRemote()
+    // The machines are known now: read the ones this desktop holds a key for, if they are drawn.
+    if (remoteWanted()) void askRemote()
   }
 
   /** The account's other machines, each read through the key this desktop holds for it. */
@@ -279,12 +288,25 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     if (state.link === 'none') void askLocal()
   }
 
+  const remoteWanted = (): boolean => options.remoteWanted?.now() ?? true
+  /** The other machines' clock runs while the page is in sight AND they are drawn. */
+  const followRemote = (): void => {
+    if (running && !sight?.hidden() && remoteWanted()) {
+      if (remoteTimer !== null) return
+      void askRemote()
+      remoteTimer = setInterval(() => void askRemote(), REMOTE_READ_MS)
+      return
+    }
+    if (remoteTimer !== null) clearInterval(remoteTimer)
+    remoteTimer = null
+  }
+  let unwatchRemote: (() => void) | null = null
+
   const wake = (): void => {
     openFeed()
     refresh()
     refreshTimer ??= setInterval(refresh, refreshMs)
-    void askRemote()
-    remoteTimer ??= setInterval(() => void askRemote(), REMOTE_READ_MS)
+    followRemote()
   }
   const sleep = (): void => {
     closeFeed()
@@ -317,6 +339,7 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     if (running) return
     running = true
     if (sight) unwatch = sight.watch(onSight)
+    if (options.remoteWanted) unwatchRemote = options.remoteWanted.watch(followRemote)
     startGrace()
     void askLocal()
     if (!sight?.hidden()) wake()
@@ -332,6 +355,8 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
       graceTimer = null
       unwatch?.()
       unwatch = null
+      unwatchRemote?.()
+      unwatchRemote = null
     }, stopGraceMs)
   }
 
@@ -380,6 +405,27 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
 
 // ── the hook ────────────────────────────────────────────────────────────────
 
+/**
+ * THE DEVICES SIDE OF THE ZOOM PATH (bytes 0.6.2): from just past the device
+ * stop out to the devices stop, every machine is drawn in one row; at the device
+ * stop and deeper the camera is inside one. Reading starts as the zoom leaves
+ * the device stop, so the row is current by the time it is seen.
+ */
+export const devicesInSightAt = (v: number): boolean => v < -1
+
+export const devicesInSight = {
+  now: (): boolean => devicesInSightAt(zoomStore.get().v),
+  watch: (changed: () => void): (() => void) => {
+    let was = devicesInSight.now()
+    return zoomStore.subscribe(() => {
+      const now = devicesInSight.now()
+      if (now === was) return
+      was = now
+      changed()
+    })
+  }
+}
+
 export const documentSight: Sight = {
   hidden: () => document.visibilityState === 'hidden',
   watch: (changed) => {
@@ -399,7 +445,12 @@ subscribeMachineScope((scope) => {
 /** The page's one fleet store, made when somebody first reads it. */
 export const sharedZoomFleet = (): ZoomFleetStore => {
   // On the console, a machine below the floor is asked nothing (shared/machine-version.ts).
-  shared ??= createZoomFleetStore(() => cookrew(), { sight: documentSight, readable: (row) => !scopeNeedsMachine() || !machineOutdated(row.appVersion) })
+  shared ??= createZoomFleetStore(() => cookrew(), {
+    sight: documentSight,
+    readable: (row) => !scopeNeedsMachine() || !machineOutdated(row.appVersion),
+    // Other machines are drawn only on the Devices side: read there and nowhere else.
+    remoteWanted: devicesInSight
+  })
   return shared
 }
 const subscribe = (listener: () => void): (() => void) => sharedZoomFleet().subscribe(listener)

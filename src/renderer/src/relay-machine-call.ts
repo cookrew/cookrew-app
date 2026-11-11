@@ -113,8 +113,21 @@ const blockOf = (entered: EnterResult): MachineBlock => {
   }
 }
 
+/** Answers held for asking again (bytes 0.6.2): a fleet and a crew each for a handful of machines. */
+const HELD_MAX = 64
+
 export function createRelayMachines(deps: RelayMachineDeps): RelayMachines {
   const blocks = new Map<string, MachineBlock>()
+  /**
+   * WHAT EACH MACHINE LAST SAID, AND ITS TAG (bytes 0.6.2). A read is asked
+   * again with that tag, and a machine whose answer has not changed says 304
+   * instead of sending it again (http-compress.ts · validatorOf): the console
+   * read every other machine's whole fleet every five seconds. The tag goes in
+   * the ADDRESS: a header the page set itself would send Chrome past its
+   * preflight cache on every call (measured 2026-11-11). Held under the key it
+   * was read with, so nothing read under a key since dropped is handed back.
+   */
+  const held = new Map<string, { readonly tag: string; readonly answer: RemoteMachineAnswer }>()
   /** One entry at a time per machine: a page asking three things at once enters its door once. */
   const entering = new Map<string, Promise<string | null>>()
 
@@ -147,14 +160,20 @@ export function createRelayMachines(deps: RelayMachineDeps): RelayMachines {
     const key = tokenKeyForBase(target)
     let token = deps.tokens.read(key) ?? (await enter(target, id.toLowerCase()))
     if (token === null) return NOTHING
-    const go = (bearer: string): Promise<Response> =>
-      deps.fetch(`${target}/${route}`, {
+    // Only a read is asked again with its tag; a picture changes with every frame and is not held.
+    const heldKey = (bearer: string): string | null => (method === 'GET' && !binary ? `${bearer}\n${id.toLowerCase()}\n${route}` : null)
+    const go = (bearer: string): Promise<Response> => {
+      const mine = heldKey(bearer)
+      const tag = mine === null ? undefined : held.get(mine)?.tag
+      const asked = tag === undefined ? route : `${route}${route.includes('?') ? '&' : '?'}etag=${encodeURIComponent(tag)}`
+      return deps.fetch(`${target}/${asked}`, {
         method,
         // No `cache: 'no-store'`: it would cost a preflight on every call (data-plane.ts · CROSS_ORIGIN_NO_COOKIE).
         ...CROSS_ORIGIN_NO_COOKIE,
         headers: { authorization: `Bearer ${bearer}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...deps.relayHeaders() },
         ...(body !== undefined ? { body } : {})
       })
+    }
     try {
       let response = await go(token)
       // The relay itself says 401 `unauthenticated` when the account session has ended: no machine forgot anything.
@@ -174,7 +193,29 @@ export function createRelayMachines(deps: RelayMachineDeps): RelayMachines {
         return NOTHING
       }
       blocks.delete(id.toLowerCase())
-      return await answerOf(binary, response)
+      const mine = heldKey(token)
+      const kept = mine === null ? undefined : held.get(mine)
+      if (response.status === 304) {
+        await response.body?.cancel().catch(() => undefined)
+        if (mine === null || kept === undefined) return NOTHING
+        held.delete(mine)
+        held.set(mine, kept)
+        return kept.answer
+      }
+      const answer = await answerOf(binary, response)
+      const tag = response.headers.get('etag')
+      if (mine !== null) {
+        held.delete(mine)
+        if (response.status === 200 && tag) {
+          held.set(mine, { tag, answer })
+          while (held.size > HELD_MAX) {
+            const oldest = held.keys().next().value
+            if (oldest === undefined) break
+            held.delete(oldest)
+          }
+        }
+      }
+      return answer
     } catch {
       blocks.set(id.toLowerCase(), { kind: 'offline' })
       return NOTHING
