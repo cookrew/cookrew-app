@@ -54,6 +54,16 @@ const describeWithChrome = chrome ? describe : describe.skip
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * Wait for something that WILL happen, for as long as a loaded machine may take over it. A fixed
+ * sleep here failed once in a full run: the first look at the door had not happened yet. (A fixed
+ * sleep stays right where the point is that nothing MORE happens.)
+ */
+const until = async (happened: () => boolean, ms = 30_000): Promise<void> => {
+  const end = Date.now() + ms
+  while (!happened() && Date.now() < end) await sleep(100)
+}
+
 /** What the fixture recorded leaving the sheet. */
 interface Left {
   nodes: unknown[]
@@ -355,7 +365,7 @@ describeWithChrome('BUY A SEAT, pressed', () => {
       await primaryReads(page, 'PAY 1.00 USD')
       await click(page, PRIMARY)
       // The sheet is waiting: one look at the door, at least, and no live button.
-      await sleep(CARD_POLL_MS + 1000)
+      await until(() => seen.presented.length >= 1)
       expect(seen.checkouts).toBe(1)
       expect(seen.presented.length).toBeGreaterThanOrEqual(1)
       expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(PRIMARY)})?.disabled === true`)).toBe(true)
@@ -444,7 +454,7 @@ describeWithChrome('BUY A SEAT, pressed', () => {
       await click(page, PRIMARY)
       await primaryReads(page, 'PAY 1.00 USD')
       await click(page, PRIMARY)
-      await sleep(CARD_POLL_MS + 1000)
+      await until(() => seen.presented.length >= 1)
       expect(seen.presented.length).toBeGreaterThanOrEqual(1)
 
       // ── the Mac changes hands ──
@@ -540,7 +550,7 @@ describeWithChrome('BUY A SEAT, pressed', () => {
       await click(first.page, PRIMARY)
       await primaryReads(first.page, 'PAY 1.00 USD')
       await click(first.page, PRIMARY)
-      await sleep(CARD_POLL_MS + 1000)
+      await until(() => world.checkoutsMade() >= made + 1)
       expect(world.checkoutsMade()).toBe(made + 1)
     } finally {
       // THE SHEET IS CLOSED. Everything it held in memory is gone.
