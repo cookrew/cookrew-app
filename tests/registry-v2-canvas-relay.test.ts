@@ -216,7 +216,7 @@ interface Linked {
  * streams requests down, a POST whose body streams answers up, a pong for
  * every ping, and base64 in both directions.
  */
-function linkDesktop(relayOrigin: string, token: string, deviceId: string, mobileOrigin: string): Linked {
+function linkDesktop(relayOrigin: string, token: string, deviceId: string, mobileOrigin: string, options: { stall?: boolean } = {}): Linked {
   const target = new URL(mobileOrigin)
   let settle: (name: string) => void = () => undefined
   const ready = new Promise<string>((resolve) => {
@@ -268,7 +268,11 @@ function linkDesktop(relayOrigin: string, token: string, deviceId: string, mobil
         if (line.length === 0) continue
         const frame = decodeFrame(line)
         if (!frame) continue
-        if (frame.t === 'ready') settle(frame.name)
+        if (frame.t === 'ready') {
+          settle(frame.name)
+          // A Mac that stops reading its line: what is sent to it now waits in the relay.
+          if (options.stall === true) res.pause()
+        }
         else if (frame.t === 'ping') send(encodeFrame({ t: 'pong', at: frame.at }))
         else if (frame.t === 'open') {
           opens.set(frame.id, { method: frame.method, path: frame.path, headers: frame.headers })
@@ -821,6 +825,42 @@ describe('/api/m — one address for every call, so a browser asks its preflight
     }
   })
 
+  it('says its answers vary by the two headers too, since every route now shares one URL', async () => {
+    const res = await atOne('api/')
+    const vary = (res.headers.get('vary') ?? '').toLowerCase()
+    expect(vary).toContain(RELAY_MACHINE_HEADER)
+    expect(vary).toContain(RELAY_ROUTE_HEADER)
+    expect(res.headers.get('cache-control')).toBe('private, no-store')
+    await res.arrayBuffer()
+  })
+
+  it('takes the address with a trailing slash as the same address', async () => {
+    const res = await fetch(`${site.origin}/api/m/`, { headers: { ...asPhone(), [RELAY_MACHINE_HEADER]: deviceId, [RELAY_ROUTE_HEADER]: 'api/workspaces' } })
+    expect(((await res.json()) as Echo).path).toBe('/api/workspaces')
+  })
+
+  it('refuses a machine id the path form would refuse: uppercase is not how the registry keeps one', async () => {
+    const res = await atOne('api/', {}, deviceId.toUpperCase())
+    expect(res.status).toBe(404)
+    await res.arrayBuffer()
+  })
+
+  it('refuses a header sent twice, as it arrives over a real connection (joined into one value)', async () => {
+    const raw = (headers: [string, string][]): Promise<number> =>
+      new Promise((resolve, reject) => {
+        const target = new URL(site.origin)
+        const asked = httpRequest({ host: target.hostname, port: target.port, path: '/api/m', method: 'GET', headers: [['host', target.host], [RELAY_SESSION_HEADER, phoneSession], ...headers].flat() as unknown as Record<string, string> }, (answer) => {
+          answer.resume()
+          answer.on('end', () => resolve(answer.statusCode ?? 0))
+        })
+        asked.on('error', reject)
+        asked.end()
+      })
+    expect(await raw([[RELAY_MACHINE_HEADER, deviceId], [RELAY_ROUTE_HEADER, 'api/']])).toBe(200)
+    expect(await raw([[RELAY_MACHINE_HEADER, deviceId], [RELAY_ROUTE_HEADER, 'api/'], [RELAY_ROUTE_HEADER, 'api/secrets']])).toBe(404)
+    expect(await raw([[RELAY_MACHINE_HEADER, deviceId], [RELAY_MACHINE_HEADER, deviceId], [RELAY_ROUTE_HEADER, 'api/']])).toBe(404)
+  })
+
   it('takes no query of its own and no half of the pair', async () => {
     const queried = await fetch(`${site.origin}/api/m?route=api/fleet`, { headers: { ...asPhone(), [RELAY_MACHINE_HEADER]: deviceId, [RELAY_ROUTE_HEADER]: 'api/fleet' } })
     expect(queried.status).toBe(404)
@@ -994,7 +1034,8 @@ describe('the console’s origin, on a registry that serves one', () => {
  */
 async function standBare(
   bounds: Partial<Parameters<typeof createCanvasRelay>[0]> = {},
-  identity: Parameters<typeof createV2>[1] = {}
+  identity: Parameters<typeof createV2>[1] = {},
+  desktopOptions: { stall?: boolean } = {}
 ): Promise<{ origin: string; relay: CanvasRelay; desktop: Linked; close: () => Promise<void> }> {
   const relay = createCanvasRelay({
     v2: createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 }, ...identity }),
@@ -1008,7 +1049,7 @@ async function standBare(
       response.writeHead(404).end()
     })
   )
-  const linked = linkDesktop(up.origin, desktopToken, deviceId, mobile.origin)
+  const linked = linkDesktop(up.origin, desktopToken, deviceId, mobile.origin, desktopOptions)
   await linked.ready
   return {
     origin: up.origin,
@@ -1030,6 +1071,27 @@ describe('what one account may make this process hold', () => {
     expect(EXCHANGES_PER_LINK).toBe(BRIDGE_MAX_OPEN)
     const results = await Promise.all(Array.from({ length: 40 }, () => echo('/', { headers: asPhone() }).then(({ res }) => res.status)))
     expect(results.filter((status) => status === 200)).toHaveLength(40)
+  })
+
+  it('refuses a body for a Mac whose line has stopped draining, and still carries its reads', async () => {
+    // The exchange cap was what bounded bytes waiting for a Mac that stopped reading its line;
+    // at 64 it no longer is (review, latency 0.6.1), so the line's own backlog is the bound.
+    const bare = await standBare({ lineQueueMax: 256 * 1024, headDeadlineMs: 60_000 }, {}, { stall: true })
+    const stop = new AbortController()
+    const body = Buffer.alloc(512 * 1024, 7)
+    const statuses = await Promise.all(
+      Array.from({ length: 40 }, () =>
+        fetch(`${bare.origin}${prefix()}/upload`, { method: 'POST', headers: asPhone({ 'content-type': 'application/octet-stream' }), body, signal: AbortSignal.any([stop.signal, AbortSignal.timeout(3000)]) })
+          .then(async (res) => (res.status === 503 ? `503 ${((await res.json()) as { error: string }).error}` : String(res.status)))
+          .catch(() => 'waiting')
+      )
+    )
+    expect(statuses).toContain('503 busy')
+    // A read has no body to queue: the stalled line still takes one (it waits for its answer).
+    const read = await fetch(`${bare.origin}${prefix()}/`, { headers: asPhone(), signal: AbortSignal.timeout(500) }).then((res) => String(res.status)).catch(() => 'waiting')
+    expect(read).toBe('waiting')
+    stop.abort()
+    await bare.close()
   })
 
   it('carries only so many exchanges on one line, and says so in a sentence', async () => {

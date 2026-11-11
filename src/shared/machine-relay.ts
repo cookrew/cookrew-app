@@ -129,7 +129,8 @@ export function relayAtOneAddress(url: string, apiOrigin: string): { url: string
  * header should not hold, and a bounded length.
  */
 export function relayPathFromHeaders(machine: unknown, route: unknown): string | null {
-  if (typeof machine !== 'string' || typeof route !== 'string') return null
+  // The id as the registry keeps it and the path form takes it: lowercase, and one of them.
+  if (!isMachineId(machine) || typeof route !== 'string') return null
   if (route.length === 0 || route.length > RELAY_ROUTE_MAX || !ROUTE_CHARS.test(route)) return null
   return machineRelayPath(machine, route)
 }

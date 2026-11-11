@@ -29,6 +29,8 @@ import { decodeFrame, encodeFrame, type RelayFrame, type StreamId } from '../../
 export interface HubSocket {
   send(data: string): void
   close(): void
+  /** Bytes sent and not yet taken by the far end, where the socket can say (a canvas line's downlink). */
+  queued?(): number
 }
 
 /** Why a connection was turned away. For the log; never a rendered sentence. */

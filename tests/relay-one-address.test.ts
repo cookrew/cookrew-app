@@ -73,7 +73,7 @@ describe('the registry unfolding the two headers', () => {
   it('builds the very path the path form would have had', () => {
     expect(relayPathFromHeaders(M, 'api/terminal/t1/turns?after=5')).toBe(`/api/m/${M}/api/terminal/t1/turns?after=5`)
     expect(relayPathFromHeaders(M, '/api/fleet')).toBe(`/api/m/${M}/api/fleet`)
-    expect(relayPathFromHeaders(M.toUpperCase(), '~seal/hello')).toBe(`/api/m/${M}/~seal/hello`)
+    expect(relayPathFromHeaders(M, '~seal/hello')).toBe(`/api/m/${M}/~seal/hello`)
   })
 
   it('refuses what the path form refuses, and what a header should never hold', () => {
@@ -83,6 +83,10 @@ describe('the registry unfolding the two headers', () => {
       [['a', 'b'], 'api/fleet'],
       [M, ['api/fleet', 'api/x']],
       ['not-a-machine', 'api/fleet'],
+      // The path form refuses an uppercase id (isMachineId); the header form must not be kinder.
+      [M.toUpperCase(), 'api/fleet'],
+      [`${M}, ${M}`, 'api/fleet'],
+      [M, 'api/fleet, api/secrets'],
       [M, ''],
       [M, 'index.html'],
       [M, 'api/../v2/me'],

@@ -114,8 +114,9 @@ export const CANVAS_CHUNK = 384 * 1024
  * measured 2026-11-11, a burst of 20 reads at Solis-Core got 4 refusals while
  * the machine answered each in ~6 ms, and the console waits a second before
  * asking a refused read again (relay-full.ts). What an exchange makes this
- * process hold is a stream id and a timer; the bodies are bounded relay-wide
- * by BODY_BUDGET, so the cap per line is not the memory bound.
+ * process hold is a stream id and a timer; a body is bounded relay-wide by
+ * BODY_BUDGET while it arrives and by LINE_QUEUE_MAX once it waits on the line,
+ * so the cap per line is not the memory bound.
  */
 export const EXCHANGES_PER_LINK = 64
 /** Lines one account may hold: one per desktop, and nobody has eight Macs. */
@@ -137,6 +138,16 @@ export const IDLE_DEADLINE_MS = 120_000
 export const RECEIPT_EVERY_MS = 40
 /** Request bodies being buffered across the WHOLE relay at once. */
 export const BODY_BUDGET = 64 * 1024 * 1024
+/**
+ * Bytes waiting on one line for its Mac to read them, past which a request
+ * WITH A BODY is refused (`busy`). BODY_BUDGET counts a body only until it is
+ * framed; after that it waits in the line's own socket until the Mac reads it,
+ * and a Mac that stopped reading would otherwise have every body sent to it
+ * held here. Once the exchange cap was the only bound on that, and at 64 it is
+ * not (review, latency 0.6.1). Four of the largest bodies; a read carries no
+ * body and is never refused by it.
+ */
+export const LINE_QUEUE_MAX = 16 * 1024 * 1024
 
 /**
  * THE REQUEST HEADERS THAT CROSS. An allow-list, because the opposite is a
@@ -298,10 +309,13 @@ export const RELAY_CORS_METHODS = 'GET, POST, PUT, DELETE'
 /** Ten minutes: the ceiling OWASP names, so a changed allow-list is honoured soon (main/companion-cors.ts). */
 export const RELAY_CORS_MAX_AGE = '600'
 
-/** Never shared, never kept, and different for each origin and each session. */
+/**
+ * Never shared, never kept, and different for each origin, each session and,
+ * at the one address, each machine and route (every route shares one URL).
+ */
 const RELAY_PRIVATE: Record<string, string> = {
   'cache-control': 'private, no-store',
-  vary: `origin, authorization, ${RELAY_SESSION_HEADER}`
+  vary: `origin, authorization, ${RELAY_SESSION_HEADER}, ${RELAY_MACHINE_HEADER}, ${RELAY_ROUTE_HEADER}`
 }
 
 /**
@@ -379,6 +393,8 @@ export interface CanvasRelayDeps {
   /** RECEIPT_EVERY_MS, shortened by tests. */
   receiptMs?: number
   bodyBudget?: number
+  /** LINE_QUEUE_MAX, lowered by a test. */
+  lineQueueMax?: number
   /** Where line sightings persist (v2-line-seen.ts); absent = memory only. */
   seenFile?: string
 }
@@ -484,6 +500,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   const idleMs = deps.idleDeadlineMs ?? IDLE_DEADLINE_MS
   const receiptMs = deps.receiptMs ?? RECEIPT_EVERY_MS
   const budget = deps.bodyBudget ?? BODY_BUDGET
+  const lineQueueMax = deps.lineQueueMax ?? LINE_QUEUE_MAX
   /** Exchanges in flight per line, so one desktop cannot be made to hold many. */
   const exchanges = new Map<string, number>()
   /** The lines each account holds, so one account cannot hold many. */
@@ -586,7 +603,9 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
       send: write,
       close: () => {
         if (!response.writableEnded) response.end()
-      }
+      },
+      // What this process holds for the Mac and the Mac has not read yet (LINE_QUEUE_MAX).
+      queued: () => response.writableLength
     }
     // `receipts`: this registry answers an uplink's `?acks=1` (sendReceipts).
     const opened = hub.openDoor(name, socket, { receipts: true })
@@ -822,6 +841,11 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         return
       }
       const body = Buffer.concat(chunks)
+      // A MAC THAT IS NOT READING ITS LINE is not sent another body to hold for it here.
+      if (body.byteLength > 0 && (live.socketOf(name)?.queued?.() ?? 0) + body.byteLength > lineQueueMax) {
+        deny(response, 503, 'busy', 'That machine is not taking what is sent to it right now. Try again in a moment.', { ...RELAY_PRIVATE, ...cors })
+        return
+      }
       counts.bytesUp += body.byteLength
       open(request, response, {
         name,

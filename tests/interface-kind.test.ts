@@ -86,7 +86,9 @@ describe('the name rule', () => {
   })
 
   it('keeps the interfaces a phone can actually reach', () => {
-    for (const name of ['en0', 'en1', 'eth0', 'wlan0', 'ens5', 'enp0s31f6', 'wlp2s0', 'eno1', 'bond0', 'brave0']) {
+    // A LAN that runs through a named bridge is real: OpenWrt's br-lan, OpenStack's br-ex and
+    // br-int, a hand-made br0. Only Docker's own form (br- and twelve hex digits) is a container's.
+    for (const name of ['en0', 'en1', 'eth0', 'wlan0', 'ens5', 'enp0s31f6', 'wlp2s0', 'eno1', 'bond0', 'team0', 'brave0', 'br0', 'br-lan', 'br-ex', 'br-int', 'br-abc']) {
       expect(interfaceKind({ name, address: '10.1.2.3' }, RULES)).toBe('real')
     }
   })
