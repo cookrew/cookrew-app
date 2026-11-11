@@ -25,8 +25,14 @@ describe('the sealed session’s fetch', () => {
     vi.stubGlobal('fetch', sent)
     await sealFetchFor(BASE)(`${BASE}/~seal/hello`, { method: 'POST', body: '{}' })
     const [url, init] = sent.mock.calls[0]
-    expect(url).toBe(`${BASE}/~seal/hello`)
-    expect(init).toMatchObject({ method: 'POST', mode: 'cors', credentials: 'omit', headers: { 'x-cookrew-session': 'account-session' } })
+    // At the relay's one address, the machine and the route in headers (latency 0.6.1).
+    expect(url).toBe('https://api.cookrew.dev/api/m')
+    expect(init).toMatchObject({
+      method: 'POST',
+      mode: 'cors',
+      credentials: 'omit',
+      headers: { 'x-cookrew-session': 'account-session', 'x-cookrew-machine': M, 'x-cookrew-route': '~seal/hello' }
+    })
   })
 
   it('never sends the session anywhere but the relay’s machine prefix', async () => {

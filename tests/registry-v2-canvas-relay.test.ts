@@ -12,7 +12,9 @@ import { IdentityService } from '../registry/src/identity'
 import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
+import { BRIDGE_MAX_OPEN } from '../src/main/canvas-bridge'
 import {
+  EXCHANGES_PER_LINK,
   allowedRequestHeaders,
   callerDeviceHeaders,
   CANVAS_DEVICE_HEADER,
@@ -26,7 +28,7 @@ import {
   headerSafeName,
   type CanvasRelay
 } from '../registry/src/v2-canvas-relay'
-import { RELAY_SESSION_HEADER, isRelayedRoute, machineRelayPath } from '../src/shared/machine-relay'
+import { RELAY_MACHINE_HEADER, RELAY_ROUTE_HEADER, RELAY_SESSION_HEADER, isRelayedRoute, machineRelayPath } from '../src/shared/machine-relay'
 import { decodeFrame, encodeFrame } from '../src/shared/relay-frame'
 
 /**
@@ -214,7 +216,7 @@ interface Linked {
  * streams requests down, a POST whose body streams answers up, a pong for
  * every ping, and base64 in both directions.
  */
-function linkDesktop(relayOrigin: string, token: string, deviceId: string, mobileOrigin: string): Linked {
+function linkDesktop(relayOrigin: string, token: string, deviceId: string, mobileOrigin: string, options: { stall?: boolean } = {}): Linked {
   const target = new URL(mobileOrigin)
   let settle: (name: string) => void = () => undefined
   const ready = new Promise<string>((resolve) => {
@@ -266,7 +268,11 @@ function linkDesktop(relayOrigin: string, token: string, deviceId: string, mobil
         if (line.length === 0) continue
         const frame = decodeFrame(line)
         if (!frame) continue
-        if (frame.t === 'ready') settle(frame.name)
+        if (frame.t === 'ready') {
+          settle(frame.name)
+          // A Mac that stops reading its line: what is sent to it now waits in the relay.
+          if (options.stall === true) res.pause()
+        }
         else if (frame.t === 'ping') send(encodeFrame({ t: 'pong', at: frame.at }))
         else if (frame.t === 'open') {
           opens.set(frame.id, { method: frame.method, path: frame.path, headers: frame.headers })
@@ -745,6 +751,126 @@ describe('a device of the account, reaching its own machine', () => {
   })
 })
 
+// ── the one address (latency 0.6.1) ──────────────────────────────────────
+
+/** The console's way: every call at `/api/m`, the machine and the route in headers. */
+const atOne = (route: string, init: RequestInit & { headers?: Record<string, string> } = {}, machine = deviceId): Promise<Response> =>
+  fetch(`${site.origin}/api/m`, { ...init, headers: { ...asPhone(init.headers ?? {}), [RELAY_MACHINE_HEADER]: machine, [RELAY_ROUTE_HEADER]: route } })
+
+describe('/api/m — one address for every call, so a browser asks its preflight once', () => {
+  it('reaches the machine at the route and query the header names, exactly as the path form does', async () => {
+    const res = await atOne('api/workspaces?limit=2')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Echo
+    expect(body.method).toBe('GET')
+    expect(body.path).toBe('/api/workspaces?limit=2')
+    const { body: pathForm } = await echo('/workspaces?limit=2', { headers: asPhone() })
+    expect(body.path).toBe(pathForm.path)
+  })
+
+  it('carries a body and every method', async () => {
+    const res = await atOne('api/thing', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ hello: 'there' }) })
+    const body = (await res.json()) as Echo
+    expect(body.method).toBe('PUT')
+    expect(body.bodyHead).toContain('hello')
+  })
+
+  it('keeps its two headers for itself: the machine is told neither', async () => {
+    const body = (await (await atOne('api/')).json()) as Echo
+    expect(body.headers[RELAY_MACHINE_HEADER]).toBeUndefined()
+    expect(body.headers[RELAY_ROUTE_HEADER]).toBeUndefined()
+    expect(body.headers[RELAY_SESSION_HEADER]).toBeUndefined()
+    expect(body.headers[CANVAS_DEVICE_HEADER]).toBe(phoneDeviceId)
+  })
+
+  it('holds an SSE stream open through it', async () => {
+    const control = new AbortController()
+    const res = await atOne('api/events', { headers: { accept: 'text/event-stream' }, signal: control.signal })
+    expect(res.headers.get('content-type')).toBe('text/event-stream')
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader()
+    let seen = ''
+    while (!seen.includes('two')) {
+      const next = await reader.read()
+      if (next.done) break
+      seen += new TextDecoder().decode(next.value)
+    }
+    expect(seen).toContain('data: two')
+    control.abort()
+  })
+
+  it('admits exactly whom the path form admits', async () => {
+    const none = await fetch(`${site.origin}/api/m`, { headers: { [RELAY_MACHINE_HEADER]: deviceId, [RELAY_ROUTE_HEADER]: 'api/fleet' } })
+    expect(none.status).toBe(401)
+    await none.arrayBuffer()
+    const stranger = await fetch(`${site.origin}/api/m`, { headers: { [RELAY_SESSION_HEADER]: strangerSession, [RELAY_MACHINE_HEADER]: deviceId, [RELAY_ROUTE_HEADER]: 'api/fleet' } })
+    expect(stranger.status).toBe(404)
+    expect(((await stranger.json()) as { error: string }).error).toBe('not_found')
+    const unknown = await atOne('api/fleet', {}, randomUUID())
+    expect(unknown.status).toBe(404)
+    await unknown.arrayBuffer()
+  })
+
+  it('refuses whatever the path form refuses, before the machine is asked', async () => {
+    const before = (await (await atOne('api/')).json()) as Echo
+    expect(before.method).toBe('GET')
+    for (const route of ['', 'index.html', 'apiary', 'api/../v2/me', 'api/..%2Fsecrets', 'api/%2e%2e%2Fsecrets', 'api\\..\\secrets', '../../v2/me', 'api/fleet#x']) {
+      const res = await atOne(route)
+      expect(res.status, route).toBe(404)
+      await res.arrayBuffer()
+    }
+    for (const machine of ['not-a-uuid', '..', `${deviceId}/api`]) {
+      const res = await atOne('api/fleet', {}, machine)
+      expect(res.status, machine).toBe(404)
+      await res.arrayBuffer()
+    }
+  })
+
+  it('says its answers vary by the two headers too, since every route now shares one URL', async () => {
+    const res = await atOne('api/')
+    const vary = (res.headers.get('vary') ?? '').toLowerCase()
+    expect(vary).toContain(RELAY_MACHINE_HEADER)
+    expect(vary).toContain(RELAY_ROUTE_HEADER)
+    expect(res.headers.get('cache-control')).toBe('private, no-store')
+    await res.arrayBuffer()
+  })
+
+  it('takes the address with a trailing slash as the same address', async () => {
+    const res = await fetch(`${site.origin}/api/m/`, { headers: { ...asPhone(), [RELAY_MACHINE_HEADER]: deviceId, [RELAY_ROUTE_HEADER]: 'api/workspaces' } })
+    expect(((await res.json()) as Echo).path).toBe('/api/workspaces')
+  })
+
+  it('refuses a machine id the path form would refuse: uppercase is not how the registry keeps one', async () => {
+    const res = await atOne('api/', {}, deviceId.toUpperCase())
+    expect(res.status).toBe(404)
+    await res.arrayBuffer()
+  })
+
+  it('refuses a header sent twice, as it arrives over a real connection (joined into one value)', async () => {
+    const raw = (headers: [string, string][]): Promise<number> =>
+      new Promise((resolve, reject) => {
+        const target = new URL(site.origin)
+        const asked = httpRequest({ host: target.hostname, port: target.port, path: '/api/m', method: 'GET', headers: [['host', target.host], [RELAY_SESSION_HEADER, phoneSession], ...headers].flat() as unknown as Record<string, string> }, (answer) => {
+          answer.resume()
+          answer.on('end', () => resolve(answer.statusCode ?? 0))
+        })
+        asked.on('error', reject)
+        asked.end()
+      })
+    expect(await raw([[RELAY_MACHINE_HEADER, deviceId], [RELAY_ROUTE_HEADER, 'api/']])).toBe(200)
+    expect(await raw([[RELAY_MACHINE_HEADER, deviceId], [RELAY_ROUTE_HEADER, 'api/'], [RELAY_ROUTE_HEADER, 'api/secrets']])).toBe(404)
+    expect(await raw([[RELAY_MACHINE_HEADER, deviceId], [RELAY_MACHINE_HEADER, deviceId], [RELAY_ROUTE_HEADER, 'api/']])).toBe(404)
+  })
+
+  it('takes no query of its own and no half of the pair', async () => {
+    const queried = await fetch(`${site.origin}/api/m?route=api/fleet`, { headers: { ...asPhone(), [RELAY_MACHINE_HEADER]: deviceId, [RELAY_ROUTE_HEADER]: 'api/fleet' } })
+    expect(queried.status).toBe(404)
+    await queried.arrayBuffer()
+    const half = await fetch(`${site.origin}/api/m`, { headers: { ...asPhone(), [RELAY_ROUTE_HEADER]: 'api/fleet' } })
+    expect(half.status).toBe(404)
+    await half.arrayBuffer()
+  })
+})
+
 // ── a machine's bytes never run, and never set anything, on this origin ────
 
 describe('what a machine’s answer may do here', () => {
@@ -855,11 +981,28 @@ describe('the console’s origin, on a registry that serves one', () => {
     })
     expect(res.status).toBe(204)
     expect(res.headers.get('access-control-allow-origin')).toBe(CONSOLE)
-    expect(res.headers.get('access-control-allow-headers')).toBe('authorization, content-type, if-none-match, last-event-id, x-cookrew-session')
+    expect(res.headers.get('access-control-allow-headers')).toBe('authorization, content-type, if-none-match, last-event-id, x-cookrew-session, x-cookrew-machine, x-cookrew-route')
     expect(res.headers.get('access-control-allow-methods')).toBe('GET, POST, PUT, DELETE')
     expect(res.headers.get('access-control-allow-credentials')).toBeNull()
     expect(res.headers.get('vary')).toContain('origin')
     expect(split.relay.stats().opened).toBe(before)
+  })
+
+  it('answers the preflight of the one address the same way, and lets the console read what it carries', async () => {
+    const pre = await fetch(`${split.origin}/api/m`, {
+      method: 'OPTIONS',
+      headers: { origin: CONSOLE, 'access-control-request-method': 'GET', 'access-control-request-headers': 'authorization, x-cookrew-session, x-cookrew-machine, x-cookrew-route' }
+    })
+    expect(pre.status).toBe(204)
+    expect(pre.headers.get('access-control-allow-origin')).toBe(CONSOLE)
+    expect(pre.headers.get('access-control-allow-headers')).toContain('x-cookrew-route')
+    const res = await fetch(`${split.origin}/api/m`, { headers: asPhone({ origin: CONSOLE, [RELAY_MACHINE_HEADER]: deviceId, [RELAY_ROUTE_HEADER]: 'api/' }) })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('access-control-allow-origin')).toBe(CONSOLE)
+    await res.arrayBuffer()
+    const other = await fetch(`${split.origin}/api/m`, { headers: asPhone({ origin: 'https://cookrew.dev', [RELAY_MACHINE_HEADER]: deviceId, [RELAY_ROUTE_HEADER]: 'api/' }) })
+    expect(other.status).toBe(403)
+    await other.arrayBuffer()
   })
 
   it('lets the console read the answer, and nobody else', async () => {
@@ -891,7 +1034,8 @@ describe('the console’s origin, on a registry that serves one', () => {
  */
 async function standBare(
   bounds: Partial<Parameters<typeof createCanvasRelay>[0]> = {},
-  identity: Parameters<typeof createV2>[1] = {}
+  identity: Parameters<typeof createV2>[1] = {},
+  desktopOptions: { stall?: boolean } = {}
 ): Promise<{ origin: string; relay: CanvasRelay; desktop: Linked; close: () => Promise<void> }> {
   const relay = createCanvasRelay({
     v2: createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 }, ...identity }),
@@ -905,7 +1049,7 @@ async function standBare(
       response.writeHead(404).end()
     })
   )
-  const linked = linkDesktop(up.origin, desktopToken, deviceId, mobile.origin)
+  const linked = linkDesktop(up.origin, desktopToken, deviceId, mobile.origin, desktopOptions)
   await linked.ready
   return {
     origin: up.origin,
@@ -920,6 +1064,36 @@ async function standBare(
 }
 
 describe('what one account may make this process hold', () => {
+  it('carries a whole page boot at once: as many exchanges as the machine’s own bridge takes (latency 0.6.1)', async () => {
+    // 2026-11-11: a burst of 20 reads at Solis-Core got 4 `too_many_exchanges` at 16, though
+    // the machine answered each in ~6 ms, and the console waits a second before asking again.
+    // A console boot asks ~20 things at once; the machine's bridge takes 64.
+    expect(EXCHANGES_PER_LINK).toBe(BRIDGE_MAX_OPEN)
+    const results = await Promise.all(Array.from({ length: 40 }, () => echo('/', { headers: asPhone() }).then(({ res }) => res.status)))
+    expect(results.filter((status) => status === 200)).toHaveLength(40)
+  })
+
+  it('refuses a body for a Mac whose line has stopped draining, and still carries its reads', async () => {
+    // The exchange cap was what bounded bytes waiting for a Mac that stopped reading its line;
+    // at 64 it no longer is (review, latency 0.6.1), so the line's own backlog is the bound.
+    const bare = await standBare({ lineQueueMax: 256 * 1024, headDeadlineMs: 60_000 }, {}, { stall: true })
+    const stop = new AbortController()
+    const body = Buffer.alloc(512 * 1024, 7)
+    const statuses = await Promise.all(
+      Array.from({ length: 40 }, () =>
+        fetch(`${bare.origin}${prefix()}/upload`, { method: 'POST', headers: asPhone({ 'content-type': 'application/octet-stream' }), body, signal: AbortSignal.any([stop.signal, AbortSignal.timeout(3000)]) })
+          .then(async (res) => (res.status === 503 ? `503 ${((await res.json()) as { error: string }).error}` : String(res.status)))
+          .catch(() => 'waiting')
+      )
+    )
+    expect(statuses).toContain('503 busy')
+    // A read has no body to queue: the stalled line still takes one (it waits for its answer).
+    const read = await fetch(`${bare.origin}${prefix()}/`, { headers: asPhone(), signal: AbortSignal.timeout(500) }).then((res) => String(res.status)).catch(() => 'waiting')
+    expect(read).toBe('waiting')
+    stop.abort()
+    await bare.close()
+  })
+
   it('carries only so many exchanges on one line, and says so in a sentence', async () => {
     const bare = await standBare({ exchangesPerLink: 2 })
     const stop = new AbortController()

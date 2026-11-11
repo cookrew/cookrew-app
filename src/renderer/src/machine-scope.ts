@@ -34,7 +34,7 @@
  * person's (theme, the account pass, the device key). Those are safe to share.
  */
 
-import { MACHINE_RELAY_PREFIX, RELAY_SESSION_HEADER, RELAY_UNAUTHENTICATED, isMachineId } from '../../shared/machine-relay'
+import { MACHINE_RELAY_PREFIX, RELAY_SESSION_HEADER, RELAY_UNAUTHENTICATED, isMachineId, relayAtOneAddress } from '../../shared/machine-relay'
 
 /** How the console reaches the account's machines. */
 export interface RelayAccess {
@@ -129,6 +129,43 @@ export function relayHeadersFor(current: MachineScope = scope): Record<string, s
 export function relayHeadersForUrl(url: string, current: MachineScope = scope): Record<string, string> {
   if (current.relay === null) return {}
   return url.startsWith(`${trimmed(current.relay.origin)}${MACHINE_RELAY_PREFIX}/`) ? relayHeadersFor(current) : {}
+}
+
+/** A request's own headers as one plain record, whatever shape they were given in. */
+const plainHeaders = (headers: HeadersInit | undefined): Record<string, string> => {
+  const out: Record<string, string> = {}
+  new Headers(headers).forEach((value, key) => void (out[key] = value))
+  return out
+}
+
+/**
+ * A REQUEST TO A MACHINE ON THE RELAY, AS IT LEAVES THE PAGE (latency 0.6.1).
+ *
+ * At the relay's ONE ADDRESS, the machine and the route in their headers
+ * (shared/machine-relay.ts · relayAtOneAddress), with the account session
+ * beside them: a browser keeps a preflight's answer per URL, so one address is
+ * one preflight for the whole visit instead of one for every route and every
+ * query (~405 ms each from the owner's Mac). Judged by the address, like the
+ * session itself: anything that is not a relayed call leaves exactly as it was
+ * asked, with nothing added. Every fetch that reaches the relay goes through
+ * here (plane-fetch.ts and the rest, pinned in tests/api-base.test.ts).
+ */
+export function relayRequestFor(url: string, headers: HeadersInit | undefined, current: MachineScope = scope): { url: string; headers: Record<string, string> } {
+  const own = plainHeaders(headers)
+  if (current.relay === null) return { url, headers: own }
+  const session = relayHeadersForUrl(url, current)
+  const folded = relayAtOneAddress(url, current.relay.origin)
+  if (folded === null) return { url, headers: { ...own, ...session } }
+  // LAST, so nothing a caller passed may stand in for the session or name another machine.
+  return { url: folded.url, headers: { ...own, ...session, ...folded.headers } }
+}
+
+/** `fetch`, with every relayed call sent the way relayRequestFor says. */
+export function relayFetch(fetchImpl: (input: string, init: RequestInit) => Promise<Response> = (input, init) => fetch(input, init), current: () => MachineScope = () => scope) {
+  return (input: string, init: RequestInit = {}): Promise<Response> => {
+    const sent = relayRequestFor(input, init.headers, current())
+    return fetchImpl(sent.url, { ...init, headers: sent.headers })
+  }
 }
 
 /**

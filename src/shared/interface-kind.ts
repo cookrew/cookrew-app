@@ -65,9 +65,19 @@ export interface InterfaceRules {
   readonly env?: Readonly<Record<string, string | undefined>>
 }
 
-/** Hypervisors, container runtimes, and the OS's own point-to-point links. */
+/**
+ * Hypervisors, container runtimes, and the OS's own point-to-point links.
+ *
+ * The second line is a Linux server's (Solis-Core, 2026-11-11): it published
+ * its VPC address and four Docker networks, each a hello the console raced to
+ * its deadline and a host candidate in every WebRTC offer. `docker0` was
+ * caught; a user-defined Docker network is `br-<id>`, and Kubernetes, Podman
+ * and LXD/Incus bring up their own. Docker's is matched by its whole form, `br-`
+ * and twelve hex digits: a LAN that runs through a named bridge is real
+ * (OpenWrt's `br-lan`, OpenStack's `br-ex`, a hand-made `br0`).
+ */
 export const VIRTUAL_INTERFACE_NAME =
-  /^(bridge|vmnet|vboxnet|utun|awdl|llw|gif|stf|ap|p2p|anpi|docker|veth|virbr|lxc)\d*/
+  /^(?:(?:bridge|vmnet|vboxnet|utun|awdl|llw|gif|stf|ap|p2p|anpi|docker|veth|virbr|lxc|cni|flannel|cali|podman|lxdbr|incusbr|vxlan|weave|kube-)\d*|br-[0-9a-f]{12}$)/
 
 /** Ethernet and Wi-Fi: the interface most likely to answer a phone. */
 const ETHERNET_NAME = /^en\d*/

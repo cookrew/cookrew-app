@@ -217,8 +217,10 @@ describe('the streams are covered too', () => {
     // Only a page a machine serves itself, on its own origin, opens a stream the browser's way.
     expect(body).toMatch(/new EventSource\(tokenParam\(url\)\)/)
     // On the relay the stream goes by fetch: the machine's token and the account session, both in
-    // headers, and the session judged by the address the stream is going to.
-    expect(opener).toMatch(/headers: \{ \.\.\.headers, \.\.\.authHeaders\(\), \.\.\.relayHeadersForUrl\(url\) \}/)
+    // headers, the session judged by the address the stream is going to, and on the relay sent to
+    // its one address like every other call (machine-scope.ts · relayRequestFor).
+    expect(opener).toMatch(/const sent = relayRequestFor\(url, \{ \.\.\.headers, \.\.\.authHeaders\(\) \}\)/)
+    expect(opener).toMatch(/fetch\(sent\.url, \{ method, signal, \.\.\.apiRequestInit\(\), headers: sent\.headers \}\)/)
 
     const carrying: string[] = []
     const walk = (dir: string): void => {
@@ -232,6 +234,57 @@ describe('the streams are covered too', () => {
     }
     walk(RENDERER)
     expect(carrying).toEqual([])
+  })
+
+  it('every module that sends the relay session sends the call to the relay’s one address too (latency 0.6.1)', () => {
+    // A browser keeps a preflight per URL; a relayed call sent at its own path pays one for every
+    // new route and query (~405 ms each from the owner's Mac). machine-scope.ts · relayRequestFor
+    // folds it into the one address, and a module that adds the session without it is a module
+    // whose calls went back to a preflight each.
+    const strays: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const file = path.join(dir, entry.name)
+        if (entry.isDirectory()) walk(file)
+        else if (/\.tsx?$/.test(entry.name) && !/machine-scope\.ts$/.test(file)) {
+          const source = readFileSync(file, 'utf8')
+          if (/relayHeadersFor(Url)?\(/.test(source) && !/relayRequestFor\(|relayFetch\(/.test(source)) strays.push(path.relative(RENDERER, file))
+        }
+      }
+    }
+    walk(RENDERER)
+    expect(strays).toEqual([])
+  })
+
+  it('no call that carries a credential across origins bypasses the cache, which in Chrome bypasses the preflight cache too (latency 0.6.1)', () => {
+    // data-plane.ts · CROSS_ORIGIN_NO_COOKIE: 'no-store', 'no-cache' and 'reload' each cost a preflight on
+    // every call, ~405 ms from the owner's Mac. The registry and the relay mark every answer no-store, so the
+    // flag kept nothing out of the cache that would otherwise have been kept.
+    const CARRIES = /authorization: `Bearer|relayHeadersFor|relayFetch\(|relayRequestFor\(|planeFetch\(|CROSS_ORIGIN_NO_COOKIE/
+    const BYPASS = /cache: '(no-store|no-cache|reload)'/
+    // Each one same-origin, or a simple request with no credential header, which nothing preflights.
+    const allowed = new Map([
+      ['account-pair-client.ts', "the same-origin branch of httpAt: a machine's own page"],
+      ['path/ask-hello.ts', 'a simple GET with no header: never preflighted'],
+      ['path/name-oracle.ts', 'a simple GET with no header: never preflighted'],
+      ['local-network.ts', 'the local-network permission probe: no credential'],
+      ['console/console-version.ts', 'the console’s own origin']
+    ])
+    const found: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const file = path.join(dir, entry.name)
+        if (entry.isDirectory()) walk(file)
+        else if (/\.tsx?$/.test(entry.name)) {
+          // The code, not what its comments say about the rule.
+          const source = readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+          const name = path.relative(RENDERER, file)
+          if (CARRIES.test(source) && BYPASS.test(source) && !allowed.has(name)) found.push(name)
+        }
+      }
+    }
+    walk(RENDERER)
+    expect(found).toEqual([])
   })
 
   it('every stream opens through openEventSource, so it follows the direct link', () => {

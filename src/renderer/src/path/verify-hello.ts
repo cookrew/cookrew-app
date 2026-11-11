@@ -77,7 +77,7 @@ export const verifyHello = async (claim: HelloClaim, timeoutMs = VERIFY_TIMEOUT_
       method: 'POST',
       ...(relay === null ? { credentials: 'same-origin' as const } : CROSS_ORIGIN_NO_COOKIE),
       headers: { 'content-type': 'application/json', ...(relay === null ? {} : { authorization: `Bearer ${session}` }) },
-      cache: 'no-store',
+      // No `cache: 'no-store'`: a POST is never kept, and it would cost a preflight each time (data-plane.ts · CROSS_ORIGIN_NO_COOKIE).
       signal: abort.signal,
       body: JSON.stringify(claim)
     })

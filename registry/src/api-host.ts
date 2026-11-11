@@ -39,6 +39,9 @@ export const API_CORS_MAX_AGE = '600'
 const API_PREFIXES = ['/v1/', '/v2/', '/api/m/']
 /** The relay path answers its own origin question and its own preflight. */
 const RELAY_PREFIX = '/api/m/'
+/** The relay's one address (shared/machine-relay.ts · relayAtOneAddress): the relay's too, exactly this path. */
+const RELAY_ONE_ADDRESS = '/api/m'
+const isRelay = (path: string): boolean => path === RELAY_ONE_ADDRESS || path.startsWith(RELAY_PREFIX)
 
 /** The exact host[:port] of the API origin, lowercased; null on a registry that is one host. */
 export const apiHostOf = (v2: V2Identity | undefined): string | null =>
@@ -107,11 +110,11 @@ export function enterApiHost(v2: V2Identity, request: IncomingMessage, response:
   // Kept by every answer whose route names no `vary` of its own; one that does has `origin` added (ownHead).
   response.setHeader('vary', 'origin')
   const path = url.pathname
-  if (!API_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+  if (!isRelay(path) && !API_PREFIXES.some((prefix) => path.startsWith(prefix))) {
     refuse(response, 404, 'not_found')
     return true
   }
-  if (path.startsWith(RELAY_PREFIX)) return false
+  if (isRelay(path)) return false
   const origin = request.headers.origin
   const method = request.method ?? 'GET'
   if (origin === undefined) {

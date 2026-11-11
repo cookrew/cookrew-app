@@ -10,7 +10,7 @@
 // push like a press of TRY AGAIN: the same race, now, with no prompt.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { inConsole, relayBaseFor } from './support/console-scope'
+import { inConsole, relayBaseFor, unfoldRelay } from './support/console-scope'
 
 const DEVICE = '11111111-2222-3333-4444-555555555555'
 /** The machine's address on the relay, as the console reaches it. */
@@ -55,8 +55,9 @@ const stubPhone = () => {
   Object.assign(globalThis, { EventSource: FakeEventSource })
   // On the relay a stream goes by fetch, so its bearer can ride a header.
   let live: ReadableStreamDefaultController<Uint8Array> | null = null
-  ;(globalThis as unknown as { fetch: unknown }).fetch = async (url: string): Promise<Response> => {
-    if (String(url).includes('/api/events')) {
+  ;(globalThis as unknown as { fetch: unknown }).fetch = async (url: string, init: RequestInit = {}): Promise<Response> => {
+    // Read as the path it names: a relayed call leaves at the relay's one address (latency 0.6.1).
+    if (unfoldRelay(String(url), init).includes('/api/events')) {
       return new Response(new ReadableStream({ start: (controller) => void (live = controller) }), {
         status: 200,
         headers: { 'content-type': 'text/event-stream' }

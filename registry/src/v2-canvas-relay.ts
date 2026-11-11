@@ -3,7 +3,14 @@ import { decodeFrame, encodeFrame } from '../../src/shared/relay-frame'
 import { RelayHub, type HubSocket } from './relay-hub'
 import { LinkPulse, openNdjson, readFrameLines } from './relay-link'
 import { refuse, sameOrigin, signedIn, v2Json, type V2Identity } from './v2-http'
-import { RELAY_SESSION_HEADER, isMachineId, isRelayedRoute } from '../../src/shared/machine-relay'
+import {
+  RELAY_MACHINE_HEADER,
+  RELAY_ROUTE_HEADER,
+  RELAY_SESSION_HEADER,
+  isMachineId,
+  isRelayedRoute,
+  relayPathFromHeaders
+} from '../../src/shared/machine-relay'
 import { fleetPresence, type DesktopPresence } from './v2-fleet'
 import { createLineSeen } from './v2-line-seen'
 
@@ -96,12 +103,22 @@ export const CANVAS_CHUNK = 384 * 1024
  * exchanges without limit and make the registry buffer four megabytes for each
  * — the doors would go down with the canvases, since they share a process.
  *
- * The arithmetic is the point: 8 lines × 16 exchanges × 4 MB is 512 MB per
+ * The arithmetic is the point: 8 lines × 64 exchanges × 4 MB is 2 GB per
  * account, which is why the LAST of these is a budget across the whole relay
  * rather than another per-account number. A cap that multiplies is not a cap.
  */
-/** Exchanges one desktop's line carries at once. A canvas opens a handful. */
-export const EXCHANGES_PER_LINK = 16
+/**
+ * Exchanges one desktop's line carries at once: as many as the machine's own
+ * bridge takes (main/canvas-bridge.ts · BRIDGE_MAX_OPEN, pinned equal in the
+ * tests). It was 16, and a console entering a machine asks ~20 things at once:
+ * measured 2026-11-11, a burst of 20 reads at Solis-Core got 4 refusals while
+ * the machine answered each in ~6 ms, and the console waits a second before
+ * asking a refused read again (relay-full.ts). What an exchange makes this
+ * process hold is a stream id and a timer; a body is bounded relay-wide by
+ * BODY_BUDGET while it arrives and by LINE_QUEUE_MAX once it waits on the line,
+ * so the cap per line is not the memory bound.
+ */
+export const EXCHANGES_PER_LINK = 64
 /** Lines one account may hold: one per desktop, and nobody has eight Macs. */
 export const LINKS_PER_ACCOUNT = 8
 /** How long an exchange may wait for its first head frame before it is given up on. */
@@ -121,6 +138,16 @@ export const IDLE_DEADLINE_MS = 120_000
 export const RECEIPT_EVERY_MS = 40
 /** Request bodies being buffered across the WHOLE relay at once. */
 export const BODY_BUDGET = 64 * 1024 * 1024
+/**
+ * Bytes waiting on one line for its Mac to read them, past which a request
+ * WITH A BODY is refused (`busy`). BODY_BUDGET counts a body only until it is
+ * framed; after that it waits in the line's own socket until the Mac reads it,
+ * and a Mac that stopped reading would otherwise have every body sent to it
+ * held here. Once the exchange cap was the only bound on that, and at 64 it is
+ * not (review, latency 0.6.1). Four of the largest bodies; a read carries no
+ * body and is never refused by it.
+ */
+export const LINE_QUEUE_MAX = 16 * 1024 * 1024
 
 /**
  * THE REQUEST HEADERS THAT CROSS. An allow-list, because the opposite is a
@@ -235,6 +262,9 @@ export function allowedRequestHeaders(headers: IncomingHttpHeaders): Record<stri
     if (name === STALE_BASE_HEADER || name === BRIDGE_MARKER || name === CANVAS_DEVICE_HEADER || name === CANVAS_DEVICE_NAME_HEADER) {
       continue
     }
+    // OURS TO READ: the one address's machine and route are the relay's
+    // question, already answered by the path the machine is asked at.
+    if (name === RELAY_MACHINE_HEADER || name === RELAY_ROUTE_HEADER) continue
     if (REQUEST_HEADERS.has(name)) out[name] = value
     // The app's own headers pass; the proxy's own never do, because they
     // describe the reader's network rather than the reader's request.
@@ -274,15 +304,18 @@ const HEADER_VALUE = /^[\t\x20-\x7e]*$/
 export const RELAY_ANSWER_CSP = "default-src 'none'; sandbox; frame-ancestors 'none'"
 
 /** What a page of the console may send on the relay path, and how (answered to its preflight). */
-export const RELAY_CORS_HEADERS = `authorization, content-type, if-none-match, last-event-id, ${RELAY_SESSION_HEADER}`
+export const RELAY_CORS_HEADERS = `authorization, content-type, if-none-match, last-event-id, ${RELAY_SESSION_HEADER}, ${RELAY_MACHINE_HEADER}, ${RELAY_ROUTE_HEADER}`
 export const RELAY_CORS_METHODS = 'GET, POST, PUT, DELETE'
 /** Ten minutes: the ceiling OWASP names, so a changed allow-list is honoured soon (main/companion-cors.ts). */
 export const RELAY_CORS_MAX_AGE = '600'
 
-/** Never shared, never kept, and different for each origin and each session. */
+/**
+ * Never shared, never kept, and different for each origin, each session and,
+ * at the one address, each machine and route (every route shares one URL).
+ */
 const RELAY_PRIVATE: Record<string, string> = {
   'cache-control': 'private, no-store',
-  vary: `origin, authorization, ${RELAY_SESSION_HEADER}`
+  vary: `origin, authorization, ${RELAY_SESSION_HEADER}, ${RELAY_MACHINE_HEADER}, ${RELAY_ROUTE_HEADER}`
 }
 
 /**
@@ -360,6 +393,8 @@ export interface CanvasRelayDeps {
   /** RECEIPT_EVERY_MS, shortened by tests. */
   receiptMs?: number
   bodyBudget?: number
+  /** LINE_QUEUE_MAX, lowered by a test. */
+  lineQueueMax?: number
   /** Where line sightings persist (v2-line-seen.ts); absent = memory only. */
   seenFile?: string
 }
@@ -427,6 +462,24 @@ export function crossSite(request: IncomingMessage): boolean {
 }
 
 /**
+ * THE ONE ADDRESS, UNFOLDED: `/api/m` with the machine and the route in their
+ * headers (shared/machine-relay.ts · relayAtOneAddress), read back into the
+ * path the path form would have had, so `proxy` asks exactly the questions it
+ * always asks of it. Null for anything that is not one clean pair: a header
+ * missing or doubled, a route the path form refuses, a query on the address
+ * itself, or a route that would climb out of its machine once parsed.
+ */
+export function oneAddress(request: IncomingMessage, url: URL): URL | null {
+  if (url.search !== '') return null
+  const machine = request.headers[RELAY_MACHINE_HEADER]
+  const path = relayPathFromHeaders(machine, request.headers[RELAY_ROUTE_HEADER])
+  if (path === null || typeof machine !== 'string') return null
+  const target = new URL(path, url.origin)
+  // Parsed the way the request line is parsed: whatever it tidied away must still leave it this machine's.
+  return target.pathname.startsWith(`/api/m/${machine.toLowerCase()}/`) ? target : null
+}
+
+/**
  * The desktop app's own path, which is not a browser and carries no cookie.
  * A page cannot use it to claim a name: a fetch that sets `Authorization` is
  * preflighted, the only page whose preflight is answered is the console's
@@ -447,6 +500,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   const idleMs = deps.idleDeadlineMs ?? IDLE_DEADLINE_MS
   const receiptMs = deps.receiptMs ?? RECEIPT_EVERY_MS
   const budget = deps.bodyBudget ?? BODY_BUDGET
+  const lineQueueMax = deps.lineQueueMax ?? LINE_QUEUE_MAX
   /** Exchanges in flight per line, so one desktop cannot be made to hold many. */
   const exchanges = new Map<string, number>()
   /** The lines each account holds, so one account cannot hold many. */
@@ -549,7 +603,9 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
       send: write,
       close: () => {
         if (!response.writableEnded) response.end()
-      }
+      },
+      // What this process holds for the Mac and the Mac has not read yet (LINE_QUEUE_MAX).
+      queued: () => response.writableLength
     }
     // `receipts`: this registry answers an uplink's `?acks=1` (sendReceipts).
     const opened = hub.openDoor(name, socket, { receipts: true })
@@ -785,6 +841,11 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         return
       }
       const body = Buffer.concat(chunks)
+      // A MAC THAT IS NOT READING ITS LINE is not sent another body to hold for it here.
+      if (body.byteLength > 0 && (live.socketOf(name)?.queued?.() ?? 0) + body.byteLength > lineQueueMax) {
+        deny(response, 503, 'busy', 'That machine is not taking what is sent to it right now. Try again in a moment.', { ...RELAY_PRIVATE, ...cors })
+        return
+      }
       counts.bytesUp += body.byteLength
       open(request, response, {
         name,
@@ -1050,8 +1111,11 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         presenceRoute(request, response)
         return true
       }
-      // ONE RELAY PATH, for every client (shared/machine-relay.ts).
-      if (parts.length >= 3 && parts[0] === 'api' && parts[1] === 'm') {
+      // ONE RELAY PATH, for every client (shared/machine-relay.ts): the machine
+      // and route in the path (`/api/m/<machine>/<route>`), or at the one
+      // address `/api/m` with both in headers, which is how a browser page
+      // asks its preflight once (relayAtOneAddress).
+      if (parts.length >= 2 && parts[0] === 'api' && parts[1] === 'm') {
         const verdict = originVerdict(request, deps.v2.consoleOrigin)
         // A page of any origin but the console's is refused before a session is
         // read or a machine asked, and told nothing it could read.
@@ -1077,7 +1141,12 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
           response.end()
           return true
         }
-        proxy(request, response, url, verdict.cors)
+        const target = parts.length === 2 ? oneAddress(request, url) : url
+        if (target === null) {
+          refuse(response, 404, 'not_found', undefined, { ...RELAY_PRIVATE, ...verdict.cors })
+          return true
+        }
+        proxy(request, response, target, verdict.cors)
         return true
       }
       return false

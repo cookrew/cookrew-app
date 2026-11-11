@@ -14,6 +14,21 @@ export const API_ORIGIN = 'https://api.cookrew.dev'
 /** A machine's address on the relay: `<api origin>/api/m/<machine id>`. */
 export const relayBaseFor = (machineId: string, origin: string = API_ORIGIN): string => `${origin}/api/m/${machineId.toLowerCase()}`
 
+/**
+ * A request the page sent to the relay's ONE ADDRESS (latency 0.6.1), read
+ * back as the path it names, the way the registry reads it
+ * (shared/machine-relay.ts · relayPathFromHeaders). A suite that asks "which
+ * machine, which route" keeps asking it of the path; anything else is the URL
+ * it was.
+ */
+export const unfoldRelay = (url: string, init: RequestInit = {}): string => {
+  const headers = new Headers(init.headers)
+  const machine = headers.get('x-cookrew-machine')
+  const route = headers.get('x-cookrew-route')
+  if (!/\/api\/m$/.test(url) || machine === null || route === null) return url
+  return `${url}/${machine}/${route.replace(/^\/+/, '')}`
+}
+
 export async function inConsole(
   machineId: string | null,
   options: { origin?: string; session?: () => string | null } = {}

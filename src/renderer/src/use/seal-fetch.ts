@@ -7,14 +7,14 @@
  * prefix is ever given (machine-scope.ts · relayHeadersForUrl).
  */
 import { CROSS_ORIGIN_NO_COOKIE, isAbsolute } from '../data-plane'
-import { relayHeadersForUrl } from '../machine-scope'
+import { relayRequestFor } from '../machine-scope'
 
 export function sealFetchFor(base: string): typeof fetch {
   if (!isAbsolute(base)) return (input, init) => fetch(input, init)
   return (input, init) => {
-    const session = relayHeadersForUrl(String(input))
-    const own = init?.headers as Record<string, string> | undefined
-    const headers = own || Object.keys(session).length > 0 ? { headers: { ...own, ...session } } : {}
-    return fetch(input, { ...init, ...CROSS_ORIGIN_NO_COOKIE, ...headers })
+    // At the relay's one address, like every relayed call (machine-scope.ts · relayRequestFor).
+    const sent = relayRequestFor(String(input), init?.headers)
+    const headers = init?.headers !== undefined || Object.keys(sent.headers).length > 0 ? { headers: sent.headers } : {}
+    return fetch(sent.url, { ...init, ...CROSS_ORIGIN_NO_COOKIE, ...headers })
   }
 }
