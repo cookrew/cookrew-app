@@ -25,6 +25,15 @@
  * selection, or decodes to nothing, would otherwise overwrite or EMPTY the
  * clipboard, and no copy does that.
  *
+ * AN ACCEPTED RISK (owner, 2026-11-11): a SET is taken from an imported card
+ * too. The session on someone else's machine can therefore put text of its
+ * choosing on this clipboard without being asked, and a person who then pastes
+ * without looking pastes that. It is kept because it is exactly how a
+ * drag-select copy on an imported card arrives (the selection is made in the
+ * other side's tmux and comes back as this string), and the two cannot be told
+ * apart from here. A rule that took a set only right after this side's own
+ * pointer release was considered and not built. What it can never do is read.
+ *
  * THIS IS THE PAGE'S HALF. The pane's own terminal reads the same bytes first,
  * and tmux answers a query by itself; on an imported card that half is
  * resources/line-guard.mjs, in front of the pane.

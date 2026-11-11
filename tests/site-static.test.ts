@@ -252,3 +252,12 @@ describe('what a crawler and the host are told', () => {
     for (const [path, html] of pages(files)) expect(html, path).not.toMatch(/document\.cookie|localStorage|sessionStorage/)
   })
 })
+
+describe('what the site says a served team can reach', () => {
+  it('does not say "nothing": it can place text on the clipboard (an accepted risk), and cannot read it', () => {
+    const marketplace = text(buildStaticSite(input()), 'features/marketplace.html')
+    expect(marketplace).toContain('What can a served team access on my computer?')
+    expect(marketplace).not.toMatch(/access on my computer\?<\/summary><p>Nothing\./)
+    expect(marketplace).toMatch(/can place text there; it cannot read your clipboard/)
+  })
+})

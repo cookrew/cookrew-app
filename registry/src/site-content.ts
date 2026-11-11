@@ -211,7 +211,7 @@ export const FEATURES: FeatureSpec[] = [
     frames: ['market'],
     faq: [
       { q: 'Can the team’s author see what I type?', a: 'Yes. The session runs on their machine, so the author can see what you send and what their agents do with it, and can end the session. The relay in between cannot read it.' },
-      { q: 'What can a served team access on my computer?', a: 'Nothing. It runs on the author’s machine in a sandbox; the app only carries keystrokes and screen bytes.' }
+      { q: 'What can a served team access on my computer?', a: 'No files and no programs: it runs on the author’s machine in a sandbox, and the app only carries keystrokes and screen bytes. Like any terminal, text you select in its card is copied to your clipboard, so a served team can place text there; it cannot read your clipboard.' }
     ],
     related: ['harnesses', 'checkpoints', 'workspaces']
   }
