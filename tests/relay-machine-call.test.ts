@@ -110,6 +110,21 @@ describe('createRelayMachines', () => {
     expect(w.deps.enter).not.toHaveBeenCalled()
   })
 
+  // In a real browser, 2026-11-11: a machine that let go of its line read "online …" for a minute.
+  it('the relay’s own word that a machine holds no line is that machine not answering, and is not taken for its answer', async () => {
+    const w = world()
+    w.store.set(`cr_token:${SOLIS}`, 'kept')
+    w.answers.push(json(503, { error: 'no_link', message: 'That machine is not holding a relay session just now.' }))
+    expect(await w.machines.fleetOf(SOLIS)).toBeNull()
+    expect(w.machines.why(SOLIS)).toEqual({ kind: 'offline' })
+    // Its key stands: nothing about the machine changed but its line.
+    expect(w.store.get(`cr_token:${SOLIS}`)).toBe('kept')
+    // A 503 the machine itself answers (it is there, and says it cannot) is an answer like any other.
+    w.answers.push(json(503, { error: 'fleet not wired' }))
+    await w.machines.fleetOf(SOLIS)
+    expect(w.machines.why(SOLIS)).toBeNull()
+  })
+
   it('a page with no relay (a machine’s own page) reads no other machine', async () => {
     const w = world({ machineBase: () => null })
     expect(await w.machines.call(SOLIS, 'GET', 'api/watch/cards')).toEqual({ status: 0, body: null })

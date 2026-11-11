@@ -12,7 +12,8 @@ import { followDrafts } from '../prompt/draft-follow'
 import { useFirstRunStage } from '../first-run/first-run-state'
 import { InkTie } from './InkAvatar'
 import { buildZoomModel, itemViewOf, type MachineView } from './zoom-model'
-import { machineWhyShows, machineWhyWords, machineSays } from './machine-why'
+import { scopeNeedsMachine } from '../machine-scope'
+import { machineTooOld, machineWhyShows, machineWhyWords, machineSays } from './machine-why'
 import { hostPlatform } from '../../../shared/machine-words'
 import { MachineTrustRow, useMachineTrust } from './MachineTrustRow'
 import { ShelfCard } from './ShelfCard'
@@ -676,7 +677,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
             <MachineNode
               key={m.id}
               machine={m}
-              say={machineSays(m, { surface: machineSurface(), trusted: trust[0]?.trusted ?? null, platform: hostPlatform(), block: cookrew().machineWhy?.(m.id) ?? null })}
+              say={machineSays(m, { surface: machineSurface(), trusted: trust[0]?.trusted ?? null, platform: hostPlatform(), floor: scopeNeedsMachine(), block: cookrew().machineWhy?.(m.id) ?? null })}
               bind={bind}
               onOpen={() => {
                 // A machine this one can read is gone into, here (RemoteMachineView.tsx); one it cannot says the one thing to do.
@@ -842,6 +843,8 @@ const machineSurface = (): 'desktop' | 'page' | 'none' => (!canEnterMachines() ?
 async function whyNot(m: MachineView): Promise<string | null> {
   const api = cookrew()
   const surface = machineSurface()
+  // Too old for the console: a tap asks it nothing either, and says to update it.
+  if (machineTooOld(m, scopeNeedsMachine())) return machineWhyWords(m, { surface, trusted: null, block: null, platform: hostPlatform(), floor: true })
   // Not read yet (a page just opened, a key just made): asked now, so a tap is not a wait for the next round.
   if (surface !== 'none' && m.online && (await api.machineFleetOf?.(m.id).catch(() => null)) != null) return null
   const trusted = surface === 'desktop' ? ((await api.machineTrust?.().catch(() => null)) ?? null)?.trusted ?? null : null

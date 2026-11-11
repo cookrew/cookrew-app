@@ -3,6 +3,9 @@
 // other desktops from the registry, joined per machine. Every name invented.
 import type { MachineScope } from '../src/renderer/src/machine-scope'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { machineOutdated } from '../src/shared/machine-version'
 import type { FleetAgent, FleetEvent, FleetSnapshot, FleetWorkspace } from '../src/shared/fleet'
 import type { AccountMachine, AccountMachines } from '../src/shared/zoom-fleet'
 import type { WorkspaceList } from '../src/shared/model'
@@ -127,7 +130,7 @@ describe('composeFleet', () => {
 })
 
 /** A fake bridge: the feed's subscriber and refusal are kept so a test can drive them. */
-const fakeApi = (options: { feed?: boolean; machines?: () => Promise<AccountMachines>; list?: () => Promise<WorkspaceList> } = {}) => {
+const fakeApi = (options: { feed?: boolean; machines?: () => Promise<AccountMachines>; list?: () => Promise<WorkspaceList>; read?: (id: string) => Promise<unknown> } = {}) => {
   const feed = {
     cb: null as ((event: FleetEvent) => void) | null,
     refused: null as (() => void) | null,
@@ -149,7 +152,8 @@ const fakeApi = (options: { feed?: boolean; machines?: () => Promise<AccountMach
           },
     zoomFleetMachines: options.machines ?? (async () => ({ ok: false, reason: 'signed-out' })),
     listWorkspaces: options.list ?? (async () => ({ workspaces: [], activeId: '' })),
-    machineName: async () => 'Studio.local'
+    machineName: async () => 'Studio.local',
+    ...(options.read ? { machineFleetOf: options.read as FleetApi['machineFleetOf'] } : {})
   }
   return { api, feed }
 }
@@ -189,6 +193,49 @@ describe('the zoom fleet store', () => {
       ['Laptop', 'listed']
     ])
     expect(seen).toHaveBeenCalled()
+  })
+
+  it('reads the account’s other machines that are online and new enough, and asks an old or unread-version one nothing', async () => {
+    const OLD = '33333333-3333-4333-8333-333333333333'
+    const UNKNOWN = '44444444-4444-4444-8444-444444444444'
+    const AWAY = '55555555-5555-4555-8555-555555555555'
+    const read = vi.fn(async (_id: string) => snapshot(4))
+    const { api, feed } = fakeApi({
+      read,
+      machines: async () => ({
+        ok: true,
+        machines: [
+          machine(ME, 'Studio', true, { appVersion: '0.6.0' }),
+          machine(OTHER, 'Laptop', false, { appVersion: '0.6.0' }),
+          machine(OLD, 'Attic', false, { appVersion: '0.5.8' }),
+          machine(UNKNOWN, 'Shed', false, { appVersion: null }),
+          machine(AWAY, 'Road', false, { appVersion: '0.6.0', online: false })
+        ]
+      })
+    })
+    // As the console makes it: with its version floor.
+    const store = createZoomFleetStore(() => api, { readable: (row) => !machineOutdated(row.appVersion) })
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(read.mock.calls.map(([id]) => id)).toEqual([OTHER])
+    const drawn = Object.fromEntries(store.get().machines.map((m) => [m.id, m.detail]))
+    expect(drawn[OTHER]).toBe('live')
+    expect(drawn[OLD]).toBe('listed')
+    expect(drawn[UNKNOWN]).toBe('listed')
+
+    // As the desktop app makes it: no floor, every machine that is online is read, as before.
+    read.mockClear()
+    const desktop = createZoomFleetStore(() => api)
+    desktop.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(read.mock.calls.map(([id]) => id).sort()).toEqual([OTHER, OLD, UNKNOWN].sort())
+  })
+
+  it('the page’s own store applies the floor on the console and nowhere else', () => {
+    const source = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'zoom', 'use-zoom-fleet.ts'), 'utf8')
+    expect(source).toContain('readable: (row) => !scopeNeedsMachine() || !machineOutdated(row.appVersion)')
   })
 
   it('lets go of the machine it read as "this one" when another is entered, and reads the next', async () => {

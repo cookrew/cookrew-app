@@ -90,3 +90,40 @@ describe('on the console', () => {
     expect(builds).toEqual({ watched: 0, stopped: 0 })
   })
 })
+
+describe('the console’s machine view (console/ConsoleMachine.tsx)', () => {
+  // The view is the whole app; what is under test here is only what loading its chunk starts.
+  // Named in a variable: this file is typechecked with the main process's sources, which must not
+  // be made to follow the import into the app's own components (they are the web project's).
+  const VIEW = '../src/renderer/src/console/ConsoleMachine'
+  const loadView = async (): Promise<unknown> => {
+    vi.doMock('../src/renderer/src/App', () => ({ default: () => null }))
+    try {
+      return await import(/* @vite-ignore */ VIEW)
+    } finally {
+      vi.doUnmock('../src/renderer/src/App')
+    }
+  }
+
+  it('starts the session for a machine entered before its chunk arrived (a cold link straight into a machine)', async () => {
+    const scope = await inConsole(A)
+    await loadView()
+    expect(path).toEqual({ started: 1, stopped: 0 })
+    expect(builds.watched).toBe(0)
+    scope.enterMachine(null)
+    expect(path).toEqual({ started: 1, stopped: 1 })
+  })
+
+  it('loaded ahead of any machine it starts nothing, then starts once per machine entered and stops when it is left', async () => {
+    const scope = await inConsole(null)
+    await loadView()
+    expect(path).toEqual({ started: 0, stopped: 0 })
+    scope.enterMachine(A)
+    expect(path).toEqual({ started: 1, stopped: 0 })
+    scope.enterMachine(null)
+    expect(path).toEqual({ started: 1, stopped: 1 })
+    scope.enterMachine(B)
+    expect(path).toEqual({ started: 2, stopped: 1 })
+    expect(builds).toEqual({ watched: 0, stopped: 0 })
+  })
+})

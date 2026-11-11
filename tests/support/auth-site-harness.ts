@@ -48,7 +48,7 @@ const freePort = (): Promise<number> =>
   })
 
 export async function bootAuthSite(
-  options: { auth?: boolean; secondStep?: 'required' | 'legacy'; freshWindowMs?: number; split?: boolean; now?: () => number } = {}
+  options: { auth?: boolean; secondStep?: 'required' | 'legacy'; freshWindowMs?: number; split?: boolean; now?: () => number; consoleOrigin?: string } = {}
 ): Promise<AuthSite> {
   const dir = mkdtempSync(path.join(tmpdir(), 'auth-site-'))
   const fake = await fakeOAuth()
@@ -57,7 +57,8 @@ export async function bootAuthSite(
   const A = `http://auth.localhost:${port}`
   // A SPLIT REGISTRY (0.6.0): the API on its own host, and the console's origin, which this process only names.
   const API = options.split === true ? `http://api.localhost:${port}` : ''
-  const C = options.split === true ? `http://console.localhost:${port}` : ''
+  // A console served by a static host of its own (a browser suite) is named by that host's origin.
+  const C = options.split === true ? (options.consoleOrigin ?? `http://console.localhost:${port}`) : ''
   const logged: string[] = []
   const v2 = createV2(dir, {
     log: (message) => logged.push(message),

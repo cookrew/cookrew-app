@@ -17,6 +17,7 @@
  * off its line, on a build older than this console speaks to, or refusing
  * this browser in its own words.
  */
+import { MIN_MACHINE_VERSION, machineOutdated } from '../../../shared/machine-version'
 import type { AccountMachine, AccountMachines } from '../../../shared/zoom-fleet'
 import type { FleetSnapshot } from '../../../shared/fleet'
 import { composeFleet, snapshotOf, type ZoomCounts } from '../zoom/fleet-compose'
@@ -26,7 +27,7 @@ import type { MachineBlock } from '../relay-machine-call'
 const MACHINE_WORDS_MAX = 160
 
 /** The first build that answers at api.cookrew.dev/api/m and lets the console's origin in. */
-export const MIN_MACHINE_VERSION = '0.6.0'
+export { MIN_MACHINE_VERSION }
 export const ACCOUNT_EVERY_MS = 60_000
 export const SUMMARY_EVERY_MS = 5_000
 /** The registry said the session was over: the session renews, and the list is asked for again this soon. */
@@ -105,21 +106,7 @@ export interface ConsoleDevices {
   gateChanged(): void
 }
 
-const triple = (version: string | null): readonly [number, number, number] | null => {
-  // A pre-release or build suffix does not change which protocol a build speaks.
-  const parts = /^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/.exec(version ?? '')
-  return parts === null ? null : [Number(parts[1]), Number(parts[2]), Number(parts[3])]
-}
-
-const MIN_TRIPLE = triple(MIN_MACHINE_VERSION) ?? [0, 0, 0]
-
-/** Older than the first build this console speaks to. A version it cannot read is not taken for a new one. */
-const outdated = (version: string | null): boolean => {
-  const have = triple(version)
-  if (have === null) return true
-  for (let at = 0; at < 3; at += 1) if (have[at] !== MIN_TRIPLE[at]) return have[at] < MIN_TRIPLE[at]
-  return false
-}
+const outdated = machineOutdated
 
 /** Where one machine stands, and what it says about itself when it cannot be read. */
 export function standingOf(row: AccountMachine, at: { open: boolean; read: boolean; block: MachineBlock | null }): { standing: MachineStanding; say: string | null } {
@@ -153,6 +140,10 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
   let reproofAsked = false
   /** Machines that did not take the pass: not asked again until there is a new proof to show them. */
   let passRefused: ReadonlySet<string> = new Set()
+  /** Machines the list calls online that did not answer, for which the list was asked again: once per loss. */
+  let lineLost: ReadonlySet<string> = new Set()
+  /** When the list was last asked for because of a loss: several losses close together are one question. */
+  let lossAskedAt = Number.NEGATIVE_INFINITY
   let gateWasOpen = false
   /** Bumped when a SUMMARY read must not be filed any more (the gate closed, the level left the screen). */
   let era = 0
@@ -227,6 +218,20 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
       if (mine !== era) return
       if (read !== null) snapshots = { ...snapshots, [id]: read }
       else if (snapshots[id] !== undefined) snapshots = Object.fromEntries(Object.entries(snapshots).filter(([held]) => held !== id))
+      // OFF ITS LINE SINCE THE LIST WAS READ. The list is asked for once a minute, and a machine
+      // closed meanwhile would be drawn as online, and silent, until then. The registry knows
+      // already: it is asked now. Once per loss, so a machine the relay cannot reach while the
+      // registry still lists it online is not asked about as fast as the two can answer.
+      if (read !== null && lineLost.has(id)) lineLost = new Set([...lineLost].filter((held) => held !== id))
+      if (read === null && deps.why(id)?.kind === 'offline' && !lineLost.has(id)) {
+        lineLost = new Set([...lineLost, id])
+        // No faster than the summaries' own clock: two machines letting go in turn would otherwise
+        // each start the next round at once, and the registry would be asked as fast as it answers.
+        if (Date.now() - lossAskedAt >= SUMMARY_EVERY_MS) {
+          lossAskedAt = Date.now()
+          void askAccount()
+        }
+      }
       if (read === null && deps.why(id)?.kind === 'needs-proof') {
         // Not asked again with the same pass: each ask is its door, through the relay.
         passRefused = new Set([...passRefused, id])
@@ -284,6 +289,8 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
         error = null
         snapshots = {}
         passRefused = new Set()
+        lineLost = new Set()
+        lossAskedAt = Number.NEGATIVE_INFINITY
         reproofAsked = false
         compose()
       }

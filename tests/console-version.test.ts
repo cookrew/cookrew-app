@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -166,5 +168,12 @@ describe('the line', () => {
     expect(draw(true, false)).toContain('<button')
     expect(draw(true, true)).toContain('Updating…')
     expect(draw(true, true)).not.toContain('<button')
+  })
+
+  it('its one button is as tall as the console’s other controls: a finger has to land on it (26 px in a real browser at 412 px, 2026-11-11)', () => {
+    const css = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'console', 'console.css'), 'utf8')
+    const rule = (selector: string): string => new RegExp(`(?:^|\\n)${selector.replace('.', '\\.')} \\{([^}]*)\\}`).exec(css)?.[1] ?? ''
+    expect(rule('.cd-primary')).toMatch(/min-height:\s*40px/)
+    expect(rule('.cd-newer-go')).toMatch(/min-height:\s*40px/)
   })
 })

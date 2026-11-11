@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
+import { firstLoad } from '../scripts/console-host-files.mjs'
 
 /**
  * THE CONSOLE, BUILT (`npm run console:build`), is what a static host is
@@ -74,6 +75,20 @@ describe('the built console', () => {
     if (chunks.some((code) => /createElement\(["']style["']\)/.test(code))) expect(policy).toContain("style-src 'self' 'unsafe-inline'")
     if (chunks.some((code) => code.includes('data:audio/'))) expect(policy).toMatch(/media-src [^;]*data:/)
     expect(chunks.some((code) => /\beval\(|new Function\(/.test(code)), 'the policy forbids eval').toBe(false)
+  })
+
+  it('carries the search for a nearer way to a machine, in what loads with a machine and not in what the page starts with', () => {
+    // The path switcher (path/companion.ts) is started by machine-session.ts, which the machine
+    // view imports. Left out, a console stays on the relay for ever and nothing says so.
+    const names = readdirSync(path.join(out, 'assets')).filter((name) => name.endsWith('.js'))
+    const switcher = (code: string): boolean => code.includes('api/rtc/offer') && code.includes('RTCPeerConnection')
+    expect(names.some((name) => switcher(file(path.join('assets', name)))), 'no built chunk knocks for a direct link').toBe(true)
+    const first = firstLoad(file('index.html')).filter((name: string) => name.endsWith('.js'))
+    expect(first.length).toBeGreaterThan(0)
+    for (const name of first) {
+      expect(file(name).includes('api/rtc/offer'), name).toBe(false)
+      expect(file(name).includes('RTCPeerConnection'), name).toBe(false)
+    }
   })
 
   it('passes the size gate over THIS build, and the gate fails a page over its limit or a directory that is no build', () => {

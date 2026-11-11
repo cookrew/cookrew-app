@@ -42,6 +42,10 @@
 
 .cd-quiet {
   appearance: none;
+  /* A finger's height, though it reads as a line of text. */
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
   padding: 0;
   border: 0;
   background: none;
@@ -335,7 +339,7 @@
   align-items: center;
   gap: 10px;
   margin: 0;
-  padding: 6px 8px 6px 12px;
+  padding: 4px 4px 4px 14px;
   max-width: calc(100vw - 24px);
   border: 1px solid var(--sumi-line, currentColor);
   border-radius: 999px;
@@ -345,7 +349,11 @@
   white-space: nowrap;
 }
 .cd-newer-go {
-  padding: 4px 10px;
+  /* As tall as the console's other controls (.cd-primary): it is the one thing on this line a finger goes for. */
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 4px 14px;
   border: 1px solid currentColor;
   border-radius: 999px;
   background: transparent;

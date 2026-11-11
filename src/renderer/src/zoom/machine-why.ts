@@ -1,5 +1,15 @@
 import { machineCopy } from '../../../shared/machine-words'
+import { machineOutdated } from '../../../shared/machine-version'
 import type { MachineBlock } from '../relay-machine-call'
+
+/**
+ * A machine the console is too new for (shared/machine-version.ts). `floor` is
+ * true on the console and nowhere else: a machine's own phone page is a page
+ * too, and enters no other machine. A machine whose version was not told is
+ * not judged.
+ */
+export const machineTooOld = (machine: { readonly appVersion?: string | null }, floor: boolean | undefined): boolean =>
+  floor === true && machine.appVersion !== undefined && machineOutdated(machine.appVersion)
 
 /**
  * A MACHINE THE ZOOM VIEW CANNOT GO INTO, SAID AS THE ONE THING TO DO (owner
@@ -20,6 +30,8 @@ export interface WhyContext {
   readonly block: MachineBlock | null
   /** This machine's platform, for the button's own words. */
   readonly platform?: string
+  /** The console's version floor applies on this surface (machine-scope.ts · scopeNeedsMachine). */
+  readonly floor?: boolean
 }
 
 /**
@@ -32,9 +44,10 @@ export function machineWhyShows(v: number, full: boolean): boolean {
   return !full && v < -1.5
 }
 
-export function machineWhyWords(machine: { readonly name: string; readonly online: boolean }, ctx: WhyContext): string {
+export function machineWhyWords(machine: { readonly name: string; readonly online: boolean; readonly appVersion?: string | null }, ctx: WhyContext): string {
   const { name } = machine
   if (!machine.online) return `${name} is offline. It opens here once it is back.`
+  if (machineTooOld(machine, ctx.floor)) return `Update Cookrew on ${name}, and it opens here.`
   if (ctx.surface === 'none') return `Open console.cookrew.dev to go into ${name} from here.`
   if (ctx.surface === 'desktop' && ctx.trusted === false) {
     return `Press “${machineCopy('Sign this Mac in again to see your other machines', ctx.platform ?? 'darwin')}” below, and ${name} opens here.`
@@ -60,10 +73,12 @@ export function machineWhyWords(machine: { readonly name: string; readonly onlin
  * sentence, with what a press would find, is `machineWhyWords`.
  */
 export function machineSays(
-  machine: { readonly name: string; readonly online: boolean; readonly detail: 'live' | 'connecting' | 'listed' },
-  ctx: Pick<WhyContext, 'surface' | 'trusted' | 'platform'> & { readonly block?: MachineBlock | null }
+  machine: { readonly name: string; readonly online: boolean; readonly detail: 'live' | 'connecting' | 'listed'; readonly appVersion?: string | null },
+  ctx: Pick<WhyContext, 'surface' | 'trusted' | 'platform' | 'floor'> & { readonly block?: MachineBlock | null }
 ): string | null {
   if (!machine.online) return `Open Cookrew on ${machine.name}.`
+  // Before anything it could be asked: an old machine is asked nothing.
+  if (machineTooOld(machine, ctx.floor)) return `Update Cookrew on ${machine.name}.`
   if (machine.detail === 'live') return null
   if (machine.detail === 'connecting') return 'Reading…'
   // The button is at the foot of the view (ZoomView · zv-trust-bar), under the machines.
