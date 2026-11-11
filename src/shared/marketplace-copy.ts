@@ -285,6 +285,13 @@ export const MKT_PAY = {
    * card was charged. A card payment is checked against the buyer's own
    * sign-in at this door, which is why asking again is the right move.
    */
+  /**
+   * A card page asked for while a signed wallet payment is still collectable
+   * (main/serve-gate.ts). The wallet may yet be charged, so the card is not
+   * offered beside it; the same press with the wallet sends the same payment.
+   */
+  'mkt.pay.wallet.unconfirmed.body':
+    'This door has not confirmed the wallet payment you signed, and it can still collect it for a few minutes. Press PAY with the wallet again to send the same payment, or pay by card once it has lapsed.',
   'mkt.pay.card.unconfirmed.body':
     'This door did not confirm the card payment. If your card was charged, press CHECK AGAIN; the payment is tied to your account at this door.',
   /**

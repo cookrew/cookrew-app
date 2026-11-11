@@ -916,6 +916,35 @@ describe('round 3 — one payment per purchase, whatever is pressed', () => {
     }
   }, SLOW)
 
+  it('no card page while a signed wallet payment can still be collected: a door cannot be paid both ways', async () => {
+    // The other order of rule (1). A door answers a wallet press "could not check" and keeps the
+    // signed transfer, which it may still submit; a card page made now would be a second payment.
+    const guest = await world.registeredMachine('r3-both', 'rbo')
+    world.quote(['x402', 'stripe'])
+    world.walletVerdict('unverifiable')
+    let clock = 1_700_000_000_000
+    try {
+      const app = world.appOn(guest.accounts, { usdc: GOOD_USDC, now: () => clock })
+      await app.ops.gate(DOOR, 'buy')
+      await app.ops.settle(DOOR, 'x402', undefined, app.shown())
+      expect(app.signed).toHaveLength(1)
+      const made = world.checkoutsMade()
+      const refused = await app.ops.checkout(DOOR)
+      expect(refused).toMatchObject({ ok: false, reason: 'wallet-in-flight' })
+      expect((refused as { detail?: string }).detail).toMatch(/wallet/i)
+      expect((refused as { detail?: string }).detail).not.toMatch(/nothing was charged/i)
+      expect(world.checkoutsMade()).toBe(made)
+      // Once the signed transfer can no longer be collected, the card is offered again.
+      clock += 300_000 + 6_000
+      world.checkoutNext('cs_test_afterwallet01')
+      expect(await app.ops.checkout(DOOR)).toMatchObject({ ok: true, session: 'cs_test_afterwallet01' })
+      expect(world.checkoutsMade()).toBe(made + 1)
+    } finally {
+      world.walletVerdict('ok')
+      world.quote(['stripe'])
+    }
+  }, SLOW)
+
   it('a signed wallet payment is one person’s: a change of hands forgets it (3)', async () => {
     const a = await world.registeredMachine('r3-hands-a', 'rha')
     const b = await world.registeredMachine('r3-hands-b', 'rhb')

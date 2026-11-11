@@ -513,6 +513,15 @@ export function createServeGate(deps: ServeGateDeps) {
         entry = presented.entry
         if (afterCardAnswer(waiting, presented.phase) !== 'gone') return standing
       }
+      // NO CARD PAGE WHILE A SIGNED WALLET PAYMENT CAN STILL BE COLLECTED: the
+      // other order of the rule in `settle`. A door that answered the wallet
+      // press "could not check" holds a transfer it may still submit, and a
+      // card page made now would be a second payment. A card page already
+      // standing was handed back above; this stops only a NEW one.
+      const signed = signedPayments.get(key)
+      if (signed !== undefined && now() < signed.until) {
+        return { ok: false as const, reason: 'wallet-in-flight' as const, detail: MKT_PAY['mkt.pay.wallet.unconfirmed.body'] }
+      }
       const checkout = await startStripeCheckout(reached.at, entry.token)
       const startedAt = now()
       pending.put({
