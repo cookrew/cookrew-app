@@ -12,7 +12,9 @@ import { IdentityService } from '../registry/src/identity'
 import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
+import { BRIDGE_MAX_OPEN } from '../src/main/canvas-bridge'
 import {
+  EXCHANGES_PER_LINK,
   allowedRequestHeaders,
   callerDeviceHeaders,
   CANVAS_DEVICE_HEADER,
@@ -1021,6 +1023,15 @@ async function standBare(
 }
 
 describe('what one account may make this process hold', () => {
+  it('carries a whole page boot at once: as many exchanges as the machine’s own bridge takes (latency 0.6.1)', async () => {
+    // 2026-11-11: a burst of 20 reads at Solis-Core got 4 `too_many_exchanges` at 16, though
+    // the machine answered each in ~6 ms, and the console waits a second before asking again.
+    // A console boot asks ~20 things at once; the machine's bridge takes 64.
+    expect(EXCHANGES_PER_LINK).toBe(BRIDGE_MAX_OPEN)
+    const results = await Promise.all(Array.from({ length: 40 }, () => echo('/', { headers: asPhone() }).then(({ res }) => res.status)))
+    expect(results.filter((status) => status === 200)).toHaveLength(40)
+  })
+
   it('carries only so many exchanges on one line, and says so in a sentence', async () => {
     const bare = await standBare({ exchangesPerLink: 2 })
     const stop = new AbortController()

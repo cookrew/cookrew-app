@@ -103,12 +103,21 @@ export const CANVAS_CHUNK = 384 * 1024
  * exchanges without limit and make the registry buffer four megabytes for each
  * — the doors would go down with the canvases, since they share a process.
  *
- * The arithmetic is the point: 8 lines × 16 exchanges × 4 MB is 512 MB per
+ * The arithmetic is the point: 8 lines × 64 exchanges × 4 MB is 2 GB per
  * account, which is why the LAST of these is a budget across the whole relay
  * rather than another per-account number. A cap that multiplies is not a cap.
  */
-/** Exchanges one desktop's line carries at once. A canvas opens a handful. */
-export const EXCHANGES_PER_LINK = 16
+/**
+ * Exchanges one desktop's line carries at once: as many as the machine's own
+ * bridge takes (main/canvas-bridge.ts · BRIDGE_MAX_OPEN, pinned equal in the
+ * tests). It was 16, and a console entering a machine asks ~20 things at once:
+ * measured 2026-11-11, a burst of 20 reads at Solis-Core got 4 refusals while
+ * the machine answered each in ~6 ms, and the console waits a second before
+ * asking a refused read again (relay-full.ts). What an exchange makes this
+ * process hold is a stream id and a timer; the bodies are bounded relay-wide
+ * by BODY_BUDGET, so the cap per line is not the memory bound.
+ */
+export const EXCHANGES_PER_LINK = 64
 /** Lines one account may hold: one per desktop, and nobody has eight Macs. */
 export const LINKS_PER_ACCOUNT = 8
 /** How long an exchange may wait for its first head frame before it is given up on. */

@@ -85,11 +85,14 @@ async function tlsSocket() {
 
 async function connect() {
   const { socket, ms } = await tlsSocket()
-  const client = http2.connect(api.origin, { createConnection: () => socket })
+  // Chrome's receive windows (6 MB a stream, 15 MB the connection): Node's default 64 KB would make
+  // this script, not the path, the limit on a large reply at a long round trip.
+  const client = http2.connect(api.origin, { createConnection: () => socket, settings: { initialWindowSize: 6 * 1024 * 1024 } })
   await new Promise((resolve, reject) => {
     client.once('connect', resolve)
     client.once('error', reject)
   })
+  client.setLocalWindowSize(15 * 1024 * 1024)
   return { client, ms }
 }
 

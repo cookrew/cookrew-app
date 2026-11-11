@@ -75,8 +75,18 @@ describe('the name rule', () => {
     }
   })
 
+  it('refuses the container networks a Linux server grows (Solis-Core, 2026-11-11)', () => {
+    // Solis-Core published 10.20.100.78 (its VPC address) and four Docker networks, 172.18-21.0.1:
+    // each a hello the console raced to its deadline and a host candidate in every WebRTC offer,
+    // and no other machine can ever reach a host's own bridge. docker0 was caught; a user-defined
+    // Docker network is `br-<id>`, and other runtimes bring up their own.
+    for (const name of ['br-3f2a1b9c8d7e', 'br-0123456789ab', 'cni0', 'flannel.1', 'cali1a2b3c4d5e6', 'podman0', 'lxdbr0', 'incusbr0', 'vxlan.calico', 'weave', 'kube-bridge', 'kube-ipvs0']) {
+      expect(interfaceKind({ name, address: '172.19.0.1', netmask: '255.255.0.0' }, RULES), name).toBe('virtual')
+    }
+  })
+
   it('keeps the interfaces a phone can actually reach', () => {
-    for (const name of ['en0', 'en1', 'eth0', 'wlan0']) {
+    for (const name of ['en0', 'en1', 'eth0', 'wlan0', 'ens5', 'enp0s31f6', 'wlp2s0', 'eno1', 'bond0', 'brave0']) {
       expect(interfaceKind({ name, address: '10.1.2.3' }, RULES)).toBe('real')
     }
   })

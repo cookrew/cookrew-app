@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { DESKTOP, PHONE, launchBrowser, type Browser, type Tab, type Viewport } from './support/chrome-driver'
+import { KITCHEN } from './support/console-machine'
 import { bootConsoleStage, type ConsoleStage } from './support/console-stage'
 
 /**
@@ -38,6 +39,8 @@ interface Row {
   url: string
   method: string
   type: string
+  /** The machine's route of a call at the relay's one address, from its header. */
+  route: string
   t0: number
   end: number | null
 }
@@ -46,9 +49,10 @@ interface Row {
 function record(tab: Tab): { rows: Row[]; clear(): void } {
   const rows: Row[] = []
   const byId = new Map<string, Row>()
-  tab.cdp.on('Network.requestWillBeSent', ((event: { requestId: string; type?: string; timestamp: number; request: { url: string; method: string } }) => {
+  tab.cdp.on('Network.requestWillBeSent', ((event: { requestId: string; type?: string; timestamp: number; request: { url: string; method: string; headers?: Record<string, string> } }) => {
     if (byId.has(event.requestId)) return
-    const row: Row = { url: event.request.url, method: event.request.method, type: event.type ?? '', t0: event.timestamp * 1000, end: null }
+    const headers = Object.fromEntries(Object.entries(event.request.headers ?? {}).map(([key, value]) => [key.toLowerCase(), value]))
+    const row: Row = { url: event.request.url, method: event.request.method, type: event.type ?? '', route: headers['x-cookrew-route'] ?? '', t0: event.timestamp * 1000, end: null }
     byId.set(event.requestId, row)
     rows.push(row)
   }) as never)
@@ -125,23 +129,42 @@ suite.each([
     await tab.goto(`${stage.host.origin}/d/${stage.studio.deviceId}`)
     await tab.until(`document.querySelector('.zv-door')`, 'the machine’s workspaces', 60_000)
     const paintMs = Date.now() - started
+    // What a visit asked, in order, when COOKREW_LATENCY_DUMP=1: the chain to read.
+    const dump = (label: string, rows: readonly Row[]): void => {
+      if (process.env.COOKREW_LATENCY_DUMP !== '1') return
+      const zero = rows[0]?.t0 ?? 0
+      console.info(`console-open-latency timeline: ${label}`)
+      for (const row of rows) {
+        const at = (ms: number | null): string => (ms === null ? '…' : String(Math.round(ms - zero)))
+        console.info(`  ${at(row.t0).padStart(5)} → ${at(row.end).padStart(5)}  ${isPreflight(row) ? 'OPTIONS' : row.method.padEnd(7)} ${row.route || row.url.replace(stage.host.origin, '[console]').replace(stage.site.API, '[api]')}`)
+      }
+    }
+    dump('to the workspaces', seen.rows)
     // Inside the machine, quietly, for a while: polls, streams and the path probe all run.
     await sleep(20_000)
-    const relayed = seen.rows.filter((row) => row.url.startsWith(`${stage.site.API}/api/m`))
+    // And one level in, by its address: the workspace's agents drawn, which is the machine readable.
+    const visit = seen.rows.slice()
+    const inner = Date.now()
+    await tab.goto(`${stage.host.origin}/d/${stage.studio.deviceId}/w/${KITCHEN}`)
+    await tab.until(`document.querySelector('.zv-av')`, 'the workspace’s agents', 60_000)
+    const agentsMs = Date.now() - inner
+    dump('to the agents', seen.rows.slice(visit.length))
+    const relayed = visit.filter((row) => row.url.startsWith(`${stage.site.API}/api/m`))
     const preflights = relayed.filter(isPreflight)
     const report = {
       rttMs: RTT_MS,
       width: viewport.width,
       paintMs,
+      agentsMs,
       relayed: relayed.length - preflights.length,
       relayPreflights: preflights.length,
       distinctRelayUrls: new Set(relayed.filter((row) => !isPreflight(row)).map((row) => row.url)).size,
       // When each preflight went out, from the first request of the visit: a burst at the start is
       // concurrent first calls (a browser does not wait for one preflight to answer the others).
-      preflightAtMs: preflights.map((row) => Math.round(row.t0 - (seen.rows[0]?.t0 ?? row.t0))),
+      preflightAtMs: preflights.map((row) => Math.round(row.t0 - (visit[0]?.t0 ?? row.t0))),
       // The registry's own routes are asked at their own URLs, a handful of them: once each, not once per call.
-      registryPreflights: seen.rows.filter((row) => isPreflight(row) && row.url.startsWith(`${stage.site.API}/v2/`)).length,
-      registryCalls: seen.rows.filter((row) => !isPreflight(row) && row.url.startsWith(`${stage.site.API}/v2/`)).length
+      registryPreflights: visit.filter((row) => isPreflight(row) && row.url.startsWith(`${stage.site.API}/v2/`)).length,
+      registryCalls: visit.filter((row) => !isPreflight(row) && row.url.startsWith(`${stage.site.API}/v2/`)).length
     }
     console.info(`console-open-latency ${JSON.stringify(report)}`)
     expect(report.relayed, 'the machine was asked things').toBeGreaterThan(3)
