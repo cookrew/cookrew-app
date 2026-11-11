@@ -1,7 +1,7 @@
-import { apiRequestInit } from './api-base'
-import { dataPlane, subscribeDataPlane, type DataPlane } from './data-plane'
+import { apiRequestInit, clientBase } from './api-base'
+import { RELAY_PLANE, dataPlane, planeRequestInit, subscribeDataPlane, type DataPlane } from './data-plane'
 import { planeHealth } from './plane-health'
-import { linkBody, linkHeaders, viaLink } from './rtc-plane'
+import { linkBody, linkHeaders, linkPath, viaLink } from './rtc-plane'
 import { reviveStreams } from './plane-streams'
 import { heldScope, machineLeft, relayHeadersForUrl, relayRequestFor } from './machine-scope'
 
@@ -83,13 +83,68 @@ const toRelay = (url: string, headers: HeadersInit | undefined): { url: string; 
 }
 
 export async function planeFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const sent = dataPlane()
+  const sameMachine = heldScope()
+  try {
+    return await onePlane(url, init, sent)
+  } catch (error) {
+    const again = sameMachine() ? relayRetryUrl(url, init, sent) : null
+    if (again === null) throw error
+    return fetchOnRelay(again, init)
+  }
+}
+
+/**
+ * THE RETRY, ON THE RELAY ITSELF and not on whatever plane is current: a
+ * direct plane that just failed has usually not been left yet, and a retry
+ * sent on it would be aborted by the fallback it was meant to survive, carry
+ * the direct plane's local-network annotation to a public host, or go down the
+ * same link. Its answer says nothing about the direct plane, so plane-health
+ * hears nothing of it; the failure that caused it was already counted.
+ */
+async function fetchOnRelay(url: string, init: RequestInit): Promise<Response> {
+  const sameMachine = heldScope()
+  const sent = toRelay(url, init.headers)
+  const response = await fetch(sent.url, {
+    ...init,
+    ...planeRequestInit(RELAY_PLANE, clientBase()),
+    ...(sent.headers ? { headers: sent.headers } : {})
+  })
+  if (!sameMachine()) throw machineLeft()
+  return response
+}
+
+/** One attempt, abandoned if the direct plane it went out on is left. */
+async function onePlane(url: string, init: RequestInit, sent: DataPlane): Promise<Response> {
   const abort = joined(init.signal)
-  const unwatch = abandonOnMove(dataPlane(), abort)
+  const unwatch = abandonOnMove(sent, abort)
   try {
     return await fetchOnPlane(url, { ...init, signal: abort.signal })
   } finally {
     unwatch()
   }
+}
+
+/**
+ * A READ THAT DIED WITH ITS DIRECT PATH IS ASKED AGAIN ON THE RELAY, once.
+ *
+ * Owner 2026-11-11, Android on 5G: every read in flight when the plane fell
+ * back reached its view as a failure, and the console drew "0 agents" and
+ * "no reading" for machines that were fine. The relay never went away, so a
+ * GET (or HEAD) that failed on a direct plane for any reason but the caller's
+ * own abort goes again there. A write does not: it may have been carried out,
+ * and the callers that send writes keep their own retries (raw-input-queue.ts).
+ *
+ * The address: a direct origin is swapped for the machine's relay address,
+ * the path kept; a link keeps the relay's URLs, so it is the same one.
+ */
+const relayRetryUrl = (url: string, init: RequestInit, sent: DataPlane): string | null => {
+  if (sent.kind === 'relay' || init.signal?.aborted === true) return null
+  const method = (init.method ?? 'GET').toUpperCase()
+  if (method !== 'GET' && method !== 'HEAD') return null
+  if (sent.origin !== '') return url.startsWith(`${sent.origin}/`) ? `${clientBase()}${url.slice(sent.origin.length)}` : null
+  // A link keeps the relay's URLs; a URL built for some other origin is not one to send there.
+  return linkPath(url) === null ? null : url
 }
 
 /**

@@ -55,6 +55,8 @@ export type PlaneOutcome =
   | 'refused'
   /** The browser would prompt, and nobody is looking. Nothing was tried. */
   | 'unasked'
+  /** The phone is on a cellular network and the Mac has no tailnet: the relay it is. Nothing was tried. */
+  | 'cellular'
   /** The machine this race was for is no longer the one the page talks to. Nothing was adopted or reported. */
   | 'left'
   /** A path proved to be this Mac and was slower than the plane in use (plane-quality.ts). */
@@ -182,6 +184,12 @@ export interface PlaneSwitchDeps {
    * Absent, the race is always live, as on a page that has one machine.
    */
   readonly live?: () => boolean
+  /**
+   * IS THE PHONE ON A RADIO (path/radio.ts)? No LAN is in reach from one, so
+   * the LAN tier is not raced: every probe would time out with the badge on
+   * PROBING. The tailnet still is. Absent, the phone may be anywhere.
+   */
+  readonly cellular?: () => boolean
 }
 
 /**
@@ -232,14 +240,14 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
   if (!live()) return 'left'
   const blocked =
     permission !== undefined && !mayRace(permission, deps.mayPrompt?.() === true)
-  const candidates = blocked
-    ? offered.filter((candidate) => !isLocalOrigin(candidate.origin))
-    : offered
+  const radio = deps.cellular?.() === true
+  const candidates =
+    blocked || radio ? offered.filter((candidate) => !isLocalOrigin(candidate.origin)) : offered
   if (candidates.length === 0) {
     // No rows: nothing was tried, and a panel showing what the LAST race tried
     // would be describing a network the phone may no longer be on.
     deps.note?.([])
-    return permission === 'denied' ? 'refused' : 'unasked'
+    return radio ? 'cellular' : permission === 'denied' ? 'refused' : 'unasked'
   }
 
   deps.probing?.(true)

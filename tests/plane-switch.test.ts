@@ -96,6 +96,7 @@ const race = async (
     ...(over.held ? { held: over.held } : {}),
     ...(over.live ? { live: over.live } : {}),
     ...(over.note ? { note: over.note } : {}),
+    ...(over.cellular ? { cellular: over.cellular } : {}),
     probing: over.probing ?? ((on) => void probes.push(on))
   }
   const outcome = await switchPlaneIfBetter(deps)
@@ -343,3 +344,31 @@ describe('what a machine may name as its own address', () => {
   })
 })
 
+
+// ON A RADIO NO LAN IS IN REACH (owner 2026-11-11, Android on 5G): the phone
+// settles on the relay at once. Racing the Mac's LAN names from a cellular
+// network times every one of them out, holds the badge on PROBING, and asks a
+// browser for a local-network permission it has no use for.
+describe('a phone on a cellular network', () => {
+  it('never asks a LAN name, and still tries the tailnet', async () => {
+    const run = await race({ cellular: () => true })
+    expect(run.asked()).toEqual([TAILNET])
+    expect(run.adopted()).toMatchObject({ origin: TAILNET, kind: 'tailnet' })
+  })
+
+  it('with no tailnet, settles on the relay without probing at all', async () => {
+    const note = vi.fn()
+    const run = await race({ cellular: () => true, card: async () => card({ tailnet: null, trusted: [LAN] }), note })
+    expect(run.outcome()).toBe('cellular')
+    expect(run.asked()).toEqual([])
+    // The badge never says PROBING for a race that had nothing to try.
+    expect(run.probes()).toEqual([])
+    expect(run.adopted()).toBe(null)
+    expect(note).toHaveBeenCalledWith([])
+  })
+
+  it('races the LAN as before when the phone is not on a radio', async () => {
+    const run = await race({ cellular: () => false })
+    expect(run.adopted()).toMatchObject({ origin: LAN, kind: 'lan' })
+  })
+})
