@@ -434,6 +434,27 @@ export const MACHINES_PER_ROW = 4
 /** A machine's screen holds its device view at this share on the devices stop; the bezel round it, in the devices layer's units. One pair for the painter and every frame. */
 export const SCREEN_SCALE = 0.5
 export const BEZEL = 28
+/**
+ * ONE FRAME FOR EVERY MACHINE, whatever its workspaces (owner 2026-11-11: the
+ * same two machines drew at half a phone's width inside a one-workspace machine
+ * and at nine tenths inside a nine-workspace one). The frame used to be this
+ * machine's workspace grid at SCREEN_SCALE, while the room for names and gauges
+ * stays fixed, so the devices stop's fit followed whichever machine was entered.
+ * The screen's width, in the devices layer's units: about what nine workspaces
+ * filled at SCREEN_SCALE, so a usual machine keeps its tiles' size.
+ */
+export const FRAME_SCREEN_W = { narrow: 900, desk: 600 } as const
+
+/** A machine's frame on the devices stop: the one width, at this machine's display proportions. */
+export function machineFrameOf(device: { screen: Box }, narrow: boolean): { w: number; h: number } {
+  const w = FRAME_SCREEN_W[narrow ? 'narrow' : 'desk']
+  return { w: w + BEZEL, h: (w * device.screen.h) / device.screen.w + BEZEL }
+}
+
+/** How a device view fits a frame's screen: tiles one size in every frame, smaller only where too many to fit. */
+export function screenFit(device: { screen: Box }, frame: { w: number; h: number }): number {
+  return Math.min(SCREEN_SCALE, (frame.w - BEZEL) / device.screen.w, (frame.h - BEZEL) / device.screen.h)
+}
 /** Between two frames in a row: the base's overhang and a breath. */
 export const MACHINE_GAP = 180
 /**

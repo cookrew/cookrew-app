@@ -9,7 +9,7 @@
  * device IS its group, and the device view IS the machine's screen.
  */
 import { clamp01, derive, ease, lerp, ramp, type ZoomDir } from './zoom-path'
-import { BEZEL, crewOf, deviceOf, fitScale, machinesAt, SCREEN_SCALE, shelfPage, stackOf, thumbsOf, DECK_POSE, SHELF_FACE, type Box, type Pos, NEW_POSE } from './zoom-layout'
+import { crewOf, deviceOf, fitScale, machineFrameOf, machinesAt, screenFit, shelfPage, stackOf, thumbsOf, DECK_POSE, SHELF_FACE, type Box, type Pos, NEW_POSE } from './zoom-layout'
 import { near, pinned, SCENE_CSS, SCENE_TYPE, sceneWords, SHELF_NAME_S, UNDER_FACE, type RestScales, type SceneWords } from './scene-words'
 import { fullPoses } from './full-poses'
 /* The cameras, the card stop's label and the words' scales: zoom-camera.ts. */
@@ -208,8 +208,8 @@ const TILE_GONE = [-0.3, -0.05] as const
 const COIN_PX = 22
 const BADGE_PX = 8
 
-/** The machine's screen holds the device view at this scale. */
-const SDEV = SCREEN_SCALE
+/** The machine's screen holds the device view at this scale: one frame for every machine (zoom-layout.ts · machineFrameOf). */
+const screenKOf = (device: Layout['device'], narrow: boolean): number => screenFit(device, machineFrameOf(device, narrow))
 const WASH = { w: 1200, h: 540 }
 
 
@@ -217,9 +217,8 @@ export function layoutOf(model: FrameModel, narrow: boolean): Layout {
   // A tree under the leads, by the cables between agents (zoom-layout.ts · crewRows).
   const crew = crewOf(model.agents, narrow, model.crewCols, model.ties)
   const device = deviceOf(model.workspaces, narrow, model.screenAspect, model.deviceCols)
-  const screen = { w: device.screen.w * SDEV + BEZEL, h: device.screen.h * SDEV + BEZEL }
-  // Every machine of the account in one row, this one first: the devices stop frames them all (zoom-layout.ts · machinesAt).
-  const machines = machinesAt(model.otherMachines, screen, narrow)
+  // Every machine of the account in one row, this one first, each the one frame: the devices stop frames them all (zoom-layout.ts · machinesAt).
+  const machines = machinesAt(model.otherMachines, machineFrameOf(device, narrow), narrow)
   return {
     stack: stackOf(model.agents),
     crew,
@@ -251,6 +250,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   let panMax = cam.panMax
   const slot: Pos = L.device.at[model.active] ?? { x: 0, y: 0 }
   const dc = deviceCam(L.device, w, h, st.narrow, st.tilesPan ?? 0)
+  const screenK = screenKOf(L.device, st.narrow)
   const camD = dc.S
   let dS: number
   let dOx: number
@@ -259,7 +259,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     // From all devices into the machine's screen: its centre holds the device view's centre.
     const k = ease(zIn + 2)
     const camDD = fit(L.devicesBox)
-    const s0 = camDD * SDEV
+    const s0 = camDD * screenK
     dS = Math.exp(lerp(Math.log(s0), Math.log(camD), k))
     // The row's centre at the view's, this machine's screen at the view's centre once inside it.
     dOx = lerp(w / 2 - camDD * L.devicesBox.cx, w / 2, k)
@@ -292,7 +292,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   // Out at the devices the tiles are a picture on the machine's screen: the doors must not take its click.
   const doors = zIn < -1.05 || deviceSeen < 0.05 ? 'none' : ''
   if (els.device.style.pointerEvents !== doors) els.device.style.pointerEvents = doors
-  const vS = dS / SDEV
+  const vS = dS / screenK
   put(els.devices, `translate(${f1(dOx)}px, ${f1(dOy + dS * L.device.box.cy)}px) scale(${f4(vS)})`, (1 - ramp(zIn, -1.4, -1.05)) * (1 - pc))
   put(els.machine, null, 1)
   // A phone draws every word at one size on screen, whatever the camera does this frame (scene-words.ts).
