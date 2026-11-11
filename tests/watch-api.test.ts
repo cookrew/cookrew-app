@@ -399,6 +399,33 @@ describe('through the real gate', () => {
     expect(again.status).toBe(304)
   })
 
+  it('an unchanged crew is a 304 by ?etag= too, and a tag stored before 0.6.2 still matches (bytes 0.6.2)', async () => {
+    const token = await paired()
+    const first = await call('/api/watch/cards', token)
+    const tag = first.headers.get('etag') as string
+    expect(tag).toMatch(/^W\/"/)
+    expect((await call(`/api/watch/cards?etag=${encodeURIComponent(tag)}`, token)).status).toBe(304)
+    // What a watch on 0.6.1 holds: the same hash, quoted, without W/.
+    expect((await call('/api/watch/cards', token, { headers: { 'if-none-match': tag.replace(/^W\//, '') } })).status).toBe(304)
+  })
+
+  it('tiles alone with ?cards=0; one card’s whole reply with ?full=; nothing changes without them (bytes 0.6.2)', async () => {
+    const token = await paired()
+    type Answer = { cards: { id: string; words: { full?: string } | null }[]; workspaces: unknown[] }
+    const whole = (await (await call('/api/watch/cards?workspace=ws', token)).json()) as Answer
+    const fullOf = (answer: Answer, id: string): string | undefined => answer.cards.find((card) => card.id === id)?.words?.full
+    expect(fullOf(whole, 'replied')).toBe('Merged.\n\nThe tests pass and the app restarted.')
+    const tiles = (await (await call('/api/watch/cards?cards=0', token)).json()) as Answer
+    expect(tiles.cards).toEqual([])
+    expect(tiles.workspaces.length).toBeGreaterThan(0)
+    const none = (await (await call('/api/watch/cards?workspace=ws&full=none', token)).json()) as Answer
+    expect(none.cards.length).toBe(whole.cards.length)
+    expect(none.cards.every((card) => card.words?.full === undefined)).toBe(true)
+    expect(none.cards.find((card) => card.id === 'replied')?.words).toMatchObject({ text: 'Merged.' })
+    const one = (await (await call('/api/watch/cards?workspace=ws&full=replied', token)).json()) as Answer
+    expect(fullOf(one, 'replied')).toBe('Merged.\n\nThe tests pass and the app restarted.')
+  })
+
   it('stop, seen, a new agent, a note and a frame all answer the token', async () => {
     const token = await paired()
     expect((await post('/api/watch/card/working/stop', token)).status).toBe(200)

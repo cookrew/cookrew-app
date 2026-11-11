@@ -12,7 +12,7 @@
 // credential raises the re-pair screen here too rather than looking like an
 // agent with no history.
 
-import { heldScope, machineLeft, relayRefusedSession } from '../machine-scope'
+import { heldScope, machineLeft, registerScopeState, relayRefusedSession } from '../machine-scope'
 import { AuthError, authStore } from '../auth-gate'
 import { apiPath } from '../api-base'
 import { planeFetch } from '../plane-fetch'
@@ -40,6 +40,13 @@ export class StreamRouteAbsent extends Error {
 }
 
 async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const read = await readMaybeHeld<T>(path, init)
+  if (read.notModified) throw new Error('HTTP 304')
+  return read.value
+}
+
+/** A read that may be answered 304 (a tag was named in the address), and the tag the answer came under. */
+async function readMaybeHeld<T>(path: string, init?: RequestInit): Promise<{ notModified: true } | { notModified: false; value: T; tag: string | null }> {
   const token = authStore().token()
   const headers: Record<string, string> = { ...((init?.headers as Record<string, string>) ?? {}) }
   if (token) headers.authorization = `Bearer ${token}`
@@ -47,6 +54,10 @@ async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
   const sameMachine = heldScope()
   const response = await planeFetch(path, { ...init, headers })
   if (response.status === 404) throw new StreamRouteAbsent(path)
+  if (response.status === 304) {
+    if (!sameMachine()) throw machineLeft()
+    return { notModified: true }
+  }
   if (!response.ok) {
     const detail = (await response.json().catch(() => ({}))) as { error?: string }
     if (!sameMachine()) throw machineLeft()
@@ -61,8 +72,21 @@ async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
   const text = await response.text()
   if (!sameMachine()) throw machineLeft()
-  return (text ? JSON.parse(text) : undefined) as T
+  return { notModified: false, value: (text ? JSON.parse(text) : undefined) as T, tag: response.headers?.get('etag') ?? null }
 }
+
+/**
+ * EACH CARD'S LAST TAIL, AND THE TAG IT CAME UNDER (bytes 0.6.2). A board's
+ * previews are read again on a clock and most have not changed: asked with the
+ * tag, the machine answers 304 and nothing crosses (http-compress.ts ·
+ * validatorOf). The tag rides the ADDRESS, not If-None-Match: a header the
+ * page set itself sends Chrome past its preflight cache (measured
+ * 2026-11-11). One machine's: let go of when another is entered.
+ */
+const heldTails = new Map<string, { readonly tag: string; readonly tail: StreamTail | null }>()
+/** A board's worth of previews, with room: past it the oldest is read whole next time. */
+const HELD_TAILS_MAX = 512
+registerScopeState('stream tails held', () => heldTails.clear())
 
 function query(cursor: StreamCursor): string {
   const params = new URLSearchParams()
@@ -95,10 +119,31 @@ async function open(terminalId: string): Promise<StreamOpen> {
  * previews without pulling twenty index pages of its own.
  */
 async function tail(terminalId: string): Promise<StreamTail | null> {
-  const answer = await readJson<StreamOpen>(base(terminalId, '/open'))
+  // The newest index row alone (`limit=1`): a preview needs its title, not the hundred rows a rail
+  // opens on, which were read and thrown away for every quiet agent on every sweep (bytes 0.6.2).
+  // Every machine build takes `limit`; one before 0.6.2 ignores the tag and answers whole.
+  const mine = heldTails.get(terminalId)
+  const read = await readMaybeHeld<StreamOpen>(`${base(terminalId, '/open')}?limit=1${mine ? `&etag=${encodeURIComponent(mine.tag)}` : ''}`)
+  if (read.notModified) {
+    if (mine === undefined) throw new Error('HTTP 304')
+    heldTails.delete(terminalId)
+    heldTails.set(terminalId, mine)
+    return mine.tail
+  }
+  const answer = read.value
   const newest = answer.index[answer.index.length - 1]
   const marks = newest?.identity === answer.tail?.block?.id ? newest?.marks : undefined
-  return answer.tail === null ? null : { ...answer.tail, ...(marks !== undefined ? { marks } : {}) }
+  const tail = answer.tail === null ? null : { ...answer.tail, ...(marks !== undefined ? { marks } : {}) }
+  heldTails.delete(terminalId)
+  if (read.tag) {
+    heldTails.set(terminalId, { tag: read.tag, tail })
+    while (heldTails.size > HELD_TAILS_MAX) {
+      const oldest = heldTails.keys().next().value
+      if (oldest === undefined) break
+      heldTails.delete(oldest)
+    }
+  }
+  return tail
 }
 
 export function createHttpStreamTransport(): StreamTransport {

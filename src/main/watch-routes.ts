@@ -19,6 +19,7 @@ import type { BrowserInstance } from './browser-instance'
 import type { StreamService } from './stream-service'
 import { machineCopy } from '../shared/machine-words'
 import { readJson, respondJson } from './mobile-http'
+import { sendTagged, validatorOf } from './http-compress'
 import type { TerminalActivity } from '../shared/turn'
 import type { LatestCheckpoint } from '../renderer/src/turn-view-model'
 import { crewRows, itemsOfAgent, MAX_CREW, rowsOfWorkspace, watchCards, watchWorkspaces, type WatchCard, type WatchItem, type WatchWorkspace } from './watch-cards'
@@ -285,18 +286,61 @@ export async function checkpointsOf(
   return found
 }
 
-const tagOf = (data: string | Buffer): string => `"${createHash('sha1').update(data).digest('base64url')}"`
+const tagOf = (data: string | Buffer): string => createHash('sha1').update(data).digest('base64url')
 
-/** A body the watch already has answers 304: most polls of a quiet crew cost a header. */
+/**
+ * A body the watch already has answers 304: most polls of a quiet crew cost a
+ * header. The tag it holds may come in If-None-Match (the watch, a machine) or
+ * in the address (a browser page: http-compress.ts · validatorOf).
+ *
+ * COMPRESSED since 0.6.2 for a reader that takes it: a busy crew measured
+ * 85 KB and went out whole every three seconds to a machine looking at it
+ * (canvas bytes audit, 2026-11-11). The watch's URLSession asks for and
+ * decodes it by itself. A picture is sent as it is.
+ */
 function respondTagged(ctx: WatchRequest, type: string, data: string | Buffer): void {
-  const tag = tagOf(data)
-  if (ctx.request.headers['if-none-match'] === tag) {
-    ctx.response.writeHead(304, { etag: tag, 'cache-control': 'no-store' })
-    ctx.response.end()
-    return
+  const body = typeof data === 'string' ? Buffer.from(data) : data
+  sendTagged(ctx.response, { 'content-type': type, 'cache-control': 'no-store' }, body, ctx.request.headers['accept-encoding'], tagOf(body), validatorOf(ctx.request))
+}
+
+/**
+ * WHAT A READER OF THE CARDS ASKS FOR BESIDE THE WORKSPACE (bytes 0.6.2), both
+ * new, so a reader that asks neither (the watch) gets what it always got:
+ *
+ *   cards=0     the tiles and nothing else: a machine's workspaces stop draws
+ *               no card.
+ *   full=<id>   a crew in which only that card carries its whole reply (`full`);
+ *   full=none   in which none does. The grid draws `text`; the whole reply is
+ *               the open card's, and it was four fifths of a busy crew.
+ */
+export interface CardsShape {
+  readonly cards: boolean
+  /** Whose whole reply is kept: every card's (null), one card's, or nobody's (''). */
+  readonly full: string | null
+}
+
+const CARD_ID = /^[A-Za-z0-9_-]{1,128}$/
+
+export function cardsShapeOf(url: URL): CardsShape {
+  const full = url.searchParams.get('full')
+  return {
+    cards: url.searchParams.get('cards') !== '0',
+    full: full === null ? null : full === 'none' ? '' : CARD_ID.test(full) ? full : ''
   }
-  ctx.response.writeHead(200, { 'content-type': type, etag: tag, 'cache-control': 'no-store' })
-  ctx.response.end(data)
+}
+
+/** The answer in the shape that was asked for. */
+export function shapeCards<T extends { cards: WatchCard[] }>(answer: T, shape: CardsShape): T {
+  if (!shape.cards) return { ...answer, cards: [] }
+  if (shape.full === null) return answer
+  return {
+    ...answer,
+    cards: answer.cards.map((card) => {
+      if (card.id === shape.full || card.words?.full === undefined) return card
+      const { full: _whole, ...words } = card.words
+      return { ...card, words }
+    })
+  }
 }
 
 /** A workspace id as a wrist may ask for one. */
@@ -305,7 +349,9 @@ const WORKSPACE_ID = /^[A-Za-z0-9_-]{1,128}$/
 async function cards(
   ctx: WatchRequest,
   current: WatchHost,
-  workspaceId: string | null
+  workspaceId: string | null,
+  /** False: the tiles alone are wanted, and no card's checkpoint is read for nothing. */
+  withCards = true
 ): Promise<{ cards: WatchCard[]; activeWorkspaceId: string; workspaces: WatchWorkspace[]; platform: string }> {
   // Inside a workspace the wrist shows its whole crew, so the week and not the day.
   const board = await ctx.board(workspaceId !== null)
@@ -328,9 +374,9 @@ async function cards(
           active: workspaceId === board.activeWorkspaceId
         })
   const activities = new Map(ctx.activities().map((activity) => [activity.terminalId, activity]))
-  const checkpoints = await checkpointsOf(rows, activities, ctx.checkpoint)
+  const checkpoints = withCards ? await checkpointsOf(rows, activities, ctx.checkpoint) : new Map()
   return {
-    cards: watchCards({
+    cards: !withCards ? [] : watchCards({
       rows,
       activities,
       checkpoints,
@@ -481,7 +527,8 @@ export async function handleWatchRoutes(ctx: WatchRequest): Promise<boolean> {
       respondJson(response, 400, { error: 'Not a workspace.' })
       return true
     }
-    respondTagged(ctx, 'application/json', JSON.stringify(await cards(ctx, current, asked)))
+    const shape = cardsShapeOf(ctx.url)
+    respondTagged(ctx, 'application/json', JSON.stringify(shapeCards(await cards(ctx, current, asked, shape.cards), shape)))
     return true
   }
   if (method === 'POST' && path === '/api/watch/new') {

@@ -27,7 +27,7 @@ const read = (): RemotePlace => remotePlace.get()
 export function RemoteMachineView(): React.JSX.Element | null {
   const place = useSyncExternalStore(remotePlace.subscribe, read, read)
   const machine = place.machine
-  const { cards, answering, refresh } = useRemoteCards(machine?.id ?? null, place.workspace?.id ?? null)
+  const { cards, answering, refresh } = useRemoteCards(machine?.id ?? null, place.workspace?.id ?? null, place.agent?.id ?? null)
   const stage = useRef<HTMLElement | null>(null)
   // ENTERED IN PLACE: the view opens out of the machine's own frame on the devices stop, from
   // where that frame stands. Once per machine entered, and not at all for someone who asked the

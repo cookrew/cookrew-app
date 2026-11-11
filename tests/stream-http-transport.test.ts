@@ -9,15 +9,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const calls: { url: string; init?: RequestInit }[] = []
-let answer: (url: string) => { status: number; body: unknown }
+let answer: (url: string) => { status: number; body: unknown; headers?: Record<string, string> }
 
 vi.mock('../src/renderer/src/plane-fetch', () => ({
   planeFetch: (url: string, init?: RequestInit) => {
     calls.push({ url, init })
-    const { status, body } = answer(url)
+    const { status, body, headers } = answer(url)
     return Promise.resolve({
       ok: status >= 200 && status < 300,
       status,
+      headers: new Headers(headers ?? {}),
       json: () => Promise.resolve(body),
       text: () => Promise.resolve(body === undefined ? '' : JSON.stringify(body))
     } as unknown as Response)
@@ -143,6 +144,36 @@ describe('the tail alone, for a card preview or a board row', () => {
     const tail = await createHttpStreamTransport().tail('t1')
     expect(tail?.block?.reply).toBe('r')
     expect(tail?.marks?.title).toBe('fixed the seam')
+  })
+
+  it('asks for the newest index row alone: a preview needs its title, not a hundred rows (bytes 0.6.2)', async () => {
+    answer = () => ({ status: 200, body: { index: [], tail: null, backwardsCursor: null, source: 'file', anomalies: {}, rolledBack: [] } })
+    const { createHttpStreamTransport } = await load()
+    calls.length = 0
+    await createHttpStreamTransport().tail('t1')
+    expect(calls[0].url).toBe('/api/terminal/t1/stream/open?limit=1')
+  })
+
+  it('asks again with the tag it holds, in the address, and a 304 is the tail it held (bytes 0.6.2)', async () => {
+    const opened = {
+      index: [{ ...INDEX_ANSWER.checkpoints[0], marks: { title: 'fixed the seam' } }],
+      tail: { block: { id: 'u1', index: 1, ordinal: 1, prompt: 'p', reply: 'r', activity: [] }, final: true, ordinal: 1, total: 1 },
+      backwardsCursor: null,
+      source: 'file',
+      anomalies: {},
+      rolledBack: []
+    }
+    let round = 0
+    answer = () => (round++ === 0 ? { status: 200, body: opened, headers: { etag: 'W/"t1v1"' } } : { status: 304, body: undefined, headers: { etag: 'W/"t1v1"' } })
+    const { createHttpStreamTransport } = await load()
+    calls.length = 0
+    const transport = createHttpStreamTransport()
+    const first = await transport.tail('t1')
+    const again = await transport.tail('t1')
+    expect(again).toEqual(first)
+    expect(again?.marks?.title).toBe('fixed the seam')
+    expect(calls[1].url).toBe(`/api/terminal/t1/stream/open?limit=1&etag=${encodeURIComponent('W/"t1v1"')}`)
+    expect(Object.keys((calls[1].init?.headers ?? {}) as Record<string, string>).map((k) => k.toLowerCase())).not.toContain('if-none-match')
   })
 
   it('a card with no turn yet is null, not an empty preview', async () => {

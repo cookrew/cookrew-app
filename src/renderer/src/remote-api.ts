@@ -34,7 +34,7 @@ import { planeHealth } from './plane-health'
 import { registerPlaneStream } from './plane-streams'
 import { openEventSource } from './rtc-plane'
 import { createRawInputQueue } from './raw-input-queue'
-import { relayAccountMachines } from './relay-machines'
+import { relayAccountMachines, ZOOM_ACCOUNT_MAX_AGE_MS } from './relay-machines'
 import { seated, settleSeat, takeSeat } from './device-seat'
 import { SEAT_GONE, type WorkspaceCheck, type WorkspaceRemovePlan } from '../../shared/workspace-door'
 import type { SousCommandResult } from '../../main/sous-control'
@@ -883,7 +883,8 @@ export function createRemoteApi(): CookrewApi {
         stream.close()
       }
     },
-    zoomFleetMachines: () => relayAccountMachines(machineScope()),
+    // The console's Devices list asks the registry every minute; the zoom takes that answer (relay-machines.ts).
+    zoomFleetMachines: () => relayAccountMachines(machineScope(), undefined, { maxAgeMs: ZOOM_ACCOUNT_MAX_AGE_MS }),
     // Off `req`: a refused gauge must not reach the re-pair screen (relay-gauges.ts).
     machineGauges: () => fetchGauges(apiPath('/api/fleet/gauges'), authStore().token(), planeFetch),
     // EVERY MACHINE OF THE ACCOUNT, FROM HERE (relay-machine-call.ts): with this browser's own key for each,

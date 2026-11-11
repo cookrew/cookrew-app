@@ -37,7 +37,8 @@ export function useCrewRows(workspace: WorkspaceState | null): CrewRows {
   clock.current = advanceClock(clock.current, activities, Date.now())
   const changedAt = clock.current
   const idle = useMemo(() => checkpointWanted(roster, activities), [roster, activities])
-  const checkpoints = useStreamTails(idle)
+  // Read again when an agent's activity says it changed, else once a minute (tail-schedule.ts).
+  const checkpoints = useStreamTails(idle, activities)
   const briefs = useMemo(() => {
     const out: Record<string, string> = {}
     for (const n of workspace?.nodes ?? []) if (n.kind === 'terminal' && n.brief) out[n.id] = n.brief

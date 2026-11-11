@@ -5,6 +5,7 @@ import type { AttachmentIndex } from '../terminal-attachments'
 import { cookrew, isDemoMode, isRemoteMode } from '../api'
 import type { Crew } from '../stage/crew-rows'
 import { thumbWants } from '../pets/thumb-wants'
+import { zoomThumbClaim } from './thumb-claim'
 import { Counts, AgentNode, ItemNode, LinkNode, LocalMachine, type Bind, NewestThumb } from './ZoomParts'
 import { MachineFrame } from './MachineFrame'
 import { openSourcePicker } from '../use/source-picker-store'
@@ -530,14 +531,21 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const moved = useRef(false)
   const swallowClick = useRef(false)
   const deckBrowsers = model.openMark.deck.filter((i) => i.kind === 'browser').map((i) => i.id).join(' ')
-  const onTiles = zoom.v < -0.5
+  // Only what is drawn where the zoom is (thumb-claim.ts): the open tile's deck on the tiles, the grid in
+  // view at the artifacts, the crew's coins past the tiles. Keyed on that answer, so the zoom moving within
+  // one stretch claims nothing again.
+  // The crew's own pictures: the browsers its coins wear, and the newest one when it is drawn on its own.
+  const crewBrowsers = useMemo(() => {
+    const items = new Map([...model.items, ...model.coinItems].map((i) => [i.id, i]))
+    const worn = model.frame.links.map((l) => items.get(l.item)).filter((i) => i?.kind === 'browser').map((i) => i!.id)
+    const alone = model.frame.newest === null && model.newestItem?.kind === 'browser' ? [model.newestItem.id] : []
+    return [...worn, ...alone].join(' ')
+  }, [model.items, model.coinItems, model.frame.links, model.frame.newest, model.newestItem])
+  const claimed = zoomThumbClaim({ dir: zoom.dir, v: zoom.v, deck: deckBrowsers.split(' '), seen: seenBrowsers.split(' '), crew: crewBrowsers.split(' ') }).join(' ')
   useEffect(() => {
-    // The open tile's deck wears real pictures too, before the grid they deal into.
-    // First where they are what is seen: the wants are capped, and the grid's come first at the grid.
-    const lists = onTiles ? [deckBrowsers, seenBrowsers] : [seenBrowsers, deckBrowsers]
-    thumbWants.claim('zoom', [...new Set(lists.flatMap((l) => l.split(' ')))].filter(Boolean))
+    thumbWants.claim('zoom', claimed === '' ? [] : claimed.split(' '))
     return () => thumbWants.release('zoom')
-  }, [seenBrowsers, deckBrowsers, onTiles])
+  }, [claimed])
   const agentOf = useMemo(() => new Map(model.agents.map((a) => [a.id, a])), [model.agents])
   const markOf = useMemo(() => new Map(model.marks.map((m) => [m.id, m])), [model.marks])
   // One names list per item, so a row scrolled into view does not draw every mounted thumbnail again (ItemNode is memo'd).

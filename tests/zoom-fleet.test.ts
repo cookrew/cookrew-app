@@ -9,7 +9,7 @@ import { machineOutdated } from '../src/shared/machine-version'
 import type { FleetAgent, FleetEvent, FleetSnapshot, FleetWorkspace } from '../src/shared/fleet'
 import type { AccountMachine, AccountMachines } from '../src/shared/zoom-fleet'
 import type { WorkspaceList } from '../src/shared/model'
-import { composeFleet, createZoomFleetStore, LOCAL_MACHINE_ID, type FleetApi, type Sight } from '../src/renderer/src/zoom/use-zoom-fleet'
+import { composeFleet, createZoomFleetStore, devicesInSightAt, LOCAL_MACHINE_ID, REMOTE_READ_MS, type FleetApi, type Sight } from '../src/renderer/src/zoom/use-zoom-fleet'
 import { relayAccountMachines } from '../src/renderer/src/relay-machines'
 import { PROFILE } from './fleet-fixture'
 
@@ -160,7 +160,7 @@ const fakeApi = (options: { feed?: boolean; machines?: () => Promise<AccountMach
 
 const fakeSight = () => {
   let hidden = false
-  let changed: (() => void) | null = null
+  let changed = null as (() => void) | null
   const sight: Sight = {
     hidden: () => hidden,
     watch: (cb) => {
@@ -231,6 +231,51 @@ describe('the zoom fleet store', () => {
     desktop.subscribe(() => undefined)
     await vi.advanceTimersByTimeAsync(0)
     expect(read.mock.calls.map(([id]) => id).sort()).toEqual([OTHER, OLD, UNKNOWN].sort())
+  })
+
+  it('reads the other machines only while they are drawn: at once on the way to the Devices stop, not at all deeper in (bytes 0.6.2)', async () => {
+    const read = vi.fn(async (_id: string) => snapshot(4))
+    const { api, feed } = fakeApi({ read, machines: async () => ({ ok: true, machines: [machine(ME, 'Studio', true), machine(OTHER, 'Laptop', false)] }) })
+    let atDevices = false
+    let changed = null as (() => void) | null
+    const store = createZoomFleetStore(() => api, {
+      remoteWanted: {
+        now: () => atDevices,
+        watch: (cb) => {
+          changed = cb
+          return () => void (changed = null)
+        }
+      }
+    })
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    // Deep in this machine for a minute: the other machine is drawn nowhere, and asked nothing.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(read).not.toHaveBeenCalled()
+    // Out to the Devices stop: read at once, then on the clock.
+    atDevices = true
+    changed?.()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(read).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(REMOTE_READ_MS * 3)
+    expect(read).toHaveBeenCalledTimes(4)
+    expect(store.get().machines.find((m) => m.id === OTHER)?.detail).toBe('live')
+    // Back in: the clock stops; what was read is still drawn when the Devices stop comes back.
+    atDevices = false
+    changed?.()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(read).toHaveBeenCalledTimes(4)
+    expect(store.get().machines.find((m) => m.id === OTHER)?.detail).toBe('live')
+  })
+
+  it('the page’s own store reads the other machines only on the Devices side of the path (bytes 0.6.2)', () => {
+    const source = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'zoom', 'use-zoom-fleet.ts'), 'utf8')
+    expect(source).toContain('remoteWanted: devicesInSight')
+    expect(devicesInSightAt(-2)).toBe(true)
+    expect(devicesInSightAt(-1.4)).toBe(true)
+    expect(devicesInSightAt(-1)).toBe(false)
+    expect(devicesInSightAt(2)).toBe(false)
   })
 
   it('the page’s own store applies the floor on the console and nowhere else', () => {
@@ -533,6 +578,27 @@ describe('relayAccountMachines (the console, from the registry)', () => {
       headers: { authorization: 'Bearer account-session' }
     })
     expect(answer.ok && answer.machines.map((m) => [m.name, m.current])).toEqual([['Studio', true], ['Laptop', false]])
+  })
+
+  it('a reader that may take a recent answer gets the last one asked for, and the registry is asked once (bytes 0.6.2)', async () => {
+    const answer = (): Response => new Response(JSON.stringify([{ id: ME, name: 'Studio' }]), { status: 200 })
+    const fetchImpl = vi.fn(async () => answer())
+    let at = 1_000_000
+    const now = (): number => at
+    // The console's Devices list asks for it fresh every minute…
+    await relayAccountMachines(scopeWith(null), fetchImpl, { now })
+    // …and the zoom store, asked a few seconds later, takes that answer instead of asking again.
+    at += 20_000
+    const reused = await relayAccountMachines(scopeWith(ME), fetchImpl, { now, maxAgeMs: 65_000 })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    // Read for ITS machine in scope: the same rows, "this one" marked by the reader's scope.
+    expect(reused.ok && reused.machines.map((m) => m.current)).toEqual([true])
+    // Past the age it asks; another session never takes this one's answer.
+    at += 60_000
+    await relayAccountMachines(scopeWith(ME), fetchImpl, { now, maxAgeMs: 65_000 })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    await relayAccountMachines(scopeWith(ME, 'another-session'), fetchImpl, { now, maxAgeMs: 65_000 })
+    expect(fetchImpl).toHaveBeenCalledTimes(3)
   })
 
   it('marks none as current at the Devices level, where no machine is in scope', async () => {

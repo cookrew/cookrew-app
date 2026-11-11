@@ -94,6 +94,13 @@ export interface DevicesDeps {
   readonly onReproof: () => void
   /** The registry says the session is over. */
   readonly onSignedOut: () => void
+  /**
+   * Whether the tab is out of sight, and word when that changes. Out of sight
+   * nobody is asked anything: the account's list and every machine's summary
+   * went on every 60 s and 5 s in a hidden tab (bytes 0.6.2); back in sight both
+   * are asked at once. Absent: always in sight.
+   */
+  readonly sight?: { readonly hidden: () => boolean; readonly watch: (changed: () => void) => () => void }
 }
 
 export interface ConsoleDevices {
@@ -184,7 +191,11 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
     for (const listener of listeners) listener()
   }
 
+  const hidden = (): boolean => deps.sight?.hidden() === true
+  let unwatchSight: (() => void) | null = null
+
   const askAccount = async (): Promise<void> => {
+    if (hidden()) return
     const mine = listEra
     const answer = await deps.account().catch((): AccountMachines => ({ ok: false, reason: 'failed' }))
     if (mine !== listEra || running === 0) return
@@ -249,7 +260,7 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
   }
 
   const askSummaries = async (): Promise<void> => {
-    if (running === 0 || watching === 0 || !deps.gateOpen()) return
+    if (running === 0 || watching === 0 || !deps.gateOpen() || hidden()) return
     await Promise.all(rows.filter((row) => readable(row) && !passRefused.has(row.id)).map((row) => askOne(row.id)))
   }
 
@@ -271,6 +282,10 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
         gateWasOpen = deps.gateOpen()
         void askAccount()
         accountTimer = setInterval(() => void askAccount(), ACCOUNT_EVERY_MS)
+        // Back in sight: the list (and with it the summaries) at once, not at the next tick.
+        unwatchSight = deps.sight?.watch(() => {
+          if (!hidden()) void askAccount()
+        }) ?? null
       }
       let stopped = false
       return () => {
@@ -280,6 +295,8 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
         if (running > 0) return
         if (accountTimer !== null) clearInterval(accountTimer)
         accountTimer = null
+        unwatchSight?.()
+        unwatchSight = null
         if (reaskTimer !== null) clearTimeout(reaskTimer)
         reaskTimer = null
         listEra += 1
