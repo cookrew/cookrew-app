@@ -91,6 +91,33 @@ describe('what this machine knows about its own standing', () => {
     expect(trust.state()).toBe('trusted')
   })
 
+  it('an answer is for the sign-in it was asked about: one that arrives after another person signed in is not theirs', async () => {
+    const { trust, world } = bed()
+    const asked = trust.who()
+    world.who = 'someone-else|1'
+    trust.heard(201, undefined, asked)
+    expect(world.marker).toBe(false)
+    expect(trust.state()).toBe('unknown')
+    trust.heard(401, 'proof_required', asked)
+    expect(trust.state()).toBe('unknown')
+  })
+
+  it('a proof given while an ask for the LAST sign-in is still out is asked about again, for the new one', async () => {
+    const { trust, world, ask } = bed()
+    let answerOld: (answer: { status: number; error?: string }) => void = () => undefined
+    ask.mockImplementationOnce(() => new Promise((resolve) => (answerOld = resolve)))
+    const first = trust.learn()
+    // The person proves it: a new sign-in on this machine, while the old question is unanswered.
+    world.who = 'anvztor|2'
+    world.answer = { status: 201 }
+    const proved = trust.learn({ now: true })
+    answerOld({ status: 401, error: 'proof_required' })
+    expect(await proved).toBe('trusted')
+    await first
+    expect(ask).toHaveBeenCalledTimes(2)
+    expect(world.marker).toBe(true)
+  })
+
   it('two askers at once are one question', async () => {
     const { trust, ask } = bed()
     await Promise.all([trust.learn(), trust.learn(), trust.learn()])

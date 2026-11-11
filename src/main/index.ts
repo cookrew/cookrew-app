@@ -1360,9 +1360,10 @@ const MACHINE_TRUSTED_FILE = path.join(homedir(), '.cookrew', 'machine-trusted')
  */
 async function trustThisMachine(password: string): Promise<void> {
   if (existsSync(MACHINE_TRUSTED_FILE)) return
+  const asked = machineTrust.who()
   const answer = await accounts.authed<{ grant?: unknown }>(GRANT_PATHS.machine, { method: 'POST', body: JSON.stringify({ password }) })
   if (!answer.ok) return
-  machineTrust.heard(201)
+  machineTrust.heard(201, undefined, asked)
   void collectMachineKeys().catch(() => undefined)
 }
 
@@ -1412,10 +1413,11 @@ async function collectMachineKeys(): Promise<void> {
     grant: async () => {
       // Asked every round there is a machine to enter: a desktop signed in with a proof on it is trusted from that
       // sign-in, with nothing to do here. Whatever is answered is also what this machine knows of its standing.
+      const asked = machineTrust.who()
       const answer = await askMachineGrant()
       if (answer === null) return null
       // A 201 with no grant in it is no verdict.
-      if (answer.status !== 201 || answer.grant !== undefined) machineTrust.heard(answer.status, answer.error)
+      if (answer.status !== 201 || answer.grant !== undefined) machineTrust.heard(answer.status, answer.error, asked)
       // Not proved here (signed in by a provider alone, or by a code): the zoom view offers the one proof.
       return answer.status === 201 ? (answer.grant ?? null) : null
     },

@@ -37,11 +37,16 @@ export interface MachineTrustDeps {
 }
 
 export interface MachineTrustStore {
+  /** The sign-in on this machine now (deps.who): what an ask made elsewhere says it asked about. */
+  who(): string | null
   state(): MachineTrust
   /** Ask the registry if this sign-in has not been answered for. `now` skips the wait between asks (the proof was just given). */
   learn(options?: { now?: boolean }): Promise<MachineTrust>
-  /** What the registry answered to a grant asked elsewhere (the key round, the password at the lock). */
-  heard(status: number, error?: string): void
+  /**
+   * What the registry answered to a grant asked elsewhere (the key round, the password at the lock), and the
+   * sign-in it was asked for: an answer that arrives after another person signed in is not theirs.
+   */
+  heard(status: number, error?: string, askedFor?: string | null): void
 }
 
 /** An ask that got no verdict is not repeated sooner than this. */
@@ -56,6 +61,7 @@ export function createMachineTrust(deps: MachineTrustDeps): MachineTrustStore {
   let askedAt = Number.NEGATIVE_INFINITY
   let askedFor: string | null = null
   let asking: Promise<void> | null = null
+  let askingFor: string | null = null
 
   const state = (): MachineTrust => {
     const who = deps.who()
@@ -64,9 +70,9 @@ export function createMachineTrust(deps: MachineTrustDeps): MachineTrustStore {
     return deps.marker.exists() ? 'trusted' : 'unknown'
   }
 
-  const heard = (status: number, error?: string): void => {
+  const heard = (status: number, error?: string, asked?: string | null): void => {
     const who = deps.who()
-    if (who === null) return
+    if (who === null || (asked !== undefined && asked !== who)) return
     if (status === 201) {
       if (!deps.marker.exists()) deps.marker.write()
       answeredFor = who
@@ -84,19 +90,24 @@ export function createMachineTrust(deps: MachineTrustDeps): MachineTrustStore {
     const settled = answeredFor === who && options.now !== true
     const rested = options.now === true || askedFor !== who || now() - askedAt >= TRUST_ASK_EVERY_MS
     if (!settled && (rested || asking !== null)) {
-      asking ??= (async () => {
-        askedAt = now()
-        askedFor = who
-        const answer = await deps.ask().catch(() => null)
-        // Answered for the sign-in it was asked about: another one since is another question.
-        if (answer !== null && deps.who() === who) heard(answer.status, answer.error)
-      })().finally(() => {
-        asking = null
-      })
+      // An ask still out for ANOTHER sign-in answers nothing about this one: waited out, then asked again.
+      if (asking !== null && askingFor !== who) await asking
+      if (asking === null) {
+        askingFor = who
+        asking = (async () => {
+          askedAt = now()
+          askedFor = who
+          const answer = await deps.ask().catch(() => null)
+          if (answer !== null) heard(answer.status, answer.error, who)
+        })().finally(() => {
+          asking = null
+          askingFor = null
+        })
+      }
       await asking
     }
     return state()
   }
 
-  return { state, learn, heard }
+  return { who: () => deps.who(), state, learn, heard }
 }

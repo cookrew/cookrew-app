@@ -105,6 +105,9 @@ describe('a FleetMachine row', () => {
     expect(fleetRow(new060, undefined, now, [{ dev: 'another', issuedAt: now - DAY, signedInAt: now - DAY }]).signedIn).toBe(false)
     // A sign-in that has run out is no sign-in.
     expect(fleetRow(new060, undefined, now, [{ dev: 'd1', issuedAt: now - 31 * DAY, signedInAt: now - 31 * DAY }]).signedIn).toBe(false)
+    // Nor is one left unused past the idle limit: the registry would refuse it, so the machine has to sign in.
+    expect(fleetRow(new060, undefined, now, [{ dev: 'd1', issuedAt: now - 9 * DAY, signedInAt: now - 9 * DAY, lastUsedAt: now - 8 * DAY }]).signedIn).toBe(false)
+    expect(fleetRow(new060, undefined, now, [{ dev: 'd1', issuedAt: now - 9 * DAY, signedInAt: now - 9 * DAY, lastUsedAt: now - DAY }]).signedIn).toBe(true)
     // A console page's session on that device id is not the machine's.
     expect(fleetRow(new060, undefined, now, [{ dev: 'd1', issuedAt: now - 1000, signedInAt: now - 1000, via: 'console' as const }]).signedIn).toBe(false)
   })

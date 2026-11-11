@@ -29,6 +29,7 @@ describe('which machines the proof would open', () => {
 
   it('another machine that is online and not read: pressing would open it', () => {
     expect(blockedByTrust([machine({ local: true, detail: 'live' }), machine({})])).toBe(1)
+    expect(blockedByTrust([machine({ detail: 'connecting' })])).toBe(1)
   })
 
   it('not a machine that is off, signed out or already read: pressing would open nothing', () => {

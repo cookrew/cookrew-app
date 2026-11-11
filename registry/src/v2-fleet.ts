@@ -12,7 +12,7 @@ import { MACHINE_RELAY_PREFIX } from '../../src/shared/machine-relay'
 import type { FleetMachine, FleetPresence, MachineKind, MachineProfile } from '../../src/shared/fleet'
 import { machineOutdated } from '../../src/shared/machine-version'
 import type { V2Desktop, V2Session } from './v2-accounts'
-import { tokenExpiry } from './v2-session-age'
+import { sessionEnded, tokenExpiry } from './v2-session-age'
 import { SESSION_TTL_MS } from './v2-tokens'
 
 export const PROFILE_STRING_MAX = 64
@@ -116,7 +116,7 @@ export function standing(desktop: V2Desktop, line: DesktopPresence | undefined, 
 }
 
 /** What a row needs of a session to tell whether it is that desktop's, and still good. */
-export type DeviceSession = Pick<V2Session, 'dev' | 'issuedAt' | 'signedInAt' | 'via'>
+export type DeviceSession = Pick<V2Session, 'dev' | 'issuedAt' | 'signedInAt' | 'lastUsedAt' | 'via'>
 
 /**
  * IS ANYBODY SIGNED IN ON THIS DESKTOP, as far as this registry can know. A
@@ -126,7 +126,8 @@ export type DeviceSession = Pick<V2Session, 'dev' | 'issuedAt' | 'signedInAt' | 
  *
  *   holding its line     signed in: the line is opened with its session
  *   no session of its    signed out there, signed out by "Not me" or a
- *   own that is good     password change, or its sign-in ran out
+ *   own that is good     password change, or its sign-in ran out (thirty
+ *                        days, or a week unused: v2-session-age.ts)
  *   last record from a   signed out by THE MOVE. 0.6.0 put this registry on
  *   build before 0.6.0   its own host and every machine starts signed out on
  *                        it: a 0.5.x build cannot reach this host at all, and
@@ -139,7 +140,7 @@ export type DeviceSession = Pick<V2Session, 'dev' | 'issuedAt' | 'signedInAt' | 
 export function desktopSignedIn(desktop: V2Desktop, line: DesktopPresence | undefined, sessions: readonly DeviceSession[], now: number): boolean {
   if (line?.online === true) return true
   if (typeof desktop.appVersion === 'string' && machineOutdated(desktop.appVersion)) return false
-  return sessions.some((session) => session.dev === desktop.deviceId && session.via !== 'console' && tokenExpiry(session, session.issuedAt, SESSION_TTL_MS) > now)
+  return sessions.some((session) => session.dev === desktop.deviceId && session.via !== 'console' && sessionEnded(session, now) === null && tokenExpiry(session, session.issuedAt, SESSION_TTL_MS) > now)
 }
 
 /** A level-0 row. With the account's sessions, it also says whether the desktop is signed in. */
