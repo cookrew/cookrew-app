@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import { WorkspaceTile } from './WorkspaceTile'
-import { BEZEL, deviceOf, SCREEN_SCALE, screenAspectOf, SWS } from './zoom-layout'
+import { deviceOf, screenAspectOf, screenFit, SWS } from './zoom-layout'
 import type { Bind } from './ZoomParts'
 import type { MachineView } from './zoom-model'
 
@@ -42,10 +42,6 @@ export interface MachineFrameProps {
   onOpenWorkspace: (workspaceId: string) => void
 }
 
-/** How its own device view fits this machine's screen: never larger than this one's tiles are drawn. */
-export function screenFit(device: ReturnType<typeof deviceOf>, frame: { w: number; h: number }): number {
-  return Math.min(SCREEN_SCALE, (frame.w - BEZEL) / device.screen.w, (frame.h - BEZEL) / device.screen.h)
-}
 
 export const MachineFrame = memo(function MachineFrame({ machine, frame, narrow, wordK, titleK, say, caption, gauge, bind, onOpen, onOpenWorkspace }: MachineFrameProps): React.JSX.Element {
   const lit = say === null
