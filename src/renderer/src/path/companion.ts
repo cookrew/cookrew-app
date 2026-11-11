@@ -90,8 +90,8 @@ const fetchCard = async (): Promise<ReachCardLite | null> => {
   const sameMachine = heldScope()
   try {
     const response = await planeFetch(apiPath('/api/reach'), {
-      headers: authHeaders(),
-      cache: 'no-store'
+      // No `cache: 'no-store'`: on the relay it would cost a preflight each time (data-plane.ts · CROSS_ORIGIN_NO_COOKIE).
+      headers: authHeaders()
     })
     if (!response.ok) return null
     const body = (await response.json()) as Partial<ReachCardLite>

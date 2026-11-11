@@ -150,7 +150,7 @@ export function createRelayMachines(deps: RelayMachineDeps): RelayMachines {
     const go = (bearer: string): Promise<Response> =>
       deps.fetch(`${target}/${route}`, {
         method,
-        cache: 'no-store',
+        // No `cache: 'no-store'`: it would cost a preflight on every call (data-plane.ts · CROSS_ORIGIN_NO_COOKIE).
         ...CROSS_ORIGIN_NO_COOKIE,
         headers: { authorization: `Bearer ${bearer}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...deps.relayHeaders() },
         ...(body !== undefined ? { body } : {})
@@ -209,7 +209,7 @@ let browserMachines: RelayMachines | null = null
 /** The page's own wiring, made on first use: this origin's storage, its fetch, its account key at each door. */
 export async function relayMachines(): Promise<RelayMachines> {
   if (browserMachines) return browserMachines
-  const [{ machineBaseOf, relayHeadersFor, scopeNeedsMachine }, { browserPairDeps, enterWithGrant }, { accountDevice }] = await Promise.all([
+  const [{ machineBaseOf, relayFetch, relayHeadersFor, scopeNeedsMachine }, { browserPairDeps, enterWithGrant }, { accountDevice }] = await Promise.all([
     import('./machine-scope'),
     import('./account-pair-client'),
     import('./account-device')
@@ -224,7 +224,8 @@ export async function relayMachines(): Promise<RelayMachines> {
   browserMachines ??= createRelayMachines({
     machineBase: (machineId) => machineBaseOf(machineId),
     relayHeaders: () => relayHeadersFor(),
-    fetch: (input, init) => fetch(input, init),
+    // Every call at the relay's one address, so the browser asks its preflight once (machine-scope.ts · relayRequestFor).
+    fetch: relayFetch(),
     tokens: {
       read: (key) => {
         try {

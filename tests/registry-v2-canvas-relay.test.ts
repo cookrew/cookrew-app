@@ -26,7 +26,7 @@ import {
   headerSafeName,
   type CanvasRelay
 } from '../registry/src/v2-canvas-relay'
-import { RELAY_SESSION_HEADER, isRelayedRoute, machineRelayPath } from '../src/shared/machine-relay'
+import { RELAY_MACHINE_HEADER, RELAY_ROUTE_HEADER, RELAY_SESSION_HEADER, isRelayedRoute, machineRelayPath } from '../src/shared/machine-relay'
 import { decodeFrame, encodeFrame } from '../src/shared/relay-frame'
 
 /**
@@ -745,6 +745,90 @@ describe('a device of the account, reaching its own machine', () => {
   })
 })
 
+// ── the one address (latency 0.6.1) ──────────────────────────────────────
+
+/** The console's way: every call at `/api/m`, the machine and the route in headers. */
+const atOne = (route: string, init: RequestInit & { headers?: Record<string, string> } = {}, machine = deviceId): Promise<Response> =>
+  fetch(`${site.origin}/api/m`, { ...init, headers: { ...asPhone(init.headers ?? {}), [RELAY_MACHINE_HEADER]: machine, [RELAY_ROUTE_HEADER]: route } })
+
+describe('/api/m — one address for every call, so a browser asks its preflight once', () => {
+  it('reaches the machine at the route and query the header names, exactly as the path form does', async () => {
+    const res = await atOne('api/workspaces?limit=2')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Echo
+    expect(body.method).toBe('GET')
+    expect(body.path).toBe('/api/workspaces?limit=2')
+    const { body: pathForm } = await echo('/workspaces?limit=2', { headers: asPhone() })
+    expect(body.path).toBe(pathForm.path)
+  })
+
+  it('carries a body and every method', async () => {
+    const res = await atOne('api/thing', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ hello: 'there' }) })
+    const body = (await res.json()) as Echo
+    expect(body.method).toBe('PUT')
+    expect(body.bodyHead).toContain('hello')
+  })
+
+  it('keeps its two headers for itself: the machine is told neither', async () => {
+    const body = (await (await atOne('api/')).json()) as Echo
+    expect(body.headers[RELAY_MACHINE_HEADER]).toBeUndefined()
+    expect(body.headers[RELAY_ROUTE_HEADER]).toBeUndefined()
+    expect(body.headers[RELAY_SESSION_HEADER]).toBeUndefined()
+    expect(body.headers[CANVAS_DEVICE_HEADER]).toBe(phoneDeviceId)
+  })
+
+  it('holds an SSE stream open through it', async () => {
+    const control = new AbortController()
+    const res = await atOne('api/events', { headers: { accept: 'text/event-stream' }, signal: control.signal })
+    expect(res.headers.get('content-type')).toBe('text/event-stream')
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader()
+    let seen = ''
+    while (!seen.includes('two')) {
+      const next = await reader.read()
+      if (next.done) break
+      seen += new TextDecoder().decode(next.value)
+    }
+    expect(seen).toContain('data: two')
+    control.abort()
+  })
+
+  it('admits exactly whom the path form admits', async () => {
+    const none = await fetch(`${site.origin}/api/m`, { headers: { [RELAY_MACHINE_HEADER]: deviceId, [RELAY_ROUTE_HEADER]: 'api/fleet' } })
+    expect(none.status).toBe(401)
+    await none.arrayBuffer()
+    const stranger = await fetch(`${site.origin}/api/m`, { headers: { [RELAY_SESSION_HEADER]: strangerSession, [RELAY_MACHINE_HEADER]: deviceId, [RELAY_ROUTE_HEADER]: 'api/fleet' } })
+    expect(stranger.status).toBe(404)
+    expect(((await stranger.json()) as { error: string }).error).toBe('not_found')
+    const unknown = await atOne('api/fleet', {}, randomUUID())
+    expect(unknown.status).toBe(404)
+    await unknown.arrayBuffer()
+  })
+
+  it('refuses whatever the path form refuses, before the machine is asked', async () => {
+    const before = (await (await atOne('api/')).json()) as Echo
+    expect(before.method).toBe('GET')
+    for (const route of ['', 'index.html', 'apiary', 'api/../v2/me', 'api/..%2Fsecrets', 'api/%2e%2e%2Fsecrets', 'api\\..\\secrets', '../../v2/me', 'api/fleet#x']) {
+      const res = await atOne(route)
+      expect(res.status, route).toBe(404)
+      await res.arrayBuffer()
+    }
+    for (const machine of ['not-a-uuid', '..', `${deviceId}/api`]) {
+      const res = await atOne('api/fleet', {}, machine)
+      expect(res.status, machine).toBe(404)
+      await res.arrayBuffer()
+    }
+  })
+
+  it('takes no query of its own and no half of the pair', async () => {
+    const queried = await fetch(`${site.origin}/api/m?route=api/fleet`, { headers: { ...asPhone(), [RELAY_MACHINE_HEADER]: deviceId, [RELAY_ROUTE_HEADER]: 'api/fleet' } })
+    expect(queried.status).toBe(404)
+    await queried.arrayBuffer()
+    const half = await fetch(`${site.origin}/api/m`, { headers: { ...asPhone(), [RELAY_ROUTE_HEADER]: 'api/fleet' } })
+    expect(half.status).toBe(404)
+    await half.arrayBuffer()
+  })
+})
+
 // ── a machine's bytes never run, and never set anything, on this origin ────
 
 describe('what a machine’s answer may do here', () => {
@@ -855,11 +939,28 @@ describe('the console’s origin, on a registry that serves one', () => {
     })
     expect(res.status).toBe(204)
     expect(res.headers.get('access-control-allow-origin')).toBe(CONSOLE)
-    expect(res.headers.get('access-control-allow-headers')).toBe('authorization, content-type, if-none-match, last-event-id, x-cookrew-session')
+    expect(res.headers.get('access-control-allow-headers')).toBe('authorization, content-type, if-none-match, last-event-id, x-cookrew-session, x-cookrew-machine, x-cookrew-route')
     expect(res.headers.get('access-control-allow-methods')).toBe('GET, POST, PUT, DELETE')
     expect(res.headers.get('access-control-allow-credentials')).toBeNull()
     expect(res.headers.get('vary')).toContain('origin')
     expect(split.relay.stats().opened).toBe(before)
+  })
+
+  it('answers the preflight of the one address the same way, and lets the console read what it carries', async () => {
+    const pre = await fetch(`${split.origin}/api/m`, {
+      method: 'OPTIONS',
+      headers: { origin: CONSOLE, 'access-control-request-method': 'GET', 'access-control-request-headers': 'authorization, x-cookrew-session, x-cookrew-machine, x-cookrew-route' }
+    })
+    expect(pre.status).toBe(204)
+    expect(pre.headers.get('access-control-allow-origin')).toBe(CONSOLE)
+    expect(pre.headers.get('access-control-allow-headers')).toContain('x-cookrew-route')
+    const res = await fetch(`${split.origin}/api/m`, { headers: asPhone({ origin: CONSOLE, [RELAY_MACHINE_HEADER]: deviceId, [RELAY_ROUTE_HEADER]: 'api/' }) })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('access-control-allow-origin')).toBe(CONSOLE)
+    await res.arrayBuffer()
+    const other = await fetch(`${split.origin}/api/m`, { headers: asPhone({ origin: 'https://cookrew.dev', [RELAY_MACHINE_HEADER]: deviceId, [RELAY_ROUTE_HEADER]: 'api/' }) })
+    expect(other.status).toBe(403)
+    await other.arrayBuffer()
   })
 
   it('lets the console read the answer, and nobody else', async () => {

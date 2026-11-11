@@ -72,3 +72,64 @@ export function machineRelayPath(machineId: string, route: string): string | nul
   if (!MACHINE_ID.test(id) || !isRelayedRoute(bare)) return null
   return `${MACHINE_RELAY_PREFIX}/${id}/${bare}`
 }
+
+/**
+ * ONE ADDRESS FOR EVERY RELAYED CALL A PAGE MAKES (latency 0.6.1).
+ *
+ * A page on the console sends the account session in a header, so its browser
+ * PREFLIGHTS every relayed request, and keeps the answer per URL. Every new
+ * route, and every new query on an old one (`turns?after=…`, `thumbs?known=…`),
+ * was a preflight: one more round trip before the call itself, ~405 ms from
+ * the owner's Mac (measured 2026-11-11: 30 preflights in 20 s inside one
+ * machine on the console stage). At one address the browser asks once and the
+ * answer covers the visit.
+ *
+ * So a page sends `<api>/api/m` and names the machine and the route in these
+ * two headers. The registry unfolds them into the very path the path form
+ * carries (`relayPathFromHeaders`) and checks it the same way, so nothing the
+ * path form refuses gets in this way. The path form stays for clients that are
+ * not browsers (the desktop app, the watch): nothing preflights them.
+ */
+export const RELAY_MACHINE_HEADER = 'x-cookrew-machine'
+export const RELAY_ROUTE_HEADER = 'x-cookrew-route'
+/** A route longer than this is not a route: the registry refuses it rather than carry it. */
+export const RELAY_ROUTE_MAX = 4096
+
+/** What a route header may be made of: printable ASCII, no blank, and no fragment. */
+const ROUTE_CHARS = /^[\x21-\x22\x24-\x7e]+$/
+
+/**
+ * A relayed call to a machine at the API origin, folded into the one address
+ * and its two headers; null for anything else (another origin, the registry's
+ * own routes, a route the relay does not carry). The route is taken as a URL
+ * holds it, percent-encoded, so a header can always carry it.
+ */
+export function relayAtOneAddress(url: string, apiOrigin: string): { url: string; headers: Record<string, string> } | null {
+  let parsed: URL
+  let api: URL
+  try {
+    parsed = new URL(url)
+    api = new URL(apiOrigin)
+  } catch {
+    return null
+  }
+  if (parsed.origin !== api.origin) return null
+  const found = /^\/api\/m\/([^/]+)\/(.+)$/.exec(parsed.pathname)
+  if (found === null) return null
+  const machine = found[1].toLowerCase()
+  const route = `${found[2]}${parsed.search}`
+  if (relayPathFromHeaders(machine, route) === null) return null
+  return { url: `${api.origin}${MACHINE_RELAY_PREFIX}`, headers: { [RELAY_MACHINE_HEADER]: machine, [RELAY_ROUTE_HEADER]: route } }
+}
+
+/**
+ * The registry's reading of the two headers: the relay path they name, with
+ * its query, or null. The same checks as the path form (`machineRelayPath`),
+ * and before them the ones only a header needs: one value each, nothing a
+ * header should not hold, and a bounded length.
+ */
+export function relayPathFromHeaders(machine: unknown, route: unknown): string | null {
+  if (typeof machine !== 'string' || typeof route !== 'string') return null
+  if (route.length === 0 || route.length > RELAY_ROUTE_MAX || !ROUTE_CHARS.test(route)) return null
+  return machineRelayPath(machine, route)
+}

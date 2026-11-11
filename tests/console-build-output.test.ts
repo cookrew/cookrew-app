@@ -45,6 +45,13 @@ describe('the built console', () => {
     expect(headers).toMatch(/\/assets\/\*\n\s+Cache-Control: public, max-age=31536000, immutable/)
   })
 
+  it('opens its connection to the API host while its own scripts load, in the pool its calls use (latency 0.6.1)', () => {
+    // A new TLS connection to the API host took ~1.5 s from the owner's Mac (2026-11-11); started
+    // by the page's head it overlaps the scripts instead of following them. `crossorigin` (no
+    // credentials) is the pool every console call uses (credentials: 'omit'), so it is the same one.
+    expect(file('index.html')).toMatch(/<link rel="preconnect" href="https:\/\/api\.cookrew\.dev" crossorigin(="")?\s*\/?>/)
+  })
+
   it('pins every script and style the page starts with to the bytes that were written', () => {
     const page = file('index.html')
     const pinned = [...page.matchAll(/<(?:script|link)\b[^>]*?(?:src|href)="(\/assets\/[^"]+\.(?:js|css))"[^>]*>/g)]

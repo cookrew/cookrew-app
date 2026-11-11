@@ -129,6 +129,26 @@ describe('which page may call the API host', () => {
     expect(String(health.headers.vary).toLowerCase()).toContain('origin')
   })
 
+  it('passes the relay’s one address to the relay, preflight and call, and nothing that only begins like it', async () => {
+    const machine = desktopDevice().payload.id
+    const pre = await app.call(site.API, 'OPTIONS', '/api/m', undefined, {
+      origin: site.C,
+      'access-control-request-method': 'GET',
+      'access-control-request-headers': 'authorization, x-cookrew-session, x-cookrew-machine, x-cookrew-route'
+    })
+    expect(pre.status).toBe(204)
+    expect(String(pre.headers['access-control-allow-headers'])).toContain('x-cookrew-route')
+    // Signed in, and the machine is not this account's: the relay's own answer, not the host's.
+    const call = await app.console('GET', '/api/m', undefined, { 'x-cookrew-session': token, 'x-cookrew-machine': machine, 'x-cookrew-route': 'api/fleet' })
+    expect(call.status).toBe(404)
+    expect(call.headers['access-control-allow-origin']).toBe(site.C)
+    const signedOut = await app.console('GET', '/api/m', undefined, { 'x-cookrew-machine': machine, 'x-cookrew-route': 'api/fleet' })
+    expect(signedOut.status).toBe(401)
+    for (const path of ['/api/mx', '/api/machines', '/api']) {
+      expect((await app.console('GET', path, undefined, { 'x-cookrew-session': token })).status, path).toBe(404)
+    }
+  })
+
   it('answers no preflight for any other origin', async () => {
     for (const origin of [site.P, site.A, 'https://evil.example']) {
       const res = await app.call(site.API, 'OPTIONS', '/v2/me', undefined, { origin, 'access-control-request-method': 'GET' })

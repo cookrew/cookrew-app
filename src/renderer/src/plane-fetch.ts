@@ -3,7 +3,7 @@ import { dataPlane, subscribeDataPlane, type DataPlane } from './data-plane'
 import { planeHealth } from './plane-health'
 import { linkBody, linkHeaders, viaLink } from './rtc-plane'
 import { reviveStreams } from './plane-streams'
-import { heldScope, machineLeft, relayHeadersForUrl } from './machine-scope'
+import { heldScope, machineLeft, relayHeadersForUrl, relayRequestFor } from './machine-scope'
 
 /**
  * ONE FETCH, ON WHICHEVER PLANE IS CARRYING THE SESSION.
@@ -72,13 +72,14 @@ const transportFailed = (error: unknown): boolean => (error as Error | undefined
  * the relay's machine prefix carries it. An address built for a direct path
  * and sent later, when the page is back on the relay, is still a machine's
  * address, and a machine has no business holding the account's session.
+ *
+ * And a relayed call leaves at the relay's ONE ADDRESS, the machine and route
+ * in headers, so the browser asks one preflight for the visit rather than one
+ * per URL (latency 0.6.1, machine-scope.ts · relayRequestFor).
  */
-const relaySession = (url: string, headers: HeadersInit | undefined): { headers?: Record<string, string> } => {
-  const session = relayHeadersForUrl(url)
-  if (Object.keys(session).length === 0) return {}
-  const own: Record<string, string> = {}
-  new Headers(headers).forEach((value, key) => void (own[key] = value))
-  return { headers: { ...own, ...session } }
+const toRelay = (url: string, headers: HeadersInit | undefined): { url: string; headers?: Record<string, string> } => {
+  if (Object.keys(relayHeadersForUrl(url)).length === 0) return { url }
+  return relayRequestFor(url, headers)
 }
 
 export async function planeFetch(url: string, init: RequestInit = {}): Promise<Response> {
@@ -125,7 +126,8 @@ async function fetchOnPlane(url: string, init: RequestInit): Promise<Response> {
     }
   }
   try {
-    const response = await fetch(url, { ...init, ...apiRequestInit(), ...relaySession(url, init.headers) })
+    const sent = toRelay(url, init.headers)
+    const response = await fetch(sent.url, { ...init, ...apiRequestInit(), ...(sent.headers ? { headers: sent.headers } : {}) })
     if (!sameMachine()) throw machineLeft()
     planeHealth().note(true)
     reviveStreams()

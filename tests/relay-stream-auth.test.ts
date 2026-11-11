@@ -76,7 +76,9 @@ describe('on the relay', () => {
     source.close()
     expect(natives).toEqual([])
     expect(fetched).toHaveLength(1)
-    expect(fetched[0].url).toBe(`${BASE}/api/events`)
+    // At the relay's one address, the machine and the route in headers (latency 0.6.1).
+    expect(fetched[0].url).toBe(BASE.replace(/\/[^/]+$/, ''))
+    expect(new Headers(fetched[0].init.headers).get('x-cookrew-route')).toBe('api/events')
     expect(new Headers(fetched[0].init.headers).get('authorization')).toBe(`Bearer ${TOKEN}`)
     // The relay is another origin: the account session rides its own header, and no cookie travels.
     expect(new Headers(fetched[0].init.headers).get('x-cookrew-session')).toBe(SESSION)
@@ -88,10 +90,13 @@ describe('on the relay', () => {
     const socket = plane.openWebSocket(`${BASE}/api/browser/b1/stream?w=390&h=844`)
     await vi.waitFor(() => expect(fetched.length).toBeGreaterThan(0))
     socket.close()
-    expect(fetched[0].url).toContain('/api/socket-bridge?path=')
-    expect(decodeURIComponent(fetched[0].url)).not.toContain('token')
-    expect(fetched[0].url).not.toContain(TOKEN)
-    expect(fetched[0].url).not.toContain(SESSION)
+    const route = new Headers(fetched[0].init.headers).get('x-cookrew-route') ?? ''
+    expect(route).toContain('api/socket-bridge?path=')
+    for (const said of [fetched[0].url, route]) {
+      expect(decodeURIComponent(said)).not.toContain('token')
+      expect(said).not.toContain(TOKEN)
+      expect(said).not.toContain(SESSION)
+    }
     expect(new Headers(fetched[0].init.headers).get('authorization')).toBe(`Bearer ${TOKEN}`)
     expect(new Headers(fetched[0].init.headers).get('x-cookrew-session')).toBe(SESSION)
   })

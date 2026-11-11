@@ -240,6 +240,15 @@ describe('what a console session may do', () => {
     const mine = await signed.page.console('GET', `/api/m/${desktop.device.payload.id}/api/fleet`, undefined, { 'x-cookrew-session': signed.token })
     expect(mine.status).toBe(503)
     expect(mine.body.error).toBe('no_link')
+    // The same call at the relay's one address (latency 0.6.1), whatever the machine's own credential looks like.
+    const one = await signed.page.console('GET', '/api/m', undefined, {
+      'x-cookrew-session': signed.token,
+      'x-cookrew-machine': desktop.device.payload.id,
+      'x-cookrew-route': 'api/fleet',
+      authorization: `Bearer ${signed.token}`
+    })
+    expect(one.status).toBe(503)
+    expect(one.body.error).toBe('no_link')
   })
 
   it('is refused every act of the account that is not the console’s to do', async () => {

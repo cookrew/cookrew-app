@@ -529,7 +529,7 @@ describe('relayAccountMachines (the console, from the registry)', () => {
     expect(fetchImpl).toHaveBeenCalledWith(`${API}/v2/me/desktops`, {
       mode: 'cors',
       credentials: 'omit',
-      cache: 'no-store',
+      // No cache mode: 'no-store' would cost a preflight on every read (latency 0.6.1, data-plane.ts).
       headers: { authorization: 'Bearer account-session' }
     })
     expect(answer.ok && answer.machines.map((m) => [m.name, m.current])).toEqual([['Studio', true], ['Laptop', false]])

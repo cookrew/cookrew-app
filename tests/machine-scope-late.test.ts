@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { bareWindow } from './support/memory-storage'
-import { inConsole, relayBaseFor } from './support/console-scope'
+import { inConsole, relayBaseFor, unfoldRelay } from './support/console-scope'
 
 /**
  * WORK THAT OUTLIVES ITS MACHINE.
@@ -56,7 +56,7 @@ beforeEach(() => {
     vi.fn(
       (url: string, init: RequestInit = {}) =>
         new Promise<Response>((answer, fail) => {
-          sent.push({ url: String(url), init, answer })
+          sent.push({ url: unfoldRelay(String(url), init), init, answer })
           init.signal?.addEventListener('abort', () => fail(init.signal?.reason ?? new DOMException('aborted', 'AbortError')), { once: true })
         })
     )

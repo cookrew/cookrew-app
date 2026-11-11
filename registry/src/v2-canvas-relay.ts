@@ -3,7 +3,14 @@ import { decodeFrame, encodeFrame } from '../../src/shared/relay-frame'
 import { RelayHub, type HubSocket } from './relay-hub'
 import { LinkPulse, openNdjson, readFrameLines } from './relay-link'
 import { refuse, sameOrigin, signedIn, v2Json, type V2Identity } from './v2-http'
-import { RELAY_SESSION_HEADER, isMachineId, isRelayedRoute } from '../../src/shared/machine-relay'
+import {
+  RELAY_MACHINE_HEADER,
+  RELAY_ROUTE_HEADER,
+  RELAY_SESSION_HEADER,
+  isMachineId,
+  isRelayedRoute,
+  relayPathFromHeaders
+} from '../../src/shared/machine-relay'
 import { fleetPresence, type DesktopPresence } from './v2-fleet'
 import { createLineSeen } from './v2-line-seen'
 
@@ -235,6 +242,9 @@ export function allowedRequestHeaders(headers: IncomingHttpHeaders): Record<stri
     if (name === STALE_BASE_HEADER || name === BRIDGE_MARKER || name === CANVAS_DEVICE_HEADER || name === CANVAS_DEVICE_NAME_HEADER) {
       continue
     }
+    // OURS TO READ: the one address's machine and route are the relay's
+    // question, already answered by the path the machine is asked at.
+    if (name === RELAY_MACHINE_HEADER || name === RELAY_ROUTE_HEADER) continue
     if (REQUEST_HEADERS.has(name)) out[name] = value
     // The app's own headers pass; the proxy's own never do, because they
     // describe the reader's network rather than the reader's request.
@@ -274,7 +284,7 @@ const HEADER_VALUE = /^[\t\x20-\x7e]*$/
 export const RELAY_ANSWER_CSP = "default-src 'none'; sandbox; frame-ancestors 'none'"
 
 /** What a page of the console may send on the relay path, and how (answered to its preflight). */
-export const RELAY_CORS_HEADERS = `authorization, content-type, if-none-match, last-event-id, ${RELAY_SESSION_HEADER}`
+export const RELAY_CORS_HEADERS = `authorization, content-type, if-none-match, last-event-id, ${RELAY_SESSION_HEADER}, ${RELAY_MACHINE_HEADER}, ${RELAY_ROUTE_HEADER}`
 export const RELAY_CORS_METHODS = 'GET, POST, PUT, DELETE'
 /** Ten minutes: the ceiling OWASP names, so a changed allow-list is honoured soon (main/companion-cors.ts). */
 export const RELAY_CORS_MAX_AGE = '600'
@@ -424,6 +434,24 @@ export function crossSite(request: IncomingMessage): boolean {
   const site = request.headers['sec-fetch-site']
   if (typeof site === 'string' && site !== '') return site !== 'same-origin' && site !== 'none'
   return !sameOrigin(request)
+}
+
+/**
+ * THE ONE ADDRESS, UNFOLDED: `/api/m` with the machine and the route in their
+ * headers (shared/machine-relay.ts · relayAtOneAddress), read back into the
+ * path the path form would have had, so `proxy` asks exactly the questions it
+ * always asks of it. Null for anything that is not one clean pair: a header
+ * missing or doubled, a route the path form refuses, a query on the address
+ * itself, or a route that would climb out of its machine once parsed.
+ */
+export function oneAddress(request: IncomingMessage, url: URL): URL | null {
+  if (url.search !== '') return null
+  const machine = request.headers[RELAY_MACHINE_HEADER]
+  const path = relayPathFromHeaders(machine, request.headers[RELAY_ROUTE_HEADER])
+  if (path === null || typeof machine !== 'string') return null
+  const target = new URL(path, url.origin)
+  // Parsed the way the request line is parsed: whatever it tidied away must still leave it this machine's.
+  return target.pathname.startsWith(`/api/m/${machine.toLowerCase()}/`) ? target : null
 }
 
 /**
@@ -1050,8 +1078,11 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         presenceRoute(request, response)
         return true
       }
-      // ONE RELAY PATH, for every client (shared/machine-relay.ts).
-      if (parts.length >= 3 && parts[0] === 'api' && parts[1] === 'm') {
+      // ONE RELAY PATH, for every client (shared/machine-relay.ts): the machine
+      // and route in the path (`/api/m/<machine>/<route>`), or at the one
+      // address `/api/m` with both in headers, which is how a browser page
+      // asks its preflight once (relayAtOneAddress).
+      if (parts.length >= 2 && parts[0] === 'api' && parts[1] === 'm') {
         const verdict = originVerdict(request, deps.v2.consoleOrigin)
         // A page of any origin but the console's is refused before a session is
         // read or a machine asked, and told nothing it could read.
@@ -1077,7 +1108,12 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
           response.end()
           return true
         }
-        proxy(request, response, url, verdict.cors)
+        const target = parts.length === 2 ? oneAddress(request, url) : url
+        if (target === null) {
+          refuse(response, 404, 'not_found', undefined, { ...RELAY_PRIVATE, ...verdict.cors })
+          return true
+        }
+        proxy(request, response, target, verdict.cors)
         return true
       }
       return false

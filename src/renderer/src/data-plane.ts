@@ -190,7 +190,19 @@ const planeAddressSpace = (
 ): { readonly targetAddressSpace?: AddressSpace } =>
   current.hint === 'none' ? {} : addressSpaceInitFor(current.origin)
 
-/** A request to another origin that carries no cookie: the relay from the console, and any direct path. */
+/**
+ * A request to another origin that carries no cookie: the relay from the console, and any direct path.
+ *
+ * AND NO `cache: 'no-store'` BESIDE IT (latency 0.6.1). Such a request carries
+ * its credential in a header, so the browser preflights it, and Chrome does not
+ * use its preflight cache for a request that bypasses the HTTP cache
+ * ('no-store', 'no-cache', 'reload'): measured in headless Chrome 2026-11-11,
+ * four calls to one URL asked four preflights with it and one without. Each is
+ * a round trip, ~405 ms from the owner's Mac, on every poll for ever. Nothing
+ * is lost by leaving it off: every answer of the registry and of the relay is
+ * already `cache-control: private, no-store`, so the browser keeps none of them
+ * (pinned in tests/api-base.test.ts).
+ */
 export const CROSS_ORIGIN_NO_COOKIE: Pick<RequestInit, 'mode' | 'credentials'> = { mode: 'cors', credentials: 'omit' }
 
 export const planeRequestInit = (current: DataPlane, base = ''): PlaneRequestInit => {

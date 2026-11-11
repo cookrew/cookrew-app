@@ -67,7 +67,8 @@ export const consoleMayAsk = (method: string, pathname: string): boolean =>
  * travels in another header.
  */
 export function consoleScopeRefuses(request: IncomingMessage, method: string, pathname: string): boolean {
-  if (pathname.startsWith('/api/m/')) return false
+  // Both of its forms: the machine in the path, or the one address with it in a header.
+  if (pathname === '/api/m' || pathname.startsWith('/api/m/')) return false
   if (!saysConsole(sessionTokenOf(request))) return false
   return !consoleMayAsk(method === 'HEAD' ? 'GET' : method, pathname)
 }
