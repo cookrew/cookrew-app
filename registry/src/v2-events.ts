@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto'
-
 /**
  * IDENTITY v3 — account:changed, THE ROSTER'S OWN FEED.
  *
@@ -172,6 +170,3 @@ function trimmed(held: readonly AccountEvent[]): AccountEvent[] {
   }
   return held.filter((event) => !drop.has(event.seq))
 }
-
-/** A fresh id, for a request the queue hands back. Here so both stores share it. */
-export const newRequestId = (): string => randomUUID()

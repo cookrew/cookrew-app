@@ -14,7 +14,7 @@ import {
 } from './v2-http'
 import { handleCertRoute } from './v2-cert-routes'
 import { handleSeatRoute, mySeats } from './v2-seat-routes'
-import { decideRequest, listEvents, listRequests } from './v2-requests'
+import { listEvents, listRequests } from './v2-requests'
 import { handleMigrateRoute, legacyHolds, refuseIfLegacy } from './v2-migrate-routes'
 import type { V2Account, V2Desktop } from './v2-accounts'
 import { readReach } from './v2-reach'
@@ -67,8 +67,6 @@ export {
 
 /** Bodies: an account or a session is small; a profile carries a picture. */
 const SMALL_BODY = 16 * 1024
-/** A request id and a device id are both UUIDs on these routes. */
-const REQUEST_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const PROFILE_BODY = 192 * 1024
 
 // ── the router ───────────────────────────────────────────────────────────
@@ -589,10 +587,10 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     return
   }
 
-  // ── the one queue (identity v3, R1) ────────────────────────────────────
+  // ── the one queue (identity v3) ────────────────────────────────────────
   //
-  // GET /v2/me/requests is the VIEW over join (approvals) and seat; the seat
-  // store is its own, the join rows are read live so nothing is stored twice.
+  // GET /v2/me/requests is the VIEW over the sign-ins waiting for a nod, read
+  // live so nothing is stored twice; they are answered at /v2/me/approvals.
   // The bodies of these live in v2-requests.ts; here are the mount points,
   // kept small so V3-10's join-code routes merge beside them.
   if (rest.length === 1 && rest[0] === 'requests' && method === 'GET') {
@@ -602,15 +600,6 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
   if (rest.length === 1 && rest[0] === 'events' && method === 'GET') {
     const since = Number(new URL(ctx.request.url ?? '', 'http://x').searchParams.get('since') ?? '0')
     listEvents(ctx, signed, since)
-    return
-  }
-  if (rest.length === 2 && rest[0] === 'requests' && method === 'POST') {
-    const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
-    if (!REQUEST_UUID.test(id)) {
-      refuse(response, 404, 'not_found')
-      return
-    }
-    await decideRequest(ctx, signed, id)
     return
   }
   if (rest.length === 1 && rest[0] === 'devices' && method === 'GET') {

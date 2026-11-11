@@ -247,11 +247,11 @@ describe('W5 · the account page — requests above devices, and the ADD button'
   it('describes the queue it actually has, naming no button that is not there', () => {
     const body = mine().body
     expect(body).toContain(esc(webCopy('w5.requests-footer', { handle: 'drej' })))
-    // SEAT THEM arrived with the unified queue (V3-11/V3-14) and the footer
-    // names it now. ALLOW has NOT arrived and the footer still must not
-    // promise it: a reach row is only ever handed to the Mac it names, so a
-    // browser has no ALLOW to press.
-    expect(body).toContain('SEAT THEM')
+    // The queue this page reads is the sign-ins waiting for a nod. SEAT THEM
+    // and ALLOW answered two kinds the registry no longer opens (0.6.0), so
+    // the footer promises neither.
+    expect(body).toContain('APPROVE needs the number showing on that device')
+    expect(body).not.toContain('SEAT THEM')
     expect(body).not.toContain('ALLOW gives')
   })
 

@@ -18,10 +18,10 @@ import {
  * THE ONE QUEUE, on the desktop (D11) — the poller D6's approvals queue grew
  * into.
  *
- * Two things used to be two: a sign-in waiting for a nod was polled here, and
- * a guest asking for a seat was a link somebody pasted into a message. V3-11
- * made them one list at the registry; this is the desktop half of it: one
- * poll, one badge, one notification habit, one place they are answered.
+ * What waits here is a sign-in waiting for a nod: one poll, one badge, one
+ * notification habit, one place it is answered. The registry's list once
+ * carried two more kinds (a phone asking for Wi-Fi, a guest asking for a
+ * seat); the pages that raised them are gone (0.6.0) and so are the rows.
  *
  * WHY POLLING, AND WHY THIS SLOWLY, is unchanged from the approvals queue it
  * replaces: twenty seconds against a registry whose requests wait minutes, and
@@ -104,8 +104,6 @@ const REGISTRY_DECISION: Record<RowAction['id'], string> = {
   approve: 'approve',
   deny: 'deny',
   'not-me': 'not-me',
-  'seat-them': 'approve',
-  decline: 'decline',
 }
 
 export const requestsHistoryFile = (base?: string): string =>
@@ -115,8 +113,8 @@ export const requestsHistoryFile = (base?: string): string =>
  * The finished rows, on disk.
  *
  * ON DISK BECAUSE SEVEN DAYS OUTLIVES A RESTART (D11), and because every
- * sentence one of these rows says is first person: "approved here", "seated
- * by you". The registry's queue lists what is still WAITING; the only thing
+ * sentence one of these rows says is first person: "approved here", "denied
+ * here". The registry's queue lists what is still WAITING; the only thing
  * that knows this Mac answered is this Mac.
  *
  * A file that will not parse reads as EMPTY. The alternative — refusing to
@@ -155,8 +153,8 @@ const isAnsweredRow = (value: unknown): value is AnsweredRow => {
   const row = value as Record<string, unknown>
   return (
     typeof row.id === 'string' &&
-    (row.kind === 'join' || row.kind === 'seat') &&
-    (row.outcome === 'joined' || row.outcome === 'seated' || row.outcome === 'denied') &&
+    row.kind === 'join' &&
+    (row.outcome === 'joined' || row.outcome === 'denied') &&
     typeof row.subject === 'string' &&
     typeof row.at === 'number'
   )
@@ -170,7 +168,7 @@ const asQueueRow = (value: unknown): QueueRow | null => {
   if (typeof value !== 'object' || value === null) return null
   const row = value as Record<string, unknown>
   if (typeof row.id !== 'string' || row.id.length === 0) return null
-  if (row.kind !== 'join' && row.kind !== 'seat') return null
+  if (row.kind !== 'join') return null
   if (typeof row.at !== 'number' || typeof row.expiresAt !== 'number') return null
   const text = (v: unknown): string | undefined =>
     typeof v === 'string' && v.length > 0 && v.length <= 256 ? v : undefined
@@ -178,8 +176,6 @@ const asQueueRow = (value: unknown): QueueRow | null => {
     id: row.id,
     kind: row.kind,
     ...(text(row.device) === undefined ? {} : { device: text(row.device) as string }),
-    ...(text(row.account) === undefined ? {} : { account: text(row.account) as string }),
-    ...(text(row.team) === undefined ? {} : { team: text(row.team) as string }),
     address: text(row.address) ?? '',
     at: row.at,
     expiresAt: row.expiresAt,
@@ -240,8 +236,8 @@ export class Requests {
   /**
    * The join rows, in the shape the lock screen already reads.
    *
-   * D13 names who is waiting to JOIN, which is the only kind whose name means
-   * anything from under a lock — a seat request is not a device at the door.
+   * D13 names who is waiting to JOIN: a device at the door, which is what a
+   * lock can say something about.
    */
   joinRequests(): readonly ApprovalRequest[] {
     return this.pending
@@ -347,15 +343,13 @@ export class Requests {
    * ANSWER ONE ROW.
    *
    * The verb is the BUTTON's own id, so the card and this cannot disagree
-   * about what a press meant. Where it goes depends on the kind: a sign-in is
-   * answered on the approvals route, where the number-matching rung lives; a
-   * seat is answered on the queue's own.
+   * about what a press meant. A sign-in is answered on the approvals route,
+   * where the number-matching rung lives; nothing else is answered here.
    */
   async decide(id: string, action: RowAction['id'], match?: string): Promise<DecideOutcome> {
     const row = this.pending.find((candidate) => candidate.id === id)
     if (row === undefined) return { ok: false, reason: 'not_found' }
-    const outcome =
-      row.kind === 'join' ? await this.answerJoin(row, action, match) : await this.answerSeat(row, action)
+    const outcome = await this.answerJoin(row, action, match)
     if (outcome.ok) {
       this.record(row, action)
       await this.refresh()
@@ -413,21 +407,6 @@ export class Requests {
     }
   }
 
-  /** A guest asking for a seat (R1). SEAT THEM grants it, by username. */
-  private async answerSeat(row: QueueRow, action: RowAction['id']): Promise<DecideOutcome> {
-    if (action !== 'seat-them' && action !== 'decline') return { ok: false, reason: 'unknown' }
-    return this.postDecision(row.id, { decision: REGISTRY_DECISION[action] })
-  }
-
-  private async postDecision(id: string, body: Record<string, unknown>): Promise<DecideOutcome> {
-    const result = await this.deps.accounts.call<void>(`/v2/me/requests/${encodeURIComponent(id)}`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-      parse: false,
-    })
-    return result.ok ? { ok: true } : { ok: false, reason: result.reason, ...(result.message ? { message: result.message } : {}) }
-  }
-
   /**
    * Keep what this Mac just did, for seven days.
    *
@@ -438,16 +417,12 @@ export class Requests {
    * that exists to be believed.
    */
   private record(row: QueueRow, action: RowAction['id']): void {
-    const outcome: AnsweredRow['outcome'] | null =
-      action === 'approve' ? 'joined' : action === 'seat-them' ? 'seated' : action === 'deny' || action === 'not-me' ? 'denied' : null
-    if (outcome === null) return
-    const subject = row.kind === 'seat' ? (row.account ?? '') : (row.device ?? '')
+    const outcome: AnsweredRow['outcome'] = action === 'approve' ? 'joined' : 'denied'
     const kept: AnsweredRow = {
       id: row.id,
       kind: row.kind,
       outcome,
-      subject,
-      ...(row.team === undefined ? {} : { team: row.team }),
+      subject: row.device ?? '',
       at: this.now(),
     }
     this.answered = keptAnswered([kept, ...this.answered], this.now())

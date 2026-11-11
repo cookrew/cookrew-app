@@ -60,9 +60,8 @@ export interface AccountIpcDeps {
    */
   onAccountPassword?: (password: string) => void
   /**
-   * THE ONE QUEUE (D11) — sign-ins and guests asking for a seat. The producer
-   * of `status.requests`, which is a count of both rather than of sign-ins
-   * alone.
+   * THE ONE QUEUE (D11) — the sign-ins waiting for a nod. The producer of
+   * `status.requests`, the count the avatar's badge shows.
    */
   requests: Requests
   /** The second-factor ladder (D3): passkeys, the authenticator app. */
@@ -254,7 +253,7 @@ const asRecord = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
 
 /**
- * Five verbs and no sixth: a button this build has never heard of is
+ * Three verbs and no fourth: a button this build has never heard of is
  * refused, never guessed at. They are the row actions' own ids (D11), so what
  * arrives here is exactly what was pressed.
  */
@@ -262,8 +261,6 @@ const ROW_ACTIONS: readonly RowAction['id'][] = [
   'approve',
   'deny',
   'not-me',
-  'seat-them',
-  'decline',
 ]
 const isRowAction = (value: unknown): value is RowAction['id'] =>
   typeof value === 'string' && (ROW_ACTIONS as readonly string[]).includes(value)
@@ -1197,8 +1194,7 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     // would just be a third clock disagreeing with the other two.
     /**
      * THE DEVICES WAITING TO JOIN, in the shape the lock screen reads (D13).
-     * A seat request is not a device at the door, so it has no name worth
-     * showing from under a lock — the queue's own channel is next door.
+     * The queue's own channel, with what is over beside it, is next door.
      */
     'account:approvals': (): readonly ApprovalRequest[] => deps.requests.joinRequests(),
     /**

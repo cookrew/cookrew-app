@@ -18,10 +18,10 @@ import { DOING, problemSentence } from './problem'
 import '../grant-surface.css'
 
 /**
- * THE ONE QUEUE (D11) — three kinds of row, one card.
+ * THE ONE QUEUE (D11) — the sign-ins waiting for a nod, in one card.
  *
  * It replaces D6's arrangement, where a sign-in was a card pinned above every
- * tab and the other two kinds had nowhere to be at all. One tab, one badge,
+ * tab. One tab, one badge,
  * one habit: the avatar's badge, the system notification and this list all
  * land in the same place, so a person who saw the toast and a person who saw
  * the badge end up looking at the same row.
@@ -207,8 +207,8 @@ export function RequestsTab({
         </ul>
       )}
       {/* WHAT EACH BUTTON ACTUALLY DOES, under the list rather than in a
-          tooltip: SEAT THEM seats a guest and NOT ME signs every other
-          device out, and neither is a thing to learn by pressing it. */}
+          tooltip: APPROVE lets a device onto the account and NOT ME signs
+          every other device out, and neither is a thing to learn by pressing it. */}
       <p className="gs-foot-note">{queueFooter()}</p>
     </section>
   )

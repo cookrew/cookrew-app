@@ -523,16 +523,15 @@ describe('step 13 — a stranger with the password (auth UX 2026-11-09, ruling 2
    * is this.
    */
   it('meets the second step, cannot ask the owner’s devices, and changes nothing on the account', async () => {
-    // Something real in the owner's queue first — a guest asking for a seat —
-    // so "the stranger added nothing" is a count that could have moved.
-    const guest = machine('Guest Mac')
-    const seated = await registerMac({ origin, base: guest.base, username: 'guestq', password: PASSWORD, name: 'Guest Mac', now, accounts: { now } })
-    const askedSeat = await call('POST', `/v2/teams/@${OWNER}/${TEAM.name}/seat-requests`, {}, seated.file.session?.token)
-    expect(askedSeat.status).toBeLessThan(300)
+    // The owner's queue is the sign-ins waiting for a nod, and nobody is
+    // waiting. (A guest asking for a seat once put a row here first, so the
+    // count could have moved; the registry takes no such ask since 0.6.0, and
+    // the approvals list below is read as well, which is where a stranger's
+    // ask would land.)
     const queueBefore = await call('GET', '/v2/me/requests', undefined, sessionToken(macB.base))
     expect(queueBefore.status).toBe(200)
     observed.queueBefore = queueRows(queueBefore.body).length
-    expect(observed.queueBefore).toBeGreaterThan(0)
+    expect(observed.queueBefore).toBe(0)
     const sittingsBefore = sittings()
 
     const stranger = machine('Stranger Mac')

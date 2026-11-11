@@ -174,7 +174,8 @@ describe('M6 · the requests view — D11’s rows at phone width', () => {
   it('the footer names the buttons that are now actually there', () => {
     const body = mine().body
     expect(body).toContain(esc(WEB_V3_COPY['w5.requests-footer'].replace('{handle}', 'drej')))
-    expect(body).toContain('SEAT THEM')
+    // A guest asking for a seat is a row the registry no longer sends (0.6.0), so no sentence here names its button.
+    expect(body).not.toContain('SEAT THEM')
     // ALLOW is not on this page and no sentence here describes it: a reach row
     // is only ever handed to the Mac it names, never to a browser.
     expect(body).not.toContain('ALLOW gives')
@@ -211,7 +212,11 @@ describe('W6 · ASK is a request, and the bar then waits', () => {
     expect(ASSETS['site.js'].body).toContain('out.status === 409')
   })
 
-  it('carries W6’s sentence from the one table', () => {
-    expect(WEB_V3_COPY['w6.no-seat']).toContain('they see the request on every device')
+  it('but nothing serves it any more: the script is shipped text, and the table has no sentence about asking (0.6.0)', () => {
+    // No page loads a seat bar for the script above, and the route it names
+    // answers as any unknown route (tests/registry-v2-requests-http.test.ts
+    // holds that, signed in and signed out). What is held here is the copy.
+    expect(Object.keys(WEB_V3_COPY).filter((id) => id.startsWith('w6.'))).toEqual([])
+    expect(Object.values(WEB_V3_COPY).join(' ')).not.toMatch(/see the request|SEAT THEM/)
   })
 })

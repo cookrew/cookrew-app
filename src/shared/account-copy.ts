@@ -98,7 +98,14 @@ export const V3_COPY = machineTable({
 
   /** D11, the join request, as the approver reads it. */
   'd11.join-row': 'What number is on that Mac?',
-  /** D11, someone asking for a seat. Replaces "Copy link to ask @owner". */
+  /**
+   * D11, someone asking for a seat.
+   *
+   * NO SUCH ROW ARRIVES ANY MORE (0.6.0): the registry has no route to ask on
+   * and the app has no row for it. The sentence stays because the account
+   * page still hands it to its script (registry/src/site-account.ts,
+   * `data-seat-row`), which keeps a branch for a row of that kind.
+   */
   'd11.seat-row': '@{handle} asks for a seat at {team}.',
   /**
    * D11, the join row's own lead, above the number field. The device names
@@ -108,8 +115,6 @@ export const V3_COPY = machineTable({
   'd11.join-lead': '{device} wants to join @{handle}',
   /** D11 over-state, a device that is on the account now. */
   'd11.join-done': '{device} joined @{handle}',
-  /** D11 over-state, a guest who is in the room. */
-  'd11.seat-done': '@{handle} is seated at {team}',
   /**
    * D11, a sign-in somebody disowned. It names WHERE it was answered, because
    * the owner reading this a day later needs to know which of their devices
@@ -117,10 +122,10 @@ export const V3_COPY = machineTable({
    */
   'd11.denied': 'A sign-in as @{handle} was denied on {device}',
   /** D11, an empty queue. The ordinary state, and it says what would land here. */
-  'd11.empty': 'Nothing is waiting. Devices asking to join and guests asking for a seat land here.',
+  'd11.empty': 'Nothing is waiting. Devices asking to join land here.',
   /** D11, what each button in the queue actually does — including NOT ME. */
   'd11.footer':
-    'APPROVE needs the number. SEAT THEM grants by username. NOT ME signs every other device out and locks the password until you change it.',
+    'APPROVE needs the number. NOT ME signs every other device out and locks the password until you change it.',
 
   /** The event every device is told about, with the way to disown it. */
   'joined.event': '{device} joined @{handle} from {place} · {ago} — NOT YOU?',
@@ -317,35 +322,16 @@ export const V3_COPY = machineTable({
   'w5.add-lede':
     'On the new device open cookrew.dev, choose “Join with a code”, and type this. It works once, for ten minutes.',
   /**
-   * W5, under the Requests heading — the web's queue while it is still only
-   * sign-ins.
+   * W5, under the Requests heading: the web's queue, which is sign-ins.
    *
-   * NOT `d11.footer`, and that is the point. D11 names SEAT THEM, which the
-   * unified queue (V3-11) will put on this page and which is not on it yet.
-   * A footer describing buttons a reader cannot see teaches them to stop
-   * reading footers. This one swaps for d11.footer the day the other kind
-   * arrives here.
+   * NOT `d11.footer`: this one says who is asking, because the page is read
+   * by somebody who may not be at a Mac. It names the buttons a reader of the
+   * page can see and no other: a footer describing buttons that are not there
+   * teaches people to stop reading footers.
    */
   'w5.requests-footer':
-    'A device asking to sign in as @{handle}, or somebody asking for a seat. APPROVE needs the number showing on that device; SEAT THEM grants by username; NOT ME signs every other device out and locks the password until you change it.',
+    'A device asking to sign in as @{handle}. APPROVE needs the number showing on that device; NOT ME signs every other device out and locks the password until you change it.',
 
-  /**
-   * W6, the team page with no seat yet — and the reason to prefer asking.
-   *
-   * It names WHERE the ask lands ("on every device") because the old button
-   * copied a link: the reader's model was "I now have to go and find them".
-   * The request finds them instead, and the sentence has to say so or the
-   * button looks like the same errand with fewer steps.
-   */
-  'w6.no-seat':
-    'Buy one, or ask @{handle} — they see the request on every device, and you are seated the moment they say yes.',
-  /** W6, the ask was filed and the bar is waiting. */
-  'w6.asked-head': 'Asked @{handle}',
-  /** W6, the same ask arriving twice. Not an error: the first one still stands. */
-  'w6.already-asked': '@{handle} already has your request. It is still waiting.',
-  /** W6, the web team page after asking. The seat outlives the tab. */
-  'w6.asked':
-    "This page seats you the moment they say yes. You can close it; the seat is yours, not this tab's."
 } as const, hostPlatform())
 
 export type V3CopyId = keyof typeof V3_COPY

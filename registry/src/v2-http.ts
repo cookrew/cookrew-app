@@ -14,7 +14,6 @@ import type { DoorRecord } from './doors'
 import type { DesktopPresence } from './v2-fleet'
 import type { NamesFeature } from './names'
 import { createHelloBurn, helloBurnTtlMs, type HelloBurn } from './hello-nonces'
-import { V2Requests } from './v2-requests'
 import { V2Events } from './v2-events'
 import { V2Links } from './v2-links'
 import { OAuthFlows } from './v2-oauth-flows'
@@ -94,12 +93,6 @@ export interface V2Identity {
     joinCodes: Limiter
     /** Renewing a session, per DEVICE — see v2-renew for why not per address. */
     renew: Limiter
-    /**
-     * Asking for a seat, per ACCOUNT; asking to reach a Mac, per DEVICE. One
-     * bucket, two keys — both write to a bounded account:changed feed, and a
-     * route that can be asked without bound is a way to flush it (H5).
-     */
-    requests: Limiter
     /** Starting and redeeming a provider trip, per address. */
     oauth: Limiter
   }
@@ -116,8 +109,6 @@ export interface V2Identity {
   trustedProxies: readonly string[]
   /** Phase 4: passkeys, authenticators, pending sign-ins and approvals. */
   factors: FactorState
-  /** Identity v3: the one queue — the seat requests; the join rows are read live from the pending sign-ins. */
-  requests: V2Requests
   /** Identity v3: account:changed, the roster's own feed. */
   events: V2Events
   /** Which provider identities open which account. */
@@ -164,8 +155,6 @@ export interface V2Options {
     joinPerMinute?: number
     joinCodesPerHour?: number
     renewPerMinute?: number
-    /** Seat and reach asks, per asker. Lowered by a test to reach the cap. */
-    requestsPerHour?: number
     oauthPerMinute?: number
   }
   trustedProxies?: readonly string[]
@@ -225,10 +214,6 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
       // handful of times in a life; the window that catches a device quietly
       // keeping a supply of live codes is a long one, not a fast one.
       joinCodes: new Limiter(options.limits?.joinCodesPerHour ?? 6, 60 * 60_000, options.now),
-      // TWENTY AN HOUR. A person asking for seats at twenty teams in one hour
-      // is not a person, and a guest who reloads a team page a few times is
-      // nowhere near it.
-      requests: new Limiter(options.limits?.requestsPerHour ?? 20, 60 * 60_000, options.now),
       renew: new Limiter(options.limits?.renewPerMinute ?? 5, 60_000, options.now),
       oauth: new Limiter(options.limits?.oauthPerMinute ?? 20, 60_000, options.now)
     },
@@ -237,7 +222,6 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
     helloNonces: createHelloBurn(helloBurnTtlMs(HELLO_SKEW_MS)),
     trustedProxies: options.trustedProxies ?? [],
     factors: createFactorState(base, { now: options.now }),
-    requests: new V2Requests(options.now),
     events: new V2Events(options.now),
     links: new V2Links(accounts, options.now),
     oauth: {
