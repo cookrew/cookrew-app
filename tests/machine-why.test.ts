@@ -69,14 +69,16 @@ describe('under a machine’s name on the devices stop', () => {
   const m = (over: object = {}) => ({ name: 'Solis-Core', online: true, detail: 'listed' as const, ...over })
   it('on the console, a machine too old to be read says to update it, before anything else it could be asked', () => {
     for (const block of [null, { kind: 'needs-proof' }, { kind: 'no-device' }] as const) {
-      expect(machineSays(m({ appVersion: '0.5.8' }), { surface: 'page', trusted: null, block })).toBe('Update Cookrew on Solis-Core.')
+      expect(machineSays(m({ appVersion: '0.5.8' }), { surface: 'page', floor: true, trusted: null, block })).toBe('Update Cookrew on Solis-Core.')
     }
-    expect(machineSays(m({ appVersion: null }), { surface: 'page', trusted: null })).toBe('Update Cookrew on Solis-Core.')
-    expect(machineSays(m({ appVersion: '0.6.0' }), { surface: 'page', trusted: null })).toBe('Not answering yet.')
+    expect(machineSays(m({ appVersion: null }), { surface: 'page', floor: true, trusted: null })).toBe('Update Cookrew on Solis-Core.')
+    expect(machineSays(m({ appVersion: '0.6.0' }), { surface: 'page', floor: true, trusted: null })).toBe('Not answering yet.')
     // Offline comes first: an update cannot be asked of a machine that is not there.
-    expect(machineSays(m({ appVersion: '0.5.8', online: false }), { surface: 'page', trusted: null })).toBe('Open Cookrew on Solis-Core.')
+    expect(machineSays(m({ appVersion: '0.5.8', online: false }), { surface: 'page', floor: true, trusted: null })).toBe('Open Cookrew on Solis-Core.')
     // A caller that does not know the version is not told to update.
-    expect(machineSays(m(), { surface: 'page', trusted: null })).toBe('Not answering yet.')
+    expect(machineSays(m(), { surface: 'page', floor: true, trusted: null })).toBe('Not answering yet.')
+    // A machine's own phone page is a page too, and enters no other machine: the floor is the console's, said only there.
+    expect(machineSays(m({ appVersion: '0.5.8' }), { surface: 'page', trusted: null })).toBe('Not answering yet.')
     // The desktop app reaches machines with a machine key, not the pass: the floor is not its rule.
     expect(machineSays(m({ appVersion: '0.5.8' }), { surface: 'desktop', trusted: true })).toBe('Not answering yet.')
     expect(machineSays(m({ appVersion: '0.5.8', detail: 'live' }), { surface: 'desktop', trusted: true })).toBeNull()
@@ -88,9 +90,9 @@ describe('under a machine’s name on the devices stop', () => {
     // And a tap on it asks it nothing: the view decides that before it asks (ZoomView · whyNot).
     const view = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'zoom', 'ZoomView.tsx'), 'utf8')
     const tap = view.slice(view.indexOf('async function whyNot('))
-    expect(tap.indexOf('machineTooOld(m, surface)')).toBeGreaterThan(-1)
-    expect(tap.indexOf('machineTooOld(m, surface)')).toBeLessThan(tap.indexOf('api.machineFleetOf?.(m.id)'))
-    expect(machineWhyWords({ name: 'Solis-Core', online: true, appVersion: '0.5.8' }, { surface: 'page', trusted: null, block: null })).toBe('Update Cookrew on Solis-Core, and it opens here.')
+    expect(tap.indexOf('machineTooOld(m, scopeNeedsMachine())')).toBeGreaterThan(-1)
+    expect(tap.indexOf('machineTooOld(m, scopeNeedsMachine())')).toBeLessThan(tap.indexOf('api.machineFleetOf?.(m.id)'))
+    expect(machineWhyWords({ name: 'Solis-Core', online: true, appVersion: '0.5.8' }, { surface: 'page', floor: true, trusted: null, block: null })).toBe('Update Cookrew on Solis-Core, and it opens here.')
   })
 
   it('says nothing for a machine that is read', () => {

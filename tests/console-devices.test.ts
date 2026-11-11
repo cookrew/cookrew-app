@@ -355,6 +355,25 @@ describe('a machine that cannot be read says the one thing to do', () => {
     stop()
   })
 
+  it('two machines lost in one round are one question to the registry, not one each and not a chain', async () => {
+    const w = world({ open: true, blocks: { [A]: { kind: 'offline' }, [B]: { kind: 'offline' } }, account: { ok: true, machines: [row(A, 'Studio Mac'), row(B, 'Solis-Core')] } })
+    let accountAsks = 0
+    const store = createConsoleDevices({ ...w.deps, account: () => ((accountAsks += 1), w.deps.account()) })
+    const stop = shown(store)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(4_000)
+    expect(accountAsks).toBe(2)
+    // They take turns answering and letting go, each round a new loss: still no faster than the summaries' own clock.
+    for (let round = 0; round < 6; round += 1) {
+      w.set(round % 2 === 0 ? { snapshots: { [A]: snapshot('Studio Mac') }, blocks: { [B]: { kind: 'offline' } } } : { snapshots: { [B]: snapshot('Solis-Core') }, blocks: { [A]: { kind: 'offline' } } })
+      await vi.advanceTimersByTimeAsync(5_000)
+    }
+    // Thirty seconds of flapping: at most one loss question per five seconds, on top of the first two.
+    expect(accountAsks).toBeLessThanOrEqual(2 + 6)
+    stop()
+  })
+
   it('it refused this browser: its own words, said as its own and cut to a sentence’s length', () => {
     expect(standingOf(row(A, 'Studio Mac'), { open: true, read: false, block: { kind: 'refused', message: 'Remote access is off on this Mac.' } })).toEqual({
       standing: 'blocked',

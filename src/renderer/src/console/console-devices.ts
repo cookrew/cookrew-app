@@ -142,6 +142,8 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
   let passRefused: ReadonlySet<string> = new Set()
   /** Machines the list calls online that did not answer, for which the list was asked again: once per loss. */
   let lineLost: ReadonlySet<string> = new Set()
+  /** When the list was last asked for because of a loss: several losses close together are one question. */
+  let lossAskedAt = Number.NEGATIVE_INFINITY
   let gateWasOpen = false
   /** Bumped when a SUMMARY read must not be filed any more (the gate closed, the level left the screen). */
   let era = 0
@@ -223,7 +225,12 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
       if (read !== null && lineLost.has(id)) lineLost = new Set([...lineLost].filter((held) => held !== id))
       if (read === null && deps.why(id)?.kind === 'offline' && !lineLost.has(id)) {
         lineLost = new Set([...lineLost, id])
-        void askAccount()
+        // No faster than the summaries' own clock: two machines letting go in turn would otherwise
+        // each start the next round at once, and the registry would be asked as fast as it answers.
+        if (Date.now() - lossAskedAt >= SUMMARY_EVERY_MS) {
+          lossAskedAt = Date.now()
+          void askAccount()
+        }
       }
       if (read === null && deps.why(id)?.kind === 'needs-proof') {
         // Not asked again with the same pass: each ask is its door, through the relay.
@@ -283,6 +290,7 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
         snapshots = {}
         passRefused = new Set()
         lineLost = new Set()
+        lossAskedAt = Number.NEGATIVE_INFINITY
         reproofAsked = false
         compose()
       }

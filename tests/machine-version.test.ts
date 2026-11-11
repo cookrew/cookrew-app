@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { MIN_MACHINE_VERSION, machineOutdated } from '../src/shared/machine-version'
 import { MIN_MACHINE_VERSION as CONSOLE_FLOOR } from '../src/renderer/src/console/console-devices'
+import { gaugedMachines } from '../src/renderer/src/zoom/gauged-machines'
 
 /**
  * THE OLDEST MACHINE THIS BUILD READS (shared/machine-version.ts). 0.6.0 is the
@@ -28,5 +29,22 @@ describe('which machines are too old to read', () => {
   it('is one floor: the console’s Devices level names the same one', () => {
     expect(CONSOLE_FLOOR).toBe(MIN_MACHINE_VERSION)
     expect(MIN_MACHINE_VERSION).toBe('0.6.0')
+  })
+})
+
+describe('whose gauges are read on the devices stop', () => {
+  const machines = [
+    { id: 'me', name: 'Studio', local: true, online: true, appVersion: '0.6.0' },
+    { id: 'a', name: 'Laptop', local: false, online: true, appVersion: '0.6.0' },
+    { id: 'old', name: 'Attic', local: false, online: true, appVersion: '0.5.8' },
+    { id: 'unknown', name: 'Shed', local: false, online: true, appVersion: null }
+  ]
+
+  it('on the console, a machine below the floor gets no line: reading its gauges would be asking it', () => {
+    expect(gaugedMachines(machines, true).map((m) => m.id)).toEqual(['a'])
+  })
+
+  it('in the app, every other machine has its line, as before', () => {
+    expect(gaugedMachines(machines, false).map((m) => m.id)).toEqual(['a', 'old', 'unknown'])
   })
 })
