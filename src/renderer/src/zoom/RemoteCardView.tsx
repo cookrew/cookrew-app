@@ -38,7 +38,7 @@ function useNote(): [{ text: string; failed: boolean } | null, (text: string, fa
   return [note, say]
 }
 
-function Thumb({ machine, item, onOpen }: { machine: RemoteMachineRef; item: RemoteItem; onOpen: () => void }): React.JSX.Element {
+export function Thumb({ machine, item, onOpen }: { machine: RemoteMachineRef; item: RemoteItem; onOpen: () => void }): React.JSX.Element {
   const { src } = useRemotePicture(machine.id, item.kind === 'browser' ? item.id : null, THUMB_W, true, REMOTE_PEEK_MS)
   // A picture that does not decode is no picture: the coin's letter stands instead.
   const [broken, setBroken] = useState<string | null>(null)

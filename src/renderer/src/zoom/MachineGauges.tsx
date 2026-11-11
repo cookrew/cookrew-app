@@ -17,7 +17,6 @@ import { gaugeCells, NO_GPU, NO_READING, type GaugeCell } from '../../../shared/
 import { scopeNeedsMachine } from '../machine-scope'
 import { atDevicesStop, gaugeStore, type GaugeReading } from './gauge-store'
 import { gaugedMachines } from './gauged-machines'
-import { useZoomFleetView } from './use-zoom-fleet'
 import { zoomStore } from './zoom-store'
 import './gauges.css'
 
@@ -74,6 +73,20 @@ const MachineLine = memo(function MachineLine({ machineId, name, local = false, 
   )
 })
 
+/**
+ * ONE MACHINE'S GAUGES, UNDER ITS NAME on the devices stop (owner 2026-11-11:
+ * every device on one canvas; the panel over all of them is gone). Asked for
+ * only while the devices stop is on show: off it, nothing is read.
+ */
+export const MachineGaugeLine = memo(function MachineGaugeLine({ machineId, local = false, online = true }: { machineId: string; local?: boolean; online?: boolean }): React.JSX.Element | null {
+  const onStop = useSyncExternalStore(zoomStore.subscribe, onTheStop, onTheStop)
+  const subscribe = useCallback((listener: () => void) => gaugeStore().subscribe(machineId, listener), [machineId])
+  const reading = useSyncExternalStore(subscribe, () => gaugeStore().get(machineId), nothingYet)
+  useEffect(() => (online && onStop ? gaugeStore().watch(machineId, local) : undefined), [online, onStop, machineId, local])
+  if (!online) return null
+  return <span className="zv-gauge-line"><GaugeRow reading={reading} /></span>
+})
+
 interface ListedMachine {
   id: string
   name: string
@@ -113,9 +126,3 @@ export function GaugeList({ localName, machines }: { localName: string; machines
     </section>
   )
 }
-
-export const GaugePanel = memo(function GaugePanel({ localName }: { localName: string }): React.JSX.Element | null {
-  const onStop = useSyncExternalStore(zoomStore.subscribe, onTheStop, onTheStop)
-  const fleet = useZoomFleetView()
-  return onStop ? <GaugeList localName={localName} machines={fleet.machines} /> : null
-})

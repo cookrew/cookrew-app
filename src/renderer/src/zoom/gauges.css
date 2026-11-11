@@ -152,3 +152,27 @@
     grid-column: 1 / -1;
   }
 }
+
+/* ── one machine's gauges, under its name on the devices stop (MachineGauges.tsx · MachineGaugeLine) ──
+   The panel over every machine is gone (owner 2026-11-11): each frame carries its own. */
+.zv-gauge-line {
+  display: grid;
+  grid-template-columns: repeat(4, max-content);
+  justify-content: start;
+  gap: 4px 18px;
+  margin-top: 4px;
+  white-space: normal;
+  font: 12px/1.25 var(--zv-mono);
+  color: var(--zv-ink-soft);
+}
+
+.zv-gauge-line .zv-gauges-none {
+  grid-column: 1 / -1;
+}
+
+.zv-gauge-line .zv-gauge-value,
+.zv-gauge-line .zv-gauge-sub {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}

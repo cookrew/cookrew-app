@@ -51,16 +51,30 @@ describe('nobody signed in', () => {
 })
 
 describe('signed in, at the machines', () => {
-  it('is the Devices level', () => {
-    expect(decideView(input({ route: DEVICES }))).toEqual({ view: { kind: 'devices', wants: null }, act: { kind: 'none' } })
+  // EVERY DEVICE ON ONE CANVAS (owner 2026-11-11): past the gate the Devices level IS the app's
+  // own devices stop, drawn from a machine in scope with every other machine beside it.
+  it('past the gate, the Devices level is a machine’s own canvas: its door asked, then entered, then shown', () => {
+    expect(decideView(input({ route: DEVICES }))).toEqual({ view: { kind: 'entering', machine: M }, act: { kind: 'open-door', machine: M } })
+    expect(decideView(input({ route: DEVICES, door: { machine: M, state: 'open' } }))).toEqual({ view: { kind: 'entering', machine: M }, act: { kind: 'enter', machine: M } })
+    expect(decideView(input({ route: DEVICES, door: { machine: M, state: 'open' }, entered: M }))).toEqual({ view: { kind: 'machine', machine: M }, act: { kind: 'none' } })
   })
 
-  it('leaves the machine it was in', () => {
-    expect(decideView(input({ route: DEVICES, entered: M }))).toEqual({ view: { kind: 'devices', wants: null }, act: { kind: 'leave' } })
+  it('the machine already in scope stays: stepping out to the devices leaves nothing', () => {
+    const both = { status: 'ready' as const, machines: [machine(M, 'live'), machine(OTHER, 'live')], error: null }
+    expect(decideView(input({ route: DEVICES, devices: both, entered: OTHER, door: { machine: OTHER, state: 'open' } }))).toEqual({ view: { kind: 'machine', machine: OTHER }, act: { kind: 'none' } })
   })
-})
 
-describe('an address that names a machine', () => {
+  it('no machine that can be read, or a door that said no: the Devices level of the page, asking nothing more', () => {
+    expect(decideView(input({ route: DEVICES, devices: { status: 'ready', machines: [machine(M, 'offline', 'Studio Mac is offline.')], error: null } }))).toEqual({ view: { kind: 'devices', wants: null }, act: { kind: 'none' } })
+    expect(decideView(input({ route: DEVICES, door: { machine: M, state: 'refused', message: 'no' } }))).toEqual({ view: { kind: 'devices', wants: null }, act: { kind: 'back', notice: 'no' } })
+    expect(decideView(input({ route: DEVICES, devices: { status: 'loading', machines: [], error: null } }))).toEqual({ view: { kind: 'devices', wants: null }, act: { kind: 'none' } })
+  })
+
+  it('before the gate: the Devices level of the page, and the machine it was in is left', () => {
+    expect(decideView(input({ route: DEVICES, gate: 'closed' }))).toEqual({ view: { kind: 'devices', wants: null }, act: { kind: 'none' } })
+    expect(decideView(input({ route: DEVICES, gate: 'closed', entered: M }))).toEqual({ view: { kind: 'devices', wants: null }, act: { kind: 'leave' } })
+  })
+
   it('before the gate: the Devices level, remembering where it was going, and no machine in scope', () => {
     for (const gate of ['closed', 'unknown'] as const) {
       expect(decideView(input({ gate }))).toEqual({ view: { kind: 'devices', wants: M }, act: { kind: 'none' } })

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { remoteDraft, remotePlace, setRemoteDraft } from '../src/renderer/src/zoom/remote-machine-store'
+import { remoteDraft, remotePlace, remoteStop, setRemoteDraft } from '../src/renderer/src/zoom/remote-machine-store'
 
 /** Where the zoom view stands inside another machine, and the words kept for it (owner 2026-11-10, B). */
 
@@ -61,5 +61,44 @@ describe('drafts: words typed for another machine stay, whatever happens to it',
     expect(remoteDraft('other', 't-1')).toBe('')
     setRemoteDraft(SOLIS.id, 't-1', '')
     expect(remoteDraft(SOLIS.id, 't-1')).toBe('')
+  })
+})
+
+// THE BAR DRIVES ANOTHER MACHINE (owner 2026-11-11): its workspaces, then a workspace's agents or
+// its artifacts, the same stops this machine's bar has; the breadcrumb strip is gone.
+describe('the bar inside another machine', () => {
+  const SOLIS = { id: '0f8c7b1e-1234-4abc-9def-0123456789ab', name: 'Solis-Core', os: 'linux' }
+  beforeEach(() => remotePlace.leave())
+
+  it('says which stop it stands on', () => {
+    expect(remoteStop(remotePlace.get())).toBeNull()
+    remotePlace.enter(SOLIS)
+    expect(remoteStop(remotePlace.get())).toBe('workspaces')
+    remotePlace.workspace({ id: 'w-1', name: 'Box Lab' })
+    expect(remoteStop(remotePlace.get())).toBe('agents')
+    remotePlace.side('items')
+    expect(remoteStop(remotePlace.get())).toBe('items')
+    remotePlace.agent({ id: 't-1', name: 'Herdr Env' })
+    expect(remoteStop(remotePlace.get())).toBe('agents')
+  })
+
+  it('AGENTS or ARTIFACTS from its workspaces goes into the workspace in front there', () => {
+    remotePlace.enter(SOLIS)
+    remotePlace.noteFront({ id: 'w-2', name: 'Gauge' })
+    remotePlace.side('items')
+    expect(remotePlace.get()).toMatchObject({ workspace: { id: 'w-2' }, side: 'items', agent: null })
+    remotePlace.side('agents')
+    expect(remotePlace.get()).toMatchObject({ workspace: { id: 'w-2' }, side: 'agents' })
+  })
+
+  it('a side with no workspace known stays at the workspaces; a new workspace starts on the agents', () => {
+    remotePlace.enter(SOLIS)
+    remotePlace.side('items')
+    expect(remoteStop(remotePlace.get())).toBe('workspaces')
+    remotePlace.workspace({ id: 'w-1', name: 'Box Lab' })
+    remotePlace.side('items')
+    remotePlace.backTo(1)
+    remotePlace.workspace({ id: 'w-3', name: 'Playground' })
+    expect(remotePlace.get().side).toBe('agents')
   })
 })

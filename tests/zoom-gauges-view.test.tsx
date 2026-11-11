@@ -79,18 +79,22 @@ describe('no reading at all', () => {
 })
 
 describe('where they stand', () => {
-  it('out of the scaled scene: a layer at 0.27 made them 2.9 px on a phone, so the view mounts one panel in screen pixels', () => {
+  // EVERY DEVICE ON ONE CANVAS (owner 2026-11-11, answered "yes" to "one line under each machine's
+  // name"): the panel over all machines is gone; each frame carries its own line, read only on the stop.
+  it('under each machine’s name, one line each, and no panel over them all', () => {
     const view = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
-    expect(view).toContain('<GaugePanel localName={machine} />')
-    expect(view.indexOf('<GaugePanel')).toBeLessThan(view.indexOf('className="zv-overview"'))
-    // The machine's own label is as it was: the painter's words are not touched.
-    expect(readFileSync('src/renderer/src/zoom/ZoomParts.tsx', 'utf8')).not.toMatch(/gauge/i)
+    expect(view).not.toContain('<GaugePanel')
+    expect(view).toContain('<MachineGaugeLine machineId="local" local />')
+    expect(view).toMatch(/<MachineGaugeLine machineId=\{m\.id\}/)
+    const leaf = readFileSync('src/renderer/src/zoom/MachineGauges.tsx', 'utf8')
+    expect(leaf).toMatch(/export const MachineGaugeLine = memo\(/)
+    expect(leaf).toMatch(/online && onStop \? gaugeStore\(\)\.watch/)
   })
   it('the leaf holds every subscription, so the view never hears a sample or a zoom step', () => {
     const view = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
     expect(view).not.toMatch(/useGauge|gaugeStore|gauge-store/)
     const leaf = readFileSync('src/renderer/src/zoom/MachineGauges.tsx', 'utf8')
-    expect(leaf).toMatch(/export const GaugePanel = memo\(/)
+    expect(leaf).toMatch(/export const MachineGaugeLine = memo\(/)
     expect(leaf).toMatch(/useSyncExternalStore\(zoomStore\.subscribe/)
   })
   it('its rows are memoised on primitives: a new fleet with the same names does not reach them', () => {

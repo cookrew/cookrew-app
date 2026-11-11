@@ -100,6 +100,8 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
   let state: RuntimeState = { view: { kind: 'starting' }, notice: null }
   let entered: string | null = null
   let door: DoorState | null = null
+  /** Sent back to the machines: the Devices level opens nothing by itself until one is chosen (console-navigator.ts). */
+  let stayOut = false
   let booted = false
   let stopDevices: (() => void) | null = null
   const now = deps.now ?? Date.now
@@ -188,7 +190,8 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
     // Each act changes what is known; decide again until there is nothing left to do.
     for (let turn = 0; turn < 8; turn += 1) {
       const route = deps.router.get()
-      const { view, act } = decideView({ session: deps.session.get(), gate: deps.gate.get().status, route, devices: deps.devices.get(), entered, door })
+      if (route.kind === 'machine') stayOut = false
+      const { view, act } = decideView({ session: deps.session.get(), gate: deps.gate.get().status, route, devices: deps.devices.get(), entered, door, stayOut })
       if (act.kind === 'none') {
         // A door still being asked for a machine the page is no longer going to: its answer will open nothing.
         if (view.kind !== 'entering' && view.kind !== 'machine' && door?.state === 'asking') door = null
@@ -204,12 +207,13 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
         if (route.kind === 'machine' && route.workspace !== null) deps.takeSeat(route.workspace)
       } else {
         leaveScope()
+        stayOut = true
         state = { ...state, notice: act.notice }
         deps.router.go(DEVICES_ROUTE)
       }
     }
     // Not reached while each act settles something; if it ever is, the page still says where it stands.
-    tell(decideView({ session: deps.session.get(), gate: deps.gate.get().status, route: deps.router.get(), devices: deps.devices.get(), entered, door }).view)
+    tell(decideView({ session: deps.session.get(), gate: deps.gate.get().status, route: deps.router.get(), devices: deps.devices.get(), entered, door, stayOut }).view)
   }
 
   const onSession = (): void => {
@@ -269,10 +273,16 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
     },
     open: (machineId, workspaceId = null) => {
       retried = null
+      // Chosen now: a no from an earlier ask is not this answer; its door is asked again.
+      if (door?.state === 'refused') door = null
       tell(state.view, null)
       deps.router.go({ kind: 'machine', machine: machineId, workspace: workspaceId, agent: null, side: 'agents' })
     },
-    leave: () => deps.router.go(DEVICES_ROUTE),
+    leave: () => {
+      stayOut = true
+      deps.router.go(DEVICES_ROUTE)
+      evaluate()
+    },
     keyRefused: (machineId) => {
       if (entered !== machineId) return
       deps.forgetDoor(machineId)

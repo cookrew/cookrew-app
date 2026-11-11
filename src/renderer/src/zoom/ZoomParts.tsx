@@ -1,12 +1,12 @@
 import { memo, useState } from 'react'
 import { sameProps } from './same-props'
 import { useThumb } from '../activity-thumb-store'
-import { InkAvatar, InkRing } from './InkAvatar'
+import { InkAvatar } from './InkAvatar'
 import { CardBody } from './CardBody'
 import { QuickReply, useQuickReply } from './quick-reply'
 import { typingOf } from './typing-line'
 import './agent-card.css'
-import type { AgentView, ItemView, MachineView } from './zoom-model'
+import type { AgentView, ItemView } from './zoom-model'
 import { NEW_POSE } from './zoom-layout'
 import { useNameEdit } from './NameEdit'
 
@@ -254,7 +254,7 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
  * handler: its press bubbles to the card, which is also what a press on the
  * words reaches, and the share button keeps its press to itself.
  */
-export function LocalMachine({ name, detail, bind, onOpen, onShare }: { name: string; detail: string; bind: Bind; onOpen: () => void; onShare: (() => void) | null }): React.JSX.Element {
+export function LocalMachine({ name, detail, bind, onOpen, onShare, gauge = null }: { name: string; detail: string; bind: Bind; onOpen: () => void; onShare: (() => void) | null; gauge?: React.ReactNode }): React.JSX.Element {
   return (
     <div className="zv-machine" ref={bind('machine')} onClick={onOpen}>
       <button type="button" className="zv-machine-open" aria-label={`Open ${name}`} />
@@ -262,6 +262,7 @@ export function LocalMachine({ name, detail, bind, onOpen, onShare }: { name: st
       <span className="zv-machine-label">
         <b>{name}</b>
         <small>{detail}</small>
+        {gauge}
         {onShare && (
           <button
             type="button"
@@ -279,40 +280,3 @@ export function LocalMachine({ name, detail, bind, onOpen, onShare }: { name: st
   )
 }
 
-/**
- * Another machine of the account on the devices stop, DRAWN AS A MACHINE, the
- * way this one is (0.6.0): a frame, a screen, a base, its name under it. Its
- * screen shows the workspaces its own summary seats (a ring and a name each).
- * One that cannot be read has a dark screen and says the one thing to do
- * (`say`, machine-why.ts · machineSays): never "listed only", never a zero it
- * does not know.
- */
-export function MachineNode({ machine, say, bind, onOpen }: { machine: MachineView; say: string | null; bind: Bind; onOpen: () => void }): React.JSX.Element {
-  // Read is "nothing stands in the way". A machine with no workspaces is read: its screen is lit and empty.
-  const read = say === null
-  const counts = `${countOf(machine.workspaces.length, 'workspace')}${machine.agents !== null ? ` · ${countOf(machine.agents, 'agent')}` : ''}${machine.waiting ? ` · ${machine.waiting} waiting` : ''}`
-  const line = say ?? counts
-  return (
-    <div ref={bind(`machinecard:${machine.id}`)} className={`zv-machinecard${machine.online ? '' : ' off'}`} data-read={read}
-      title={`${machine.name} · ${line}`}
-      {...press(onOpen, `${machine.name}, ${line}`)}>
-      <div className="zv-machinecard-screen">
-        {read && machine.workspaces.slice(0, 6).map((w) => (
-          <div key={w.id} className="zv-mws">
-            <div className="zv-mws-ring"><InkRing seed={3 + w.name.length} /></div>
-            <span>{w.name}</span>
-            {w.waiting && <i className="zv-mws-dot" />}
-          </div>
-        ))}
-        {read && machine.workspaces.length === 0 && <span className="zv-none">no workspaces</span>}
-      </div>
-      <span className="zv-machinecard-deck" />
-      <div className="zv-machinecard-label">
-        <b>{machine.name}</b>
-        <small>{line}</small>
-      </div>
-    </div>
-  )
-}
-
-const countOf = (n: number, one: string): string => `${n} ${one}${n === 1 ? '' : 's'}`

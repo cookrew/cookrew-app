@@ -88,27 +88,36 @@ describe('the devices stop', () => {
     expect(L.device.screen.w).toBeGreaterThan(L.device.box.w)
   })
 
-  it('stands the other machines under the screen', () => {
-    const tall = deviceOf(ids(2), false, 0.5)
-    // Under its name and its pill (LABEL_ROOM), which stood over the first machine at desk width too.
-    expect(machinesAt(1, tall.screen, false).at[0].y).toBe(tall.screen.h / 2 + 120 + LABEL_ROOM.desk)
+  // EVERY DEVICE ON ONE CANVAS (owner 2026-11-11, screenshot 5): each machine is the same
+  // frame, standing in one row with this one first; a phone stacks them, one a row.
+  it('on a desk, the others stand in this machine\'s row, a frame apart, and wrap after four', () => {
+    const f = { w: 520, h: 330 }
+    const two = machinesAt(2, f, false)
+    expect(two.at.map((p) => p.y)).toEqual([0, 0])
+    expect(two.at[0].x).toBeGreaterThan(f.w)
+    expect(two.at[1].x - two.at[0].x).toBe(two.at[0].x)
+    const five = machinesAt(5, f, false)
+    expect(five.at[3].y).toBeGreaterThan(0)
+    expect(five.at[3].x).toBe(0)
   })
 
-  // A PHONE AT 412 PX (owner screenshot 2026-11-10): three machines stood one per row, and
-  // the camera framed them three across, so everything was drawn at a quarter and the
-  // Mac's "Remote desktop" pill, kept at a thumb's size, lay over the first one.
-  it('on a phone, two machines a row, framed as wide as they stand, with room under the screen for its label and pill', () => {
-    const phone = deviceOf(ids(9), true, screenAspectOf(MBP16))
-    const three = machinesAt(3, phone.screen, true)
-    expect(three.rows).toBe(2)
-    expect(new Set(three.at.map((p) => p.y)).size).toBe(2)
-    expect(three.at[0].y).toBeGreaterThan(machinesAt(3, phone.screen, false).at[0].y)
-    const L = layoutOf(frame(screenAspectOf(MBP16), 3), true)
-    const desk = layoutOf(frame(screenAspectOf(MBP16), 3), false)
-    expect(L.devicesBox.w).toBeLessThan(desk.devicesBox.w)
-    // At 412 × 915 a machine's card was drawn 99 px across (framed three wide): now well over a quarter of the view.
-    const scale = Math.min((412 - 32) / L.devicesBox.w, (915 - 32) / L.devicesBox.h)
-    expect(380 * scale).toBeGreaterThan(412 / 4 + 10)
+  it('on a phone, one machine a row, under this one, with room for its name, gauges and pill', () => {
+    const f = { w: 520, h: 330 }
+    const two = machinesAt(2, f, true)
+    expect(two.at.map((p) => p.x)).toEqual([0, 0])
+    expect(two.at[0].y).toBeGreaterThan(f.h + LABEL_ROOM.narrow - 1)
+  })
+
+  it('frames the whole row, centred on it: this machine alone is framed as before', () => {
+    const f = { w: 520, h: 330 }
+    const alone = machinesAt(0, f, false).box
+    expect(alone.cx).toBe(0)
+    const row = machinesAt(2, f, false)
+    expect(row.box.cx).toBe(row.at[1].x / 2)
+    expect(row.box.w).toBeGreaterThan(row.at[1].x + f.w)
+    const L = layoutOf(frame(screenAspectOf(MBP16), 2), false)
+    expect(L.devicesBox.cx).toBeGreaterThan(0)
+    expect(layoutOf(frame(screenAspectOf(MBP16), 0), false).devicesBox.cx).toBe(0)
   })
 })
 

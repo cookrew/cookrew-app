@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { crumbsOf, menuCall, parseRemoteCards, remoteAgentView, replyCall, sendRefusal, stopCall, tileView } from '../src/renderer/src/zoom/remote-machine'
+import { artifactsOf, crumbsOf, menuCall, parseRemoteCards, remoteAgentView, replyCall, sendRefusal, stopCall, tileView } from '../src/renderer/src/zoom/remote-machine'
 
 /**
  * ANOTHER MACHINE INSIDE THIS ONE'S ZOOM VIEW (owner 2026-11-10, design B): the
@@ -136,5 +136,15 @@ describe('what a card sends', () => {
     const shown = menu([{ key: '1', label: 'Yes', detail: null }])
     expect(menuCall(shown, shown.choice!, { kind: 'row', index: 0 })).toEqual({ route: 'api/terminal/t-1/menu', body: { menu: 'm-1', brief: '', act: { kind: 'row', index: 0 } } })
     expect(stopCall({ id: 'a/b' })).toEqual({ route: 'api/watch/card/a%2Fb/stop' })
+  })
+})
+
+// ARTIFACTS ON THE BAR, INSIDE ANOTHER MACHINE (owner 2026-11-11): a workspace's browsers and notes,
+// each once, with the agent it is opened under.
+describe('artifactsOf', () => {
+  it('each item once, the first agent that wears it, in crew order', () => {
+    const read = parseRemoteCards(answer({ cards: [card(), card({ id: 't-2', name: 'Box Test', items: [{ id: 'b-1', kind: 'browser', title: 'Box', host: 'h', tint: '#456', initial: 'B' }, { id: 'n-1', kind: 'note', title: 'plan' }] })] }))!
+    expect(artifactsOf(read.cards).map((a) => [a.item.id, a.card.id])).toEqual([['b-1', 't-1'], ['n-1', 't-2']])
+    expect(artifactsOf([])).toEqual([])
   })
 })
