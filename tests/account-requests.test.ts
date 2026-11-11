@@ -45,18 +45,9 @@ const join: QueueRow = {
   expiresAt: NOW + MINUTE,
   state: 'pending',
 }
-const seat: QueueRow = {
-  id: 's1',
-  kind: 'seat',
-  account: 'jkim',
-  team: '@mira/research-crew',
-  address: 'jkim',
-  at: AT,
-  expiresAt: NOW + MINUTE,
-  state: 'pending',
-}
+const phone: QueueRow = { ...join, id: 'j2', device: 'iPhone' }
 
-describe('a waiting row, by kind', () => {
+describe('a waiting row', () => {
   it('a join asks for the number, and APPROVE cannot fire until it is filled', () => {
     const view = pendingRowView(join, INPUT)
     expect(view.lead).toBe('Mac Studio wants to join @drej')
@@ -69,32 +60,26 @@ describe('a waiting row, by kind', () => {
     expect(view.chip).toBeNull()
   })
 
-  it('there is no third kind: nothing here offers ALLOW, or says a phone is asking for Wi-Fi', () => {
-    const offered = [join, seat].flatMap((row) => pendingRowView(row, INPUT).actions.map((a) => a.id))
-    expect(offered).toEqual(['approve', 'deny', 'not-me', 'seat-them', 'decline'])
+  it('there is no other kind: nothing here offers ALLOW or SEAT THEM, or says who else might be asking', () => {
+    const offered = [join, phone].flatMap((row) => pendingRowView(row, INPUT).actions.map((a) => a.id))
+    expect(offered).toEqual(['approve', 'deny', 'not-me', 'approve', 'deny', 'not-me'])
     const said = [...Object.values(REQUEST_COPY), queueFooter(), queueEmpty()].join(' ')
+    // A phone asking for Wi-Fi, and a guest asking for a seat: both gone with the pages that raised them (0.6.0).
     expect(said).not.toMatch(/\bALLOW\b|NOT NOW|Wi-Fi|\bLAN\b/)
-  })
-
-  it('a seat names both the guest and the room, and is answered by two buttons', () => {
-    const view = pendingRowView(seat, INPUT)
-    expect(view.lead).toBe('@jkim asks for a seat at @mira/research-crew.')
-    expect(view.actions.map((a) => a.id)).toEqual(['seat-them', 'decline'])
-    expect(view.initials).toBe('JK')
+    expect(said).not.toMatch(/SEAT THEM|DECLINE|SEATED|\bseat/i)
   })
 
   it('every row ends with how long it has been asking', () => {
-    for (const row of [join, seat]) {
-      expect(pendingRowView(row, INPUT).detail, row.kind).toMatch(/4 minutes ago$/)
+    for (const row of [join, phone]) {
+      expect(pendingRowView(row, INPUT).detail, row.id).toMatch(/4 minutes ago$/)
     }
   })
 
   it('never invents a fact the wire did not carry', () => {
-    // The design's mock shows "$4 team · 3 seated" and a device kind; the
-    // queue's shape carries neither, so the row says less rather than guessing.
-    const view = pendingRowView(seat, INPUT)
-    expect(view.detail).not.toMatch(/\$/)
-    expect(view.detail).not.toMatch(/seated/)
+    // The design's mock shows a device kind; the queue's shape does not carry
+    // one, so the row says less rather than guessing.
+    const view = pendingRowView(join, INPUT)
+    expect(view.detail).toBe('Sign-in · Shanghai · 4 minutes ago')
   })
 })
 
@@ -111,11 +96,6 @@ describe('a row that is over', () => {
   it('wears the chip its outcome earned, and says so in the first person', () => {
     const cases: [AnsweredRow, string, string][] = [
       [answered({}), REQUEST_COPY.CHIP_DONE, REQUEST_COPY.OVER_APPROVED],
-      [
-        answered({ kind: 'seat', outcome: 'seated', subject: 'jkim', team: '@mira/research-crew' }),
-        REQUEST_COPY.CHIP_SEATED,
-        REQUEST_COPY.OVER_SEATED,
-      ],
       [answered({ outcome: 'denied', subject: 'iPhone' }), REQUEST_COPY.CHIP_NOT_ME, REQUEST_COPY.OVER_DENIED],
     ]
     for (const [row, chip, clause] of cases) {
@@ -128,11 +108,8 @@ describe('a row that is over', () => {
     }
   })
 
-  it('reads the table sentence for each of the three states', () => {
+  it('reads the table sentence for each of the two states', () => {
     expect(answeredRowView(answered({}), INPUT).lead).toBe('Mac Studio joined @drej')
-    expect(
-      answeredRowView(answered({ kind: 'seat', outcome: 'seated', subject: 'jkim', team: 'RESEARCH CREW' }), INPUT).lead,
-    ).toBe('@jkim is seated at RESEARCH CREW')
     expect(answeredRowView(answered({ outcome: 'denied', subject: 'iPhone' }), INPUT).lead).toBe(
       'A sign-in as @drej was denied on iPhone',
     )
@@ -159,12 +136,12 @@ describe('the card as a whole', () => {
   })
 
   it('orders each half newest first', () => {
-    const older: QueueRow = { ...seat, id: 's0', at: AT - MINUTE }
-    expect(queueView([older, join], [], INPUT).map((r) => r.id)).toEqual(['j1', 's0'])
+    const older: QueueRow = { ...phone, id: 'j0', at: AT - MINUTE }
+    expect(queueView([older, join], [], INPUT).map((r) => r.id)).toEqual(['j1', 'j0'])
   })
 
-  it('counts every kind on the badge, and no finished row', () => {
-    expect(badgeCount([join, seat])).toBe(2)
+  it('counts every waiting row on the badge, and no finished row', () => {
+    expect(badgeCount([join, phone])).toBe(2)
     expect(badgeCount([])).toBe(0)
   })
 
@@ -208,7 +185,7 @@ describe('what a device is told', () => {
     ...over,
   })
 
-  it('has a sentence for every kind, and borrows five of the six', () => {
+  it('has a sentence for every kind, and borrows all but one from the table', () => {
     expect(eventNotice(event({}), 'drej')).toBe('Mac Studio joined @drej')
     const revoke = eventNotice(event({ kind: 'revoked', device: 'iPhone' }), 'drej')
     // The LEAD of the table's revoke sentence, asserted by identity rather
@@ -226,12 +203,11 @@ describe('what a device is told', () => {
     expect(eventNotice(event({ kind: 'not-me', device: undefined }), 'drej')).toBe(
       `A sign-in as @drej was denied on ${ACCOUNT_EVENT_PLAIN.anotherDevice}`,
     )
-    expect(eventNotice(event({ kind: 'request' }), 'drej')).toBe(ACCOUNT_EVENT_PLAIN.request)
   })
 
   it('announces an arriving row as the row itself reads', () => {
     expect(rowNotice(join, 'drej')).toBe('Mac Studio wants to join @drej')
-    expect(rowNotice(seat, 'drej')).toBe('@jkim asks for a seat at @mira/research-crew.')
+    expect(rowNotice(phone, 'drej')).toBe('iPhone wants to join @drej')
   })
 
   it('never says error, invalid, or a status number', () => {

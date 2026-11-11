@@ -36,11 +36,9 @@ const TABLE_KEYS: V3CopyId[] = [
   'd14.held',
   'd14.moved',
   'g1.identify',
-  'g1.seat',
   'g2.no-seat',
   'g2.budget',
-  'g3.direct',
-  'w6.asked'
+  'g3.direct'
 ]
 
 describe('the copy table is here, in full', () => {
@@ -49,7 +47,7 @@ describe('the copy table is here, in full', () => {
       expect(V3_COPY[key], key).toBeTypeOf('string')
       expect(V3_COPY[key].length, key).toBeGreaterThan(0)
     }
-    expect(TABLE_KEYS).toHaveLength(27)
+    expect(TABLE_KEYS).toHaveLength(25)
   })
 
   it('holds no sentence twice under two keys', () => {

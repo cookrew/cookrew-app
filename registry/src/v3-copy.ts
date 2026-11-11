@@ -37,9 +37,7 @@ export const WEB_V3_COPY = {
     'On the new device open cookrew.dev, choose “Join with a code”, and type this. It works once, for ten minutes.',
   'w5.reach-elsewhere': '{device} asked to reach that Mac on Wi-Fi. Answer it on the Mac itself.',
   'w5.requests-footer':
-    'A device asking to sign in as @{handle}, or somebody asking for a seat. APPROVE needs the number showing on that device; SEAT THEM grants by username; NOT ME signs every other device out and locks the password until you change it.',
-  'w6.no-seat':
-    'Buy one, or ask @{handle} — they see the request on every device, and you are seated the moment they say yes.'
+    'A device asking to sign in as @{handle}. APPROVE needs the number showing on that device; NOT ME signs every other device out and locks the password until you change it.'
 } as const
 
 export type WebV3CopyId = keyof typeof WEB_V3_COPY

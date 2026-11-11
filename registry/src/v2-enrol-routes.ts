@@ -287,9 +287,7 @@ async function answerApproval(ctx: V2Context, signed: Signed, id: string): Promi
     // A code the stranger may be holding goes too. A password account's redeem
     // is shut by the password lock; a passwordless account has no such lock.
     if (signed.account.passwordless === true) ctx.v2.joinCodes.voidFor(username)
-    // §06: "not me" empties the queue — every seat request the account is
-    // party to goes with the alarm — and every device is told.
-    ctx.v2.requests.emptyFor(username)
+    // §06: every device is told. The queue is the pending sign-ins, closed above.
     ctx.v2.events.append(username, { kind: 'not-me' })
   }
   noContent(ctx.response)

@@ -15,13 +15,20 @@ import { createV2 } from '../registry/src/v2-routes'
 /**
  * IDENTITY v3 — THE ONE QUEUE, over HTTP (V3-11).
  *
- * The two kinds through the same list (a sign-in waiting for a nod, a guest
- * asking for a seat), the seat ruling's route, and the revocation table: a
- * revoke is told to every device, "not me" empties the queue.
+ * What is listed is a sign-in waiting for a nod, answered at the approvals
+ * route with the number; and the feed every device catches up on.
  *
- * A THIRD KIND IS GONE (0.6.0): a device asking one Mac for Wi-Fi. Its route
- * answers as any route the registry never had, and nothing it once opened can
- * be listed, polled or answered.
+ * TWO OTHER KINDS ARE GONE (0.6.0): a device asking one Mac for Wi-Fi, and a
+ * guest asking a team's owner for a seat. Each one's route answers as any
+ * route the registry never had, and nothing it once opened can be listed,
+ * polled or answered.
+ *
+ * A GUEST IS STILL SEATED, the two ways that were never a request, and both
+ * are proved next door rather than again here: the owner grants by username
+ * (tests/registry-v2-seats-http.test.ts, "grants a seat by username…" and the
+ * app's half in tests/door-seats.test.ts), and a seat bought at the door is
+ * recorded (the same file's "records a bought seat with the rail that settled
+ * it", tests/seat-settle.test.ts and tests/seat-purchase-stripe-e2e.test.ts).
  */
 
 const PASSWORD = 'correct horse battery staple'
@@ -83,7 +90,7 @@ async function attach(username: string, device: Device, approver: string, kind =
   return (await bodyOf<{ token: string }>(done)).token
 }
 
-// The cast, once: an owner with two Macs and a phone, and a paying guest.
+// The cast, once: an owner with two Macs and a phone, and a guest with no seat.
 const drejMac = newDevice()
 const drejMac2 = newDevice()
 const drejPhone = newDevice()
@@ -140,134 +147,77 @@ beforeAll(async () => {
 })
 afterAll(async () => close())
 
-// ── R1: seat requests ──────────────────────────────────────────────────────
+// ── a guest asking for a seat: gone with the team's page (0.6.0) ────────────
 
-describe('POST /v2/teams/@o/t/seat-requests (R1)', () => {
-  it('a signed-in guest asks, and asking twice returns the one request, not two', async () => {
-    const first = await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(miraToken))
-    expect(first.status).toBe(201)
-    const a = await bodyOf<{ id: string; kind: string; team: string; state: string }>(first)
-    expect(a).toMatchObject({ kind: 'seat', team: '@drej/alpha', state: 'pending' })
-    const again = await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(miraToken))
-    expect((await bodyOf<{ id: string }>(again)).id).toBe(a.id)
-  })
+const feedOf = async (token: string): Promise<{ kind: string; device?: string; address?: string }[]> =>
+  (await bodyOf<{ events: { kind: string; device?: string; address?: string }[] }>(await call('GET', '/v2/me/events?since=0', undefined, as(token)))).events
+const queueOf = async (token: string): Promise<{ id: string; kind: string }[]> =>
+  bodyOf<{ id: string; kind: string }[]>(await call('GET', '/v2/me/requests', undefined, as(token)))
+/** What an answer says, and the realm it names, so two answers can be held side by side. */
+const answerOf = async (res: Response): Promise<{ status: number; body: string; realm: string | null }> => ({
+  status: res.status,
+  body: await res.text(),
+  realm: res.headers.get('www-authenticate')
+})
 
-  it('a signed-out guest is refused with the realm', async () => {
-    const res = await call('POST', '/v2/teams/@drej/alpha/seat-requests', {})
-    expect(res.status).toBe(401)
-    expect(res.headers.get('www-authenticate')).toBe('Cookrew realm="@drej/alpha"')
-  })
+describe('POST /v2/teams/@o/t/seat-requests, which the registry no longer takes', () => {
+  /** Who might ask: a guest with no seat, the team's owner, another device of the owner, and nobody. */
+  const askers = (): readonly (string | undefined)[] => [miraToken, drejToken, drejPhoneToken, undefined]
 
-  it('lands in the OWNER’s queue as one seat row, and nowhere the guest can see', async () => {
-    const owner = await bodyOf<{ id: string; kind: string; account: string; team: string }[]>(
-      await call('GET', '/v2/me/requests', undefined, as(drejToken))
-    )
-    const seat = owner.find((r) => r.kind === 'seat')
-    expect(seat).toMatchObject({ kind: 'seat', account: 'mira', team: '@drej/alpha' })
-    // The guest's own queue never shows the request they made.
-    const guest = await bodyOf<unknown[]>(await call('GET', '/v2/me/requests', undefined, as(miraToken)))
-    expect(guest).toEqual([])
-  })
-
-  it('APPROVE grants the seat, so the guest’s own GET …/seat sees it next poll', async () => {
-    const owner = await bodyOf<{ id: string; kind: string }[]>(
-      await call('GET', '/v2/me/requests', undefined, as(drejToken))
-    )
-    const seat = owner.find((r) => r.kind === 'seat')!
-    const before = await bodyOf<{ seat: unknown }>(await call('GET', '/v2/teams/@drej/alpha/seat', undefined, as(miraToken)))
-    expect(before.seat).toBeNull()
-    expect((await call('POST', `/v2/me/requests/${seat.id}`, { decision: 'approve' }, as(drejToken))).status).toBe(204)
-    const after = await bodyOf<{ seat: { account: string; source: string } | null }>(
-      await call('GET', '/v2/teams/@drej/alpha/seat', undefined, as(miraToken))
-    )
-    expect(after.seat).toMatchObject({ account: 'mira', source: 'granted' })
-    // Answered, so it leaves the owner's queue.
-    const owner2 = await bodyOf<{ kind: string }[]>(await call('GET', '/v2/me/requests', undefined, as(drejToken)))
-    expect(owner2.some((r) => r.kind === 'seat')).toBe(false)
-  })
-
-  /**
-   * A STRANGER MUST NOT BE ABLE TO FLUSH THE OWNER'S FEED (H5).
-   *
-   * account:changed is the ONLY channel this design has for telling an owner
-   * that something happened to their account — there is no email. Its tail is
-   * bounded, so anything that can be appended at will is a way to push the
-   * owner's real security events out of it: a device joining, a revoke, a
-   * password change. That is a feed which stops working at exactly the moment
-   * it matters, which is while somebody is attacking the account.
-   *
-   * Two halves, and the flood needs both to be closed:
-   *   · the event follows the DEDUPE — one row per (team, account) already,
-   *     and a request that opened no row is not a thing that happened;
-   *   · the route is LIMITED, like every other route that writes.
-   * And the tail itself now reserves room, so even a distributed ask cannot
-   * evict what the owner has to see.
-   */
-  it('a stranger’s flood leaves the owner’s earlier events still readable', async () => {
-    const flooder = newDevice()
-    const flooderToken = await claim('flood', flooder)
-
-    // The owner's real security events, from before the flood.
-    const throwaway = newDevice()
-    const throwawayToken = await attach('drej', throwaway, drejToken, 'phone')
-    expect(throwawayToken.length).toBeGreaterThan(0)
-    // Revoking another device is on the step-up list (C1), so the password is
-    // proved again here. The threshold in front of the event is not the thing
-    // this test measures — the feed underneath it is.
-    expect(
-      (await call('DELETE', `/v2/me/devices/${throwaway.id}`, { current: PASSWORD }, as(drejToken)))
-        .status
-    ).toBe(204)
-    const before = await bodyOf<{ events: { kind: string }[] }>(
-      await call('GET', '/v2/me/events?since=0', undefined, as(drejToken))
-    )
-    const revokedBefore = before.events.filter((e) => e.kind === 'revoked').length
-    const askedBefore = before.events.filter((e) => e.kind === 'request').length
-    expect(revokedBefore).toBeGreaterThan(0)
-
-    // 120 asks from one account that never gets a seat.
-    let created = 0
-    let limited = 0
-    const ids = new Set<string>()
-    for (let i = 0; i < 120; i += 1) {
-      const res = await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(flooderToken))
-      if (res.status === 429) {
-        limited += 1
-        continue
-      }
-      expect(res.status).toBe(201)
-      created += 1
-      ids.add((await bodyOf<{ id: string }>(res)).id)
+  it('answers exactly as an unknown route under a team does, signed in and signed out', async () => {
+    for (const token of askers()) {
+      const headers = token === undefined ? {} : as(token)
+      const asked = await answerOf(await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, headers))
+      const never = await answerOf(await call('POST', '/v2/teams/@drej/alpha/no-such-thing', {}, headers))
+      expect(asked).toEqual(never)
+      expect(asked.status).toBe(token === undefined ? 401 : 404)
+      // Signed out is told to sign in at this team, as every route under it says; signed in is told there is nothing here.
+      expect(asked.realm).toBe(token === undefined ? 'Cookrew realm="@drej/alpha"' : null)
     }
-
-    // The queue was always right: one row for one asker at one team.
-    const queue = await bodyOf<{ kind: string; account?: string }[]>(
-      await call('GET', '/v2/me/requests', undefined, as(drejToken))
+    // And a team that does not exist is still the same nothing, with or without the word.
+    expect(await answerOf(await call('POST', '/v2/teams/@nobody/nothing/seat-requests', {}, as(miraToken)))).toEqual(
+      await answerOf(await call('POST', '/v2/teams/@nobody/nothing/no-such-thing', {}, as(miraToken)))
     )
-    expect(queue.filter((r) => r.kind === 'seat' && r.account === 'flood')).toHaveLength(1)
-    expect(ids.size).toBe(1)
-    // The route stops answering long before 120, like every sibling that writes.
-    expect(limited).toBeGreaterThan(0)
-    expect(created).toBeLessThan(120)
-
-    // THE FEED IS THE POINT. One arrival is one event, and the owner's own
-    // security events are all still there to be read.
-    const after = await bodyOf<{ events: { kind: string; address?: string }[] }>(
-      await call('GET', '/v2/me/events?since=0', undefined, as(drejToken))
-    )
-    expect(after.events.filter((e) => e.kind === 'revoked')).toHaveLength(revokedBefore)
-    // EXACTLY ONE, whatever the limiter let through: the queue held one row
-    // for this asker, so one thing happened. Counted as a difference so it
-    // pins the dedupe on its own rather than on how many asks were refused.
-    expect(after.events.filter((e) => e.kind === 'request').length).toBe(askedBefore + 1)
   })
 
-  it('only the team owner may answer a seat request', async () => {
-    const asked = await bodyOf<{ id: string }>(
-      await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(miraToken))
-    )
-    // mira is signed in, but the seat request is drej's to answer.
-    expect((await call('POST', `/v2/me/requests/${asked.id}`, { decision: 'approve' }, as(miraToken))).status).toBe(404)
+  it('queues nothing and announces nothing, however often it is asked', async () => {
+    const before = { owner: await queueOf(drejToken), guest: await queueOf(miraToken), said: await feedOf(drejToken), heard: await feedOf(miraToken) }
+    for (let i = 0; i < 30; i += 1) {
+      // Not even a limiter stands in front of it: there is no route to limit.
+      expect((await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(miraToken))).status).toBe(404)
+    }
+    expect(await queueOf(drejToken)).toEqual(before.owner)
+    expect(await queueOf(drejMac2Token)).toEqual(before.owner)
+    expect(await queueOf(miraToken)).toEqual(before.guest)
+    // The owner's feed is the one channel that tells them about their account: a stranger cannot write to it.
+    expect(await feedOf(drejToken)).toEqual(before.said)
+    expect(await feedOf(miraToken)).toEqual(before.heard)
+    expect((await queueOf(drejToken)).every((row) => row.kind === 'join')).toBe(true)
+  })
+
+  it('seats nobody: the asker holds what they held, which GET …/seat still says', async () => {
+    await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(miraToken))
+    const mine = await call('GET', '/v2/teams/@drej/alpha/seat', undefined, as(miraToken))
+    expect(mine.status).toBe(200)
+    // The read that stays: whether this account HOLDS a seat, and the team's terms beside it.
+    expect(await bodyOf<{ seat: unknown; team: { name: string; access: string } }>(mine)).toMatchObject({
+      seat: null,
+      team: { name: '@drej/alpha', access: 'paid' }
+    })
+    expect((await bodyOf<{ seats: unknown[] }>(await call('GET', '/v2/me/seats', undefined, as(miraToken)))).seats).toEqual([])
+  })
+
+  it('has no answer route either: POST /v2/me/requests/:id is as unknown as any other', async () => {
+    const id = randomUUID()
+    for (const token of [drejToken, miraToken, undefined]) {
+      const headers = token === undefined ? {} : as(token)
+      for (const body of [{ decision: 'approve' }, { decision: 'decline' }, {}]) {
+        const answered = await answerOf(await call('POST', `/v2/me/requests/${id}`, body, headers))
+        const never = await answerOf(await call('POST', `/v2/me/no-such-thing/${id}`, body, headers))
+        expect(answered).toEqual(never)
+        expect(answered.status).toBe(token === undefined ? 401 : 404)
+      }
+    }
   })
 })
 
@@ -277,12 +227,6 @@ describe('POST /v2/me/desktops/:id/reach-requests, which the registry no longer 
   /** A route under /v2/me this registry has never had: how it answers one. */
   const unknown = (id: string, token?: string): Promise<Response> =>
     call('POST', `/v2/me/desktops/${id}/no-such-thing`, {}, token === undefined ? {} : as(token))
-  const queueOf = async (token: string): Promise<{ id: string; kind: string }[]> =>
-    bodyOf<{ id: string; kind: string }[]>(await call('GET', '/v2/me/requests', undefined, as(token)))
-  const requestEvents = async (): Promise<number> =>
-    (await bodyOf<{ events: { kind: string }[] }>(await call('GET', '/v2/me/events?since=0', undefined, as(drejToken)))).events.filter(
-      (e) => e.kind === 'request'
-    ).length
 
   it('answers as any unknown route does, whoever asks and whichever machine is named', async () => {
     const asks: readonly [string, string | undefined][] = [
@@ -305,33 +249,23 @@ describe('POST /v2/me/desktops/:id/reach-requests, which the registry no longer 
   })
 
   it('opens nothing: no row in any device’s queue, and nothing said on the feed', async () => {
-    const before = { mac: await queueOf(drejToken), mac2: await queueOf(drejMac2Token), phone: await queueOf(drejPhoneToken), said: await requestEvents() }
+    const before = { mac: await queueOf(drejToken), mac2: await queueOf(drejMac2Token), phone: await queueOf(drejPhoneToken), said: await feedOf(drejToken) }
     expect((await call('POST', `/v2/me/desktops/${drejMac.id}/reach-requests`, {}, as(drejPhoneToken))).status).toBe(404)
     expect(await queueOf(drejToken)).toEqual(before.mac)
     expect(await queueOf(drejMac2Token)).toEqual(before.mac2)
     expect(await queueOf(drejPhoneToken)).toEqual(before.phone)
-    expect(await requestEvents()).toBe(before.said)
+    expect(await feedOf(drejToken)).toEqual(before.said)
     for (const token of [drejToken, drejMac2Token, drejPhoneToken]) {
-      expect((await queueOf(token)).every((row) => row.kind === 'join' || row.kind === 'seat')).toBe(true)
+      expect((await queueOf(token)).every((row) => row.kind === 'join')).toBe(true)
     }
   })
 
   it('has no answer to poll for: a request’s id is not a page of its own', async () => {
-    // A seat request is real, and it was never read here either: its answer is GET …/seat.
-    const seat = await bodyOf<{ id: string }>(await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(miraToken)))
-    for (const [id, token] of [[seat.id, miraToken], [seat.id, drejToken], [randomUUID(), drejPhoneToken]] as const) {
-      const res = await call('GET', `/v2/me/requests/${id}`, undefined, as(token))
+    for (const token of [drejToken, drejPhoneToken, miraToken]) {
+      const res = await call('GET', `/v2/me/requests/${randomUUID()}`, undefined, as(token))
       expect(res.status).toBe(404)
       expect(await bodyOf<{ error: string }>(res)).toMatchObject({ error: 'not_found' })
     }
-  })
-
-  it('takes no sealed answer: the queue’s own route answers a seat and nothing else', async () => {
-    const sealed = { alg: 'x25519', e: 'a', sealed: 'b' }
-    expect((await call('POST', `/v2/me/requests/${randomUUID()}`, { decision: 'approve', sealed }, as(drejToken))).status).toBe(404)
-    // A seat request is still answered there, by its owner, as before.
-    const asked = await bodyOf<{ id: string }>(await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(miraToken)))
-    expect((await call('POST', `/v2/me/requests/${asked.id}`, { decision: 'decline', sealed }, as(drejToken))).status).toBe(204)
   })
 
   it('leaves a sign-in waiting for a nod exactly where it was: listed as a join row, and answered', async () => {
@@ -357,7 +291,7 @@ describe('POST /v2/me/desktops/:id/reach-requests, which the registry no longer 
   })
 })
 
-// ── §06: a revoke is told, not-me empties ───────────────────────────────────
+// ── §06: a revoke is told, not-me is answered ───────────────────────────────
 
 describe('the revocation table (§06)', () => {
   it('revoking a device tells every device', async () => {
@@ -378,13 +312,11 @@ describe('the revocation table (§06)', () => {
     expect(feed.events.filter((e) => e.kind === 'revoked').at(-1)?.device).toBe("drej's phone")
   })
 
-  it('“not me” empties the queue', async () => {
+  it('“not me” is answered with the account’s own proof, and the stranger is never let in', async () => {
     // A fresh account so the count is its own.
     const mac = newDevice()
     const token = await claim('rae', mac)
     await call('PUT', `/v2/me/desktops/${mac.id}`, { name: 'A Mac', workspaces: [] }, as(token))
-    // A seat request rae is asking for.
-    await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(token))
     // rae presses "not me" on a fresh sign-in ladder.
     const stranger = newDevice()
     const laddered = await call('POST', '/v2/sessions', {
@@ -395,20 +327,17 @@ describe('the revocation table (§06)', () => {
     const asked = await bodyOf<{ pending: string }>(laddered)
     const req = await call('POST', `/v2/sessions/${asked.pending}/approve`)
     const { approval } = await bodyOf<{ approval: string }>(req)
+    // It was in the queue, as a join row, until it was answered.
+    expect((await queueOf(token)).map((row) => [row.id, row.kind])).toEqual([[approval, 'join']])
     expect(
       (await call('POST', `/v2/me/approvals/${approval}`, { decision: 'not-me', current: PASSWORD }, as(token)))
         .status
     ).toBe(204)
-    // The queue rae was party to is empty — both as owner-of-nothing and as asker.
-    const drejQueue = await bodyOf<{ kind: string; account?: string }[]>(
-      await call('GET', '/v2/me/requests', undefined, as(drejToken))
-    )
-    expect(drejQueue.some((r) => r.kind === 'seat' && r.account === 'rae')).toBe(false)
-    // rae's own token was ended by not-me; a fresh sign-in would show an empty queue.
-    const feed = await bodyOf<{ events: { kind: string }[] }>(
-      await call('GET', '/v2/me/events?since=0', undefined, as(drejToken))
-    )
-    expect(Array.isArray(feed.events)).toBe(true)
+    // The sign-in it disowned gets no session.
+    expect((await call('GET', `/v2/sessions/${asked.pending}`)).status).not.toBe(201)
+    // Nobody else's queue or feed is touched by it.
+    expect((await queueOf(drejToken)).some((row) => row.id === approval)).toBe(false)
+    expect((await feedOf(drejToken)).some((event) => event.kind === 'not-me')).toBe(false)
   })
 })
 
@@ -423,17 +352,21 @@ describe('GET /v2/me/events — account:changed', () => {
       await call('GET', '/v2/me/events?since=0', undefined, as(token))
     )
     expect(first.events).toEqual([])
-    // eve asks drej for a seat → drej gets a 'request' event; eve's own feed is
-    // unchanged (the event is the owner's).
-    await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(token))
-    const drejFeed = await bodyOf<{ events: { kind: string }[]; cursor: number }>(
-      await call('GET', '/v2/me/events?since=0', undefined, as(drejToken))
+    // Something happens to eve's own account: a phone joins and is taken off again.
+    const phone = newDevice()
+    await attach('eve', phone, token, 'phone')
+    expect((await call('DELETE', `/v2/me/devices/${phone.id}`, { current: PASSWORD }, as(token))).status).toBe(204)
+    const feed = await bodyOf<{ events: { kind: string }[]; cursor: number }>(
+      await call('GET', '/v2/me/events?since=0', undefined, as(token))
     )
-    expect(drejFeed.events.some((e) => e.kind === 'request')).toBe(true)
+    expect(feed.events.some((e) => e.kind === 'revoked')).toBe(true)
+    expect(feed.cursor).toBeGreaterThan(first.cursor)
     // Polling forward from the cursor returns nothing new.
     const forward = await bodyOf<{ events: unknown[] }>(
-      await call('GET', `/v2/me/events?since=${drejFeed.cursor}`, undefined, as(drejToken))
+      await call('GET', `/v2/me/events?since=${feed.cursor}`, undefined, as(token))
     )
     expect(forward.events).toEqual([])
+    // And it was eve's feed only: what happens to one account is told to that account.
+    expect((await feedOf(miraToken)).some((e) => e.kind === 'revoked')).toBe(false)
   })
 })

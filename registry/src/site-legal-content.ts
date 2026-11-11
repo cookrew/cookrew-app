@@ -10,7 +10,6 @@ import { PER_ACCOUNT as EVENTS_KEPT } from './v2-events'
 import { JOIN_CODE_TTL_MS } from './v2-join-codes'
 import { SEEN_KEEP_MS } from './v2-line-seen'
 import { PENDING_TTL_MS } from './v2-pending'
-import { SEAT_TTL_MS } from './v2-requests'
 import { SEATS_MAX } from './v2-seats'
 import { SESSION_TTL_MS } from './v2-tokens'
 
@@ -312,7 +311,6 @@ export const PRIVACY: LegalDoc = {
                 'Sign-ins waiting for approval, and join codes',
                 `Sign-ins: ${minutes(PENDING_TTL_MS)} minutes. Join codes: ${minutes(JOIN_CODE_TTL_MS)} minutes. Both in memory only.`
               ],
-              ['Seat requests', `${days(SEAT_TTL_MS)} days. In memory only, so a restart clears them.`],
               ['Account activity feed', `The last ${EVENTS_KEPT} events per account, in memory only.`],
               ['Rate-limit counters', 'In memory only, and gone at the latest when the registry restarts.'],
               [
