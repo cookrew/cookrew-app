@@ -30,6 +30,7 @@ import {
   switchPlaneIfBetter
 } from './plane-switch'
 import { startPlaneRecheck } from './plane-recheck'
+import { browserConnection, leaveDirectPlane, onCellular, watchNetworkMoves } from './radio'
 // The registry call it makes lives beside its own deadline (verify-hello.ts)
 // and is re-exported here, where every caller has always imported it from.
 export { VERIFY_TIMEOUT_MS, verifyHello } from './verify-hello'
@@ -375,6 +376,9 @@ const startPlaneSwitch = (): (() => void) => {
   // nothing and remembers nothing.
   const sameMachine = heldScope()
   const live = (): boolean => !stopped && sameMachine()
+  // Counts the phone's moves between networks (path/radio.ts). A race that
+  // began before a move proved its path on the network the phone just left.
+  let moves = 0
   const raceSoon = (): void => {
     if (stopped || document.visibilityState !== 'visible' || soon !== null) return
     soon = setTimeout(() => {
@@ -426,15 +430,26 @@ const startPlaneSwitch = (): (() => void) => {
     // answered late): there is no race to run, and none to charge the next
     // machine's two-minute knock for.
     if (!live()) return
+    // This race is for the network the phone is on as it starts: after a move
+    // it adopts nothing, and the race the move asked for runs instead.
+    const onNetwork = moves
+    const raceLive = (): boolean => live() && moves === onNetwork
     // THE LINK FIRST. It opens in about a second where it opens at all,
     // and on the owner's phone the names never answer (each race spent
     // 2.5-6 s timing them out before the link was even tried). A hold
     // means the plane just failed; the race after the hold knocks.
-    const knocked = health.held() ? [] : await rtcKnock(raceSoon, live)
+    // ON A RADIO THERE IS NO LAN TO KNOCK ON (path/radio.ts): the Mac's
+    // candidates are its LAN addresses, and a knock from 5G spent ~10 s of
+    // gathering and waiting to learn it. WebRTC over the tailnet never opened
+    // from a phone (cookrew-webrtc-lan); the name race still carries it.
+    // A link that opens is working on whatever network the phone is on now, so
+    // the knock is not gated on the move: only the name race, which proves a
+    // path before it adopts it, is.
+    const knocked = health.held() || onCellular() ? [] : await rtcKnock(raceSoon, live)
     if (!live()) return
     let noted = false
     await switchPlaneIfBetter({
-      live,
+      live: raceLive,
       plane: dataPlane,
       card: fetchCard,
       // The origin is sent so the Mac answers version 2 — a proof bound
@@ -446,7 +461,7 @@ const startPlaneSwitch = (): (() => void) => {
       // "refused by the browser" where it is not (path/name-oracle.ts).
       named: (origin) => nameLive(origin),
       adopt: (plane: DataPlane) => {
-        if (live()) setDataPlane(plane)
+        if (raceLive()) setDataPlane(plane)
       },
       // A tailnet must beat the relay on a warm connection, not just
       // answer once (path/plane-quality.ts). The LAN is the same Wi-Fi.
@@ -460,6 +475,7 @@ const startPlaneSwitch = (): (() => void) => {
       },
       nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
       held: () => health.held(),
+      cellular: () => onCellular(),
       probing: (on) => {
         if (live()) setProbing(on)
       },
@@ -562,6 +578,22 @@ const startPlaneSwitch = (): (() => void) => {
       // far end is still the Mac before the session keeps using it.
       if (reconnected) recheck.now()
     }),
+    // THE PHONE MOVED NETWORKS (Wi-Fi to 5G fires no `online`): a direct
+    // plane proved on the last network is let go now, not when the heartbeat
+    // notices 5-15 s later, and the race after it finds what this one offers
+    // (path/radio.ts). Reads caught by the move go again on the relay
+    // (plane-fetch.ts), so the views keep their numbers.
+    watchNetworkMoves(
+      () => {
+        if (!live()) return
+        moves += 1
+        // A new network is owed a knock now, not two minutes after the last one.
+        lastRtcAt = 0
+        leaveDirectPlane({ plane: dataPlane, link: heldRtcLink, fallBack: fallBackToRelay }, 'the network changed')
+        raceSoon()
+      },
+      { connection: browserConnection(), on: listen }
+    ),
     // THE MAC SAID ITS ADDRESSES MOVED — and said it only once the registry
     // took the new card, so the names resolve. No `pressed`, so a phone
     // nobody is holding is never shown the one permission prompt it gets.
