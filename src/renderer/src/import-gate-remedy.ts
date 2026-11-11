@@ -1,6 +1,8 @@
-import type { GateDoor, WalkPricing } from '../../shared/gate-walk'
-import { teamPageUrl } from '../../shared/seats'
+import { SEAT_DENIAL, type GateDoor, type WalkPricing } from '../../shared/gate-walk'
+import { MKT_PAY } from '../../shared/marketplace-copy'
+import { x402KeySays } from '../../shared/x402-terms'
 import type { ServeFacePreview, ServeRail } from './api'
+import type { PayFault } from './GateSheet'
 
 /**
  * THE IMPORT GATE's decisions, pure — so a test can hold them without a DOM.
@@ -12,16 +14,12 @@ import type { ServeFacePreview, ServeRail } from './api'
  */
 
 /**
- * Where a published team's page is. The renderer has no registry setting of
- * its own — main resolves addresses — so the one public origin is named here,
- * as import-session.ts names it for main.
+ * What a refusal's forward action does. Never "close the sheet", and never
+ * "open a page": every one of them is a question put to the door again.
  */
-const REGISTRY_SITE = 'https://cookrew.dev'
-
-/** What a refusal's forward action does. Never "close the sheet". */
 export type RemedyAct =
-  /** Open the team's own page in a browser card — the author's surface. */
-  | { kind: 'author-page'; url: string }
+  /** Ask the door again as a BUYER — the walk that lands on its price and rails. */
+  | { kind: 'buy' }
   /** Ask the door again, now. */
   | { kind: 'retry' }
 
@@ -29,28 +27,81 @@ export type RemedyAct =
 export const BUDGET_RETRY_MS = 15 * 60 * 1000
 
 /**
- * The dispatch, by reason (G2). Everything the author can change — a seat,
- * their seat count, a region, a version, credit — goes to their page; the
- * refusals that pass with time are retried. `no_seat` is BUY, and BUY is the
- * team's page: cookrew.dev now mints an unseated token on an explicit
- * `intent: 'buy'` and the door admits it as far as its 402, so the page's
- * seat bar completes the purchase end to end. This sheet still sends people
- * there rather than paying in place — one purchase surface, on the author's
- * own page, until an in-app buy is worth a second one.
+ * The dispatch, by reason (G2).
+ *
+ * `no_seat` is BUY, and BUY HAPPENS HERE (0.6.0). It used to open the team's
+ * page at cookrew.dev in a browser card, because that page was the one place
+ * a seat could be bought; the page is gone, and the purchase is this sheet's
+ * own pay step. Pressing it charges nothing: the gate is asked again with the
+ * intent said out loud, the door answers with its price and its rails, and
+ * the person pays there or does not.
+ *
+ * `refunded` is BUY too: its button reads BUY AGAIN, and a seat that ended
+ * with a refund is bought the way a first one is — the same intent, the same
+ * pay step.
+ *
+ * Both are offered on the INSTALL walk only. A direct door has no registry to
+ * seat anybody (gate-walk.ts), so either reason from one is asked again like
+ * any other refusal.
+ *
+ * Everything else is asked again, and its button says TRY AGAIN
+ * (marketplace-copy.ts). The refusals only the author can lift (a region, a
+ * version, a seat count) were sent to that same page to read about it; with
+ * no page, the honest act left is the question itself — the sentence on the
+ * band has already said who can change the answer.
  */
-export function remedyFor(reason: string, team: string | null): RemedyAct {
-  switch (reason) {
-    case 'budget':
-    case 'payment_unavailable':
-    case 'not_answering':
-    case 'workspace':
-    case 'scope':
-      return { kind: 'retry' }
-    default:
-      return team === null
-        ? { kind: 'retry' }
-        : { kind: 'author-page', url: teamPageUrl(REGISTRY_SITE, team) }
+const BUYS: ReadonlySet<string> = new Set([SEAT_DENIAL, 'refunded'])
+
+export function remedyFor(reason: string, door: GateDoor): RemedyAct {
+  return BUYS.has(reason) && door === 'install' ? { kind: 'buy' } : { kind: 'retry' }
+}
+
+/**
+ * A settle main REFUSED TO MAKE, as the pay step says it.
+ *
+ * `terms-changed` has its own sentence: the quote at the press was not the
+ * one on screen, and main signed nothing. Nobody is accused — the door may
+ * have changed its price, or another of this person's screens asked again and
+ * this one went stale. Everything else is a failure on the way (no Bearer, a
+ * door that hung up), which is ours to apologise for.
+ */
+export function settleRefusalFault(refusal: { reason: string; detail?: string }): PayFault {
+  if (refusal.reason === 'terms-changed') {
+    return {
+      voice: 'apolog',
+      title: MKT_PAY['mkt.pay.error.changed.title'],
+      body: MKT_PAY['mkt.pay.error.changed.body']
+    }
   }
+  // A wallet press main refused because a card payment for this seat is
+  // still in flight (serve-gate.ts settle): two payments are two charges.
+  if (refusal.reason === 'card-in-flight') {
+    return {
+      voice: 'apolog',
+      title: MKT_PAY['mkt.pay.card.resume.title'],
+      body: MKT_PAY['mkt.pay.card.unconfirmed.body']
+    }
+  }
+  return {
+    voice: 'apolog',
+    title: MKT_PAY['mkt.pay.error.unverifiable.title'],
+    body: refusal.detail ?? MKT_PAY['mkt.pay.error.unverifiable.body']
+  }
+}
+
+/**
+ * WHAT THE WALLET RAIL ON SCREEN SAYS, as the key sent back with the press.
+ *
+ * The sheet prints `rail.price` on `rail.chain`; main keyed every signed field
+ * of the same quote as `rail.shown`. The key goes back only if it says what
+ * was printed — its amount is this price, its network this chain — so the
+ * display and what the press vouches for cannot drift apart: change the rail
+ * and both change, and a rail whose two halves disagree vouches for nothing.
+ */
+export function displayedTermsKey(rail: ServeRail | null): string | undefined {
+  if (rail === null || rail.rail !== 'x402') return undefined
+  const said = x402KeySays(rail.shown)
+  return said !== null && said.price === rail.price && said.network === rail.chain ? rail.shown : undefined
 }
 
 /** The facts main returns beside the phase, on the install walk. */
@@ -59,6 +110,8 @@ export interface GateFacts {
   team: string | null
   owner: string | null
   account: string | null
+  /** The seat that admitted this account, or null: none yet, or none needed. */
+  seat: string | null
 }
 
 /**
@@ -66,12 +119,18 @@ export interface GateFacts {
  * the door quotes, a paid team's published price stands in so the seat and
  * pay steps read as AHEAD rather than dashed — a free team carries null and
  * both dash, honestly.
+ *
+ * WHO IS PAID is the owner, when the walk knows one. A listed team reaches
+ * the pay step now (a seat is bought here), and main names its owner beside
+ * the phase; a dialled door tells us nobody, so there the slug is the most
+ * there is to say.
  */
 export function walkPricing(
   face: Pick<ServeFacePreview, 'access' | 'priceUsd' | 'slug'>,
-  selected: ServeRail | null
+  selected: ServeRail | null,
+  owner: string | null = null
 ): WalkPricing | null {
-  const author = `@${face.slug}`
+  const author = `@${owner ?? face.slug}`
   if (selected !== null) {
     return {
       model: 'one-time',

@@ -152,6 +152,12 @@ export type ServeRail =
       chain: string;
       payTo: string;
       expiry: number;
+      /**
+       * Every signed field of this quote, as main keyed it (shared/x402-terms.ts).
+       * The sheet sends it back with the PAY press: the wallet signs only the
+       * terms the surface that was pressed actually displayed.
+       */
+      shown: string;
     }
   | { rail: 'stripe'; price: string; asset: 'USD'; chain: 'Stripe'; expiry: number };
 
@@ -286,9 +292,15 @@ export interface CookrewApi {
    * walk main took: `install` (a listed team, entered as the account — the
    * team, its owner and this Mac's account come with it) or `direct` (an
    * unlisted door, this Mac's own key).
+   *
+   * `intent: 'buy'` is the seat step's BUY A SEAT press, and only that: the
+   * listed walk is taken with a token that carries no seat, so the door
+   * answers with its price and rails (the `pay` phase) instead of `no_seat`.
+   * Nothing is charged by asking.
    */
   serveGate: (
     link: string,
+    intent?: 'buy',
   ) => Promise<
     | {
         ok: true;
@@ -302,22 +314,59 @@ export interface CookrewApi {
         /** The username this Mac is signed in as, when known. */
         account?: string | null;
         seat?: string | null;
+        /**
+         * A card payment started earlier for this door is STILL OPEN: unpaid
+         * and still payable. The sheet resumes that one (main hands back the
+         * same page for it) and never starts another beside it.
+         */
+        card?: { session: string; url: string; startedAt: number; price: string };
+        /** A card payment started earlier had landed: the phase is `open`, and this is its receipt. */
+        settled?: { price: string; asset: string; rail: 'x402' | 'stripe' };
       }
-    | { ok: false; reason: string; detail?: string }
+    | {
+        ok: false;
+        reason: string;
+        detail?: string;
+        /** A card payment stands even though the door could not be asked: the sheet keeps to it. */
+        card?: { session: string; url: string; startedAt: number; price: string };
+      }
   >;
-  /** Start a card payment: opens hosted Checkout in the real browser. */
+  /**
+   * Start a card payment: opens hosted Checkout in the real browser. While a
+   * payment for this door is already in flight, main hands back THAT session
+   * (`resumed`) instead of making a new one. `startedAt` is main's clock for
+   * when the door handed the session out.
+   */
   serveCheckout: (
     link: string,
   ) => Promise<
-    { ok: true; session: string; url: string } | { ok: false; reason: string; detail?: string }
+    | { ok: true; session: string; url: string; startedAt?: number; resumed?: boolean }
+    | { ok: false; reason: string; detail?: string }
   >;
-  /** Present a payment on one rail and be admitted. */
+  /**
+   * Present a payment on one rail and be admitted. For the wallet rail,
+   * `shown` is the key of the terms THIS surface displayed (ServeRail.shown):
+   * main signs only if the door's quote at the press is still exactly that.
+   */
   serveSettle: (
     link: string,
     rail: 'x402' | 'stripe',
     session?: string,
+    shown?: string,
   ) => Promise<
-    { ok: true; phase: ServePhase } | { ok: false; reason: string; detail?: string }
+    | {
+        ok: true;
+        phase: ServePhase;
+        /** Card rail: whether main still holds a payment in flight for this door after this answer. */
+        standing?: boolean;
+      }
+    | {
+        ok: false;
+        reason: string;
+        detail?: string;
+        /** Wallet rail refused because this card payment is in flight (`card-in-flight`). */
+        card?: { session: string; url: string; startedAt: number; price: string };
+      }
   >;
   switchWorkspace: (id: string) => Promise<WorkspaceList>;
   /** Photograph the canvas as it is now (the screen wall). */

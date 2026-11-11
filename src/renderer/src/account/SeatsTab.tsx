@@ -10,6 +10,7 @@ import {
   type ServingSeatsRow
 } from '../../../shared/seats'
 import { cookrew } from '../api'
+import { importRequestable, requestImport } from '../import-request'
 import { ACCOUNT_COPY, refusalSentence } from './account-store'
 import { DOING, problemSentence } from './problem'
 
@@ -24,9 +25,10 @@ import { DOING, problemSentence } from './problem'
  *
  * The SERVING rows are teams THIS Mac is serving, with the seats cookrew.dev
  * holds for them; the SEAT rows are seats this person holds at other people's
- * doors, and OPEN is a deep link to that team's page rather than anything
- * local — a seat is not canvas access (the architecture note's last line about
- * what a guest may see), so there is nothing here for it to open.
+ * doors, and OPEN opens that team in the import sheet, on its address — a seat
+ * is not canvas access (the architecture note's last line about what a guest
+ * may see), so what it opens is the way to place the team's card, and the
+ * sheet still asks before one is placed.
  *
  * A ROW SURVIVES A REGISTRY THAT WILL NOT ANSWER. Serving is a fact this Mac
  * knows on its own; the seat count is not. So the team is listed either way and
@@ -229,7 +231,7 @@ export function SeatsTab({
           <li key={row.seat.id} className="cr-acct-device">
             <span className="cr-acct-kind">SEAT</span>
             <span className="cr-acct-seclabel">{heldLine(row)}</span>
-            <OpenTeam url={row.url} />
+            <OpenTeam team={row.seat.team} />
           </li>
         ))}
 
@@ -240,26 +242,20 @@ export function SeatsTab({
 }
 
 /**
- * OPEN goes to the team's page at cookrew.dev, in a real browser.
+ * OPEN opens the team IN THE APP: the import sheet, with the team's address
+ * already in its field (import-request.ts).
  *
- * Not into the canvas: a seat is not canvas access, and the page is where the
- * seat, the terms and the line all are. The anchor fallback matters on the
- * phone, where a real https navigation is what deep-links the native app.
+ * It went to the team's page at cookrew.dev until 0.6.0 removed the page; the
+ * address it was built from now names an API host and answered a 404. The
+ * import sheet is the one way into a team — it reads the face, shows what the
+ * seat already covers, and asks before a card is placed. Where no import
+ * sheet is mounted (a surface with no canvas to place on) the button is not
+ * drawn, rather than drawn and dead.
  */
-function OpenTeam({ url }: { url: string }): React.JSX.Element {
-  const bridged = cookrew().openExternal
-  if (!bridged) {
-    return (
-      <a className="gs-revoke cr-acct-act" href={url} target="_blank" rel="noopener noreferrer">
-        OPEN
-      </a>
-    )
-  }
+export function OpenTeam({ team }: { team: string }): React.JSX.Element | null {
+  if (!importRequestable()) return null
   return (
-    <button
-      className="gs-revoke cr-acct-act"
-      onClick={() => void bridged(url).catch(() => undefined)}
-    >
+    <button className="gs-revoke cr-acct-act" onClick={() => void requestImport(team)}>
       OPEN
     </button>
   )

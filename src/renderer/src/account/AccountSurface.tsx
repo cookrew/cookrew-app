@@ -15,6 +15,7 @@ import { ResumeSession } from './ResumeSession'
 import { SecurityCard } from './SecurityCard'
 import { securityActions } from './security-actions'
 import { onAccountAsk, onAccountSheetRequest, onJoinRequest } from './open-request'
+import { onImportRequest } from '../import-request'
 
 /**
  * THE ACCOUNT SURFACE, assembled — one hook, so App gains three lines.
@@ -170,6 +171,13 @@ export function useAccountSurface(): AccountSurface {
     if (!supported) return
     return onAccountSheetRequest(open)
   }, [supported, open])
+
+  // The Seats tab's OPEN asks App for the import sheet (import-request.ts).
+  // That sheet is the answer, so this one steps aside rather than sit over it.
+  useEffect(() => {
+    if (!supported) return
+    return onImportRequest(() => setSheet('none'))
+  }, [supported])
 
   // D8: `cookrew://join#<code>`, routed here by App — the bridge holds one
   // deep-link subscriber and App is it. The card is offered, never acted on:

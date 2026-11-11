@@ -123,6 +123,14 @@ export interface GateScene {
   pricing?: WalkPricing | null
   /** The version you leave with — the violet pin mark. e.g. 'V4'. */
   pin?: string | null
+  /**
+   * The person is at the pay step to BUY the seat (0.6.0: a seat is bought at
+   * the door's 402, on a token that carries none). Their seat step is then
+   * AHEAD, not cleared — the receipt reads "You have a seat here." and until
+   * the payment lands they do not. Absent means the old truth: whoever met the
+   * 402 was past the seat rung already.
+   */
+  buying?: boolean
 }
 
 /**
@@ -190,16 +198,25 @@ function bandFor(id: StepId, state: StepState): BandVariant | null {
 
 /**
  * The state of each step on the happy path, given which step is live. A step
- * before the live one is `done`; the seat and pay steps are `skip` when the
+ * before the live one is `done` — except a BUYER's seat while they are paying
+ * for it, which is `todo`; the seat and pay steps are `skip` when the
  * door is free regardless of where we are — a free team demands neither, and
  * the registry's seat rung admits without a seat there; the open step is
  * `now` only when served.
  */
-function walkSteps(door: GateDoor, live: StepId, pricing: WalkPricing | null | undefined): WalkStep[] {
+function walkSteps(
+  door: GateDoor,
+  live: StepId,
+  pricing: WalkPricing | null | undefined,
+  buying = false
+): WalkStep[] {
   const order = stepOrder(door)
   const liveIndex = order.indexOf(live)
 
   return order.map((id, index): WalkStep => {
+    // A buyer's seat is what the live pay step is for: still ahead of them,
+    // drawn as a tick with no band, so the sheet never says they hold one.
+    if (id === 'seat' && buying && live === 'pay') return { id, state: 'todo', band: null }
     // The live step is never dashed: if the gate is asking, it was demanded,
     // whatever the price line said.
     if ((id === 'pay' || id === 'seat') && payIsSkipped(pricing) && index !== liveIndex) {
@@ -216,14 +233,14 @@ function walkSteps(door: GateDoor, live: StepId, pricing: WalkPricing | null | u
  * the seat rung, which is the rail's own third slot lighting up.
  */
 export function gateWalk(scene: GateScene): GateWalk {
-  const { door, phase, pricing = null, pin = null } = scene
+  const { door, phase, pricing = null, pin = null, buying = false } = scene
 
   switch (phase.kind) {
     case 'identify':
       return { kind: 'walk', door, steps: walkSteps(door, 'identify', pricing), pin }
 
     case 'pay':
-      return { kind: 'walk', door, steps: walkSteps(door, 'pay', pricing), pin }
+      return { kind: 'walk', door, steps: walkSteps(door, 'pay', pricing, buying), pin }
 
     case 'open':
       return { kind: 'walk', door, steps: walkSteps(door, 'open', pricing), pin }

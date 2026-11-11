@@ -42,6 +42,7 @@ import type { WorkspaceMeta } from '../../shared/model'
 import { fetchGauges } from './relay-gauges'
 import { relayMachines, relayMachineWhy } from './relay-machine-call'
 import { parseMachineGauges } from '../../shared/machine-gauges'
+import { isStripeCheckoutUrl } from '../../shared/stripe-checkout'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -1074,18 +1075,27 @@ export function createRemoteApi(): CookrewApi {
     serveBrowse: (link) => req(apiPath('/api/serve/browse'), 'POST', { link }),
     serveImport: (link, position, paid) =>
       req(apiPath('/api/serve/import'), 'POST', { link, position, paid }),
-    serveGate: (link) => req(apiPath('/api/serve/gate'), 'POST', { link }),
+    serveGate: (link, intent) =>
+      req(apiPath('/api/serve/gate'), 'POST', { link, ...(intent === 'buy' ? { intent } : {}) }),
     serveCheckout: async (link) => {
       const checkout = await req<
-        { ok: true; session: string; url: string } | { ok: false; reason: string; detail?: string }
+        | { ok: true; session: string; url: string; startedAt?: number; resumed?: boolean }
+        | { ok: false; reason: string; detail?: string }
       >(apiPath('/api/serve/checkout'), 'POST', { link })
+      if (!checkout.ok) return checkout
+      // The address came from a door, by way of the desktop. Checked again
+      // here, where it is opened: Stripe's hosted Checkout or nothing.
+      if (!isStripeCheckoutUrl(checkout.url)) {
+        return { ok: false, reason: 'unavailable', detail: 'the door returned an unusable checkout link' }
+      }
       // The hosted page opens HERE, on the phone — the desktop must not raise
       // a browser on a machine the person is not sitting at.
-      if (checkout.ok) window.open(checkout.url, '_blank', 'noopener')
+      // The canonical form of what was just checked, not the string as it arrived.
+      window.open(new URL(checkout.url).href, '_blank', 'noopener')
       return checkout
     },
-    serveSettle: (link, rail, session) =>
-      req(apiPath('/api/serve/settle'), 'POST', { link, rail, session }),
+    serveSettle: (link, rail, session, shown) =>
+      req(apiPath('/api/serve/settle'), 'POST', { link, rail, session, ...(shown === undefined ? {} : { shown }) }),
     /**
      * THE PHONE READS THE MAC'S PICTURES, AND NEVER ASKS FOR ONE.
      *
