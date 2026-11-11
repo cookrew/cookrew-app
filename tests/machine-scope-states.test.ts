@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { bareWindow } from './support/memory-storage'
-import { inConsole } from './support/console-scope'
+import { inConsole, unfoldRelay } from './support/console-scope'
 
 /**
  * EVERYTHING A PAGE HOLDS FOR ONE MACHINE, LET GO OF WHEN ANOTHER IS ENTERED.
@@ -215,8 +215,9 @@ describe('entering another machine lets go of', () => {
     const typed = (): { url: string; data: string }[] =>
       vi
         .mocked(fetch)
-        .mock.calls.filter(([url]) => String(url).includes('/api/terminal/agent-1/raw'))
-        .map(([url, init]) => ({ url: String(url), data: String(JSON.parse(String((init as RequestInit).body)).data) }))
+        .mock.calls.map(([url, init]) => [unfoldRelay(String(url), init as RequestInit), init] as const)
+        .filter(([url]) => url.includes('/api/terminal/agent-1/raw'))
+        .map(([url, init]) => ({ url, data: String(JSON.parse(String((init as RequestInit).body)).data) }))
     const before = typed().length
     lines.typeLine('agent-1', 'half a thought', true)
     expect(typed().slice(before)).toEqual([{ url: `https://api.cookrew.dev/api/m/${B}/api/terminal/agent-1/raw`, data: 'half a thought' }])

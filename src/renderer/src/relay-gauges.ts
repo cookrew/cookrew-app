@@ -18,7 +18,7 @@
 import { parseMachineGauges, type MachineGauges } from '../../shared/machine-gauges'
 import { tokenKeyForBase } from './pairing-scope'
 import { CROSS_ORIGIN_NO_COOKIE } from './data-plane'
-import { machineBaseOf, relayHeadersFor, type MachineScope } from './machine-scope'
+import { machineBaseOf, relayFetch, relayHeadersFor, type MachineScope } from './machine-scope'
 
 export const GAUGES_API_PATH = '/api/fleet/gauges'
 /** Past this the exchange is given back: the next question is a few seconds away anyway. */
@@ -48,8 +48,8 @@ export async function fetchGauges(
   const giveUp = new AbortController()
   const deadline = setTimeout(() => giveUp.abort(), GAUGE_FETCH_TIMEOUT_MS)
   try {
+    // No `cache: 'no-store'`: across origins it would cost a preflight on every poll (data-plane.ts · CROSS_ORIGIN_NO_COOKIE).
     const response = await fetcher(path, {
-      cache: 'no-store',
       headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...relay },
       signal: giveUp.signal
     })
@@ -73,7 +73,8 @@ export async function relayDesktopGauges(
   scope: MachineScope,
   machineId: string,
   storedToken: (key: string) => string | null,
-  fetcher: FetchLike = (input, init) => fetch(input, { ...init, ...CROSS_ORIGIN_NO_COOKIE })
+  // At the relay's one address, like every relayed call (machine-scope.ts · relayRequestFor).
+  fetcher: FetchLike = relayFetch((input, init) => fetch(input, { ...init, ...CROSS_ORIGIN_NO_COOKIE }), () => scope)
 ): Promise<MachineGauges | null> {
   const target = machineBaseOf(machineId, scope)
   if (target === null) return null

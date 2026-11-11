@@ -62,6 +62,8 @@ export interface ZoomFleetMachine {
   lastSeenAt: number | null
   appVersion: string | null
   profile: MachineProfile | null
+  /** False when the registry says nobody is signed in on it; absent when it does not say. */
+  signedIn?: boolean
   /** This desktop's display, from its own feed; another desktop's is not known. */
   display?: MachineDisplay | null
   detail: ZoomMachineDetail
@@ -173,6 +175,7 @@ const machineOf = (row: AccountMachine): ZoomFleetMachine => ({
   lastSeenAt: row.lastSeenAt,
   appVersion: row.appVersion,
   profile: row.profile,
+  ...(row.signedIn === undefined ? {} : { signedIn: row.signedIn }),
   detail: 'listed',
   focusedWorkspaceId: null,
   workspaces: row.workspaces.map((w) => listedWorkspace(w, null)),

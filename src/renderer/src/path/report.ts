@@ -160,8 +160,8 @@ export const postPathReport = async (
 ): Promise<void> => {
   const response = await deps.fetch(deps.url, {
     method: 'POST',
+    // No `cache: 'no-store'`: on the console it would cost a preflight each time (data-plane.ts · CROSS_ORIGIN_NO_COOKIE).
     headers: { ...deps.headers, 'content-type': 'application/json' },
-    cache: 'no-store',
     body: JSON.stringify(report)
   })
   if (!response.ok) throw new Error(`the desktop refused the path report: ${response.status}`)

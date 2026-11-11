@@ -10,7 +10,7 @@
  */
 
 import { apiPath, apiRequestInit, clientBase } from './api-base'
-import { heldScope, machineLeft, registerScopeState, relayHeadersForUrl } from './machine-scope'
+import { heldScope, machineLeft, registerScopeState, relayRequestFor } from './machine-scope'
 import { authHeaders, tokenParam } from './auth-gate'
 import { BridgeWebSocket } from './path/bridge-socket'
 import { planeFetch } from './plane-fetch'
@@ -149,8 +149,10 @@ const headerStream = (url: string): Pick<RtcLink, 'request'> => {
   return {
     request: async ({ method, headers, signal }) => {
       if (!sameMachine()) throw machineLeft()
-      // The relay's own stream: the same request options as any relayed call, and the account session judged by its address.
-      const response = await fetch(url, { method, signal, ...apiRequestInit(), headers: { ...headers, ...authHeaders(), ...relayHeadersForUrl(url) } })
+      // The relay's own stream: the same request options as any relayed call, and the account session judged by its
+      // address; on the relay, at its one address like every other call (machine-scope.ts · relayRequestFor).
+      const sent = relayRequestFor(url, { ...headers, ...authHeaders() })
+      const response = await fetch(sent.url, { method, signal, ...apiRequestInit(), headers: sent.headers })
       // A page where a stream was due is a failed connect, as EventSource holds it.
       const stream = response.headers.get('content-type')?.includes('text/event-stream') === true
       return stream || !response.ok ? response : new Response(null, { status: 502 })

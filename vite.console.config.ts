@@ -51,7 +51,14 @@ function consolePage(): Plugin {
     name: 'cookrew-console-page',
     // After Vite's own plugins: the page and every asset they emit are in the bundle by then.
     enforce: 'post',
-    transformIndexHtml: (html) => html.replace(/%(COOKREW_API_ORIGIN|COOKREW_AUTH_ORIGIN)%/g, (_, name: keyof typeof origins) => origins[name]),
+    transformIndexHtml: (html) => ({
+      html: html.replace(/%(COOKREW_API_ORIGIN|COOKREW_AUTH_ORIGIN)%/g, (_, name: keyof typeof origins) => origins[name]),
+      // THE CONNECTION TO THE API HOST, opened while the scripts load (latency 0.6.1): a new one
+      // took ~1.5 s from the owner's Mac. `crossorigin` sends no credentials, which is the pool
+      // every call of the console uses (credentials: 'omit'). Written here, not in the page: a
+      // placeholder in an href is not a URL Vite's own HTML step can read.
+      tags: [{ tag: 'link', attrs: { rel: 'preconnect', href: origins.COOKREW_API_ORIGIN, crossorigin: '' }, injectTo: 'head' }]
+    }),
     generateBundle(_options, bundle) {
       const page = bundle['console.html']
       if (page) page.fileName = 'index.html'

@@ -96,6 +96,14 @@ describe('the account desktops answer', () => {
     expect(JSON.stringify(machines)).not.toMatch(/192\.168|secret-signature|alpha|relay/)
   })
 
+  it('carries the registry’s word on whether a machine is signed in, and claims nothing when it has none', () => {
+    const [out, signed, silent, odd] = parseAccountMachines([row(OTHER, 'Solis-Core', { online: false, signedIn: false }), row(OTHER, 'Laptop', { signedIn: true }), row(OTHER, 'Old registry'), row(OTHER, 'Odd', { signedIn: 'no' })], null) ?? []
+    expect(out.signedIn).toBe(false)
+    expect(signed.signedIn).toBe(true)
+    expect('signedIn' in silent).toBe(false)
+    expect('signedIn' in odd).toBe(false)
+  })
+
   it('reads an older registry row (no presence, no profile) as offline and unknown', () => {
     const [machine] = parseAccountMachines([{ deviceId: OTHER, name: 'Old Mac', workspaces: [] }], null) ?? []
     expect(machine).toEqual({ id: OTHER, name: 'Old Mac', online: false, lastSeenAt: null, appVersion: null, profile: null, workspaces: [], current: false })

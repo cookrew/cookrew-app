@@ -709,7 +709,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
       200,
       account.desktops.map((desktop) => ({
         ...(outside ? {} : desktopBody(desktop, hasNames(ctx)(desktop.deviceId))),
-        ...fleetRow(desktop, presence.get(desktop.deviceId), now)
+        ...fleetRow(desktop, presence.get(desktop.deviceId), now, account.sessions)
       }))
     )
     return

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { bareWindow } from './support/memory-storage'
-import { inConsole, relayBaseFor } from './support/console-scope'
+import { inConsole, relayBaseFor, unfoldRelay } from './support/console-scope'
 
 /**
  * A WRITE IS SENT ONCE, ON ONE PATH (0.6.0, decision F2). When the path under
@@ -36,7 +36,7 @@ beforeEach(() => {
     vi.fn(
       (url: string, init: RequestInit = {}) =>
         new Promise<Response>((_, fail) => {
-          sent.push({ url: String(url), init })
+          sent.push({ url: unfoldRelay(String(url), init), init })
           init.signal?.addEventListener('abort', () => fail(init.signal?.reason ?? new DOMException('aborted', 'AbortError')), { once: true })
         })
     )

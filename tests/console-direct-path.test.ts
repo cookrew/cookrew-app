@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { inConsole, relayBaseFor } from './support/console-scope'
+import { inConsole, relayBaseFor, unfoldRelay } from './support/console-scope'
 
 /**
  * THE CONSOLE FINDS THE NEARER PATH BY ITSELF (0.6.0, decision F2). A machine
@@ -33,7 +33,7 @@ function page(answers: { verify?: unknown; cardDevice?: string } = {}): { sent: 
   }
   vi.stubGlobal('document', { hidden: false, visibilityState: 'visible', addEventListener: () => undefined, removeEventListener: () => undefined })
   vi.stubGlobal('fetch', async (input: string, init: RequestInit = {}) => {
-    const url = String(input)
+    const url = unfoldRelay(String(input), init)
     sent.push({ url, init })
     const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
     if (url.startsWith(`${BASE}/api/reach`)) return json({ deviceId: answers.cardDevice ?? M, lan: [{ url: 'https://192.168.1.24:8643' }], tailnet: null, trusted: [LAN] })

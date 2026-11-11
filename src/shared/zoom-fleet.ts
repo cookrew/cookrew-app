@@ -24,6 +24,8 @@ export interface AccountMachine {
   appVersion: string | null
   /** Null for a desktop older than the probe: drawn as unknown. */
   profile: MachineProfile | null
+  /** False when the registry says nobody is signed in on it; absent when it does not say (shared/fleet.ts). */
+  signedIn?: boolean
   /** The workspaces it registered, by name. */
   workspaces: Array<{ id: string; name: string }>
   /** The desktop answering: this window's own Mac, or the one the phone is served for. */
@@ -97,6 +99,7 @@ function parseRow(raw: unknown, currentId: string | null): AccountMachine | null
     lastSeenAt: count(raw.lastSeenAt),
     appVersion: text(raw.appVersion),
     profile: parseProfile(raw.profile),
+    ...(typeof raw.signedIn === 'boolean' ? { signedIn: raw.signedIn } : {}),
     workspaces: parseWorkspaces(raw.workspaces),
     current: currentId !== null && id.toLowerCase() === currentId.toLowerCase()
   }

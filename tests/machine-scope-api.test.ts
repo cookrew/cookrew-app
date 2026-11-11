@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { bareWindow } from './support/memory-storage'
-import { inConsole, relayBaseFor } from './support/console-scope'
+import { inConsole, relayBaseFor, unfoldRelay } from './support/console-scope'
 
 /**
  * THE API OBJECT, ACROSS A CHANGE OF MACHINE.
@@ -50,7 +50,7 @@ beforeEach(() => {
     vi.fn(
       (url: string, init: RequestInit = {}) =>
         new Promise<Response>((answer, fail) => {
-          sent.push({ url: String(url), init, answer, fail })
+          sent.push({ url: unfoldRelay(String(url), init), init, answer, fail })
           init.signal?.addEventListener('abort', () => fail(init.signal?.reason ?? new DOMException('aborted', 'AbortError')), { once: true })
         })
     )
@@ -78,6 +78,25 @@ describe('the console with no machine in scope', () => {
 })
 
 describe('entering another machine', () => {
+  it('sends every call to either machine at the relay’s one address, so the browser asks one preflight (latency 0.6.1)', async () => {
+    const wire: string[] = []
+    vi.mocked(fetch).mockImplementation((url: string | URL | Request, init: RequestInit = {}) => {
+      wire.push(String(url))
+      return new Promise<Response>((answer, fail) => {
+        sent.push({ url: unfoldRelay(String(url), init), init, answer, fail })
+      })
+    })
+    const { scope, api } = await consoleAt(A)
+    api.cookrew().onWorkspaceState(() => undefined)
+    await tick()
+    scope.enterMachine(B)
+    api.cookrew().onWorkspaceState(() => undefined)
+    await tick()
+    expect(sent.some((one) => one.url.startsWith(BASE_A))).toBe(true)
+    expect(sent.some((one) => one.url.startsWith(BASE_B))).toBe(true)
+    expect(new Set(wire)).toEqual(new Set(['https://api.cookrew.dev/api/m']))
+  })
+
   it('asks the new machine whether this browser is paired, at its own address', async () => {
     const { scope, api } = await consoleAt(A)
     api.cookrew()

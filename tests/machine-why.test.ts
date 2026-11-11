@@ -15,11 +15,30 @@ const solis = { name: 'Solis-Core', online: true }
 describe('machineWhyWords', () => {
   it('an offline machine: when it is back', () => {
     expect(machineWhyWords({ name: 'Solis-Core', online: false }, { surface: 'desktop', trusted: true, block: null })).toBe('Solis-Core is offline. It opens here once it is back.')
+    expect(machineWhyWords({ name: 'Solis-Core', online: false, signedIn: true }, { surface: 'desktop', trusted: true, block: null })).toBe('Solis-Core is offline. It opens here once it is back.')
+  })
+
+  it('a machine that is SIGNED OUT is not told to open Cookrew: it is told to sign in, in its own platform’s way', () => {
+    // Owner 2026-11-11: Cookrew was open on Solis-Core; it had not signed in since the registry moved.
+    const out = { name: 'Solis-Core', online: false, signedIn: false }
+    for (const surface of ['desktop', 'page'] as const) {
+      expect(machineWhyWords({ ...out, os: 'linux' }, { surface, trusted: null, block: null })).toBe('Solis-Core is signed out. Run cookrew login on it, and it opens here.')
+      expect(machineWhyWords({ ...out, os: null }, { surface, trusted: null, block: null })).toBe('Solis-Core is signed out. Run cookrew login on it, and it opens here.')
+      expect(machineWhyWords({ ...out, name: 'Studio Mac', os: 'darwin' }, { surface, trusted: null, block: null })).toBe('Studio Mac is signed out. Open Cookrew on it and sign in, and it opens here.')
+    }
+    expect(machineSays({ ...out, os: 'linux', detail: 'listed' }, { surface: 'desktop', trusted: true })).toBe('Solis-Core is signed out. Run cookrew login on it.')
+    expect(machineSays({ ...out, name: 'Studio Mac', os: 'darwin', detail: 'listed' }, { surface: 'page', trusted: null })).toBe('Studio Mac is signed out. Open Cookrew on it and sign in.')
+    expect(machineSays({ ...out, name: 'Desk PC', os: 'win32', detail: 'listed' }, { surface: 'desktop', trusted: true })).toBe('Desk PC is signed out. Open Cookrew on it and sign in.')
+    // Signed in, or a registry that does not say: the app is simply not running there.
+    expect(machineSays({ name: 'Solis-Core', online: false, signedIn: true, detail: 'listed' }, { surface: 'desktop', trusted: true })).toBe('Open Cookrew on Solis-Core.')
+    expect(machineSays({ name: 'Solis-Core', online: false, detail: 'listed' }, { surface: 'desktop', trusted: true })).toBe('Open Cookrew on Solis-Core.')
+    // A machine that holds its line is not signed out, whatever an older row said.
+    expect(machineSays({ name: 'Solis-Core', online: true, signedIn: false, detail: 'live' }, { surface: 'desktop', trusted: true })).toBeNull()
   })
 
   it('a desktop that has not proved itself: the one button', () => {
-    expect(machineWhyWords(solis, { surface: 'desktop', trusted: false, block: null, platform: 'darwin' })).toBe('Press “Sign this Mac in again to see your other machines” below, and Solis-Core opens here.')
-    expect(machineWhyWords(solis, { surface: 'desktop', trusted: false, block: null, platform: 'linux' })).toBe('Press “Sign this machine in again to see your other machines” below, and Solis-Core opens here.')
+    expect(machineWhyWords(solis, { surface: 'desktop', trusted: false, block: null, platform: 'darwin' })).toBe('Press “Prove it’s you on this Mac to see your other machines” below, and Solis-Core opens here.')
+    expect(machineWhyWords(solis, { surface: 'desktop', trusted: false, block: null, platform: 'linux' })).toBe('Press “Prove it’s you on this machine to see your other machines” below, and Solis-Core opens here.')
   })
 
   it('a browser with no pass, or no account key: where to prove it once', () => {
@@ -100,8 +119,8 @@ describe('under a machine’s name on the devices stop', () => {
   })
   it('says the one thing to do for one that is not', () => {
     expect(machineSays(m({ online: false }), { surface: 'desktop', trusted: true })).toBe('Open Cookrew on Solis-Core.')
-    expect(machineSays(m(), { surface: 'desktop', trusted: false, platform: 'darwin' })).toBe('Sign this Mac in again, below, to read it.')
-    expect(machineSays(m(), { surface: 'desktop', trusted: false, platform: 'linux' })).toBe('Sign this machine in again, below, to read it.')
+    expect(machineSays(m(), { surface: 'desktop', trusted: false, platform: 'darwin' })).toBe('Prove it’s you on this Mac, below, to read it.')
+    expect(machineSays(m(), { surface: 'desktop', trusted: false, platform: 'linux' })).toBe('Prove it’s you on this machine, below, to read it.')
     expect(machineSays(m(), { surface: 'none', trusted: null })).toBe('Open console.cookrew.dev to read it.')
     expect(machineSays(m(), { surface: 'desktop', trusted: true })).toBe('Not answering yet.')
     expect(machineSays(m({ detail: 'connecting' }), { surface: 'desktop', trusted: true })).toBe('Reading…')

@@ -8,8 +8,10 @@ import {
   machineLeft,
   machineScope,
   registerScopeState,
+  relayFetch,
   relayHeadersFor,
   relayHeadersForUrl,
+  relayRequestFor,
   resetMachineScopeForTests,
   scopeBase,
   scopeEpoch,
@@ -207,6 +209,51 @@ describe('the account session, judged by where a request goes', () => {
   it('is nothing on a page a machine serves itself', () => {
     resetMachineScopeForTests()
     expect(relayHeadersForUrl(`${API}/api/m/${A}/api/workspaces`)).toEqual({})
+  })
+})
+
+describe('a relayed call as it leaves the page: one address, one preflight (latency 0.6.1)', () => {
+  beforeEach(() => {
+    configureMachineScope({ relay: { origin: `${API}/`, session: () => 'account-session' } })
+    enterMachine(A)
+  })
+
+  it('goes to the one address with the machine, the route and the session in headers', () => {
+    expect(relayRequestFor(`${API}/api/m/${A}/api/terminal/t1/turns?after=5`, { authorization: 'Bearer machine-key' })).toEqual({
+      url: `${API}/api/m`,
+      headers: { authorization: 'Bearer machine-key', 'x-cookrew-session': 'account-session', 'x-cookrew-machine': A, 'x-cookrew-route': 'api/terminal/t1/turns?after=5' }
+    })
+  })
+
+  it('sends every machine and every route to the same address', () => {
+    const urls = [`${API}/api/m/${A}/api/fleet`, `${API}/api/m/${A}/api/events`, `${API}/api/m/${B}/api/watch/cards?workspace=w1`]
+    expect(new Set(urls.map((url) => relayRequestFor(url, undefined).url))).toEqual(new Set([`${API}/api/m`]))
+  })
+
+  it('lets nothing a caller passed stand in for the session or name another machine', () => {
+    const sent = relayRequestFor(`${API}/api/m/${A}/api/fleet`, { 'X-Cookrew-Session': 'forged', 'x-cookrew-machine': B, 'x-cookrew-route': 'api/secrets' })
+    expect(sent.headers['x-cookrew-session']).toBe('account-session')
+    expect(sent.headers['x-cookrew-machine']).toBe(A)
+    expect(sent.headers['x-cookrew-route']).toBe('api/fleet')
+  })
+
+  it('leaves everything else as it was asked, with nothing added', () => {
+    for (const url of [`https://192-168-1-7.${A}.d.cookrew.dev:8643/api/workspaces`, `${API}/v2/me/desktops`, '/api/workspaces']) {
+      expect(relayRequestFor(url, { authorization: 'Bearer t' }), url).toEqual({ url, headers: { authorization: 'Bearer t' } })
+    }
+    resetMachineScopeForTests()
+    expect(relayRequestFor(`${API}/api/m/${A}/api/fleet`, undefined)).toEqual({ url: `${API}/api/m/${A}/api/fleet`, headers: {} })
+  })
+
+  it('is what relayFetch sends', async () => {
+    const sent: { input: string; init: RequestInit }[] = []
+    const send = relayFetch(async (input, init) => {
+      sent.push({ input, init })
+      return new Response('{}')
+    })
+    await send(`${API}/api/m/${A}/api/fleet`, { method: 'POST', headers: new Headers({ 'content-type': 'application/json' }), body: '{}' })
+    expect(sent[0].input).toBe(`${API}/api/m`)
+    expect(sent[0].init).toMatchObject({ method: 'POST', body: '{}', headers: { 'content-type': 'application/json', 'x-cookrew-route': 'api/fleet', 'x-cookrew-machine': A } })
   })
 })
 

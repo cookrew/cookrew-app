@@ -82,7 +82,7 @@ function registryAt(origin: string): RegistryCall {
     try {
       const response = await fetch(`${origin}${path}`, {
         method,
-        cache: 'no-store',
+        // No `cache: 'no-store'`: it would cost a preflight on every call (data-plane.ts · CROSS_ORIGIN_NO_COOKIE).
         ...CROSS_ORIGIN_NO_COOKIE,
         // A registry that takes the call and never answers is one that did not answer.
         signal: AbortSignal.timeout(REGISTRY_ANSWER_MS),
