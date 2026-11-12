@@ -97,11 +97,11 @@
     return store
   }
 
-  @MainActor private func card(_ id: String, _ make: (WatchStore) -> Void = { _ in }, draft: [String: String] = [:], sent: [String: String] = [:], notice: String? = nil) -> AnyView {
+  @MainActor private func card(_ id: String, _ make: (WatchStore) -> Void = { _ in }, draft: [String: String] = [:], sent: [String: String] = [:], notice: String? = nil, open: Bool = false) -> AnyView {
     let s = store(page: id, draft: draft, sent: sent, notice: notice)
     make(s)
     let target = cards.first { $0.id == id }!
-    return AnyView(CardPage(store: s, card: target, onFace: {}, onItem: { _ in }))
+    return AnyView(CardPage(store: s, card: target, onFace: {}, onItem: { _ in }, startOpen: open))
   }
 
   /** A stand-in page: a real picture of a page, from a file when one is given. */
@@ -160,9 +160,11 @@
       Shot(name: "08 working", view: card("a3")),
       Shot(name: "09 stop armed", view: card("a3", { $0.stageStopArmed("a3") })),
       Shot(name: "10 resting", view: card("a4")),
+      Shot(name: "10b face tapped · box open", view: card("a4", open: true)),
       Shot(name: "11 asleep", view: card("a5")),
       Shot(name: "12 refused", view: card("a4", notice: "A dispatch is in flight")),
-      Shot(name: "13 new agent", view: AnyView(NewAgentPage(store: blank))),
+      Shot(name: "13 new agent", view: AnyView(NewAgentPage(store: blank, onOut: {}))),
+      Shot(name: "13b new agent · box open", view: AnyView(NewAgentPage(store: blank, onOut: {}, startOpen: true))),
       Shot(name: "14 agents · one workspace", view: titled("Cookrew Dev", back: true, CrewGrid(store: inside, onNewAgent: {}, onPick: { _ in }))),
       Shot(name: "15 browser", view: AnyView(BrowserPage(store: blank, item: items[0], first: page))),
       Shot(name: "16 note", view: AnyView(NotePage(store: blank, item: items[2], first: NoteBody(name: "plan", content: "**Watch baseline**\n\nCards first, then the box.\nCrown walks the cards.")))),

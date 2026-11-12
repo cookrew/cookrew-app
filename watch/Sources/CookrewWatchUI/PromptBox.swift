@@ -31,22 +31,32 @@ public struct PromptBox: View {
   /** The card it speaks to; nil on the new agent's page. */
   let card: Card?
   let page: String
+  /** Folds the box back into the bar's face (WatchBar.swift): its face, tapped with no words in it. */
+  let onFold: (() -> Void)?
 
   @Environment(\.ink) private var ink
 
-  public init(store: WatchStore, card: Card?, page: String) {
+  public init(store: WatchStore, card: Card?, page: String, onFold: (() -> Void)? = nil) {
     self.store = store
     self.card = card
     self.page = page
+    self.onFold = onFold
   }
 
   private var draft: String { store.draft(page) }
 
   public var body: some View {
     HStack(spacing: 6) {
+      // The face folds the box back while it holds no words; with words it is theirs to keep.
+      if let onFold, draft.isEmpty {
+        Button(action: onFold) { chip.contentShape(Rectangle()) }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Fold the box")
+      } else {
+        chip
+      }
       WordsField(prompt: placeholder(for: card), onWords: { store.setDraft($0, for: page) }) {
         HStack(spacing: 6) {
-          chip
           Text(draft.isEmpty ? boxWords(for: card) : draft)
             .font(InkType.box(12.5))
             .foregroundStyle(draft.isEmpty ? ink.muted : ink.ink)
