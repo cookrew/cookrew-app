@@ -252,6 +252,8 @@ export interface MobileServerDeps {
   socketBridge?: MobileApiDeps['socketBridge']
   /** The build this Mac serves — passed straight through. */
   build?: MobileApiDeps['build']
+  /** The account's skin (skin-store.ts) — passed straight through. */
+  skin?: MobileApiDeps['skin']
   /** Sous's door and its `ui` bus — see MobileApiDeps; passed through as-is. */
   sous?: MobileApiDeps['sous']
   /** The Mac's ear for the phone's recordings — see MobileApiDeps; passed through as-is. */

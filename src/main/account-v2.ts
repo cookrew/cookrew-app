@@ -1888,6 +1888,7 @@ export class Accounts {
   setProfile(patch: {
     displayName?: string
     avatar?: string | null
+    skin?: string | null
   }): Promise<AccountResult<AccountProfile>> {
     return this.authed<AccountProfile>('/v2/me', {
       method: 'PATCH',

@@ -43,6 +43,7 @@ import { fetchGauges } from './relay-gauges'
 import { relayMachines, relayMachineWhy } from './relay-machine-call'
 import { parseMachineGauges } from '../../shared/machine-gauges'
 import { isStripeCheckoutUrl } from '../../shared/stripe-checkout'
+import { SKIN_PATH } from '../../shared/skins'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -804,6 +805,12 @@ export function createRemoteApi(): CookrewApi {
     onReachChanged: (cb) => subscribe('reach', () => cb()),
     onBuild: (cb) => subscribe<{ id?: unknown }>('build', (data) => {
       if (typeof data.id === 'string') cb(data.id)
+    }),
+    // The account's skin, as the Mac holds it; a pick needs the pairing.
+    skin: () => req<{ skin: string }>(apiPath(SKIN_PATH)).then((r) => r.skin),
+    setSkin: (skin) => req<{ skin: string }>(apiPath(SKIN_PATH), 'POST', { skin }).then((r) => r.skin, () => null),
+    onSkin: (cb) => subscribe<{ skin?: unknown }>('skin', (data) => {
+      if (typeof data.skin === 'string') cb(data.skin)
     }),
     // The sealed slots: owner-token routes; the read-only wall token gets 401.
     secretPut: (name, value, served) =>

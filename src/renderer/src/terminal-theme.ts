@@ -1,5 +1,6 @@
 import type { ITheme } from '@xterm/xterm'
 import type { ThemeName } from './color-scheme'
+import { isDrawnSkin, skinTerminal } from './skins/skin-look'
 
 /* THE LIVE TERMINAL'S COLOURS. xterm draws on a canvas, so no stylesheet
    reaches it: each theme of the app names its palette here. */
@@ -92,6 +93,6 @@ export const ROOT_THEME = {
   brightWhite: '#F2F5F1'
 }
 
-/** Which palette the terminal wears: the root theme's own, else night or paper. */
+/** Which palette the terminal wears: a skin's own, the root theme's, else night or paper. */
 export const terminalTheme = (theme: ThemeName, night: boolean): ITheme =>
-  theme === 'root' ? ROOT_THEME : night ? NIGHT_THEME : PAPER_THEME
+  isDrawnSkin(theme) ? skinTerminal(theme, night) : theme === 'root' ? ROOT_THEME : night ? NIGHT_THEME : PAPER_THEME

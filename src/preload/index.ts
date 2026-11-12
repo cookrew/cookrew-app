@@ -627,6 +627,14 @@ const api = {
   /** The usage-data switch; it lives on this machine, so the phone has no such call. */
   telemetryStatus: () => ipcRenderer.invoke('telemetry:status'),
   setTelemetry: (on: boolean) => ipcRenderer.invoke('telemetry:set', on),
+  /** The account's skin: this Mac's copy, a pick, and every change (main/skin-store.ts). */
+  skin: () => ipcRenderer.invoke('skin:get'),
+  setSkin: (skin: string) => ipcRenderer.invoke('skin:set', skin),
+  onSkin: (cb: (skin: string) => void) => {
+    const listener = (_e: unknown, skin: string): void => cb(skin)
+    ipcRenderer.on('skin:changed', listener)
+    return () => ipcRenderer.removeListener('skin:changed', listener)
+  },
   launchSettings: () => ipcRenderer.invoke('launch-settings:status'),
   saveLaunchSettings: (choices: unknown) => ipcRenderer.invoke('launch-settings:save', choices),
   updateStatus: () => ipcRenderer.invoke('update:status'),

@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMachineScopeEpoch } from './use-machine-scope'
+import { followAccountSkin } from './skins/skin-sync'
 import { attachmentIndex, sameAttachmentIndex, TerminalAttachmentsContext, type AttachmentIndex } from './terminal-attachments'
 import { requestJoin } from './account/open-request'
 import { onImportRequest } from './import-request'
@@ -1761,6 +1762,8 @@ export default function App(): React.JSX.Element {
   // and nothing drawn for the last one is carried over (machine-scope.ts).
   // The crash screen too: one machine's view failing says nothing of the next.
   const machine = useMachineScopeEpoch()
+  // The account's skin, as this machine holds it, and every change to it (skins/skin-sync.ts).
+  useEffect(() => followAccountSkin(), [machine])
   return (
     <ErrorBoundary key={machine}>
       <ReactFlowProvider>

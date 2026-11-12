@@ -75,7 +75,7 @@ const SENTENCES: Record<V2Error, string> = {
   unauthenticated: 'Sign in to see this.',
   not_found: 'There is nothing at that address.',
   last_device: 'This is the last device on the account. Add another before you revoke this one.',
-  bad_profile: 'A display name is up to 40 characters, and a picture is a PNG, JPEG or WebP under 64 KB.',
+  bad_profile: 'A display name is up to 40 characters, a picture is a PNG, JPEG or WebP under 64 KB, and a skin is one Cookrew draws.',
   bad_desktop: 'A desktop registers its own name and up to 64 workspaces, each by name and id.',
   bad_reach:
     'That address card is not this Mac’s. A desktop signs its own addresses, and they must be on your own network, your tailnet or a .local name.',
