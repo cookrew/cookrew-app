@@ -83,6 +83,7 @@ public func eventsElsewhere(_ old: [WorkspaceTile], _ new: [WorkspaceTile], insi
   }
 }
 
+/** The new agent's box's draft key: the bar's ＋ (HitlBar.swift), on every stop. */
 public let newAgentPage = "__new_agent__"
 
 @MainActor
@@ -105,7 +106,7 @@ public final class WatchStore {
   /** The Mac's own active workspace: the dot on its tile. */
   public private(set) var activeWorkspaceId: String?
   public private(set) var link: WatchLink = .connecting
-  /** The page the crown is on: a card's id, or newAgentPage. Kept by id, so a reorder never moves it. */
+  /** The card the crown is on, by id, so a reorder never moves it. */
   public var page: String?
   /** A word on the card: why the last thing did not go. */
   public private(set) var notice: String?
@@ -183,8 +184,9 @@ public final class WatchStore {
     scope = workspace
     zooms &+= 1
     tag = nil
-    // With no card in hand yet, none: the reply's first card takes the page, not the new agent.
-    page = visibleCards.first?.id
+    // A card picked from a bar above (HitlBar.swift) keeps its page, read in the day's cards; else the first card.
+    let kept = page.flatMap { id in visibleCards.contains { $0.id == id } ? id : nil }
+    page = kept ?? visibleCards.first?.id
     await refresh()
   }
 
@@ -241,7 +243,8 @@ public final class WatchStore {
     if link != .live { link = .live }
     // A card that left takes its page with it; the first page is the one that needs the owner.
     let visible = shown(next)
-    if page != newAgentPage, page == nil || !visible.contains(where: { $0.id == page }) { page = visible.first?.id ?? newAgentPage }
+    // There is no new agent's page any more (owner 2026-11-12): the bar's ＋ is.
+    if page == nil || !visible.contains(where: { $0.id == page }) { page = visible.first?.id }
     let stillRead = readIds.filter { id in next.contains { $0.id == id && $0.status == .done } }
     if stillRead != readIds { readIds = stillRead }
     for card in next where card.choice == nil && answers[card.id] != nil { answers[card.id] = nil }

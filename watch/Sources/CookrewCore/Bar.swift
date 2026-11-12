@@ -1,11 +1,31 @@
 import Foundation
 
-// THE BAR AT THE FOOT OF A WRIST (owner 2026-11-12): the Mac's zoom bar without
-// its DEVICES and WORKSPACES stops, so what is left has the room: ‹, the two
-// groups, and the box folded into the face of whoever its words go to
-// (src/renderer/src/zoom/BarGroups.tsx, prompt/prompt-fold.ts). The groups are
-// the human-in-the-loop inbox (zoom/bar-inbox.ts): the agents that need you,
-// and the artifacts they hold, each one tap away.
+// THE BAR AT THE FOOT OF A WRIST (owner 2026-11-12, docs/watch-hitl-bar-2026-11-12.html,
+// as the phone draws it). Every page has one:
+//
+//   the devices, workspaces and crew stops   [ARTIFACTS | AGENTS] · ＋
+//   an agent's card                          (face) Reply… ➜
+//
+// The groups are the human-in-the-loop inbox (src/renderer/src/zoom/bar-inbox.ts):
+// the agents that need you, and the artifacts they hold, each one tap away. ＋ is
+// the box folded, and opens in place for a new agent. The way out is not the
+// bar's: it is the top left, as it always was.
+
+/** Which bar a page wears: nil card is a stop with no card on show. */
+public enum BarShape: Equatable, Sendable {
+  case hitl
+  case reply
+  /** A menu with no row to type in: the box stands where it always is, dimmed, pointing up at the rows. */
+  case shut
+}
+
+public func barShape(on card: Card?) -> BarShape {
+  guard let card else { return .hitl }
+  return boxTarget(for: card) == .rowsOnly ? .shut : .reply
+}
+
+/** The shut box's words. */
+public let rowsOnlyWords = "Pick a row above"
 
 /** What the bar's two groups hold, in the order they are drawn. */
 public struct BarInbox: Equatable, Sendable {

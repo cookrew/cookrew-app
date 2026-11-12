@@ -412,18 +412,21 @@ struct ZoomStack: View {
 
   var body: some View {
     NavigationStack(path: $path) {
-      DevicesPage(
-        rows: deviceRows(app.machines, pairedId: app.pairedId, desktop: app.desktop, live: store.link == .live, held: app.heldMachines),
-        onOpen: { path = [.workspaces] },
-        onSwitch: app.switchTo,
-        onAdd: { row in
-          Task {
-            guard let why = await app.enter(id: row.id, name: row.name, goIn: true) else { return }
-            path.append(.addMachine(row.name, addNote(why)))
-          }
-        },
-        onThisWatch: { path.append(.thisWatch) }
-      )
+      // Every stop wears the HITL bar (owner 2026-11-12); above a workspace it holds the day's cards of the paired Mac.
+      HitlPage(store: store, onAgent: openCard, onItem: openItem) { _ in
+        DevicesPage(
+          rows: deviceRows(app.machines, pairedId: app.pairedId, desktop: app.desktop, live: store.link == .live, held: app.heldMachines),
+          onOpen: { path = [.workspaces] },
+          onSwitch: app.switchTo,
+          onAdd: { row in
+            Task {
+              guard let why = await app.enter(id: row.id, name: row.name, goIn: true) else { return }
+              path.append(.addMachine(row.name, addNote(why)))
+            }
+          },
+          onThisWatch: { path.append(.thisWatch) }
+        )
+      }
       .navigationTitle("Devices")
       .navigationDestination(for: Route.self) { route in destination(route) }
     }
@@ -448,18 +451,20 @@ struct ZoomStack: View {
   @ViewBuilder private func destination(_ route: Route) -> some View {
     switch route {
     case .workspaces:
-      WorkspacesPage(tiles: mergedTiles(store.workspaces, names: app.pairedMachine?.workspaces ?? []), machine: store.machine) { id in
-        path.append(.agents(id))
+      HitlPage(store: store, onAgent: openCard, onItem: openItem) { _ in
+        WorkspacesPage(tiles: mergedTiles(store.workspaces, names: app.pairedMachine?.workspaces ?? []), machine: store.machine) { id in
+          path.append(.agents(id))
+        }
       }
       .navigationTitle(app.desktop)
     case .agents(let id):
-      CrewGrid(store: store, left: left, onNewAgent: { open(newAgentPage, in: id) }) { card in open(card, in: id) }
-        .navigationTitle(name(of: id))
+      HitlPage(store: store, onAgent: openCard, onItem: openItem) { newOpen in
+        // The crew's ＋ seat opens the bar's box in place: no page of its own.
+        CrewGrid(store: store, left: left, onNewAgent: { newOpen.wrappedValue = true }) { card in open(card, in: id) }
+      }
+      .navigationTitle(name(of: id))
     case .cards:
-      CardPager(store: store, onOut: stepOut, onItem: { item in
-        items[item.id] = item
-        path.append(.item(item.id))
-      }, onThisWatch: { path.append(.thisWatch) })
+      CardPager(store: store, onOut: stepOut, onItem: openItem)
     case .thisWatch:
       ThisWatchPage(desktop: app.desktop, account: app.username, line: store.client.line, onCode: app.signInAgain, onForget: { Task { await app.forget() } }).wholeGlass()
     case .item(let id):
@@ -467,6 +472,19 @@ struct ZoomStack: View {
     case .addMachine(let name, let note):
       AddMachinePage(name: name, note: note, onCode: app.addMachine)
     }
+  }
+
+  /** A face on a bar: that agent's card, from whatever stop, in its own workspace. */
+  private func openCard(_ card: Card) {
+    left = nil
+    store.page = card.id
+    path = routes(to: .cards(card.workspace.id))
+  }
+
+  /** A picture on a bar or a card: that artifact's page, over the stop it was tapped on. */
+  private func openItem(_ item: CardItem) {
+    items[item.id] = item
+    path.append(.item(item.id))
   }
 
   /** Into one card: the crown walks its workspace's cards from there. */

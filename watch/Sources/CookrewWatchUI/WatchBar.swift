@@ -1,81 +1,110 @@
 import CookrewCore
 import SwiftUI
 
-// THE BAR AT THE FOOT OF A WRIST (owner 2026-11-12): the Mac's zoom bar
-// (src/renderer/src/zoom/ZoomView.tsx · .zv-controls) with its DEVICES and
-// WORKSPACES stops left out, so the rest has the room. One pill:
+// THE BAR AT THE FOOT OF A WRIST (Bar.swift; owner 2026-11-12, as the phone
+// draws it): on every page, and never a way out (that is the top left's).
 //
-//   ‹  · [ARTIFACTS | AGENTS] ·  face
-//
-// ‹ is one step out, as the card's head is. The two groups are what needs the
-// owner (Bar.swift · barInbox): a face picks that agent's card, a picture opens
-// that artifact, and an empty group is its word alone. The face at the end is
-// the box, folded into whoever its words go to (prompt/prompt-fold.ts); a tap
-// opens it into the box (PromptBox.swift), and its face folds it again. It
-// stays open while it holds words.
+//   HitlBar   the devices, workspaces and crew stops: [ARTIFACTS | AGENTS] · ＋
+//             A face opens that agent's card, a picture that artifact; ＋ opens
+//             in place into the new agent's box, and folds back once sent.
+//   ReplyBar  an agent's card: its box, open, (face) Reply… ➜. A menu with rows
+//             only leaves it in place, dimmed: "Pick a row above".
 
-/** The bar's height: the box's own, so folding it moves nothing. */
 private let barFace: CGFloat = 22
 private let stackFace: CGFloat = 19
 
-public struct WatchBar: View {
+/** A stop with the HITL bar at its foot, the content above it clipped (a watch's scroll view catches touches past its frame). */
+public struct HitlPage<Content: View>: View {
   @Bindable var store: WatchStore
-  /** The card the box speaks to; nil on the new agent's page. */
-  let card: Card?
-  let page: String
-  /** One step out; nil where there is nowhere to go. */
-  let onOut: (() -> Void)?
+  let onAgent: (Card) -> Void
   let onItem: (CardItem) -> Void
-
-  @State private var opened: Bool
+  /** The stop, given the new agent's box: the crew's ＋ seat opens it too. */
+  let content: (Binding<Bool>) -> Content
+  @State private var newOpen: Bool
   @Environment(\.ink) private var ink
 
-  public init(store: WatchStore, card: Card?, page: String, onOut: (() -> Void)?, onItem: @escaping (CardItem) -> Void, open: Bool = false) {
+  public init(store: WatchStore, onAgent: @escaping (Card) -> Void, onItem: @escaping (CardItem) -> Void, newOpen: Bool = false, @ViewBuilder content: @escaping (Binding<Bool>) -> Content) {
     self.store = store
-    self.card = card
-    self.page = page
-    self.onOut = onOut
+    self.onAgent = onAgent
     self.onItem = onItem
-    _opened = State(initialValue: open)
+    self.content = content
+    _newOpen = State(initialValue: newOpen)
   }
 
-  private var target: BoxTarget { boxTarget(for: card) }
+  public var body: some View {
+    VStack(spacing: 0) {
+      content($newOpen)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .contentShape(Rectangle())
+      HitlBar(store: store, newOpen: $newOpen, onAgent: onAgent, onItem: onItem)
+        .padding(.horizontal, boxSides)
+        .padding(.bottom, boxFloor)
+    }
+    .background(ink.paper)
+    .ignoresSafeArea(.container, edges: .bottom)
+  }
+}
+
+public struct HitlBar: View {
+  @Bindable var store: WatchStore
+  @Binding var newOpen: Bool
+  let onAgent: (Card) -> Void
+  let onItem: (CardItem) -> Void
+  @Environment(\.ink) private var ink
+
+  public init(store: WatchStore, newOpen: Binding<Bool>, onAgent: @escaping (Card) -> Void, onItem: @escaping (CardItem) -> Void) {
+    self.store = store
+    _newOpen = newOpen
+    self.onAgent = onAgent
+    self.onItem = onItem
+  }
+
+  private var open: Bool { boxOpen(draft: store.draft(newAgentPage), opened: newOpen, target: .newAgent) }
 
   public var body: some View {
-    Group {
-      if boxOpen(draft: store.draft(page), opened: opened, target: target) {
-        PromptBox(store: store, card: card, page: page, onFold: { opened = false })
+    VStack(spacing: 4) {
+      line
+      if open {
+        PromptBox(store: store, card: nil, page: newAgentPage, onFold: { newOpen = false })
       } else {
         folded
       }
     }
-    // Sent: the words left, and the box folds back into the face.
-    .onChange(of: store.draft(page).isEmpty) { wasEmpty, isEmpty in
-      if isEmpty && !wasEmpty { opened = false }
+    // Sent: the words left, and the box folds back into ＋.
+    .onChange(of: store.draft(newAgentPage).isEmpty) { wasEmpty, isEmpty in
+      if isEmpty && !wasEmpty { newOpen = false }
     }
-    // Another page under the crown: its box starts folded.
-    .onChange(of: store.page) { _, _ in opened = false }
+  }
+
+  /** One line over the bar: what was just started, why it was not, or where the new agent will be. */
+  @ViewBuilder private var line: some View {
+    if let sent = store.sent(newAgentPage) {
+      note("Started · \(sent)", ink.sealText)
+    } else if let notice = store.notice, !store.draft(newAgentPage).isEmpty {
+      note(notice, ink.wait)
+    } else if open, let workspace = store.newAgentWorkspace {
+      note("New agent in \(workspace)", ink.muted)
+    }
+  }
+
+  private func note(_ words: String, _ color: Color) -> some View {
+    Text(words)
+      .font(InkType.words(11.5))
+      .foregroundStyle(color)
+      .lineLimit(1)
+      .truncationMode(.tail)
+      .padding(.horizontal, 8)
+      .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private var folded: some View {
-    let inbox = barInbox(store.visibleCards, here: page)
-    return HStack(spacing: 3) {
-      if let onOut {
-        Button(action: onOut) {
-          Image(systemName: "chevron.left")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(ink.sealText)
-            .frame(width: 20, height: boxHeight)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Back to the crew")
-      }
-      groups(inbox)
+    HStack(spacing: 3) {
+      groups(barInbox(store.visibleCards, here: nil))
       Spacer(minLength: 0)
-      face
+      plus
     }
-    .padding(.leading, onOut == nil ? 5 : 1)
+    .padding(.leading, 5)
     .padding(.trailing, 4)
     .frame(height: boxHeight)
     .background(Capsule().fill(ink.card))
@@ -83,40 +112,73 @@ public struct WatchBar: View {
     .accessibilityElement(children: .contain)
   }
 
-  /** ARTIFACTS first, AGENTS next to the face, in one inner pill, as the Mac's bar draws them. */
+  /** ARTIFACTS first, AGENTS next to ＋, in one inner pill, as the Mac's bar draws them. */
   private func groups(_ inbox: BarInbox) -> some View {
     HStack(spacing: 0) {
       ArtifactsGroup(items: inbox.items, onItem: onItem)
       Rectangle().fill(ink.hair2).frame(width: 1, height: 14)
-      AgentsGroup(agents: inbox.agents, onPick: { store.page = $0.id }, onCrew: onOut)
+      AgentsGroup(agents: inbox.agents, onPick: onAgent)
     }
     .padding(.horizontal, 2)
     .frame(height: boxHeight - 8)
     .overlay(Capsule().strokeBorder(ink.hair2, lineWidth: 1))
   }
 
-  /** The box, folded: whoever its words go to, a ＋ for a new agent. A menu with rows only takes no words. */
-  @ViewBuilder private var face: some View {
-    let shut = target == .rowsOnly
-    Button { opened = true } label: {
-      Group {
-        if let card {
-          InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: barFace, weight: .small)
-        } else {
-          ZStack {
-            Circle().strokeBorder(ink.dim, style: StrokeStyle(lineWidth: 1, dash: [2.5, 2.5]))
-            Text("＋").font(.system(size: 12, weight: .medium)).foregroundStyle(ink.sealText)
-          }
-          .frame(width: barFace, height: barFace)
-        }
+  /** The box folded: ＋, for a new agent. */
+  private var plus: some View {
+    Button { newOpen = true } label: {
+      ZStack {
+        Circle().strokeBorder(ink.dim, style: StrokeStyle(lineWidth: 1, dash: [2.5, 2.5]))
+        Text("＋").font(.system(size: 12, weight: .medium)).foregroundStyle(ink.sealText)
       }
+      .frame(width: barFace, height: barFace)
       .frame(width: 26, height: boxHeight)
       .contentShape(Rectangle())
-      .opacity(shut ? 0.4 : 1)
     }
     .buttonStyle(.plain)
-    .disabled(shut)
-    .accessibilityLabel(shut ? "Answer with a row above" : card.map { "Write to \($0.name)" } ?? "Describe a task for a new agent")
+    .accessibilityLabel("Describe a task for a new agent")
+  }
+}
+
+/** An agent's card's bar: its box, always open; dimmed where the menu takes rows only. */
+public struct ReplyBar: View {
+  let store: WatchStore
+  let card: Card
+  @Environment(\.ink) private var ink
+
+  public init(store: WatchStore, card: Card) {
+    self.store = store
+    self.card = card
+  }
+
+  public var body: some View {
+    if barShape(on: card) == .shut {
+      shut
+    } else {
+      PromptBox(store: store, card: card, page: card.id)
+    }
+  }
+
+  /** Where the box always is, so the bar never jumps: the face and the words pointing up at the rows. */
+  private var shut: some View {
+    HStack(spacing: 6) {
+      InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: barFace, weight: .small)
+      // No key: nothing here sends, and the words want the room (a 41 mm wrist).
+      Text(rowsOnlyWords)
+        .font(InkType.box(12.5))
+        .foregroundStyle(ink.muted)
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .padding(.leading, 5)
+    .padding(.trailing, 4)
+    .frame(height: boxHeight)
+    .background(Capsule().fill(ink.card))
+    .overlay(Capsule().strokeBorder(ink.hair2, lineWidth: 1))
+    .opacity(0.6)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Answer \(card.name) with a row above")
   }
 }
 
@@ -187,16 +249,12 @@ private struct ArtifactsGroup: View {
 private struct AgentsGroup: View {
   let agents: [Card]
   let onPick: (Card) -> Void
-  let onCrew: (() -> Void)?
 
   var body: some View {
     let stack = barStack(agents)
     if stack.shown.isEmpty {
-      // Empty, the word is the stop: the crew, as the Mac's AGENTS goes to it.
-      Button { onCrew?() } label: { GroupWord(word: "AGENTS").contentShape(Rectangle()) }
-        .buttonStyle(.plain)
-        .disabled(onCrew == nil)
-        .accessibilityLabel("Agents")
+      // Empty, the word alone: nobody needs the owner.
+      GroupWord(word: "AGENTS").opacity(0.7).accessibilityLabel("Nobody needs you")
     } else {
       HStack(spacing: -3) {
         ForEach(stack.shown) { card in

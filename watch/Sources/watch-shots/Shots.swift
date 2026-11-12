@@ -97,11 +97,18 @@
     return store
   }
 
-  @MainActor private func card(_ id: String, _ make: (WatchStore) -> Void = { _ in }, draft: [String: String] = [:], sent: [String: String] = [:], notice: String? = nil, open: Bool = false) -> AnyView {
+  @MainActor private func card(_ id: String, _ make: (WatchStore) -> Void = { _ in }, draft: [String: String] = [:], sent: [String: String] = [:], notice: String? = nil) -> AnyView {
     let s = store(page: id, draft: draft, sent: sent, notice: notice)
     make(s)
     let target = cards.first { $0.id == id }!
-    return AnyView(CardPage(store: s, card: target, onFace: {}, onItem: { _ in }, startOpen: open))
+    return AnyView(CardPage(store: s, card: target, onFace: {}, onItem: { _ in }))
+  }
+
+  /** One workspace's crew with the HITL bar at its foot, its ＋ tapped or not. */
+  @MainActor private func crew(_ s: WatchStore, open: Bool) -> some View {
+    HitlPage(store: s, onAgent: { _ in }, onItem: { _ in }, newOpen: open) { newOpen in
+      CrewGrid(store: s, onNewAgent: { newOpen.wrappedValue = true }, onPick: { _ in })
+    }
   }
 
   /** A stand-in page: a real picture of a page, from a file when one is given. */
@@ -148,6 +155,8 @@
     let blank = store(page: nil)
     let inside = store(page: nil)
     inside.stage(cards: cards, page: nil, scope: "w")
+    let typed = store(page: nil)
+    typed.stage(cards: cards, page: nil, draft: [newAgentPage: "Fix the flaky build"], scope: "w")
     let page = pagePicture()
     return [
       Shot(name: "01 needs you · menu", view: card("a1")),
@@ -160,17 +169,16 @@
       Shot(name: "08 working", view: card("a3")),
       Shot(name: "09 stop armed", view: card("a3", { $0.stageStopArmed("a3") })),
       Shot(name: "10 resting", view: card("a4")),
-      Shot(name: "10b face tapped · box open", view: card("a4", open: true)),
       Shot(name: "11 asleep", view: card("a5")),
       Shot(name: "12 refused", view: card("a4", notice: "A dispatch is in flight")),
-      Shot(name: "13 new agent", view: AnyView(NewAgentPage(store: blank, onOut: {}))),
-      Shot(name: "13b new agent · box open", view: AnyView(NewAgentPage(store: blank, onOut: {}, startOpen: true))),
-      Shot(name: "14 agents · one workspace", view: titled("Cookrew Dev", back: true, CrewGrid(store: inside, onNewAgent: {}, onPick: { _ in }))),
+      Shot(name: "13 crew · HITL bar", view: titled("Cookrew Dev", back: true, crew(inside, open: false))),
+      Shot(name: "13b crew · ＋ tapped", view: titled("Cookrew Dev", back: true, crew(inside, open: true))),
+      Shot(name: "14 crew · new agent typed", view: titled("Cookrew Dev", back: true, crew(typed, open: false))),
       Shot(name: "15 browser", view: AnyView(BrowserPage(store: blank, item: items[0], first: page))),
       Shot(name: "16 note", view: AnyView(NotePage(store: blank, item: items[2], first: NoteBody(name: "plan", content: "**Watch baseline**\n\nCards first, then the box.\nCrown walks the cards.")))),
       Shot(name: "17 pairing", view: AnyView(PairView(address: .constant("192.168.2.40"), digits: "4821", busy: false, failure: nil, onDigit: { _ in }, onDelete: {}))),
-      Shot(name: "18 devices", view: titled("Devices", back: false, DevicesPage(rows: devices, onOpen: {}, onThisWatch: {}))),
-      Shot(name: "19 workspaces", view: titled("MacBook Pro", back: true, WorkspacesPage(tiles: mergedTiles(blank.workspaces, names: names), onOpen: { _ in })))
+      Shot(name: "18 devices · HITL bar", view: titled("Devices", back: false, HitlPage(store: blank, onAgent: { _ in }, onItem: { _ in }) { _ in DevicesPage(rows: devices, onOpen: {}, onThisWatch: {}) })),
+      Shot(name: "19 workspaces · HITL bar", view: titled("MacBook Pro", back: true, HitlPage(store: blank, onAgent: { _ in }, onItem: { _ in }) { _ in WorkspacesPage(tiles: mergedTiles(blank.workspaces, names: names), onOpen: { _ in }) }))
     ]
   }
 
@@ -249,8 +257,7 @@
       ("paired", AnyView(JoinSteps(done: ["Joined your account", "Paired with MacBook Pro"], now: nil))),
       ("mac-away", note("Can't reach your computer", "You're in your account. Wake the computer, then try again.", "Try again")),
       ("this-watch", AnyView(ThisWatchPage(desktop: "MacBook Pro", account: "drej", line: .relay, onForget: {}))),
-      ("this-watch-no-account", AnyView(ThisWatchPage(desktop: "MacBook Pro", account: nil, line: .direct, onForget: {}))),
-      ("new-agent", AnyView(NewAgentPage(store: WatchStore(api: NoAPI()))))
+      ("this-watch-no-account", AnyView(ThisWatchPage(desktop: "MacBook Pro", account: nil, line: .direct, onForget: {})))
     ]
     for (name, view) in screens {
       write(Glass(size: CGSize(width: 198, height: 242), palette: .day) { view }, scale: 2, to: out.appending(path: "pair-\(name).png"))
