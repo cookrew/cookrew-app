@@ -1,22 +1,21 @@
 import CookrewCore
 import SwiftUI
 
-// ONE WORKSPACE'S CARDS: a page each, then a new agent there. The crown walks
-// them up and down; the system's bar is hidden, so the way out is the card's
-// own head (chevron + face), or a swipe right anywhere on the card.
+// ONE WORKSPACE'S CARDS: a page each. The crown walks them up and down; the
+// system's bar is hidden, so the way out is the card's own head (chevron +
+// face), or a swipe right anywhere on the card. A new agent is the bar's ＋ on
+// the stops (WatchBar.swift · HitlBar; owner 2026-11-12), no page of its own.
 
 public struct CardPager: View {
   @Bindable var store: WatchStore
   /** One step out: back to the crew these cards are from. */
   let onOut: () -> Void
   let onItem: (CardItem) -> Void
-  let onThisWatch: () -> Void
 
-  public init(store: WatchStore, onOut: @escaping () -> Void, onItem: @escaping (CardItem) -> Void, onThisWatch: @escaping () -> Void = {}) {
+  public init(store: WatchStore, onOut: @escaping () -> Void, onItem: @escaping (CardItem) -> Void) {
     self.store = store
     self.onOut = onOut
     self.onItem = onItem
-    self.onThisWatch = onThisWatch
   }
 
   /** A swipe right across a card: one step out. The pages go up and down, so sideways is free. */
@@ -34,10 +33,10 @@ public struct CardPager: View {
           .simultaneousGesture(swipeOut)
           .tag(Optional(card.id))
       }
-      NewAgentPage(store: store, onThisWatch: onThisWatch, onOut: onOut, onItem: onItem)
-        .wholeGlass()
-        .simultaneousGesture(swipeOut)
-        .tag(Optional(newAgentPage))
+    }
+    // The last card left the workspace, as the Mac answered: back on its crew, where ＋ is.
+    .onChange(of: store.link == .live && store.visibleCards.isEmpty) { _, gone in
+      if gone { onOut() }
     }
     #if os(watchOS)
       .tabViewStyle(.verticalPage)

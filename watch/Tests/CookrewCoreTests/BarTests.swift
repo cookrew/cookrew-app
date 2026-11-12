@@ -70,4 +70,22 @@ struct BarBoxTests {
     #expect(boxOpen(draft: "", opened: true, target: boxTarget(for: card("a", .waiting, choice: typed))))
     #expect(!boxOpen(draft: "", opened: true, target: boxTarget(for: card("a", .waiting, choice: rows))))
   }
+
+  // Owner 2026-11-12: every page has a bar; on a card it is the reply box, in place even when it takes no words.
+  @Test("a stop wears the HITL bar; a card its reply box; a card with rows only the same box, shut")
+  func shapes() {
+    #expect(barShape(on: nil) == .hitl)
+    #expect(barShape(on: card("a", .idle)) == .reply)
+    #expect(barShape(on: card("a", .waiting)) == .reply)
+    #expect(barShape(on: card("a", .waiting, choice: typed)) == .reply)
+    #expect(barShape(on: card("a", .waiting, choice: rows)) == .shut)
+    #expect(rowsOnlyWords == "Pick a row above")
+  }
+
+  @Test("above a workspace the HITL bar holds every agent that needs you, from any workspace")
+  func everyStop() {
+    let other = CardWorkspace(id: "g", name: "GOAT Team", active: false)
+    let cards = [card("a", .waiting), Card(id: "b", name: "B", workspace: other, status: .waiting, word: "needs you"), card("c", .idle)]
+    #expect(barInbox(cards, here: nil).agents.map(\.id) == ["a", "b"])
+  }
 }
