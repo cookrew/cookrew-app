@@ -7,6 +7,30 @@
   gap: 12px;
 }
 
+/* THE MARK (owner 2026-11-12): the Co at the front of the bar, in the theme's ink. The 88px of
+   styles.css is the macOS window's traffic lights (Header.tsx · hasTrafficLights); with none
+   over it, the mark takes the front instead. */
+.cr-header:not(.cr-lights) {
+  padding-left: 16px;
+}
+
+.cr-mark {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 25px;
+  background: var(--ink);
+  -webkit-mask: url('./brand/co-mark.svg') center / contain no-repeat;
+  mask: url('./brand/co-mark.svg') center / contain no-repeat;
+}
+
+/* A phone's bar is one line with the least room: the mark gives a little first. */
+@media (max-width: 700px) {
+  .cr-mark {
+    width: 16px;
+    height: 20px;
+  }
+}
+
 /* ---- the route: device / workspace / agent ---- */
 
 .cr-route {
