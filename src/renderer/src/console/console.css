@@ -13,27 +13,10 @@
   overflow-y: auto;
 }
 
-.cd-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px 20px;
-  flex-wrap: wrap;
-  margin-bottom: 22px;
-}
-
 .cd-mark {
   margin: 0;
   font: 600 22px/1.1 var(--font-serif);
   letter-spacing: 0.01em;
-}
-
-.cd-who {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-  flex-wrap: wrap;
-  font-size: 13px;
 }
 
 .cd-user {
@@ -199,13 +182,75 @@
   flex-direction: column;
   height: 100dvh;
   overflow: hidden;
+  padding: 0;
+}
+
+/* The app's top bar (header.css), edge to edge as inside a machine; what it says stands under it. */
+.cd-canvas-page > .cd-bar {
+  padding-top: max(10px, env(safe-area-inset-top));
+  -webkit-app-region: no-drag;
+}
+
+.cd-canvas-page > .cd-notice,
+.cd-canvas-page > .cd-gate,
+.cd-canvas-page > .cd-line,
+.cd-canvas-page > .cd-empty {
+  margin: 16px max(20px, env(safe-area-inset-right)) 0 max(20px, env(safe-area-inset-left));
 }
 
 .cd-canvas-page .cd-canvas {
   position: relative;
   flex: 1;
   min-height: 0;
-  margin: 0 calc(-1 * max(20px, env(safe-area-inset-right))) calc(-1 * max(28px, env(safe-area-inset-bottom))) calc(-1 * max(20px, env(safe-area-inset-left)));
+}
+
+.cd-acct-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin: -8px -8px -8px 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.cd-acct-btn:focus-visible {
+  outline: 3px solid var(--sumi-seal);
+  outline-offset: -4px;
+  border-radius: 50%;
+}
+
+/* The account's menu, under its avatar: the way to the account, and out. */
+.cd-acct {
+  position: relative;
+  margin-left: auto;
+}
+
+.cd-acct-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  min-width: 200px;
+  padding: 10px 14px;
+  border: 1px solid var(--sumi-hair-2);
+  border-radius: 12px;
+  background: var(--sumi-card);
+  box-shadow: var(--sumi-lift);
+  font: 14px/1.45 var(--font-serif);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.cd-acct-menu .cd-user {
+  padding: 4px 0 6px;
 }
 
 /* "Opening Studio Mac…": over the canvas, above the bar at its foot (zoom.css · .zv-controls, z-index 44). */
