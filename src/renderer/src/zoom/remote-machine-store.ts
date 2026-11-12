@@ -1,4 +1,5 @@
 import type { ScreenBox } from './remote-entry'
+import type { RemoteCard } from './remote-machine'
 import { registerScopeState } from '../machine-scope'
 import { useSyncExternalStore } from 'react'
 
@@ -69,6 +70,8 @@ export const remotePlace = {
   },
   enter: (machine: RemoteMachineRef): void => {
     front = null
+    // Another machine's cards are not this one's: the box waits for its own read.
+    remoteSeen.forget()
     set({ ...OUTSIDE, machine })
   },
   workspace: (workspace: { id: string; name: string }): void => {
@@ -102,6 +105,7 @@ export const remotePlace = {
   },
   leave: (): void => {
     front = null
+    remoteSeen.forget()
     if (place !== OUTSIDE) set(OUTSIDE)
   }
 }
@@ -129,6 +133,38 @@ export function setRemoteDraft(machineId: string, box: string, words: string): v
   if (words === '') drafts.delete(draftKeyOf(machineId, box))
   else drafts.set(draftKeyOf(machineId, box), words)
 }
+
+/**
+ * WHAT THE STAGE LAST READ THERE (RemoteMachineView.tsx · useRemoteCards), for
+ * the bar's box (RemotePrompt.tsx): the cards on show, how to read them again
+ * after a send, and the workspace in front. The box reads nothing of its own:
+ * one read a stop, not two.
+ */
+export interface RemoteSeen {
+  readonly cards: readonly RemoteCard[] | null
+  readonly front: { readonly id: string; readonly name: string } | null
+  readonly refresh: () => void
+}
+
+const NOTHING_SEEN: RemoteSeen = { cards: null, front: null, refresh: () => undefined }
+let seen: RemoteSeen = NOTHING_SEEN
+const seenListeners = new Set<() => void>()
+
+export const remoteSeen = {
+  get: (): RemoteSeen => seen,
+  subscribe(listener: () => void): () => void {
+    seenListeners.add(listener)
+    return () => seenListeners.delete(listener)
+  },
+  note(next: RemoteSeen): void {
+    if (next.cards === seen.cards && next.front?.id === seen.front?.id && next.front?.name === seen.front?.name && next.refresh === seen.refresh) return
+    seen = next
+    for (const listener of seenListeners) listener()
+  },
+  forget: (): void => remoteSeen.note(NOTHING_SEEN)
+}
+
+export const useRemoteSeen = (): RemoteSeen => useSyncExternalStore(remoteSeen.subscribe, remoteSeen.get, remoteSeen.get)
 
 const inside = (): boolean => place.machine !== null
 

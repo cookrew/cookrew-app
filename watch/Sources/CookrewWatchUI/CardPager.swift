@@ -34,7 +34,7 @@ public struct CardPager: View {
           .simultaneousGesture(swipeOut)
           .tag(Optional(card.id))
       }
-      NewAgentPage(store: store, onThisWatch: onThisWatch, onOut: onOut)
+      NewAgentPage(store: store, onThisWatch: onThisWatch, onOut: onOut, onItem: onItem)
         .wholeGlass()
         .simultaneousGesture(swipeOut)
         .tag(Optional(newAgentPage))

@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import { ENTRY_MS, entryFrom } from './remote-entry'
 import { artifactsOf } from './remote-machine'
-import { remotePlace, type RemotePlace } from './remote-machine-store'
+import { remotePlace, remoteSeen, type RemotePlace } from './remote-machine-store'
 import { RemoteCardView, Thumb } from './RemoteCardView'
 import { RemoteItemView } from './RemoteItemView'
-import { RemoteCrew, RemoteNewAgent, RemoteWorkspaces } from './RemoteStops'
+import { RemoteCrew, RemoteWorkspaces } from './RemoteStops'
 import { useRemoteCards } from './use-remote-machine'
 import './remote-machine.css'
 
@@ -50,6 +50,11 @@ export function RemoteMachineView(): React.JSX.Element | null {
   useEffect(() => {
     remotePlace.noteFront(frontTile ? { id: frontTile.id, name: frontTile.name } : null)
   }, [frontTile?.id, frontTile?.name])
+  // What is on show, for the bar's box (RemotePrompt.tsx): it reads nothing of its own.
+  useEffect(() => {
+    remoteSeen.note({ cards: cards?.cards ?? null, front: frontTile ? { id: frontTile.id, name: frontTile.name } : null, refresh })
+  }, [cards, frontTile?.id, frontTile?.name, refresh])
+  useEffect(() => () => remoteSeen.forget(), [])
   if (!machine) return null
 
   const card = place.agent ? (cards?.cards.find((one) => one.id === place.agent?.id) ?? null) : null
@@ -73,12 +78,8 @@ export function RemoteMachineView(): React.JSX.Element | null {
       )
     }
     if (!place.agent) {
-      return (
-        <>
-          <RemoteNewAgent machine={machine} workspaceId={place.workspace.id} onStarted={refresh} />
-          <RemoteCrew cards={cards.cards} onOpen={(one) => remotePlace.agent({ id: one.id, name: one.name })} />
-        </>
-      )
+      // A new agent there is the bar's box's (RemotePrompt.tsx), as on this machine.
+      return <RemoteCrew cards={cards.cards} onOpen={(one) => remotePlace.agent({ id: one.id, name: one.name })} />
     }
     if (!card) return <p className="rm-empty">{place.agent.name} is no longer in this workspace on {machine.name}.</p>
     if (place.item) {
