@@ -50,6 +50,8 @@ export type CrIconName =
   | 'fullscreen'
   /** ⋯ → Apple Watch: pair one. */
   | 'watch'
+  /** ⋯ → Skin: the account's look, a painter's palette. */
+  | 'skin'
 
 const STROKE = {
   fill: 'none',
@@ -255,6 +257,14 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
       strokeLinecap="square"
       d="M2.6 6 V2.6 H6 M10 2.6 H13.4 V6 M13.4 10 V13.4 H10 M6 13.4 H2.6 V10"
     />
+  ),
+  skin: (
+    <g>
+      <path {...STROKE} strokeLinejoin="round" d="M8 2.2 C4.4 2.2 2 4.8 2 8 C2 11.2 4.6 13.8 7.6 13.8 C8.8 13.8 9.2 13 8.7 12.1 C8.2 11.1 8.8 10.2 10 10.2 H11.4 C12.9 10.2 14 9.1 14 7.6 C14 4.6 11.4 2.2 8 2.2 Z" />
+      <circle cx="5.2" cy="7.6" r="1.1" fill="currentColor" />
+      <circle cx="7.4" cy="5" r="1.1" fill="currentColor" />
+      <circle cx="10.6" cy="5.6" r="1.1" fill="currentColor" />
+    </g>
   ),
   watch: (
     <g {...STROKE}>

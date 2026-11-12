@@ -578,6 +578,14 @@ export interface CookrewApi {
   /** The build the Mac serves (main/build-id.ts); the companion reloads when it changes. */
   onBuild?: (cb: (id: string) => void) => () => void;
   /**
+   * The account's skin (shared/skins.ts, main/skin-store.ts): what this Mac
+   * holds, a pick (null when it was refused), and every change, whichever
+   * device or Mac on the account made it. Optional: the demo has no account.
+   */
+  skin?: () => Promise<string>;
+  setSkin?: (skin: string) => Promise<string | null>;
+  onSkin?: (cb: (skin: string) => void) => () => void;
+  /**
    * The sealed slots (R4, shared/secret-slot.ts): a note line `🔒 <name>` is
    * a slot; SEAL puts the value in ~/.cookrew/secrets/ and nothing in the
    * note. The listing carries names and dates, never values. Optional: an

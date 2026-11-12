@@ -113,6 +113,16 @@ account, the link goes through the cookrew.dev relay and works from anywhere, an
 profile shows it as a QR code. Without an account the phone connects directly, over
 your Wi-Fi or Tailscale. `cookrew mobile --rotate` revokes the pairing token.
 
+## Skins
+
+⋯ → Skin changes how the whole app looks: Paper (the default), Broadsheet, Phosphor,
+Neon, Blueprint, Sakura, Shanshui, Celadon, Dunhuang, Dusk, Aurora, Obsidian, Riso and
+Root. A skin recolours every agent card, avatar and view, sets the type that names
+them, lays a texture on the background and colours the live terminal. What the app does
+stays the same. The pick belongs to your account: signed in, every Mac on it wears the
+same skin, and phones follow the Mac they are paired with. A skin with light and dark
+sides follows the phone's setting; the desktop wears its light side.
+
 ## The cookrew CLI
 
 Cookrew puts `cookrew` (or `crew`, for short) on the PATH of every terminal it runs.

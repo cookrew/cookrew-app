@@ -500,6 +500,7 @@ export function meBody(
     username: account.username,
     displayName: account.displayName,
     avatar: account.avatar,
+    skin: account.skin ?? null,
     claimedAt: account.claimedAt,
     devices: account.devices.map((d) => ({
       id: d.id,
@@ -562,7 +563,8 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     }
     const out = v2.accounts.setProfile(account.username, {
       ...(body.value.displayName === undefined ? {} : { displayName: body.value.displayName }),
-      ...(body.value.avatar === undefined ? {} : { avatar: body.value.avatar })
+      ...(body.value.avatar === undefined ? {} : { avatar: body.value.avatar }),
+      ...(body.value.skin === undefined ? {} : { skin: body.value.skin })
     })
     if (!out.ok) {
       refuse(response, out.reason === 'not_found' ? 404 : 400, out.reason)

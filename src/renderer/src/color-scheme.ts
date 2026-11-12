@@ -1,4 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
+import { skinFrom, skinInfo, type SkinId } from '../../shared/skins'
 
 /**
  * LIGHT OR DARK — the companion follows the phone, the desktop stays paper.
@@ -26,10 +27,26 @@ export type SchemeMode = 'auto' | 'light'
  * recoloured (zoom/root-theme.css), with every shape kept. `data-theme="root"`
  * on <html> is its one switch; ink sets nothing. Root is always dark, so it
  * draws night even on the desktop, which otherwise stays paper.
+ *
+ * THE THEME IS THE SKIN now (owner 2026-11-12): fourteen looks, the account's
+ * pick (shared/skins.ts, skins/skin-sync.ts). Still one attribute, still
+ * nothing for ink. Root keeps its own sheet; the other twelve are drawn from
+ * their palettes (skins/skin-look.ts), only the one worn in the page. A dark
+ * skin draws night everywhere, a light one never, and a skin with both
+ * follows the scheme above, so the desktop wears its light side.
+ *
+ * The drawing is a chunk of its own, so the console's first load stays small
+ * (console-first-load.test.ts). A page never waits on it to paint: the sheet
+ * last drawn is kept on the device and worn at boot as it was, then drawn
+ * again by this build.
  */
-export type ThemeName = 'ink' | 'root'
+export type ThemeName = SkinId
 
 const THEME_KEY = 'cookrew.theme'
+const SKIN_CSS_KEY = 'cookrew.skin-css'
+const SKIN_STYLE_ID = 'cr-skin'
+/** The two skins with sheets of their own (ink-theme.css, root-theme.css). */
+const OWN_SHEET: ReadonlySet<ThemeName> = new Set<ThemeName>(['ink', 'root'])
 
 const DARK_QUERY = '(prefers-color-scheme: dark)'
 
@@ -50,14 +67,65 @@ export const applyColorScheme = (remote: boolean, root: HTMLElement = document.d
 const darkQuery = (): MediaQueryList | null =>
   typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(DARK_QUERY) : null
 
-/** Only an exact 'root' is root: a stray or old value falls back to ink. */
-export const themeFrom = (stored: string | null | undefined): ThemeName => (stored === 'root' ? 'root' : 'ink')
+/** Only an exact skin id is a skin: a stray or old value falls back to ink. */
+export const themeFrom = (stored: string | null | undefined): ThemeName => skinFrom(stored)
+
+/** The sheet this device last drew for `skin`, if that is the one it holds. */
+const keptSheet = (skin: ThemeName): string | null => {
+  try {
+    const kept = JSON.parse(globalThis.localStorage?.getItem(SKIN_CSS_KEY) ?? 'null') as { skin?: unknown; css?: unknown } | null
+    return kept?.skin === skin && typeof kept.css === 'string' ? kept.css : null
+  } catch {
+    return null
+  }
+}
+
+const keepSheet = (skin: ThemeName, css: string): void => {
+  try {
+    globalThis.localStorage?.setItem(SKIN_CSS_KEY, JSON.stringify({ skin, css }))
+  } catch {
+    // Full or private: the next boot draws it a moment later.
+  }
+}
+
+/** Which skin this build has drawn into the page; a kept sheet may be an older build's. */
+let drawnHere: ThemeName | null = null
+
+/** The worn skin's own stylesheet, swapped whole; none for ink and root, which have theirs. */
+const wearSheet = (next: ThemeName, root: HTMLElement): void => {
+  const doc = root.ownerDocument
+  if (!doc?.head) return
+  const put = (css: string): void => {
+    if (theme !== next) return
+    const style = doc.getElementById(SKIN_STYLE_ID) ?? doc.createElement('style')
+    style.id = SKIN_STYLE_ID
+    style.dataset.skin = next
+    style.textContent = css
+    // Last in <head>, after every sheet it recolours.
+    doc.head.appendChild(style)
+  }
+  if (OWN_SHEET.has(next)) {
+    doc.getElementById(SKIN_STYLE_ID)?.remove()
+    return
+  }
+  if (drawnHere === next && doc.getElementById(SKIN_STYLE_ID)?.dataset.skin === next) return
+  const kept = keptSheet(next)
+  if (kept !== null) put(kept)
+  void import('./skins/skin-look').then(({ isDrawnSkin, skinCss }) => {
+    if (theme !== next || !isDrawnSkin(next)) return
+    const css = skinCss(next)
+    drawnHere = next
+    if (css !== kept) put(css)
+    keepSheet(next, css)
+  })
+}
 
 /** Sets the attribute the CSS reads; ink removes it, so ink is exactly the page it was. */
 export const applyTheme = (next: ThemeName, root: HTMLElement = document.documentElement): ThemeName => {
   theme = next
-  if (next === 'root') root.dataset.theme = 'root'
-  else delete root.dataset.theme
+  if (next === 'ink') delete root.dataset.theme
+  else root.dataset.theme = next
+  wearSheet(next, root)
   return next
 }
 
@@ -72,7 +140,7 @@ export const storedTheme = (): ThemeName => {
 
 export const themeNow = (): ThemeName => theme
 
-/** The ⋯ menu's switch: remembered on this device, applied at once. */
+/** Remembered on this device too, so the next boot paints the account's skin before it hears from it. */
 export const setTheme = (next: ThemeName): void => {
   try {
     globalThis.localStorage?.setItem(THEME_KEY, next)
@@ -90,8 +158,14 @@ const subscribeTheme = (listener: () => void): (() => void) => {
 
 export const useTheme = (): ThemeName => useSyncExternalStore(subscribeTheme, themeNow, themeNow)
 
+/** Would a skin with both sides wear its dark one here? Only a page that follows a dark system. */
+export const schemeIsDark = (): boolean => mode === 'auto' && (darkQuery()?.matches ?? false)
+
 /** Is the page drawn dark right now? For what CSS cannot reach (xterm's canvas). */
-export const isNight = (): boolean => theme === 'root' || (mode === 'auto' && (darkQuery()?.matches ?? false))
+export const isNight = (): boolean => {
+  const skin = skinInfo(theme).mode
+  return skin === 'both' ? schemeIsDark() : skin === 'dark'
+}
 
 /** The same, as React state that follows the system flipping while the page is open. */
 export const useNight = (): boolean => {

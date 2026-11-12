@@ -66,6 +66,8 @@ import type { LoopHealthSnapshot } from "./loop-health";
 import { ROUTE_ID_RE, type CardRouteState, type RouteState } from "../shared/route";
 import { ownerSubmit } from "./ask";
 import { handleUseSourceRoutes, isUseSourceRoute } from "./use-source-routes";
+import type { SkinStore } from "./skin-store";
+import { SKIN_PATH } from "../shared/skins";
 import type { UseSourceService } from "./use-source-service";
 import { BATCH_ID, createOnceByKey } from "./once-by-key";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
@@ -299,6 +301,12 @@ export interface MobileApiDeps {
   socketBridge?: SocketBridge;
   /** The build this Mac serves (build-id.ts): sent on every stream, and again when it changes. */
   build?: { id: () => string; bus: EventEmitter };
+  /**
+   * The account's skin (skin-store.ts): GET /api/skin reads it, POST picks
+   * one (the write gate asks for the pairing), and every stream hears it on
+   * opening and again when it changes, whichever device picked it.
+   */
+  skin?: Pick<SkinStore, "get" | "choose" | "bus">;
   /**
    * Cold-boot wait window for a stream open (acquireViewWhenReady). Omitted in
    * production (defaults ~2s in 50ms steps); tests shrink it for determinism.
@@ -805,6 +813,21 @@ export async function handleMobileApi(
       paired: hasPairing,
       credential: presentedToken(request, url),
     });
+    return true;
+  }
+
+  if (p === SKIN_PATH && (method === "GET" || method === "POST")) {
+    if (!deps.skin) {
+      respondJson(response, 404, { error: "This Mac keeps no skin" });
+      return true;
+    }
+    if (method === "GET") {
+      respondJson(response, 200, { skin: deps.skin.get() });
+      return true;
+    }
+    const body = await readJson<{ skin?: unknown }>(request);
+    const skin = deps.skin.choose(body.skin);
+    respondJson(response, skin === null ? 400 : 200, skin === null ? { error: "Not a skin" } : { skin });
     return true;
   }
 
@@ -2141,6 +2164,13 @@ export async function handleMobileApi(
       const onBuild = (id: string): void => send("build", { id });
       deps.build.bus.on("build", onBuild);
       onClose(() => deps.build?.bus.removeListener("build", onBuild));
+    }
+    // THE ACCOUNT'S SKIN: worn from the first frame, and again whenever it is picked.
+    if (deps.skin) {
+      send("skin", { skin: deps.skin.get() });
+      const onSkin = (skin: string): void => send("skin", { skin });
+      deps.skin.bus.on("skin", onSkin);
+      onClose(() => deps.skin?.bus.removeListener("skin", onSkin));
     }
     // Sous's zoom / zoom-back, so the phone and the TV follow the owner's
     // voice. A scoped stream only hears about its own canvas.
