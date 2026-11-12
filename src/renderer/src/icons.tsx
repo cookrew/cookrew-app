@@ -46,6 +46,8 @@ export type CrIconName =
   | 'more'
   /** The route's device step: this desktop. */
   | 'device'
+  /** This machine's screen, reached from elsewhere (ViewTools.tsx · the remote desktop). */
+  | 'remote-desktop'
   /** The phone's Full screen row in ⋯: four corners of the screen. */
   | 'fullscreen'
   /** ⋯ → Apple Watch: pair one. */
@@ -276,6 +278,14 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
     <g {...STROKE}>
       <rect x="2.2" y="2.8" width="11.6" height="8" rx="1" />
       <path d="M5.2 13.6 H10.8 M8 10.8 V13.6" strokeLinecap="square" />
+    </g>
+  ),
+  // The device's screen with the external arrow out of its corner: this screen, from another one.
+  'remote-desktop': (
+    <g {...STROKE}>
+      <path d="M8.4 2.8 H3.2 C2.6 2.8 2.2 3.2 2.2 3.8 V9.8 C2.2 10.4 2.6 10.8 3.2 10.8 H12.8 C13.4 10.8 13.8 10.4 13.8 9.8 V7.6" />
+      <path d="M5.2 13.6 H10.8 M8 10.8 V13.6" strokeLinecap="square" />
+      <path d="M10.8 1.6 H14.4 V5.2 M14.2 1.8 L9.8 6.2" strokeWidth={1.6} strokeLinecap="square" />
     </g>
   ),
   // Summary/conclusion: full text lines condensing to a short bottom line —

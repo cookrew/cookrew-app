@@ -27,6 +27,7 @@ import { inkStatusOfRow, statusWord } from '../zoom/ink-status'
 import { InkAvatar } from '../zoom/InkAvatar'
 import { itemInitial } from '../zoom/zoom-model'
 import '../zoom/full-views.css'
+import { RemoteDeskButton } from '../zoom/ViewTools'
 import { useFullRouteSlot } from '../route-slot'
 import { fullRouteWords } from './full-route'
 import { NameHost } from '../zoom/NameEdit'
@@ -221,6 +222,8 @@ export function StageView({
               <span className="zv-fv-tools">
                 <span className="zv-fv-tool-look" ref={setLookSlot} />
                 <span className="zv-fv-tool-make" ref={setMakeSlot} />
+                {/* This machine's remote desktop, as the view's toolbar has it at every stop (ViewTools.tsx). */}
+                <RemoteDeskButton />
               </span>
             </header>
             {/* The terminal, and beside it on the same paper the agent's browsers

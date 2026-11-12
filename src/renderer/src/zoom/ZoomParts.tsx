@@ -171,12 +171,12 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
 }, sameProps)
 
 /**
- * This machine on the devices stop: its frame opens it, and the words under it
- * carry the way to its screen, one tap to the picker. The frame's own button has no
- * handler: its press bubbles to the card, which is also what a press on the
- * words reaches, and the share button keeps its press to itself.
+ * This machine on the devices stop: its frame opens it. The frame's own button
+ * has no handler: its press bubbles to the card, which is also what a press on
+ * the words reaches. Its remote desktop is the view's toolbar's (ViewTools.tsx;
+ * owner 2026-11-12: the button under the name took too much room).
  */
-export function LocalMachine({ name, detail, bind, onOpen, onShare, gauge = null }: { name: string; detail: string; bind: Bind; onOpen: () => void; onShare: (() => void) | null; gauge?: React.ReactNode }): React.JSX.Element {
+export function LocalMachine({ name, detail, bind, onOpen, gauge = null }: { name: string; detail: string; bind: Bind; onOpen: () => void; gauge?: React.ReactNode }): React.JSX.Element {
   return (
     <div className="zv-machine" ref={bind('machine')} onClick={onOpen}>
       <button type="button" className="zv-machine-open" aria-label={`Open ${name}`} />
@@ -185,18 +185,6 @@ export function LocalMachine({ name, detail, bind, onOpen, onShare, gauge = null
         <b>{name}</b>
         <small>{detail}</small>
         {gauge}
-        {onShare && (
-          <button
-            type="button"
-            className="zv-machine-share"
-            onClick={(e) => {
-              e.stopPropagation()
-              onShare()
-            }}
-          >
-            Remote desktop
-          </button>
-        )}
       </span>
     </div>
   )
