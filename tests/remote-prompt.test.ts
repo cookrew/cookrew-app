@@ -13,7 +13,7 @@ const SOLIS = { id: 'solis', name: 'Solis-Core', os: 'linux' }
 const OUT: RemotePlace = { machine: null, workspace: null, agent: null, item: null, side: 'agents' }
 const at = (over: Partial<RemotePlace>): RemotePlace => ({ ...OUT, machine: SOLIS, ...over })
 
-const cardsOf = (...cards: Record<string, unknown>[]): RemoteCard[] =>
+const cardsOf = (...cards: Record<string, unknown>[]): readonly RemoteCard[] =>
   parseRemoteCards({
     workspaces: [],
     cards: cards.map((over) => ({ id: 't-1', name: 'Herdr Env', preset: 'claude', status: 'idle', workspace: { id: 'w-1', name: 'Box Lab' }, choice: null, items: [], ...over }))
