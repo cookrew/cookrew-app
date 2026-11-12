@@ -99,10 +99,7 @@
       letter-spacing: 0;
     }
   }
-  :root:root .zv-cols {
-    font-size: var(--ph-caption);
-  }
-  :root:root .zv-cols button {
+  :root:root .zv-view-cols .zv-fv-arts-btn {
     font-size: var(--ph-control);
   }
 
