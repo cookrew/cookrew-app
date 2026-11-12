@@ -200,11 +200,6 @@
   color: var(--zv-wait);
 }
 
-.rm-new {
-  max-width: 620px;
-  margin: 0 0 18px;
-}
-
 /* ── an agent's card ── */
 .rm-card {
   max-width: 680px;
@@ -326,10 +321,6 @@
   font: 11px/1.3 var(--zv-mono);
   color: var(--zv-ink-soft);
   background: var(--zv-card);
-}
-
-.rm-card .rm-box {
-  margin: 14px 0 0;
 }
 
 /* ── an item: a page or a screen to work, a note to read ── */

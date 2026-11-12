@@ -1,11 +1,11 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { choiceSig, hasWordsRow, staysOpen, type MenuAct } from '../../../shared/wait-choice'
+import { choiceSig, staysOpen, type MenuAct } from '../../../shared/wait-choice'
 import { AgentLatest } from './AgentLatest'
 import { InkAvatar } from './InkAvatar'
 import { NOTE_GLYPH } from './ZoomParts'
 import { WaitBrief, WaitReviewList, WaitRows, WaitSteps } from '../prompt/WaitChoices'
-import { menuCall, remoteAgentView, replyCall, sendRefusal, stopCall, type CardCall, type RemoteCard, type RemoteItem } from './remote-machine'
-import { remoteDraft, setRemoteDraft, type RemoteMachineRef } from './remote-machine-store'
+import { menuCall, remoteAgentView, sendRefusal, stopCall, type CardCall, type RemoteCard, type RemoteItem } from './remote-machine'
+import type { RemoteMachineRef } from './remote-machine-store'
 import { callRemote, REMOTE_PEEK_MS, useRemotePicture } from './use-remote-machine'
 import '../prompt/wait-choices.css'
 import './agent-card.css'
@@ -14,9 +14,9 @@ import './agent-card.css'
  * AN AGENT'S CARD ON ANOTHER MACHINE (owner 2026-11-10, design B): the face,
  * the name and state, its latest reply whole, the menu it waits on with the
  * same rows as this machine's own (prompt/WaitChoices.tsx), its browsers and
- * notes, and a box that says which machine it sends to. Everything it sends
- * goes the way a phone's would on that machine: /input, the checked menu
- * answer, Esc for a stop.
+ * notes. Words to it are typed in the bar's box, as on this machine
+ * (prompt/RemotePrompt.tsx; owner 2026-11-12). What the card sends goes the
+ * way a phone's would on that machine: the checked menu answer, Esc for a stop.
  */
 
 /** How long a picked row stands filled before the next read shows what the agent did. */
@@ -59,7 +59,6 @@ export function RemoteCardView({ machine, card, onItem, onSent }: {
 }): React.JSX.Element {
   const view = remoteAgentView(card)
   const qid = useId()
-  const [words, setWords] = useState(() => remoteDraft(machine.id, card.id))
   const [note, say] = useNote()
   const [sent, setSent] = useState<{ sig: string; index: number; at: number } | null>(null)
   const busy = useRef(false)
@@ -73,11 +72,6 @@ export function RemoteCardView({ machine, card, onItem, onSent }: {
     seenDone.current = card.id
     void callRemote(machine.id, 'POST', `api/terminal/${encodeURIComponent(card.id)}/seen`)
   }, [card.status, card.id, machine.id])
-
-  const write = (text: string): void => {
-    setWords(text)
-    setRemoteDraft(machine.id, card.id, text)
-  }
 
   /** One send at a time; the answer, or why not, in words. */
   const deliver = async (call: CardCall, done: string): Promise<boolean> => {
@@ -99,14 +93,6 @@ export function RemoteCardView({ machine, card, onItem, onSent }: {
     void deliver(menuCall(card, choice, act), `Answered on ${machine.name}.`).then((ok) => {
       if (!ok) setSent(null)
     })
-  }
-
-  const wordsGoToMenu = choice !== null && hasWordsRow(choice)
-  const boxShut = choice !== null && !wordsGoToMenu
-  const send = async (): Promise<void> => {
-    const call = replyCall(card, words)
-    // The words leave the box only once the machine took them.
-    if (call && (await deliver(call, `Sent to ${card.name} on ${machine.name}.`))) write('')
   }
 
   return (
@@ -140,18 +126,6 @@ export function RemoteCardView({ machine, card, onItem, onSent }: {
           {card.items.map((item) => <Thumb key={item.id} machine={machine} item={item} onOpen={() => onItem(item)} />)}
         </div>
       )}
-      <form className="rm-box" onSubmit={(e) => { e.preventDefault(); void send() }}>
-        <input
-          value={words}
-          disabled={boxShut}
-          onChange={(e) => write(e.target.value)}
-          onKeyDown={(e) => e.stopPropagation()}
-          placeholder={boxShut ? 'Answer its menu above first' : wordsGoToMenu ? `Type the answer for ${card.name} on ${machine.name}…` : `Reply to ${card.name} on ${machine.name}…`}
-          aria-label={`Reply to ${card.name} on ${machine.name}`}
-          autoComplete="off"
-        />
-        <button type="submit" disabled={boxShut || !words.trim()}>Send</button>
-      </form>
       <p className={`rm-note${note?.failed ? ' failed' : ''}`} role="status">{note?.text ?? ''}</p>
     </article>
   )
