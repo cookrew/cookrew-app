@@ -5,6 +5,8 @@ import { zoomStore } from './zoom-store'
 import { shelfPage } from './zoom-layout'
 import { stageSelect } from '../stage/stage-select'
 import { createRestFlag } from './zoom-rest'
+import { foldLight, subscribeFoldLight } from './fold-light'
+import { slotsOf, subscribeSlots, swapSlots, withSlots } from './crew-slots'
 
 /** The compositor-facing part of the navigator. React builds nodes; this owns the moving values. */
 /** The crew's scroll on a narrow screen and the thumbnails', and the page of their shelf: the view owns them (a drag, the wheel, the shelf's chip), the painter clamps the scroll. */
@@ -17,6 +19,9 @@ export interface ZoomPan {
   setTilesMax: (max: number) => void
 }
 
+/** How far a pressed face moves before it is a drag rather than a press, in px on screen. */
+const DRAG_START_PX = 5
+
 /** A shelf face's node stands at 12 + its place on the page, kept under the waiting dots (zoom.css · .zv-dot, 44). */
 const SHELF_RANKS = 31
 
@@ -25,6 +30,10 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
   m.current = { model, collect, pan }
   const moving = useRef({ v: zoomStore.get().v, dir: zoomStore.get().dir, leaving: null as string | null, amount: 0, pending: null as { id: string; full: boolean } | null })
   const kick = useRef<() => void>(() => undefined)
+  /** The fold round a hovered agent (zoom-frame.ts · foldAt): who, how far it has come, where it goes, and who is next once it has gone. */
+  const hovering = useRef({ id: null as string | null, amt: 0, target: 0, next: null as string | null })
+  /** A face being dragged at the crew (crew-slots.ts): who, from where on screen, how far, and whether it has moved enough to be a drag. */
+  const dragging = useRef<{ id: string; x0: number; y0: number; dx: number; dy: number; moved: boolean; dropOn: string | null } | null>(null)
   const snapTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSelection = useRef<string | null>(null)
   const wake = useCallback(() => kick.current(), [])
@@ -35,6 +44,7 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
     let alive = true
     let layoutModel: FrameModel | null = null
     let narrowWas = false
+    let slotsWas: ReturnType<typeof slotsOf> | null = null
     let layout: ReturnType<typeof layoutOf> | null = null
     let jump = zoomStore.get().jump
     // The compositor hints live while the loop moves, never at rest (zoom-rest.ts).
@@ -48,10 +58,14 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       const { clientWidth: w, clientHeight: h } = env
       if (w < 1 || h < 1) return
       const narrow = w < 760
-      if (!layout || m.current.model !== layoutModel || narrow !== narrowWas) {
+      const slots = slotsOf(m.current.model.active)
+      if (!layout || m.current.model !== layoutModel || narrow !== narrowWas || slots !== slotsWas) {
         layoutModel = m.current.model
         narrowWas = narrow
-        layout = layoutOf(layoutModel, narrow)
+        slotsWas = slots
+        // The crew as its ties lay it out, then as the hand has swapped it (crew-slots.ts).
+        const laid = layoutOf(layoutModel, narrow)
+        layout = { ...laid, crew: { ...laid.crew, at: withSlots(laid.crew.at, slots) } }
       }
       const target = zoomStore.get()
       const at = moving.current
@@ -92,6 +106,16 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
         zoomStore.focusAgent(pending.id)
         zoomStore.go(pending.full ? 3 : 2, 'agents')
       }
+      // The fold eases in and out; moving straight to another agent lets this one's fold go first.
+      const hv = hovering.current
+      if (reduced) hv.amt = hv.target
+      else hv.amt += (hv.target - hv.amt) * (1 - Math.exp(-dt / 110))
+      if (Math.abs(hv.target - hv.amt) < 0.002) hv.amt = hv.target
+      if (hv.amt === 0 && hv.target === 0) {
+        hv.id = hv.next
+        hv.next = null
+        if (hv.id !== null) hv.target = 1
+      }
       const focus = target.agent ?? m.current.model.agents[0]?.id ?? null
       const focusItem = target.item ?? m.current.model.items[0]?.id ?? null
       // WHO OWNS `full`: the value the eye has reached, never the target. Enter
@@ -112,8 +136,9 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       } else if (lastSelection.current !== null) {
         lastSelection.current = null
       }
-      const out = paint(m.current.model, layout, els, { dir: at.dir, sv: at.v, focus, leaving: at.leaving, leavingAmt: at.amount, focusItem, w, h, narrow, pan: m.current.pan?.get() ?? 0, tilesPan: m.current.pan?.tiles() ?? 0, shelf: m.current.pan?.shelf() ?? 0 })
+      const out = paint(m.current.model, layout, els, { dir: at.dir, sv: at.v, focus, leaving: at.leaving, leavingAmt: at.amount, focusItem, w, h, narrow, pan: m.current.pan?.get() ?? 0, tilesPan: m.current.pan?.tiles() ?? 0, shelf: m.current.pan?.shelf() ?? 0, hover: hv.id === null ? null : { id: hv.id, amt: hv.amt }, light: foldLight(), drag: dragging.current?.moved ? { id: dragging.current.id, dx: dragging.current.dx, dy: dragging.current.dy } : null })
       m.current.pan?.setMax(out.panMax)
+      if (dragging.current) dragging.current.dropOn = out.dropOn
       m.current.pan?.setTilesMax(out.tilesMax)
       // The real view fades in under the shell as the shell's own cover goes.
       env.style.setProperty('--zv-full-opacity', String(1 - out.cover))
@@ -143,7 +168,8 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
         const flag = open ? 'open' : ''
         if (el.node.dataset.card !== flag) el.node.dataset.card = flag
         const rank = shelfRank.get(a.id)
-        const level = rank !== undefined ? 10 + rank : a.id === focus && at.v > 1.01 ? 40 : a.id === at.leaving ? 36 : 10 + (fanned ? Math.max(0, SHELF_RANKS - i) : 0)
+        // A face in the hand is over every other.
+        const level = dragging.current?.moved && dragging.current.id === a.id ? 42 : rank !== undefined ? 10 + rank : a.id === focus && at.v > 1.01 ? 40 : a.id === at.leaving ? 36 : 10 + (fanned ? Math.max(0, SHELF_RANKS - i) : 0)
         if (el.node.style.zIndex !== String(level + 2)) el.node.style.zIndex = String(level + 2)
         if (el.cardl.style.zIndex !== String(level)) el.cardl.style.zIndex = String(level)
       }
@@ -154,7 +180,7 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
         if (el.node.style.zIndex !== String(level)) el.node.style.zIndex = String(level)
       }
       const state = zoomStore.get()
-      if (at.v !== state.v || at.leaving || at.pending) {
+      if (at.v !== state.v || at.leaving || at.pending || hv.amt !== hv.target || dragging.current?.moved) {
         rest.moving()
         raf = requestAnimationFrame(tick)
       } else {
@@ -166,6 +192,8 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       if (!raf && alive) raf = requestAnimationFrame(tick)
     }
     const unsub = zoomStore.subscribe(kick.current)
+    const offLight = subscribeFoldLight(kick.current)
+    const offSlots = subscribeSlots(kick.current)
     const observer = new ResizeObserver(kick.current)
     if (root.current) observer.observe(root.current)
     kick.current()
@@ -177,6 +205,8 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       if (raf) cancelAnimationFrame(raf)
       observer.disconnect()
       unsub()
+      offLight()
+      offSlots()
       kick.current = () => undefined
       if (snapTimer.current) clearTimeout(snapTimer.current)
     }
@@ -221,5 +251,66 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
     if (action.kind === 'set') go(action.v, action.dir)
   }, [go])
 
-  return { go, agent, item, wake }
+  /** The pointer came to rest on an agent's face, or left it (null): the space folds round it. */
+  const hover = useCallback((id: string | null) => {
+    const hv = hovering.current
+    if (id === null) {
+      hv.target = 0
+      hv.next = null
+    } else if (id === hv.id) {
+      hv.target = 1
+      hv.next = null
+    } else if (hv.id === null || hv.amt < 0.02) {
+      hv.id = id
+      hv.target = 1
+      hv.next = null
+    } else {
+      hv.target = 0
+      hv.next = id
+    }
+    kick.current()
+  }, [])
+
+  /**
+   * A face pressed at the crew (mouse or pen): past a few px it is a drag, the
+   * face follows the pointer and the fold is worked out from there; dropped on
+   * another agent the two swap places (crew-slots.ts), anywhere else it goes
+   * back. A drag is never also the click that opens a card.
+   */
+  const dragStart = useCallback((id: string, e: React.PointerEvent) => {
+    if (e.button !== 0 || e.pointerType === 'touch') return
+    const s = zoomStore.get()
+    if (s.dir !== 'agents' || Math.abs(moving.current.v - 1) > 0.2) return
+    dragging.current = { id, x0: e.clientX, y0: e.clientY, dx: 0, dy: 0, moved: false, dropOn: null }
+    const move = (ev: PointerEvent): void => {
+      const d = dragging.current
+      if (!d) return
+      d.dx = ev.clientX - d.x0
+      d.dy = ev.clientY - d.y0
+      if (!d.moved && Math.hypot(d.dx, d.dy) > DRAG_START_PX) d.moved = true
+      if (d.moved) kick.current()
+    }
+    const up = (): void => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      const d = dragging.current
+      dragging.current = null
+      if (!d?.moved) return
+      // The click this release makes would open the card: it is the drag's, not a press.
+      const swallow = (ev: MouseEvent): void => {
+        ev.stopPropagation()
+        ev.preventDefault()
+      }
+      window.addEventListener('click', swallow, { capture: true, once: true })
+      setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 0)
+      if (d.dropOn) swapSlots(m.current.model.active, d.id, d.dropOn)
+      kick.current()
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+  }, [])
+
+  return { go, agent, item, wake, hover, dragStart }
 }
