@@ -23,14 +23,6 @@
   mask: url('./brand/co-mark.svg') center / contain no-repeat;
 }
 
-/* A phone's bar is one line with the least room: the mark gives a little first. */
-@media (max-width: 700px) {
-  .cr-mark {
-    width: 16px;
-    height: 20px;
-  }
-}
-
 /* ---- the route: device / workspace / agent ---- */
 
 .cr-route {
@@ -381,6 +373,12 @@
 @media (max-width: 700px) {
   .cr-header {
     gap: 8px;
+  }
+
+  /* The bar is one line with the least room: the mark gives a little first. */
+  .cr-mark {
+    width: 16px;
+    height: 20px;
   }
 
   .cr-route-device .cr-route-label {

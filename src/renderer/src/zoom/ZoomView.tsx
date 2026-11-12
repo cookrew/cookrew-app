@@ -8,7 +8,6 @@ import { thumbWants } from '../pets/thumb-wants'
 import { zoomThumbClaim } from './thumb-claim'
 import { Counts, AgentNode, ItemNode, LinkNode, LocalMachine, type Bind, NewestThumb } from './ZoomParts'
 import { MachineFrame } from './MachineFrame'
-import { openSourcePicker } from '../use/source-picker-store'
 import { WorkspaceTile } from './WorkspaceTile'
 import { followDrafts } from '../prompt/draft-follow'
 import { useFirstRunStage } from '../first-run/first-run-state'
@@ -22,7 +21,7 @@ import { ShelfCard } from './ShelfCard'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
 import { defaultCrewCols, defaultDeviceCols, deviceOf, machineFrameOf, machinesAt, shelfPage } from './zoom-layout'
 import { useCrewCols, usePerRow } from './crew-cols'
-import { PerRowPill } from './PerRowPill'
+import { ViewTools, type PerRow } from './ViewTools'
 import { deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
@@ -615,6 +614,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const selectedStop = barStop(zoom.dir, zoom.v)
   // Inside another machine the bar moves through its stops, not this one's (owner 2026-11-11).
   const inside = remoteStop(useSyncExternalStore(remotePlace.subscribe, remotePlace.get, remotePlace.get))
+  const perRowAt: PerRow | null =
+    zoom.dir === 'agents' && Math.abs(zoom.v - 1) < 0.25 && model.agents.length > 0
+      ? { what: 'agents', narrow, cols: crewCols ?? defaultCrewCols(narrow), onPick: setCrewCols }
+      : Math.abs(zoom.v + 1) < 0.25 && model.frame.workspaces.length > 1
+        ? { what: 'workspaces', narrow, cols: deviceCols ?? defaultDeviceCols(narrow), onPick: setDeviceCols }
+        : null
   const side = barSide(zoom.dir, zoom.v)
   // Pinch only changes the scene; the full terminal keeps its own native scroll.
   const pointers = useRef(new Map<number, { x: number; y: number }>())
@@ -722,7 +727,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
               />
             )
           })}
-          <LocalMachine name={machine} detail={`${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}`} gauge={<MachineGaugeLine machineId="local" local />} bind={bind} onOpen={() => motion.go(-1)} onShare={cookrew().useSources ? () => openSourcePicker({ remoteDesktop: true }) : null} />
+          <LocalMachine name={machine} detail={`${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}`} gauge={<MachineGaugeLine machineId="local" local />} bind={bind} onOpen={() => motion.go(-1)} />
         </div>
         <div className="zv-device" ref={bind('device')} data-density={words.density} style={{ '--zv-k': words.markK.toFixed(3), '--zv-tile-top': `${Math.round(device.tile.top)}px`, '--zv-tile-h': `${Math.round(device.tile.h)}px` } as React.CSSProperties}>
           {/* Placed and sized by the painter (zoom-frame.ts · paintDeviceWords): on a phone it keeps one size as the device zooms. */}
@@ -782,17 +787,14 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         </div>
       </div>
       {firstRun}
-      {/* Per row: at the crew and at the workspaces, each where its row is seen (owner, 2026-11-01). */}
-      {zoom.dir === 'agents' && !zoom.full && Math.abs(zoom.v - 1) < 0.25 && model.agents.length > 0 && (
-        <PerRowPill what="agents" narrow={narrow} cols={crewCols ?? defaultCrewCols(narrow)} onPick={setCrewCols} />
-      )}
+      {/* THE VIEW'S TOOLBAR (ViewTools.tsx; owner 2026-11-12): top right at every stop of this machine,
+          per row where a row is seen (the crew's agents, the device's workspaces; owner 2026-11-01)
+          beside this machine's remote desktop. Inside another machine its stops are that machine's. */}
+      {!zoom.full && inside === null && <ViewTools perRow={perRowAt} />}
       {!zoom.full && Math.abs(zoom.v + 1) < 0.25 && onNewWorkspace && (
         <button type="button" className="zv-new-workspace" onClick={onNewWorkspace}>
           <span aria-hidden="true">＋</span> New workspace
         </button>
-      )}
-      {!zoom.full && Math.abs(zoom.v + 1) < 0.25 && model.frame.workspaces.length > 1 && (
-        <PerRowPill what="workspaces" narrow={narrow} cols={deviceCols ?? defaultDeviceCols(narrow)} onPick={setDeviceCols} />
       )}
       <nav className="zv-controls" aria-label="Semantic zoom">
         <button type="button" className="zv-back" onClick={stepBack} aria-label="Zoom out">‹</button>
@@ -904,11 +906,10 @@ async function whyNot(m: MachineView): Promise<string | null> {
 }
 
 /** The device layers' words the painter keeps at one size on a phone (zoom-frame.ts · paintDeviceWords). */
-function deviceWordEls(title: HTMLElement | null, marks: HTMLElement[], devices: HTMLElement): Pick<FrameEls, 'deviceLabel' | 'markLabels' | 'machineWords' | 'machineShare'> {
+function deviceWordEls(title: HTMLElement | null, marks: HTMLElement[], devices: HTMLElement): Pick<FrameEls, 'deviceLabel' | 'markLabels' | 'machineWords'> {
   return {
     deviceLabel: title,
     markLabels: marks.flatMap((m) => [...m.querySelectorAll<HTMLElement>('.zv-tw')]),
-    machineWords: [...devices.querySelectorAll<HTMLElement>('.zv-machine-label')],
-    machineShare: devices.querySelector<HTMLElement>('.zv-machine-share')
+    machineWords: [...devices.querySelectorAll<HTMLElement>('.zv-machine-label')]
   }
 }
