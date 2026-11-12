@@ -102,7 +102,8 @@ describe('under a machine’s name on the devices stop', () => {
     expect(machineSays(m({ appVersion: '0.5.8' }), { surface: 'desktop', trusted: true })).toBe('Not answering yet.')
     expect(machineSays(m({ appVersion: '0.5.8', detail: 'live' }), { surface: 'desktop', trusted: true })).toBeNull()
     // The view's own machine carries the version, or none of this would ever be said.
-    const model = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'zoom', 'zoom-model.ts'), 'utf8')
+    // (zoom-model.ts · machineViewOf, kept in machine-view.ts so the console's first load can draw it.)
+    const model = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'zoom', 'machine-view.ts'), 'utf8')
     expect(model).toContain('appVersion: m.appVersion ?? null,')
     const fleet = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'zoom', 'use-zoom-fleet.ts'), 'utf8')
     expect(fleet.slice(fleet.indexOf('export function fleetViewOf('))).toContain('appVersion: m.appVersion,')

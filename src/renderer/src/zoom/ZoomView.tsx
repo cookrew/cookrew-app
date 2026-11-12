@@ -39,7 +39,6 @@ import { gaugedMachines } from './gauged-machines'
 import { RemoteDeskPanel } from './RemoteDeskPanel'
 import { RemoteMachineView } from './RemoteMachineView'
 import { remotePlace, remoteStop } from './remote-machine-store'
-import { machineOpener } from './machine-open'
 import { canEnterMachines } from './use-remote-machine'
 import './zoom.css'
 // The full view's head, for the crisp ghost the way in arrives at (zv-fv-ghost).
@@ -689,12 +688,10 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         <div className="zv-devices" ref={bind('devices')}>
           {model.machines.filter((m) => !m.local).map((m) => {
             const say = machineSays(m, { surface: machineSurface(), trusted: trust[0]?.trusted ?? null, platform: hostPlatform(), floor: scopeNeedsMachine(), block: cookrew().machineWhy?.(m.id) ?? null })
-            // Into another machine, in place (RemoteMachineView.tsx), or the console's whole app for it (machine-open.ts).
+            // Into another machine, in place (RemoteMachineView.tsx).
             const open = (workspace: { id: string; name: string } | null): void => {
               const enter = (): void => {
                 setWhy(null)
-                const elsewhere = machineOpener()
-                if (elsewhere) return elsewhere(m.id, workspace?.id ?? null)
                 // Entered in place: its view opens from where its frame stands (remote-entry.ts).
                 const frame = registry.current.get(`machinecard:${m.id}`)?.getBoundingClientRect()
                 remotePlace.enter({ id: m.id, name: m.name, os: m.os ?? null, ...(frame ? { from: { x: frame.left, y: frame.top, w: frame.width, h: frame.height } } : {}) })

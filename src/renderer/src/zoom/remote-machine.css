@@ -18,23 +18,6 @@
   background-size: 3px 3px;
 }
 
-/* Where you are, said in the machine's colour; the bar at the foot moves you (owner 2026-11-11). */
-.rm-where {
-  flex: none;
-  padding: calc(14px + env(safe-area-inset-top, 0px)) 22px 8px;
-  font: 600 13px/1.4 var(--zv-mono);
-  letter-spacing: 0.02em;
-  color: var(--zv-seal-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.rm-where b {
-  font: 600 18px/1.2 var(--zv-serif);
-  color: var(--zv-seal-text);
-}
-
 .rm-face:focus-visible,
 .rm-thumb:focus-visible,
 .rm-cell:focus-visible {

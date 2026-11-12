@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import { InkAvatar } from './InkAvatar'
-import { Counts, Page, type Bind } from './ZoomParts'
+import { Counts, Page, type Bind } from './page-parts'
 import { sameProps } from './same-props'
 import { DECK_POSE, fanOf } from './zoom-layout'
 import type { ItemView, MarkView } from './zoom-model'

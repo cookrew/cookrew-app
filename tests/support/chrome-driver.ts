@@ -199,14 +199,22 @@ export async function launchBrowser(): Promise<Browser> {
       if (event.entry.source === 'network') return
       note(event.entry.source === 'security' && /Content Security Policy/i.test(event.entry.text) ? 'csp' : 'console', `${event.entry.text}${event.entry.url ? ` (${event.entry.url})` : ''}`.slice(0, 600))
     }) as never)
-    cdp.on('Network.requestWillBeSent', ((event: { requestId: string; request: { url: string; method: string } }) => {
+    // A call relayed at the one address (shared/machine-relay.ts · relayAtOneAddress) names its
+    // machine and route in two headers; a problem with it is told as the path the registry unfolds
+    // them into, or every relayed failure would read as the same bare `/api/m`.
+    const named = new Map<string, string>()
+    cdp.on('Network.requestWillBeSent', ((event: { requestId: string; request: { url: string; method: string; headers?: Record<string, string> } }) => {
       byId.set(event.requestId, requests.length)
       requests.push({ url: event.request.url, method: event.request.method, status: 0, at: Date.now() })
+      const header = (name: string): string | undefined => Object.entries(event.request.headers ?? {}).find(([key]) => key.toLowerCase() === name)?.[1]
+      const machine = header('x-cookrew-machine')
+      const route = header('x-cookrew-route')
+      if (machine && route) named.set(event.requestId, `${event.request.url}/${machine}${route.startsWith('/') ? '' : '/'}${route}`)
     }) as never)
     cdp.on('Network.responseReceived', ((event: { requestId: string; response: { status: number; url: string } }) => {
       const index = byId.get(event.requestId)
       if (index !== undefined) requests[index] = { ...requests[index], status: event.response.status }
-      if (event.response.status >= 400) note('http', `${event.response.status} ${requests[index ?? -1]?.method ?? 'GET'} ${event.response.url}`)
+      if (event.response.status >= 400) note('http', `${event.response.status} ${requests[index ?? -1]?.method ?? 'GET'} ${named.get(event.requestId) ?? event.response.url}`)
     }) as never)
     cdp.on('Network.loadingFailed', ((event: { requestId: string; errorText: string; canceled?: boolean; blockedReason?: string }) => {
       const index = byId.get(event.requestId)

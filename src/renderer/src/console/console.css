@@ -75,9 +75,7 @@
 }
 
 .cd-primary:focus-visible,
-.cd-quiet:focus-visible,
-.cd-open:focus-visible,
-.cd-ws:focus-visible {
+.cd-quiet:focus-visible {
   outline: 3px solid var(--sumi-seal);
   outline-offset: 3px;
 }
@@ -122,153 +120,7 @@
   margin-top: 12px;
 }
 
-/* ── the machines: two to a row on a phone, one row on a desk ── */
-.cd-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 34px 18px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-@media (min-width: 720px) {
-  .cd-grid {
-    grid-template-columns: repeat(auto-fit, minmax(220px, 300px));
-    gap: 40px 34px;
-  }
-}
-
-.cd-tile {
-  min-width: 0;
-}
-
-.cd-frame {
-  position: relative;
-  aspect-ratio: 16 / 10;
-  margin: 0 7% 22px;
-  border: 2px solid var(--sumi-ink);
-  border-radius: 12px;
-  background: var(--sumi-paper-2);
-  box-shadow: 0 10px 30px var(--sumi-shadow);
-}
-
-/* The whole bezel opens the machine; what is on its screen sits above it. */
-.cd-open {
-  appearance: none;
-  position: absolute;
-  inset: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: inherit;
-  background: none;
-  cursor: zoom-in;
-}
-
-.cd-open:disabled {
-  cursor: default;
-}
-
-.cd-screen {
-  position: absolute;
-  inset: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 6px;
-  border-radius: 5px;
-  background: var(--sumi-paper);
-  box-shadow: inset 0 0 0 1px var(--sumi-hair);
-  overflow: hidden;
-  pointer-events: none;
-}
-
-/* A screen nobody may read yet, or that cannot be read: dark, as a lid closed. */
-.cd-tile[data-standing='locked'] .cd-screen,
-.cd-tile[data-standing='offline'] .cd-screen,
-.cd-tile[data-standing='outdated'] .cd-screen,
-.cd-tile[data-standing='blocked'] .cd-screen {
-  background: var(--sumi-paper-3);
-}
-
-.cd-tile[data-standing='offline'] .cd-frame,
-.cd-tile[data-standing='outdated'] .cd-frame,
-.cd-tile[data-standing='blocked'] .cd-frame {
-  opacity: 0.6;
-}
-
-.cd-deck {
-  position: absolute;
-  left: -9%;
-  right: -9%;
-  bottom: -16px;
-  height: 10px;
-  border: 2px solid var(--sumi-ink);
-  border-radius: 3px 3px 10px 10px;
-  background: var(--sumi-paper);
-  pointer-events: none;
-}
-
-.cd-ws {
-  appearance: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 24px;
-  padding: 1px 6px;
-  border: 0;
-  border-radius: 4px;
-  background: none;
-  color: var(--sumi-ink);
-  font: 12px/1.2 var(--font-serif);
-  text-align: left;
-  cursor: zoom-in;
-  pointer-events: auto;
-}
-
-.cd-ws:hover {
-  background: var(--sumi-wash);
-}
-
-.cd-ws-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.cd-ws-count {
-  color: var(--sumi-muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.cd-ws-wait {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--sumi-wait);
-}
-
-.cd-none {
-  padding: 1px 6px;
-  color: var(--sumi-muted);
-  font-size: 12px;
-}
-
-.cd-label {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.cd-label b {
-  font: 600 16px/1.15 var(--font-serif);
-  overflow-wrap: anywhere;
-}
-
-/* The path word beside a machine's name: quiet for the relay, the seal for a direct one. */
+/* The path word beside a machine's name on the canvas (MachineFrame · badge): quiet for the relay, the seal for a direct one. */
 .cd-path {
   margin-left: 8px;
   padding: 1px 6px;
@@ -284,21 +136,6 @@
 .cd-path[data-path='TAILNET'] {
   border-color: var(--sumi-seal);
   color: var(--sumi-seal-text);
-}
-
-.cd-label small {
-  color: var(--sumi-ink-soft);
-  font-size: 12px;
-}
-
-.cd-label em {
-  color: var(--sumi-seal-text);
-  font-style: normal;
-  font-size: 13px;
-}
-
-.cd-page[data-entering] .cd-tile:not([data-opening]) {
-  opacity: 0.45;
 }
 
 /* ── the way in ── */
@@ -319,13 +156,6 @@
   margin: 0 0 6px;
   color: var(--sumi-ink-soft);
   font-size: 16px;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .cd-tile,
-  .cd-frame {
-    transition: opacity 160ms ease;
-  }
 }
 
 /* A newer build is out (NewerBuild.tsx): one line over whatever is on screen, out of the way of the thumb's row. */
@@ -362,46 +192,35 @@
   cursor: pointer;
 }
 
-/* ── a machine's screen holds its workspaces as tiles (owner 2026-11-11, screenshot 5) ──
-   The page's own Devices level (before the gate, or after "Back to your machines") draws each
-   machine as the app's devices stop does: a frame whose screen is a grid of its workspace tiles. */
-.cd-screen {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-auto-rows: minmax(38px, 1fr);
-  align-content: start;
-  gap: 6px;
-  padding: 10px;
-}
-
-.cd-ws {
-  position: relative;
+/* ── the Devices level as the zoom's canvas (zoom/DevicesCanvas.tsx; owner 2026-11-12) ──
+   The page's head and gate on top; under them every machine as a peer, filling the rest. */
+.cd-canvas-page {
+  display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  justify-content: space-between;
-  min-height: 38px;
-  padding: 5px 7px;
-  border-radius: 5px;
-  background: var(--sumi-card);
-  box-shadow: inset 0 0 0 1px var(--sumi-hair-2);
-  font-size: 11px;
+  height: 100dvh;
+  overflow: hidden;
 }
 
-.cd-ws-name {
-  width: 100%;
-  font-weight: 600;
+.cd-canvas-page .cd-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin: 0 calc(-1 * max(20px, env(safe-area-inset-right))) calc(-1 * max(28px, env(safe-area-inset-bottom))) calc(-1 * max(20px, env(safe-area-inset-left)));
 }
 
-.cd-ws-count {
-  font-size: 10px;
-}
-
-.cd-ws-wait {
+/* "Opening Studio Mac…": over the canvas, above the bar at its foot (zoom.css · .zv-controls, z-index 44). */
+.cd-canvas .cd-opening {
   position: absolute;
-  top: 5px;
-  right: 5px;
-}
-
-.cd-screen .cd-none {
-  grid-column: 1 / -1;
+  left: 50%;
+  bottom: calc(max(28px, env(safe-area-inset-bottom)) + 72px);
+  z-index: 45;
+  margin: 0;
+  padding: 6px 14px;
+  border: 1px solid var(--sumi-hair-2);
+  border-radius: 999px;
+  background: var(--sumi-card);
+  box-shadow: var(--sumi-lift);
+  color: var(--sumi-ink-soft);
+  white-space: nowrap;
+  transform: translateX(-50%);
 }

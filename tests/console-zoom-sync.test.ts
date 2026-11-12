@@ -123,20 +123,6 @@ describe('every step the view takes is written back', () => {
   })
 })
 
-// EVERY DEVICE ON ONE CANVAS (owner 2026-11-11): at the machines the view is this machine's own devices stop.
-describe('entered at the machines', () => {
-  it('the view starts at the devices stop, and zooming in writes the machine’s level', () => {
-    const w = world({ kind: 'devices' })
-    const stop = startZoomSync(w.deps)
-    expect(w.zoom().v).toBe(-2)
-    w.moveZoom({ v: -1 })
-    expect(w.route()).toEqual(at())
-    w.moveZoom({ v: -2 })
-    expect(w.route()).toEqual({ kind: 'devices' })
-    stop()
-  })
-})
-
 // Review 2026-11-11 (HIGH): another machine chosen on this one's canvas moves the address first; this
 // machine's view, still mounted while it is left, must not write the devices stop back over it.
 describe('another machine chosen on the canvas', () => {

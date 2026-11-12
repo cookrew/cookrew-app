@@ -13,6 +13,7 @@ import { activeBrowserTab, type CanvasNode, type Connection, type WorkspaceMeta 
 import type { AttachmentIndex } from '../terminal-attachments'
 import { hostOf, screenAspectOf, tintOf } from './zoom-layout'
 import { DECK_SHOWN } from './fleet-compose'
+import { deckView, itemInitial, machineViewOf } from './machine-view'
 import type { FrameModel, LinkModel, TieModel } from './zoom-frame'
 import { inkStatusOfRow, statusWord, type InkStatus } from './ink-status'
 import type { LaunchFailure } from '../../../shared/launch-failure'
@@ -140,8 +141,6 @@ export function lineOf(row: AgentRow | undefined, brief: string | null | undefin
  */
 const drawn = new WeakMap<CanvasNode, Omit<ItemView, 'owners'> | null>()
 
-/** A browser's letter, on its coin, its card and its full view's head: the title's first letter or digit. */
-export const itemInitial = (title: string): string => (title.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase()
 
 function drawnOf(n: CanvasNode): Omit<ItemView, 'owners'> | null {
   const known = drawn.get(n)
@@ -231,22 +230,8 @@ export interface DeckSource {
 }
 /** How many things a tile's deck shows by name; the rest is its depth. */
 export { DECK_SHOWN }
-/** A workspace of another machine as a tile (owner 2026-11-11): from its own feed, never a made-up zero. */
-const machineMarkOf = (w: NonNullable<ZoomInput['machines']>[number]['workspaces'][number]): MarkView => {
-  const waitingCount = w.counts?.waiting ?? w.agents.filter((a) => a.phase === 'waiting').length
-  return {
-    id: w.id,
-    name: w.name,
-    presets: w.agents.map((a) => a.harness),
-    waiting: waitingCount > 0,
-    waitingCount,
-    browsers: w.counts?.browsers ?? null,
-    notes: w.counts?.notes ?? null,
-    deck: (w.deck ?? []).map(deckView)
-  }
-}
+export { itemInitial, machineViewOf }
 
-const deckView = (d: DeckSource): ItemView => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? '', tint: tintOf(d.id), initial: itemInitial(d.title), line: '', owners: [] })
 
 /** The word over a card that is not resting but stuck. */
 export const failureWord = (failure: LaunchFailure | null | undefined): string | null =>
@@ -274,6 +259,7 @@ export function agentViewOf(row: AgentRow, attachIndex: AttachmentIndex): AgentV
     turn: row.turn ?? null
   }
 }
+
 
 export function buildZoomModel(input: ZoomInput): ZoomModel {
   // The crew: one row per terminal card, the same list the agent group draws (agent-rows.ts · crewOf).
@@ -374,21 +360,7 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       // The open workspace's own things: their real thumbnails, not the feed's names.
       deck: [...new Set([all.find((n) => n.kind === 'browser'), all.find((n) => n.kind === 'note'), ...all.slice(0, DECK_SHOWN)])].flatMap((n) => n ?? []).slice(0, DECK_SHOWN).flatMap((n) => itemViewOf(n, []) ?? [])
     },
-    machines: (input.machines ?? []).map((m) => ({
-      id: m.id,
-      name: m.name,
-      local: m.local,
-      online: m.online,
-      detail: m.detail,
-      appVersion: m.appVersion ?? null,
-      ...(m.signedIn === undefined ? {} : { signedIn: m.signedIn }),
-      os: m.os ?? null,
-      workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, presets: w.agents.map((a) => a.harness), waiting: w.agents.some((a) => a.phase === 'waiting') })),
-      marks: m.workspaces.map((w) => machineMarkOf(w)),
-      display: m.display ?? null,
-      agents: m.workspaces.length && m.workspaces.every((w) => w.counts) ? m.workspaces.reduce((a, w) => a + (w.counts?.agents ?? 0), 0) : null,
-      waiting: m.workspaces.length && m.workspaces.every((w) => w.counts) ? m.workspaces.reduce((a, w) => a + (w.counts?.waiting ?? 0), 0) : null
-    })),
+    machines: (input.machines ?? []).map(machineViewOf),
     name: input.name,
     browsers: all.filter((n) => n.kind === 'browser').length,
     notes: all.filter((n) => n.kind === 'note').length,

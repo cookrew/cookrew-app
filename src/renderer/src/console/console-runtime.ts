@@ -85,7 +85,8 @@ export interface ConsoleRuntime {
   signIn(): Promise<StartResult>
   signOut(): Promise<void>
   /** Go to a machine (the Devices level's tile), optionally straight to one of its workspaces. */
-  open(machineId: string, workspaceId?: string | null): void
+  /** Into a machine: its workspaces, or a workspace's agents or artifacts (`side`). */
+  open(machineId: string, workspaceId?: string | null, side?: 'agents' | 'items'): void
   /** Back to the machines. */
   leave(): void
   /** The machine in scope no longer takes this browser's key. */
@@ -100,8 +101,6 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
   let state: RuntimeState = { view: { kind: 'starting' }, notice: null }
   let entered: string | null = null
   let door: DoorState | null = null
-  /** Sent back to the machines: the Devices level opens nothing by itself until one is chosen (console-navigator.ts). */
-  let stayOut = false
   let booted = false
   let stopDevices: (() => void) | null = null
   const now = deps.now ?? Date.now
@@ -190,8 +189,7 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
     // Each act changes what is known; decide again until there is nothing left to do.
     for (let turn = 0; turn < 8; turn += 1) {
       const route = deps.router.get()
-      if (route.kind === 'machine') stayOut = false
-      const { view, act } = decideView({ session: deps.session.get(), gate: deps.gate.get().status, route, devices: deps.devices.get(), entered, door, stayOut })
+      const { view, act } = decideView({ session: deps.session.get(), gate: deps.gate.get().status, route, devices: deps.devices.get(), entered, door })
       if (act.kind === 'none') {
         // A door still being asked for a machine the page is no longer going to: its answer will open nothing.
         if (view.kind !== 'entering' && view.kind !== 'machine' && door?.state === 'asking') door = null
@@ -207,13 +205,12 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
         if (route.kind === 'machine' && route.workspace !== null) deps.takeSeat(route.workspace)
       } else {
         leaveScope()
-        stayOut = true
         state = { ...state, notice: act.notice }
         deps.router.go(DEVICES_ROUTE)
       }
     }
     // Not reached while each act settles something; if it ever is, the page still says where it stands.
-    tell(decideView({ session: deps.session.get(), gate: deps.gate.get().status, route: deps.router.get(), devices: deps.devices.get(), entered, door, stayOut }).view)
+    tell(decideView({ session: deps.session.get(), gate: deps.gate.get().status, route: deps.router.get(), devices: deps.devices.get(), entered, door }).view)
   }
 
   const onSession = (): void => {
@@ -271,18 +268,14 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
       const done = await deps.session.signOut()
       if (!done.ended) tell(state.view, UNTOLD_SIGN_OUT)
     },
-    open: (machineId, workspaceId = null) => {
+    open: (machineId, workspaceId = null, side = 'agents') => {
       retried = null
       // Chosen now: a no from an earlier ask is not this answer; its door is asked again.
       if (door?.state === 'refused') door = null
       tell(state.view, null)
-      deps.router.go({ kind: 'machine', machine: machineId, workspace: workspaceId, agent: null, side: 'agents' })
+      deps.router.go({ kind: 'machine', machine: machineId, workspace: workspaceId, agent: null, side: workspaceId === null ? 'agents' : side })
     },
-    leave: () => {
-      stayOut = true
-      deps.router.go(DEVICES_ROUTE)
-      evaluate()
-    },
+    leave: () => deps.router.go(DEVICES_ROUTE),
     keyRefused: (machineId) => {
       if (entered !== machineId) return
       deps.forgetDoor(machineId)

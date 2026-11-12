@@ -5,6 +5,8 @@ import type { ConsoleView } from './console-navigator'
 import type { GateState } from './console-gate'
 import { consoleRoutePath } from './console-route'
 import type { PathWord } from './machine-paths'
+import { DevicesCanvas, type CanvasMachine } from '../zoom/DevicesCanvas'
+import type { MachineView } from '../zoom/zoom-model'
 
 /**
  * THE ACCOUNT'S MACHINES. Each is drawn as a machine: a frame, a screen, its
@@ -20,59 +22,51 @@ const underName = (machine: ConsoleMachine): string => [PLATFORM[machine.os ?? '
 
 const countOf = (n: number, one: string): string => `${n} ${one}${n === 1 ? '' : 's'}`
 
+/** A machine with nothing read from it: its frame, blank, with the one thing to do on its screen. */
+const blankView = (machine: ConsoleMachine): MachineView => ({ id: machine.id, name: machine.name, local: false, online: machine.online, detail: 'listed', os: machine.os, workspaces: [], marks: [], agents: null, waiting: null })
+
+/** Under its name: its platform and line, and how much it holds. */
+function captionOf(machine: ConsoleMachine): string {
+  const waiting = machine.counts?.waiting ?? 0
+  return [
+    underName(machine),
+    machine.counts ? `${countOf(machine.workspaces.length, 'workspace')} · ${countOf(machine.counts.agents, 'agent')}` : null,
+    waiting > 0 ? `${waiting} waiting` : null
+  ].filter(Boolean).join(' · ')
+}
+
 const PATH_SAYS: Record<PathWord, string> = {
   LAN: 'Reached directly over this network',
   TAILNET: 'Reached over your tailnet',
   RELAY: 'Reached through the Cookrew relay'
 }
 
-function MachineTile({ machine, path, opening, onOpen }: { machine: ConsoleMachine; path: PathWord; opening: boolean; onOpen: (workspace?: string) => void }): React.JSX.Element {
-  const canOpen = machine.standing === 'locked' || machine.standing === 'reading' || machine.standing === 'live'
-  const waiting = machine.counts?.waiting ?? 0
-  return (
-    <li className="cd-tile" data-standing={machine.standing} data-opening={opening || undefined}>
-      <div className="cd-frame">
-        <button type="button" className="cd-open" disabled={!canOpen} aria-label={canOpen ? `Open ${machine.name}` : `${machine.name}: ${machine.say ?? 'cannot be opened'}`} onClick={() => onOpen()} />
-        <div className="cd-screen">
-          {machine.standing === 'live' &&
-            machine.workspaces.slice(0, 6).map((workspace) => (
-              <button
-                type="button"
-                key={workspace.id}
-                className="cd-ws"
-                aria-label={`Open ${workspace.name} on ${machine.name}: ${countOf(workspace.agents, 'agent')}${workspace.waiting > 0 ? `, ${workspace.waiting} waiting` : ''}`}
-                onClick={() => onOpen(workspace.id)}
-              >
-                <span className="cd-ws-name">{workspace.name}</span>
-                <span className="cd-ws-count">{workspace.agents}</span>
-                {workspace.waiting > 0 && <i className="cd-ws-wait" aria-hidden="true" />}
-              </button>
-            ))}
-          {machine.standing === 'live' && machine.workspaces.length === 0 && <span className="cd-none">no workspaces</span>}
-          {machine.standing === 'live' && machine.workspaces.length > 6 && <span className="cd-none">+{machine.workspaces.length - 6} more</span>}
-          {machine.standing === 'reading' && <span className="cd-none">…</span>}
-        </div>
-        <span className="cd-deck" aria-hidden="true" />
-      </div>
-      <div className="cd-label">
-        <b>
-          {machine.name}
-          {/* How this page reaches it now. Only for a machine it does reach: one that cannot be read has no path to name. */}
-          {(machine.standing === 'live' || machine.standing === 'reading') && (
-            <span className="cd-path" data-path={path} title={PATH_SAYS[path]} aria-label={PATH_SAYS[path]}>
-              {path}
-            </span>
-          )}
-        </b>
-        <small>
-          {underName(machine)}
-          {machine.counts ? ` · ${countOf(machine.workspaces.length, 'workspace')} · ${countOf(machine.counts.agents, 'agent')}` : ''}
-          {waiting > 0 ? ` · ${waiting} waiting` : ''}
-        </small>
-        {machine.say && <em>{machine.say}</em>}
-      </div>
-    </li>
-  )
+/** Can it be gone into from here: a locked one can (its door asks for proof), one offline, outdated or blocked cannot. */
+const openable = (machine: ConsoleMachine): boolean => machine.standing === 'locked' || machine.standing === 'reading' || machine.standing === 'live'
+
+/**
+ * Its screen: lit with its own tiles only when it is read (`live`); else the
+ * one thing to do. Nothing of a machine is drawn before the gate opens.
+ */
+const sayOf = (machine: ConsoleMachine): string | null => machine.say ?? (machine.standing === 'live' ? null : machine.standing === 'locked' ? 'Prove it’s you to see inside.' : '…')
+
+/** One machine on the canvas, as this page knows it. */
+export function canvasMachineOf(machine: ConsoleMachine, path: PathWord): CanvasMachine {
+  const reached = machine.standing === 'live' || machine.standing === 'reading'
+  const say = sayOf(machine)
+  return {
+    view: say === null && machine.view ? machine.view : blankView(machine),
+    say,
+    caption: captionOf(machine),
+    standing: machine.standing,
+    openable: openable(machine),
+    // How this page reaches it now. Only for one it does reach: one that cannot be read has no path to name.
+    badge: reached ? (
+      <span className="cd-path" data-path={path} title={PATH_SAYS[path]} aria-label={PATH_SAYS[path]}>
+        {path}
+      </span>
+    ) : null
+  }
 }
 
 function Gate({ gate, state, wants, returnTo }: { gate: ConsoleParts['gate']; state: Extract<GateState, { status: 'closed' }>; wants: string | null; returnTo: string }): React.JSX.Element {
@@ -120,7 +114,7 @@ export function ConsoleDevicesView({ parts, view, notice, username }: { parts: C
   const openingId = view.kind === 'entering' ? view.machine : null
 
   return (
-    <main className="cd-page" data-entering={openingId !== null || undefined}>
+    <main className="cd-page cd-canvas-page">
       <header className="cd-head">
         <h1 className="cd-mark">Cookrew</h1>
         <nav className="cd-who" aria-label="Account">
@@ -148,16 +142,18 @@ export function ConsoleDevicesView({ parts, view, notice, username }: { parts: C
         </p>
       )}
       {list.status === 'ready' && list.machines.length === 0 && <p className="cd-empty">No machines yet. Install Cookrew on a computer and sign in to this account there.</p>}
-      <ul className="cd-grid">
-        {list.machines.map((machine) => (
-          <MachineTile key={machine.id} machine={machine} path={paths.of(machine.id)} opening={machine.id === openingId} onOpen={(workspace) => runtime.open(machine.id, workspace ?? null)} />
-        ))}
-      </ul>
-      {openingId !== null && (
-        <p className="cd-opening" role="status">
-          Opening {list.machines.find((machine) => machine.id === openingId)?.name ?? 'your machine'}…
-        </p>
-      )}
+      <div className="cd-canvas">
+        <DevicesCanvas
+          machines={list.machines.map((machine) => canvasMachineOf(machine, paths.of(machine.id)))}
+          openingId={openingId}
+          onEnter={(id, workspace, side) => runtime.open(id, workspace, side)}
+        />
+        {openingId !== null && (
+          <p className="cd-opening" role="status">
+            Opening {list.machines.find((machine) => machine.id === openingId)?.name ?? 'your machine'}…
+          </p>
+        )}
+      </div>
     </main>
   )
 }
