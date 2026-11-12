@@ -5,7 +5,6 @@ import { authStore } from '../auth-gate'
 import { deviceSeat } from '../device-seat'
 import { startMachineSession } from '../machine-session'
 import { zoomStore } from '../zoom/zoom-store'
-import { setMachineOpener } from '../zoom/machine-open'
 import type { ConsoleParts } from './console-wiring'
 import { applyRouteToZoom, followZoom, type ZoomSyncDeps } from './zoom-sync'
 
@@ -70,9 +69,6 @@ export default function ConsoleMachine({ machine, parts }: { machine: string; pa
       offWorkspace()
     }
   }, [sync])
-
-  // Another machine chosen on the canvas: the console puts it in scope, the whole app for it (zoom/machine-open.ts).
-  useEffect(() => setMachineOpener((id, workspace) => parts.runtime.open(id, workspace)), [parts.runtime])
 
   useEffect(() => {
     const store = authStore()

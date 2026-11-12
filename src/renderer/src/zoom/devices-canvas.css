@@ -1,0 +1,58 @@
+/* ── the console's Devices level, no machine entered (DevicesCanvas.tsx; owner 2026-11-12) ──
+   The zoom's own paper, frames and bar; the row is placed by the component, not the painter. */
+.dc-canvas .dc-overview {
+  opacity: 1;
+}
+
+.dc-world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+
+.dc-machine {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+}
+
+.dc-canvas .zv-stops button:disabled,
+.dc-canvas .zv-back:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* One machine being gone into: it stays, the others step back and take no press. */
+.dc-canvas[data-opening] .dc-machine:not([data-opening]) {
+  opacity: 0.4;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+
+.dc-canvas[data-opening] .dc-machine[data-opening] .zv-om-tile {
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dc-canvas[data-opening] .dc-machine:not([data-opening]) {
+    transition: none;
+  }
+}
+
+/* The one thing to do, on a screen that cannot be read: read at one size on screen, as the names
+   under the frames are (phone-type.css), not shrunk with the row (it was 4 px at a phone's width). */
+.dc-canvas .zv-om-say {
+  font-size: calc(12px / var(--zv-k-devices, 1));
+  padding: 0 calc(12px / var(--zv-k-devices, 1));
+}
+
+/* The path word rides its name's size wherever the name is set (console.css · .cd-path). */
+.dc-canvas .zv-machine-label .cd-path {
+  font-size: 0.55em;
+  margin-left: 0.5em;
+}

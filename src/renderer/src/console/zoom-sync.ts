@@ -13,8 +13,6 @@
 import type { ConsoleRoute } from './console-route'
 import { routeOfZoom, zoomOfRoute, type ZoomPlace } from './console-router'
 
-const DEVICES_STOP = -2
-
 export interface ZoomSyncDeps {
   readonly machine: string
   readonly router: { get(): ConsoleRoute; go(route: ConsoleRoute): void }
@@ -31,8 +29,6 @@ export interface ZoomSyncDeps {
 /** Put the view on the level the address names. Done before the app first draws. */
 export function applyRouteToZoom(deps: ZoomSyncDeps): void {
   const route = deps.router.get()
-  // At the machines: this machine's own devices stop, every other machine beside it (owner 2026-11-11).
-  if (route.kind === 'devices') return deps.zoom.go(DEVICES_STOP, 'agents')
   if (route.kind !== 'machine' || route.machine !== deps.machine) return
   const place = zoomOfRoute(route)
   deps.zoom.go(place.v, place.dir)

@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { WorkspaceTile } from './WorkspaceTile'
 import { deviceOf, screenAspectOf, screenFit, SWS } from './zoom-layout'
-import type { Bind } from './ZoomParts'
+import type { Bind } from './page-parts'
 import type { MachineView } from './zoom-model'
 
 /**
@@ -37,13 +37,17 @@ export interface MachineFrameProps {
   caption: string
   /** Its gauges, one line under its name (MachineGauges.tsx · MachineGaugeLine). */
   gauge: React.ReactNode
+  /** False: it cannot be gone into from here (the console's offline or outdated machine); its frame is no control. */
+  openable?: boolean
+  /** Beside its name: how this page reaches it (the console's path word). */
+  badge?: React.ReactNode
   bind: Bind
   onOpen: () => void
   onOpenWorkspace: (workspaceId: string) => void
 }
 
 
-export const MachineFrame = memo(function MachineFrame({ machine, frame, narrow, wordK, titleK, say, caption, gauge, bind, onOpen, onOpenWorkspace }: MachineFrameProps): React.JSX.Element {
+export const MachineFrame = memo(function MachineFrame({ machine, frame, narrow, wordK, titleK, say, caption, gauge, openable = true, badge = null, bind, onOpen, onOpenWorkspace }: MachineFrameProps): React.JSX.Element {
   const lit = say === null
   const device = deviceOf(machine.marks.map((m) => m.id), narrow, screenAspectOf(machine.display ?? null))
   const k = screenFit(device, frame)
@@ -56,7 +60,7 @@ export const MachineFrame = memo(function MachineFrame({ machine, frame, narrow,
   }
   return (
     <div ref={bind(`machinecard:${machine.id}`)} className={`zv-machine zv-other${machine.online ? '' : ' off'}`} data-read={lit} style={{ width: frame.w, height: frame.h }}>
-      <button type="button" className="zv-machine-open" aria-label={lit ? `Open ${machine.name}` : `${machine.name}: ${say}`} title={lit ? undefined : (say ?? undefined)} onClick={onOpen} />
+      <button type="button" className="zv-machine-open" aria-label={lit ? `Open ${machine.name}` : `${machine.name}: ${say}`} title={lit ? undefined : (say ?? undefined)} disabled={!openable} onClick={onOpen} />
       {lit ? (
         <div className="zv-om-screen" style={screen}>
           <div className="zv-om-title" style={{ transform: `translate(${device.left}px, ${device.titleBottom}px) translateY(-100%)` }}>
@@ -78,7 +82,10 @@ export const MachineFrame = memo(function MachineFrame({ machine, frame, narrow,
       )}
       <span className="zv-machine-deck" />
       <span className="zv-machine-label">
-        <b>{machine.name}</b>
+        <b>
+          {machine.name}
+          {badge}
+        </b>
         <small>{caption}</small>
         {gauge}
       </span>

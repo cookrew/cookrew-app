@@ -118,7 +118,7 @@ describe('before the gate', () => {
       ['Old Mini', 'darwin', true, 'outdated']
     ])
     // Nothing from inside any machine: no workspaces, no numbers.
-    expect(machines.every((m) => m.workspaces.length === 0 && m.counts === null)).toBe(true)
+    expect(machines.every((m) => m.workspaces.length === 0 && m.counts === null && m.view === null)).toBe(true)
     await vi.advanceTimersByTimeAsync(30_000)
     expect(w.asked).toEqual([])
     stop()
@@ -145,6 +145,9 @@ describe('past the gate', () => {
     expect(studio).toMatchObject({ standing: 'live', say: null })
     expect(studio.workspaces).toEqual([{ id: 'w1', name: 'cookrew', icon: null, agents: 2, waiting: 1, working: 1 }])
     expect(studio.counts).toMatchObject({ agents: 2, notes: 1, browsers: 3, waiting: 1 })
+    // Drawn as every machine is on the devices stop (owner 2026-11-12: one canvas, no machine entered).
+    expect(studio.view?.marks).toEqual([expect.objectContaining({ id: 'w1', name: 'cookrew', presets: ['claude', 'claude'], waitingCount: 1, browsers: 3, notes: 1 })])
+    expect(solis.view).toBeNull()
     // Asked, not yet answered: its screen is on and empty, not a claim of zero.
     expect(solis).toMatchObject({ standing: 'reading', workspaces: [], counts: null })
     // Never asked: it cannot answer this build.
