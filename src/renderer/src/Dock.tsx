@@ -1,6 +1,7 @@
 import { CANVAS_RETIRED, type ToolId } from './canvas-ui'
 import type { AgentRole, CanvasNode } from '../../shared/model'
 import { GlobalPrompt, type PromptAgent } from './prompt/GlobalPrompt'
+import { RemotePrompt } from './prompt/RemotePrompt'
 import { SHELL_PRESET } from './prompt/harness-pref'
 import type { PromptArtifact } from './prompt/artifact-refs'
 import { useKeyboardInset } from './keyboard-inset'
@@ -153,7 +154,7 @@ export function Dock({
   const hint = tool === 'connect' ? connectHint : (HINTS[tool] ?? null)
   /** The board's toggle parks the canvas tools; a full view no longer does. */
   const slidIn = boardFor !== null
-  // Inside another machine the box would send to this one's agents: its own boxes say where they send (RemoteMachineView.tsx).
+  // Inside another machine the bar's box is that machine's (owner 2026-11-12): RemotePrompt.tsx sends there.
   const insideMachine = useInsideMachine()
   // `presets` arrives as harnesses AND saved teams in one list, because a
   // saved team IS a terminal preset to the placement path. To a person they
@@ -220,6 +221,7 @@ export function Dock({
             ))}
           </div>
         )}
+        {!slidIn && insideMachine && <RemotePrompt />}
         {!slidIn && !insideMachine && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} artifacts={artifacts} acts={acts} workspaceName={workspaceName} />}
         {!slidIn && tool === 'terminal' && (
           <div className="cr-dock-presets">

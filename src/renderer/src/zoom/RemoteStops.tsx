@@ -1,14 +1,11 @@
-import { useState } from 'react'
 import { InkAvatar } from './InkAvatar'
 import { WorkspaceTile } from './WorkspaceTile'
-import { remoteAgentView, sendRefusal, tileView, type RemoteCard, type RemoteTile } from './remote-machine'
-import { remoteDraft, setRemoteDraft, type RemoteMachineRef } from './remote-machine-store'
-import { callRemote } from './use-remote-machine'
+import { remoteAgentView, tileView, type RemoteCard, type RemoteTile } from './remote-machine'
 
 /**
  * THE OTHER MACHINE'S FIRST TWO STOPS (RemoteMachineView.tsx): its workspaces,
- * as the zoom's own tiles, and one workspace's whole crew, a face each, with
- * the box that starts a new agent there.
+ * as the zoom's own tiles, and one workspace's whole crew, a face each. A new
+ * agent there is started from the bar's box (prompt/RemotePrompt.tsx).
  */
 
 /** A tile's refs go nowhere: the painter does not draw these. */
@@ -54,42 +51,6 @@ export function RemoteCrew({ cards, onOpen }: { cards: readonly RemoteCard[]; on
           </button>
         )
       })}
-    </div>
-  )
-}
-
-/** A new agent, started on the other machine in this workspace (watch-routes.ts · /api/watch/new with the seat). */
-export function RemoteNewAgent({ machine, workspaceId, onStarted }: { machine: RemoteMachineRef; workspaceId: string; onStarted: () => void }): React.JSX.Element {
-  const box = `new:${workspaceId}`
-  const [words, setWords] = useState(() => remoteDraft(machine.id, box))
-  const [note, setNote] = useState<{ text: string; failed: boolean } | null>(null)
-  const [busy, setBusy] = useState(false)
-  const write = (text: string): void => {
-    setWords(text)
-    setRemoteDraft(machine.id, box, text)
-  }
-  const start = async (): Promise<void> => {
-    const text = words.trim()
-    if (!text || busy) return
-    setBusy(true)
-    try {
-      const answer = await callRemote(machine.id, 'POST', `api/watch/new?seat=${encodeURIComponent(workspaceId)}`, { text })
-      const refusal = sendRefusal(answer, machine.name)
-      if (refusal) return setNote({ text: refusal, failed: true })
-      write('')
-      setNote({ text: `Started on ${machine.name}.`, failed: false })
-      onStarted()
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="rm-new">
-      <form className="rm-box" onSubmit={(e) => { e.preventDefault(); void start() }}>
-        <input value={words} onChange={(e) => write(e.target.value)} onKeyDown={(e) => e.stopPropagation()} placeholder={`Start a new agent on ${machine.name}…`} aria-label={`Start a new agent on ${machine.name}`} autoComplete="off" />
-        <button type="submit" disabled={busy || !words.trim()}>Start</button>
-      </form>
-      <p className={`rm-note${note?.failed ? ' failed' : ''}`} role="status">{note?.text ?? ''}</p>
     </div>
   )
 }
