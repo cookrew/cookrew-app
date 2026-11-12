@@ -16,7 +16,7 @@ import SwiftUI
 
 /** The bar's height: the box's own, so folding it moves nothing. */
 private let barFace: CGFloat = 22
-private let stackFace: CGFloat = 17
+private let stackFace: CGFloat = 19
 
 public struct WatchBar: View {
   @Bindable var store: WatchStore
@@ -101,7 +101,7 @@ public struct WatchBar: View {
     Button { opened = true } label: {
       Group {
         if let card {
-          InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: barFace, weight: .mini)
+          InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: barFace, weight: .small)
         } else {
           ZStack {
             Circle().strokeBorder(ink.dim, style: StrokeStyle(lineWidth: 1, dash: [2.5, 2.5]))
@@ -201,7 +201,7 @@ private struct AgentsGroup: View {
       HStack(spacing: -3) {
         ForEach(stack.shown) { card in
           Button { onPick(card) } label: {
-            InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: stackFace, weight: .mini)
+            InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: stackFace, weight: .small)
           }
           .buttonStyle(.plain)
           .accessibilityLabel("\(card.name), \(card.word)")

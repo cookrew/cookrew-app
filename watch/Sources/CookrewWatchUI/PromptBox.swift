@@ -79,7 +79,7 @@ public struct PromptBox: View {
 
   @ViewBuilder private var chip: some View {
     if let card {
-      InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: 22, weight: .mini)
+      InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: 22, weight: .small)
     } else {
       Text("＋")
         .font(.system(size: 14, weight: .medium))
