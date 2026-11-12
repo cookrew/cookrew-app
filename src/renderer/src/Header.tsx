@@ -9,6 +9,16 @@ import type { RouteStatus } from '../../shared/route'
 import './header.css'
 
 /**
+ * THE MAC WINDOW'S TRAFFIC LIGHTS stand over the bar's left end (main ·
+ * titleBarStyle 'hiddenInset'): only there does the bar keep their room.
+ * Everywhere else (the console, a phone, Windows and Linux) the mark takes
+ * the front of the bar (header.css · .cr-header:not(.cr-lights)).
+ */
+export const hasTrafficLights = (agent: string, platform: string): boolean => / Electron\//.test(agent) && /Mac/.test(platform)
+
+const LIGHTS = typeof navigator !== 'undefined' && hasTrafficLights(navigator.userAgent, navigator.platform)
+
+/**
  * What the window shows: the STAGE (stage/StageView.tsx) — canvas and board
  * merged into one (2026-10-30). The levels view is deleted (2026-10-31), and
  * the board is no longer a view: it is the search box on this bar
@@ -95,7 +105,10 @@ export function Header({
   const [pathOpen, setPathOpen] = useState(false)
 
   return (
-    <header className="cr-header">
+    <header className={`cr-header${LIGHTS ? ' cr-lights' : ''}`}>
+      {/* THE MARK LEADS THE BAR (owner 2026-11-12): the Co, as on the console's Devices level, so
+          the bar reads the same before a machine is entered and after (ConsoleDevicesView · TopBar). */}
+      <span className="cr-mark" role="img" aria-label="Cookrew" />
       <HeaderRoute
         view={view}
         workspaceName={workspaceName}

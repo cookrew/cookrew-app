@@ -220,7 +220,8 @@ suite.each([
     }
 
     await onConsole(tab, '/', 'the console, signed in, at a clean address', 30_000)
-    await tab.until(`document.querySelector('.cd-user') && document.querySelector('.cd-user').innerText === '@${stage.username}'`, 'the account’s name on the page')
+    // The top bar is the app's (owner 2026-11-12): the account is its avatar, named in its title.
+    await tab.until(`document.querySelector('.cd-bar .cr-mark') && document.querySelector('.cd-acct-btn') && document.querySelector('.cd-acct-btn').title === '@${stage.username}'`, 'the account’s avatar on the bar')
     // The code on the way back is in no address and no storage after it was read.
     expect(await tab.url()).toBe(`${origin()}/`)
     const kept = await storage(tab)
@@ -272,7 +273,7 @@ suite.each([
     await sleep(500)
     expect(await tab.url()).toBe(`${origin()}/`)
     // The two quiet links in the head are controls too: the way to the account, and the way out.
-    await fits(tab, 'Devices', ['.dc-machine[data-standing=live] .zv-machine-open', '.cd-head a.cd-quiet', '.cd-head button.cd-quiet'])
+    await fits(tab, 'Devices', ['.dc-machine[data-standing=live] .zv-machine-open', '.cd-acct-btn'])
     await shot(tab, '2c-devices')
 
     // A machine that lets go of its line while the page is up says so within a few seconds, by itself:
@@ -517,7 +518,11 @@ suite.each([
     expect(before.local).toContain('cr_grant')
     expect(before.local.some((key) => key.startsWith('cr_token:'))).toBe(true)
 
-    await tab.click('.cd-who button.cd-quiet', 'Sign out')
+    // The avatar is named for the account (ConsoleDevicesView · TopBar).
+    await tab.click('.cd-acct-btn', `Account @${stage.username}`)
+    await tab.until(`document.querySelector('.cd-acct-menu')`, 'the account’s menu')
+    await fits(tab, 'the account’s menu', ['.cd-acct-menu a.cd-quiet', '.cd-acct-menu button.cd-quiet'])
+    await tab.click('.cd-acct-menu button.cd-quiet', 'Sign out')
     await tab.until(`document.querySelector('.cd-signin .cd-primary')`, 'the signed-out view', 30_000)
     await sleep(1500)
     expect((await api.console('GET', '/v2/me/desktops', undefined, bearer(second.token))).status).toBe(401)

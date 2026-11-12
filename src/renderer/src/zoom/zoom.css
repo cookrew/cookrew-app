@@ -318,31 +318,6 @@
   outline-offset: 6px;
 }
 
-/* Scaled from its corner by the painter, so it reads and presses at this size on screen. */
-.zv-machine-share {
-  appearance: none;
-  justify-self: start;
-  transform-origin: left top;
-  min-height: 32px;
-  margin-top: 4px;
-  padding: 6px 12px;
-  border: 1px solid var(--zv-ink-soft);
-  border-radius: 999px;
-  background: var(--zv-paper);
-  color: var(--zv-ink);
-  font: 600 12px/1.2 var(--zv-mono);
-  cursor: pointer;
-}
-
-.zv-machine-share:hover {
-  border-color: var(--zv-seal);
-}
-
-.zv-machine-share:focus-visible {
-  outline: 2px solid var(--zv-seal);
-  outline-offset: 2px;
-}
-
 /* ── the device: its workspaces, a mark each ──
    The machine's name and count grow (scale, from their top-left corner) to be
    read where the device is seen small (ZoomView · deviceWords sets the width
@@ -1900,77 +1875,76 @@
   }
 }
 
-/* ── agents per row (ZoomView · crew-cols.ts): a small pill at the crew's top right ── */
-.zv-cols {
+/* ── THE VIEW'S TOOLBAR (ViewTools.tsx; owner 2026-11-12) ──
+   Top right at every stop of this machine: per row where a row is seen, and this machine's
+   remote desktop, in the full view's own buttons (full-views.css · .zv-fv-arts-btn) on one
+   small bar, as the agent's full view carries its tools. */
+.zv-view-tools {
+  --fv-ink: var(--zv-ink);
+  --fv-hair-2: var(--zv-hair-2);
+  --fv-seal: var(--zv-seal);
   position: absolute;
   z-index: 44;
   top: calc(12px + env(safe-area-inset-top, 0px));
   right: 12px;
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 4px 4px 4px 10px;
-  border-radius: 999px;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 10px;
   background: var(--zv-card);
   box-shadow:
     inset 0 0 0 1px var(--zv-hair-2),
     0 6px 18px var(--zv-shadow);
   color: var(--zv-ink-soft);
-  font: 10px/1 var(--zv-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
   animation: zv-controls-in 180ms ease-out;
 }
 
-.zv-cols > span {
-  margin-right: 4px;
+.zv-view-tools .zv-fv-arts-btn {
+  width: 30px;
+  height: 28px;
+  font: 600 12px/1 var(--zv-mono);
+}
+
+.zv-view-tools .zv-fv-arts-btn .cr-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.zv-view-cols {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .zv-cols-glyph {
-  display: none;
   width: 12px;
   height: 12px;
-  margin: 0 3px 0 -3px;
+  margin: 0 4px;
   fill: currentColor;
 }
 
-/* A phone: the title has the room, the pill keeps its numbers beside a small grid. */
-@media (max-width: 520px) {
-  .zv-cols {
-    top: 12px;
-    right: 16px;
-    padding: 3px 3px 3px 10px;
-  }
-  .zv-cols > span {
-    display: none;
-  }
-  .zv-cols-glyph {
-    display: block;
-  }
+/* The row's count is one of three: the chosen one is ink, as the bar's stop is. */
+.zv-view-cols .zv-fv-arts-btn {
+  box-shadow: none;
 }
 
-.zv-cols button {
-  appearance: none;
-  width: 26px;
-  height: 26px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: none;
-  color: var(--zv-ink-soft);
-  font: 600 12px/1 var(--zv-mono);
-  cursor: pointer;
-}
-
-.zv-cols button[aria-pressed='true'] {
+.zv-view-cols .zv-fv-arts-btn[aria-pressed='true'] {
   background: var(--zv-ink);
   color: var(--zv-paper);
 }
 
-.zv-cols button:focus-visible {
-  outline: 2px solid var(--zv-seal);
-  outline-offset: 2px;
+.zv-view-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--zv-hair-2);
+}
+
+@media (max-width: 520px) {
+  .zv-view-tools {
+    top: 12px;
+    right: 16px;
+  }
 }
 
 
