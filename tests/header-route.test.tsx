@@ -39,3 +39,39 @@ describe('the agent step', () => {
     expect(routeAgent('stage', null)).toBeNull()
   })
 })
+
+// INSIDE ANOTHER MACHINE THE TITLE IS ITS (owner 2026-11-12): Solis-Core where this Mac's name was,
+// its workspace where this Mac's was, and no amber line of its own over the stage.
+describe('the route inside another machine', () => {
+  it('names that machine, its workspace and its agent; outside, nothing', async () => {
+    const { remoteRoute } = await import('../src/renderer/src/HeaderRoute')
+    expect(remoteRoute({ machine: null, workspace: null, agent: null, item: null, side: 'agents' })).toBeNull()
+    const machine = { id: 'm', name: 'Solis-Core', os: 'linux' }
+    expect(remoteRoute({ machine, workspace: null, agent: null, item: null, side: 'agents' })).toEqual({ device: 'Solis-Core', workspace: null, agent: null, item: null })
+    expect(remoteRoute({ machine, workspace: { id: 'w', name: 'My Workspace' }, agent: { id: 'a', name: 'Herdr Env' }, item: null, side: 'agents' })).toEqual({ device: 'Solis-Core', workspace: 'My Workspace', agent: 'Herdr Env', item: null })
+    // A browser open on that agent's card is the last step, as the stage's own line named it.
+    const deep = { machine, workspace: { id: 'w', name: 'My Workspace' }, agent: { id: 'a', name: 'Herdr Env' }, item: { id: 'b', title: 'Grafana', kind: 'browser' as const }, side: 'agents' as const }
+    expect(remoteRoute(deep)).toEqual({ device: 'Solis-Core', workspace: 'My Workspace', agent: 'Herdr Env', item: 'Grafana' })
+  })
+
+  it('its device step goes back to its workspaces, and from them out to every device: never a dead button', async () => {
+    const { remoteDeviceStep, remoteRoute } = await import('../src/renderer/src/HeaderRoute')
+    const { remotePlace } = await import('../src/renderer/src/zoom/remote-machine-store')
+    const step = (): void => {
+      const inside = remoteRoute(remotePlace.get())
+      if (!inside) throw new Error('not inside a machine')
+      remoteDeviceStep(inside)()
+    }
+    remotePlace.enter({ id: 'm', name: 'Solis-Core', os: 'linux' })
+    remotePlace.workspace({ id: 'w', name: 'My Workspace' })
+    remotePlace.agent({ id: 'a', name: 'Herdr Env' })
+    step()
+    expect(remotePlace.get()).toMatchObject({ machine: { id: 'm' }, workspace: null, agent: null })
+    step()
+    expect(remotePlace.get().machine).toBeNull()
+  })
+
+  it('the stage draws no line of its own saying whose it is: the title says it', () => {
+    expect(readFileSync('src/renderer/src/zoom/RemoteMachineView.tsx', 'utf8')).not.toContain('rm-where')
+  })
+})

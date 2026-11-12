@@ -236,7 +236,7 @@ suite.each([
     await tab.until(`document.querySelector('.cd-gate .cd-primary')`, 'the gate, asking for proof')
     expect(await tab.text()).toContain('Prove it’s you once to see inside your machines')
     // Before the gate: names and lines only, and nothing asked of any machine.
-    expect(await tab.evaluate<number>(`document.querySelectorAll('.cd-tile').length`)).toBe(3)
+    expect(await tab.evaluate<number>(`document.querySelectorAll('.dc-machine').length`)).toBe(3)
     expect(stage.studio.requests.length + stage.laptop.requests.length + stage.old.requests.length).toBe(0)
     await fits(tab, 'the gate', ['.cd-gate .cd-primary'])
     await shot(tab, '2a-gate')
@@ -250,14 +250,14 @@ suite.each([
     await onConsole(tab, '/', 'the console, with the pass', 30_000)
 
     // Past the gate each machine it can read lights with its own workspaces.
-    await tab.until(`document.querySelectorAll('.cd-tile[data-standing=live]').length === 2`, 'the two machines it can read to answer', 30_000)
-    const tiles = await tab.evaluate<{ name: string; standing: string; frame: boolean; say: string; disabled: boolean; chips: number }[]>(`[...document.querySelectorAll('.cd-tile')].map((tile) => ({
-      name: tile.querySelector('.cd-label b').firstChild.textContent,
+    await tab.until(`document.querySelectorAll('.dc-machine[data-standing=live]').length === 2`, 'the two machines it can read to answer', 30_000)
+    const tiles = await tab.evaluate<{ name: string; standing: string; frame: boolean; say: string; disabled: boolean; chips: number }[]>(`[...document.querySelectorAll('.dc-machine')].map((tile) => ({
+      name: tile.querySelector('.zv-machine-label b').firstChild.textContent,
       standing: tile.dataset.standing,
-      frame: !!tile.querySelector('.cd-frame .cd-screen') && !!tile.querySelector('.cd-deck'),
-      say: (tile.querySelector('.cd-label em') || { innerText: '' }).innerText,
-      disabled: tile.querySelector('.cd-open').disabled,
-      chips: tile.querySelectorAll('.cd-ws').length
+      frame: !!tile.querySelector('.zv-machine') && !!tile.querySelector('.zv-machine-deck'),
+      say: (tile.querySelector('.zv-om-blank') || { innerText: '' }).innerText,
+      disabled: tile.querySelector('.zv-machine-open').disabled,
+      chips: tile.querySelectorAll('.zv-om-tile').length
     }))`)
     expect(tiles.map((tile) => tile.name).sort()).toEqual(['Attic Mac', 'Road Laptop', 'Studio Mac'])
     expect(tiles.every((tile) => tile.frame)).toBe(true)
@@ -267,24 +267,24 @@ suite.each([
     // The Devices level asks nothing of a machine it will not read.
     expect(stage.old.requests).toEqual([])
     // Pressing the old machine goes nowhere.
-    const oldBox = await tab.box('.cd-tile[data-standing=outdated] .cd-frame')
+    const oldBox = await tab.box('.dc-machine[data-standing=outdated] .zv-machine')
     await tab.clickAt((oldBox?.x ?? 0) + 8, (oldBox?.y ?? 0) + 8)
     await sleep(500)
     expect(await tab.url()).toBe(`${origin()}/`)
     // The two quiet links in the head are controls too: the way to the account, and the way out.
-    await fits(tab, 'Devices', ['.cd-tile[data-standing=live] .cd-open', '.cd-head a.cd-quiet', '.cd-head button.cd-quiet'])
+    await fits(tab, 'Devices', ['.dc-machine[data-standing=live] .zv-machine-open', '.cd-head a.cd-quiet', '.cd-head button.cd-quiet'])
     await shot(tab, '2c-devices')
 
     // A machine that lets go of its line while the page is up says so within a few seconds, by itself:
     // its next summary is the relay's "no line", and the registry is asked at once (not at the next minute).
     await stage.laptop.offline()
-    await tab.until(`document.querySelector('.cd-tile[data-standing=offline]')`, 'the machine off its line to say so', 20_000)
-    const off = await tab.evaluate<{ text: string; disabled: boolean }>(`(() => { const tile = document.querySelector('.cd-tile[data-standing=offline]'); return { text: tile.querySelector('.cd-label').innerText, disabled: tile.querySelector('.cd-open').disabled } })()`)
+    await tab.until(`document.querySelector('.dc-machine[data-standing=offline]')`, 'the machine off its line to say so', 20_000)
+    const off = await tab.evaluate<{ text: string; disabled: boolean }>(`(() => { const tile = document.querySelector('.dc-machine[data-standing=offline]'); return { text: tile.innerText, disabled: tile.querySelector('.zv-machine-open').disabled } })()`)
     expect(off.text).toContain('Road Laptop')
     expect(off.text).toContain('offline')
     expect(off.text).toContain('Open Cookrew on Road Laptop.')
     expect(off.disabled).toBe(true)
-    await tab.until(`document.querySelectorAll('.cd-tile[data-standing=live]').length === 1`, 'the machine still on its line to answer')
+    await tab.until(`document.querySelectorAll('.dc-machine[data-standing=live]').length === 1`, 'the machine still on its line to answer')
     await shot(tab, '2d-one-offline')
     await stage.laptop.online()
     settle('step 2', tab)
@@ -294,7 +294,7 @@ suite.each([
   it('3. a machine is entered in place: its workspaces, an agent’s card, its terminal with colours and a cursor, and a prompt that arrives once', async () => {
     needs(2)
     const id = stage.studio.deviceId
-    await tab.click('.cd-tile[data-standing=live] .cd-open', 'Open Studio Mac')
+    await tab.click('.dc-machine[data-standing=live] .zv-machine-open', 'Open Studio Mac')
     await onConsole(tab, `/d/${id}`, 'the address of the machine')
     await tab.until(`document.querySelector('.zv-door[aria-label^="Open Kitchen agents"]') && document.querySelector('.zv-door[aria-label^="Open Garden agents"]')`, 'the machine’s workspaces', 30_000)
     await sleep(600)
@@ -372,7 +372,7 @@ suite.each([
     // Back, from the terminal in the first tab: one level out each time, never off the console.
     const walked: string[] = [new URL(await tab.url()).pathname]
     for (let press = 0; press < 8; press += 1) {
-      if (await tab.evaluate<boolean>(`!!document.querySelector('.cd-grid') && location.pathname === '/'`)) break
+      if (await tab.evaluate<boolean>(`!!document.querySelector('.dc-canvas') && location.pathname === '/'`)) break
       const went = await tab.back()
       expect(went, 'there is a level to go back to').toBe(true)
       await sleep(1200)
@@ -381,7 +381,7 @@ suite.each([
       walked.push(at.pathname)
     }
     expect(walked.at(-1), walked.join(' → ')).toBe('/')
-    await tab.until(`document.querySelector('.cd-grid .cd-tile')`, 'the Devices level')
+    await tab.until(`document.querySelector('.dc-canvas .dc-machine')`, 'the Devices level')
     // Up the levels in order: never deeper than the step before, and every level of the way seen.
     const depth = (pathname: string): number => pathname.split('/').filter(Boolean).length
     for (let at = 1; at < walked.length; at += 1) expect(depth(walked[at]), walked.join(' → ')).toBeLessThanOrEqual(depth(walked[at - 1]))
@@ -415,7 +415,7 @@ suite.each([
     expect(window.length, `requests in twenty seconds: ${window.map((request) => `${request.method} ${request.path.split('?')[0]}`).join(', ')}`).toBeLessThanOrEqual(40)
     await shot(other, '5-on-the-relay')
     // And on the Devices level the tile of the machine it reaches says how.
-    const word = await tab.evaluate<{ word: string; says: string } | null>(`(() => { const path = document.querySelector('.cd-tile[data-standing=live] .cd-path'); return path ? { word: path.innerText, says: path.getAttribute('title') } : null })()`)
+    const word = await tab.evaluate<{ word: string; says: string } | null>(`(() => { const path = document.querySelector('.dc-machine[data-standing=live] .cd-path'); return path ? { word: path.innerText, says: path.getAttribute('title') } : null })()`)
     expect(word).toEqual({ word: 'RELAY', says: 'Reached through the Cookrew relay' })
     settle('step 5', tab, other)
     passed.add(5)
@@ -431,8 +431,11 @@ suite.each([
 
     await stage.host.stop()
     const served = stage.host.requests.length
+    // A person reloads the page in front. The other tab has been in front since step 4, and a
+    // page out of sight asks nothing (console-devices.ts · askAccount, since f7b90ad2).
+    await tab.front()
     await tab.reload()
-    await tab.until(`document.querySelectorAll('.cd-tile[data-standing=live]').length >= 1`, 'the Devices level, painted from the worker’s cache', 40_000)
+    await tab.until(`document.querySelectorAll('.dc-machine[data-standing=live]').length >= 1`, 'the Devices level, painted from the worker’s cache', 40_000)
     expect(stage.host.requests.length).toBe(served)
     await shot(tab, '6a-host-stopped')
     await stage.host.start()
@@ -456,7 +459,7 @@ suite.each([
 
     const hostBefore = stage.host.requests.length
     await tab.click('.cd-newer-go', 'Update')
-    await tab.until(`document.querySelector('meta[name="cookrew-build"]') && document.querySelector('meta[name="cookrew-build"]').content === ${JSON.stringify(stage.next.id)} && document.querySelector('.cd-grid .cd-tile')`, 'the page to load again on the new build', 60_000)
+    await tab.until(`document.querySelector('meta[name="cookrew-build"]') && document.querySelector('meta[name="cookrew-build"]').content === ${JSON.stringify(stage.next.id)} && document.querySelector('.dc-canvas .dc-machine')`, 'the page to load again on the new build', 60_000)
     expect(await tab.evaluate<boolean>(`!document.querySelector('.cd-newer')`)).toBe(true)
     await shot(tab, '6c-updated')
 
@@ -503,7 +506,7 @@ suite.each([
     expect(second.exp).toBeGreaterThan(first.exp)
     // Nobody was asked anything: the same level, and the machines still answer.
     expect(await tab.evaluate<boolean>(`!document.querySelector('.cd-signin') && !document.querySelector('.cd-gate')`)).toBe(true)
-    await tab.until(`document.querySelectorAll('.cd-tile[data-standing=live]').length >= 1`, 'the machines to answer on the renewed session', 30_000)
+    await tab.until(`document.querySelectorAll('.dc-machine[data-standing=live]').length >= 1`, 'the machines to answer on the renewed session', 30_000)
     const api = new Client(stage.site, 'after')
     expect((await api.console('GET', '/v2/me/desktops', undefined, bearer(first.token))).status).toBe(401)
     expect((await api.console('GET', '/v2/me/desktops', undefined, bearer(second.token))).status).toBe(200)

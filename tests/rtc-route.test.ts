@@ -63,8 +63,8 @@ describe('the rtc row in a path report', () => {
     const src = readFileSync('src/renderer/src/path/companion.ts', 'utf8')
     expect(src).toContain("dataPlane().kind !== 'relay'")
     expect(src).toContain('const RTC_EVERY_MS = 2 * 60 * 1000')
-    // Before the names, unless the plane just failed.
-    expect(src).toContain('const knocked = health.held() ? [] : await rtcKnock(raceSoon, live)')
+    // Before the names, unless the plane just failed or the phone is on a radio (no LAN in reach).
+    expect(src).toContain('const knocked = health.held() || onCellular() ? [] : await rtcKnock(raceSoon, live)')
     expect(src).toContain('reportLinkRows(knocked)')
     // A link that ended, however, is knocked again at once, not after the gap.
     expect(src).toMatch(/ended: \(row\) => \{[\s\S]{0,400}lastRtcAt = 0[\s\S]{0,40}onEnd\(\)/)

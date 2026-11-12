@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import { ENTRY_MS, entryFrom } from './remote-entry'
-import { artifactsOf, crumbsOf } from './remote-machine'
+import { artifactsOf } from './remote-machine'
 import { remotePlace, type RemotePlace } from './remote-machine-store'
 import { RemoteCardView, Thumb } from './RemoteCardView'
 import { RemoteItemView } from './RemoteItemView'
@@ -16,8 +16,8 @@ import './remote-machine.css'
  * workspaces, one workspace's crew or its artifacts, an agent's card, one of
  * that agent's browsers, screens or notes. The bar at the foot moves between
  * them, as it does on this machine (ZoomView · the remote stops; owner
- * 2026-11-11: no breadcrumb strip); the line at the top says whose they are,
- * in the machine's colour. What is on show is read
+ * 2026-11-11: no breadcrumb strip); the title says whose they are (HeaderRoute ·
+ * remoteRoute; owner 2026-11-12). What is on show is read
  * again every few seconds; a machine that stops answering keeps its last stop
  * on screen, greyed, and every box keeps its words (remote-machine-store.ts).
  */
@@ -54,7 +54,6 @@ export function RemoteMachineView(): React.JSX.Element | null {
 
   const card = place.agent ? (cards?.cards.find((one) => one.id === place.agent?.id) ?? null) : null
   const item = place.item && card ? (card.items.find((one) => one.id === place.item?.id) ?? null) : null
-  const where = crumbsOf(machine, place.workspace, place.agent, place.item).slice(1).map((crumb) => crumb.label)
 
   const stop = (): React.ReactNode => {
     if (!cards) return <p className="rm-empty">{answering ? `Asking ${machine.name}…` : `${machine.name} isn’t answering.`}</p>
@@ -90,10 +89,6 @@ export function RemoteMachineView(): React.JSX.Element | null {
 
   return (
     <section ref={stage} className="rm-stage" aria-label={`${machine.name}, another machine of your account`}>
-      <header className="rm-where" aria-label="Where you are">
-        <b>{where[0]}</b>
-        {where.slice(1).map((label, i) => <span key={i}> / {label}</span>)}
-      </header>
       {!answering && <p className="rm-quiet" role="status">{machine.name} isn’t answering. This is what it showed last; nothing you typed is lost.</p>}
       <div className="rm-body" data-stale={!answering || undefined}>
         {stop()}

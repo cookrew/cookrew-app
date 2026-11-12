@@ -20,7 +20,7 @@ import { hostPlatform } from '../../../shared/machine-words'
 import { MachineTrustRow, useMachineTrust } from './MachineTrustRow'
 import { ShelfCard } from './ShelfCard'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
-import { BEZEL, defaultCrewCols, defaultDeviceCols, deviceOf, machinesAt, SCREEN_SCALE, shelfPage } from './zoom-layout'
+import { defaultCrewCols, defaultDeviceCols, deviceOf, machineFrameOf, machinesAt, shelfPage } from './zoom-layout'
 import { useCrewCols, usePerRow } from './crew-cols'
 import { PerRowPill } from './PerRowPill'
 import { deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from './zoom-frame'
@@ -39,7 +39,6 @@ import { gaugedMachines } from './gauged-machines'
 import { RemoteDeskPanel } from './RemoteDeskPanel'
 import { RemoteMachineView } from './RemoteMachineView'
 import { remotePlace, remoteStop } from './remote-machine-store'
-import { machineOpener } from './machine-open'
 import { canEnterMachines } from './use-remote-machine'
 import './zoom.css'
 // The full view's head, for the crisp ghost the way in arrives at (zv-fv-ghost).
@@ -554,8 +553,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const itemOf = useMemo(() => new Map([...model.items, ...model.coinItems].map((i) => [i.id, i])), [model.items, model.coinItems])
   const device = useMemo(() => deviceOf(model.frame.workspaces, narrow, model.frame.screenAspect, deviceCols ?? undefined), [model.frame.workspaces, model.frame.screenAspect, narrow, deviceCols])
   const activeSlot = device.at[model.frame.active] ?? { x: 0, y: 0 }
-  // This machine's frame on the devices stop: every other machine is drawn the same size (MachineFrame.tsx).
-  const frameOf = useMemo(() => ({ w: device.screen.w * SCREEN_SCALE + BEZEL, h: device.screen.h * SCREEN_SCALE + BEZEL }), [device])
+  // The one frame every machine is drawn in on the devices stop, this one too (zoom-layout.ts · machineFrameOf).
+  const frameOf = useMemo(() => machineFrameOf(device, narrow), [device, narrow])
   const gauged = useMemo(() => new Set(gaugedMachines(model.machines, scopeNeedsMachine()).map((m) => m.id)), [model.machines])
   // The device stop's words grow to be read at the size the device is seen (zoom-frame.ts · deviceWords).
   const words = useMemo(() => deviceWords(device, size.w, size.h, size.w < 760), [device, size])
@@ -571,11 +570,10 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     fontsVersion.current += 1
     const machineEl = registry.current.get('machine')
     if (machineEl) {
-      // The screen at the display's proportions (zoom-layout.ts · screenOf), the device view centred in it.
-      const sw = device.screen.w * 0.5, sh = device.screen.h * 0.5
-      machineEl.style.width = `${sw + 28}px`
-      machineEl.style.height = `${sh + 28}px`
-      machineEl.style.transform = `translate(${-sw / 2 - 14}px, ${-sh / 2 - 14}px)`
+      // The one frame, at the display's proportions (zoom-layout.ts · screenOf), the device view centred in it.
+      machineEl.style.width = `${frameOf.w}px`
+      machineEl.style.height = `${frameOf.h}px`
+      machineEl.style.transform = `translate(${-frameOf.w / 2}px, ${-frameOf.h / 2}px)`
     }
     // The account's other machines: in this one's row, each the same frame (zoom-layout.ts · machinesAt).
     const others = model.machines.filter((m) => !m.local)
@@ -690,12 +688,10 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         <div className="zv-devices" ref={bind('devices')}>
           {model.machines.filter((m) => !m.local).map((m) => {
             const say = machineSays(m, { surface: machineSurface(), trusted: trust[0]?.trusted ?? null, platform: hostPlatform(), floor: scopeNeedsMachine(), block: cookrew().machineWhy?.(m.id) ?? null })
-            // Into another machine, in place (RemoteMachineView.tsx), or the console's whole app for it (machine-open.ts).
+            // Into another machine, in place (RemoteMachineView.tsx).
             const open = (workspace: { id: string; name: string } | null): void => {
               const enter = (): void => {
                 setWhy(null)
-                const elsewhere = machineOpener()
-                if (elsewhere) return elsewhere(m.id, workspace?.id ?? null)
                 // Entered in place: its view opens from where its frame stands (remote-entry.ts).
                 const frame = registry.current.get(`machinecard:${m.id}`)?.getBoundingClientRect()
                 remotePlace.enter({ id: m.id, name: m.name, os: m.os ?? null, ...(frame ? { from: { x: frame.left, y: frame.top, w: frame.width, h: frame.height } } : {}) })

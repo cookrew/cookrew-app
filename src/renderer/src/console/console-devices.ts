@@ -21,7 +21,9 @@ import { MIN_MACHINE_VERSION, machineOutdated } from '../../../shared/machine-ve
 import { signedOutWords } from '../../../shared/machine-words'
 import type { AccountMachine, AccountMachines } from '../../../shared/zoom-fleet'
 import type { FleetSnapshot } from '../../../shared/fleet'
-import { composeFleet, snapshotOf, type ZoomCounts } from '../zoom/fleet-compose'
+import { composeFleet, deckOf, snapshotOf, type ZoomCounts, type ZoomFleetMachine } from '../zoom/fleet-compose'
+import { machineViewOf } from '../zoom/machine-view'
+import type { MachineView } from '../zoom/zoom-model'
 import type { MachineBlock } from '../relay-machine-call'
 
 /** A machine's own sentence is shown on the console's page: as its own, and no longer than this. */
@@ -74,6 +76,8 @@ export interface ConsoleMachine {
   readonly say: string | null
   readonly workspaces: readonly ConsoleWorkspace[]
   readonly counts: ZoomCounts | null
+  /** Live: drawn as the devices stop draws every machine (zoom-model.ts · machineViewOf); null otherwise. */
+  readonly view: MachineView | null
 }
 
 export interface ConsoleDevicesState {
@@ -131,6 +135,20 @@ export function standingOf(row: AccountMachine, at: { open: boolean; read: boole
   return { standing: 'reading', say: null }
 }
 
+/** A read machine as the devices stop draws it (zoom-model.ts · machineViewOf): its tiles, faces, counts and decks. */
+const tilesOf = (m: ZoomFleetMachine): MachineView =>
+  machineViewOf({
+    id: m.id,
+    name: m.name,
+    local: false,
+    online: m.online,
+    detail: m.detail,
+    appVersion: m.appVersion,
+    os: m.profile?.os ?? null,
+    display: m.display ?? null,
+    workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts, deck: deckOf(w).map((d) => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? null })) }))
+  })
+
 const readable = (row: AccountMachine): boolean => row.online && !outdated(row.appVersion)
 
 export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
@@ -181,7 +199,8 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
         workspaces: live
           ? machine.workspaces.map((w) => ({ id: w.id, name: w.name, icon: w.icon, agents: w.agents.length, waiting: w.counts?.waiting ?? 0, working: w.counts?.working ?? 0 }))
           : [],
-        counts: live ? machine.counts : null
+        counts: live ? machine.counts : null,
+        view: live ? tilesOf(machine) : null
       }
     })
     const status = answered ? 'ready' : error !== null ? 'failed' : 'loading'

@@ -110,7 +110,7 @@ suite.each([
     await tab.type(stage.password)
     await tab.key('Enter')
     await onConsole('/', 'past the gate')
-    await tab.until(`document.querySelectorAll('.cd-tile[data-standing=live]').length >= 2`, 'the machines to answer', 30_000)
+    await tab.until(`document.querySelectorAll('.dc-machine[data-standing=live]').length >= 2`, 'the machines to answer', 30_000)
   }, 5 * MINUTE)
 
   afterAll(async () => {

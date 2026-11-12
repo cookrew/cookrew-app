@@ -1151,3 +1151,9 @@
     color: var(--sumi-wait, var(--danger, #c0392b));
   }
 }
+
+/* Inside another machine of the account (HeaderRoute · remoteRoute; owner 2026-11-12): its name and
+   workspace where this machine's were, in the seal's amber, so nothing is sent to the wrong one. */
+.cr-route-remote .cr-route-label {
+  color: var(--sumi-seal-text, var(--amber-deep));
+}
