@@ -428,19 +428,21 @@ public struct CardPage: View {
   let onFace: () -> Void
   /** A thumbnail was tapped. */
   let onItem: (CardItem) -> Void
+  /** The box drawn open (the shots draw both states). */
+  let startOpen: Bool
 
   @Environment(\.ink) private var ink
 
-  public init(store: WatchStore, card: Card, onFace: @escaping () -> Void, onItem: @escaping (CardItem) -> Void) {
+  public init(store: WatchStore, card: Card, onFace: @escaping () -> Void, onItem: @escaping (CardItem) -> Void, startOpen: Bool = false) {
     self.store = store
     self.card = card
     self.onFace = onFace
     self.onItem = onItem
+    self.startOpen = startOpen
   }
 
   public var body: some View {
     let wait = store.waitView(card)
-    let rowsOnly = boxTarget(for: card) == .rowsOnly
     VStack(spacing: 0) {
       // The way out is always there: pinned above the words, drawn over them and
       // touched before them. A watch's scroll view neither clips its content nor
@@ -457,11 +459,11 @@ public struct CardPage: View {
         .clipped()
         .contentShape(Rectangle())
       }
-      if !rowsOnly {
-        PromptBox(store: store, card: card, page: card.id)
-          .padding(.horizontal, boxSides)
-          .padding(.bottom, boxFloor)
-      }
+      // The bar is the way about as well as the box (WatchBar.swift): always there, its face
+      // shut while a menu takes rows only.
+      WatchBar(store: store, card: card, page: card.id, onOut: onFace, onItem: onItem, open: startOpen)
+        .padding(.horizontal, boxSides)
+        .padding(.bottom, boxFloor)
     }
     .background(ink.paper)
     .task(id: "\(card.id)|\(card.status.rawValue)|\(store.page == card.id)") {
@@ -526,12 +528,16 @@ public struct NewAgentPage: View {
   let store: WatchStore
   let onThisWatch: () -> Void
   let onOut: (() -> Void)?
+  let onItem: (CardItem) -> Void
+  let startOpen: Bool
   @Environment(\.ink) private var ink
 
-  public init(store: WatchStore, onThisWatch: @escaping () -> Void = {}, onOut: (() -> Void)? = nil) {
+  public init(store: WatchStore, onThisWatch: @escaping () -> Void = {}, onOut: (() -> Void)? = nil, onItem: @escaping (CardItem) -> Void = { _ in }, startOpen: Bool = false) {
     self.store = store
     self.onThisWatch = onThisWatch
     self.onOut = onOut
+    self.onItem = onItem
+    self.startOpen = startOpen
   }
 
   public var body: some View {
@@ -572,7 +578,7 @@ public struct NewAgentPage: View {
         Text(notice).font(InkType.words(12.5)).foregroundStyle(ink.wait).padding(.top, 6).padding(.horizontal, 12)
       }
       Spacer(minLength: 0)
-      PromptBox(store: store, card: nil, page: newAgentPage)
+      WatchBar(store: store, card: nil, page: newAgentPage, onOut: onOut, onItem: onItem, open: startOpen)
         .padding(.horizontal, boxSides)
         .padding(.bottom, boxFloor)
     }

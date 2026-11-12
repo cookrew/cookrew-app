@@ -52,13 +52,15 @@ describe('the other machine’s stops', () => {
     expect(renderToStaticMarkup(createElement(RemoteCrew, { cards: [], onOpen: () => undefined }))).toContain('No agents here yet.')
   })
 
-  it('the box that starts a new agent says which machine it starts on', async () => {
-    const { RemoteNewAgent } = await import('../src/renderer/src/zoom/RemoteStops')
-    const html = renderToStaticMarkup(createElement(RemoteNewAgent, { machine: SOLIS, workspaceId: 'w-1', onStarted: () => undefined }))
-    expect(html).toContain('Start a new agent on Solis-Core')
+  // Owner 2026-11-12: the box goes back to the bar (prompt/RemotePrompt.tsx); the stops draw none.
+  it('the crew stop draws no box of its own: a new agent there is the bar’s box’s', async () => {
+    const stops = await import('../src/renderer/src/zoom/RemoteStops')
+    expect('RemoteNewAgent' in stops).toBe(false)
+    const crew = renderToStaticMarkup(createElement(stops.RemoteCrew, { cards: [card()], onOpen: () => undefined }))
+    expect(crew).not.toContain('<input')
   })
 
-  it('a card: its words, its menu with the same rows, its items, and a box that says where it sends', async () => {
+  it('a card: its words, its menu with the same rows, its items, and no box of its own', async () => {
     const { RemoteCardView } = await import('../src/renderer/src/zoom/RemoteCardView')
     const html = renderToStaticMarkup(createElement(RemoteCardView, { machine: SOLIS, card: card(), onItem: () => undefined, onSent: () => undefined }))
     expect(html).toContain('Herdr Env')
@@ -66,10 +68,11 @@ describe('the other machine’s stops', () => {
     expect(html).toContain('Allow this edit to herdr/config.toml?')
     expect(html).toContain('wc-row')
     expect(html).toContain('localhost:8643')
-    // A menu with no row to type in takes no words.
-    expect(html).toContain('Answer its menu above first')
+    // Words to it are typed in the bar's box (RemotePrompt.tsx), not on the card.
+    expect(html).not.toContain('<input')
+    expect(html).not.toContain('rm-box')
     const free = renderToStaticMarkup(createElement(RemoteCardView, { machine: SOLIS, card: card({ status: 'working', word: 'working', choice: null }), onItem: () => undefined, onSent: () => undefined }))
-    expect(free).toContain('Reply to Herdr Env on Solis-Core')
+    expect(free).not.toContain('<input')
     expect(free).toContain('Stop')
   })
 })
