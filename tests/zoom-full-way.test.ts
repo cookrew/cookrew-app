@@ -15,7 +15,7 @@ import { layoutOf, paint, type AgentEls, type FrameEls, type FrameModel } from '
 import { modelOf } from './zoom-qa-helpers'
 
 type Part = HTMLElement & { _t?: string; _o?: number }
-const part = (): Part => ({ style: { setProperty: () => undefined } }) as unknown as Part
+const part = (): Part => ({ style: {} }) as unknown as Part
 
 const agentEls = (): AgentEls =>
   ({

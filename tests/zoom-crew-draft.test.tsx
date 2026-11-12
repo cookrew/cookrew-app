@@ -85,7 +85,7 @@ describe('the crew face', () => {
 })
 
 describe('the painter', () => {
-  const part = (): HTMLElement & { style: Record<string, string> } => ({ style: { setProperty: () => undefined } }) as never
+  const part = (): HTMLElement & { style: Record<string, string> } => ({ style: {} }) as never
   const elsOf = (cntW: number) => {
     const e = { node: part(), cardl: part(), card: part(), av: part(), nm: part(), st: part(), cnt: part(), dft: part(), body: null, reply: null, emp: null, dot: null, nmW: 40, stW: 50, cntW }
     return e as unknown as AgentEls & { dft: { style: Record<string, string> } }

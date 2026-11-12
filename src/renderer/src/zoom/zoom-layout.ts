@@ -75,19 +75,19 @@ export function tileOf(narrow: boolean, cols: number): { top: number; h: number 
 }
 
 /** The deck's centre and scale in the tile: a thumbnail of the artifacts' grid, as large as the ring can stand beside. */
-export const DECK_POSE = { x: 206, y: -10, s: 1.08 } as const
+export const DECK_POSE = { x: 194, y: -10, s: 1.08 } as const
 /** Where the agents' door ends and the artifacts' begins. */
 export const TILE_SPLIT = 98
 export const ROW = 175
 
 /** The most faces a fan shows: past them it is a swirl of coins, not people (owner, 2026-11-04). */
 const FAN_SHOWN = 6
-/** The fan's reach (the agents' door less a face and the link to the deck), and its steepest lean. */
-const FAN_REACH = 96
+/** The fan's reach (the agents' door less a face), and its steepest lean. */
+const FAN_REACH = 116
 const FAN_STEP = 23
 const FAN_LEAN = 16
 /** A face in the fan, of its size at the crew. */
-export const FAN_FACE = 1.05
+const FAN_FACE = 1.05
 
 /** The fan of `n` faces, bottom → top: never more than FAN_SHOWN, a face's width apart at most. */
 export function fanOf(n: number): (Pos & { s: number; r: number })[] {

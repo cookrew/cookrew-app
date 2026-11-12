@@ -11,6 +11,7 @@ import { MachineFrame } from './MachineFrame'
 import { WorkspaceTile } from './WorkspaceTile'
 import { followDrafts } from '../prompt/draft-follow'
 import { useFirstRunStage } from '../first-run/first-run-state'
+import { InkTie } from './InkAvatar'
 import { buildZoomModel, itemViewOf, type MachineView } from './zoom-model'
 import { scopeNeedsMachine } from '../machine-scope'
 import { machineTooOld, machineWhyShows, machineWhyWords, machineSays } from './machine-why'
@@ -208,7 +209,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     }
     for (const t of modelRef.current.frame.ties) { const el = get(`tie:${t.key}`); if (el) ties.set(t.key, el) }
     for (const m of modelRef.current.marks) { const el = get(`mark:${m.id}`); if (el) marks.set(m.id, el) }
-    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, fold: get('fold'), glow: get('glow'), marks, next: get('newseat'), fullHead: get('fullHead'), newThumb: get('newThumb'), shelfMore: get('shelfMore'), ...deviceWordEls(get('deviceLabel'), [...marks.values(), ...(get('openMark') ? [get('openMark')!] : [])], get('devices')!) }
+    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat'), fullHead: get('fullHead'), newThumb: get('newThumb'), shelfMore: get('shelfMore'), ...deviceWordEls(get('deviceLabel'), [...marks.values(), ...(get('openMark') ? [get('openMark')!] : [])], get('devices')!) }
   }, [])
   // THE CREW SCROLLS ON A PHONE (zoom-frame.ts · phoneCamera), THE THUMBNAILS
   // ON ANY SCREEN (deskThumbs, phoneThumbs): drawn at a readable size, a tall
@@ -744,11 +745,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         <div className="zv-panel" ref={bind('panel')} />
         <div className="zv-scene" ref={bind('scene')}>
           <div className="zv-wash" ref={bind('wash')} />
-          {/* The fold's faces round a hovered agent, in their light (zoom-frame.ts · foldFaces): under every tie and face. */}
-          {/* The crew's light at rest, under the fold's (zoom-frame.ts · terrainFaces, foldFaces; ⋯ → Agent light). */}
-          <svg className="zv-glow" ref={bind('glow') as unknown as React.Ref<SVGSVGElement>} aria-hidden="true" />
-          <svg className="zv-fold" ref={bind('fold') as unknown as React.Ref<SVGSVGElement>} aria-hidden="true" />
-          {/* No cable is drawn between agents (owner 2026-11-12): their ties show in the fold's faces and the light at rest, and still lay out the crew. */}
+          {model.frame.ties.map((t) => <div key={t.key} className="zv-tie" ref={bind(`tie:${t.key}`)}><InkTie /></div>)}
           {model.agents.map((a) => (
             <div key={a.id} className="zv-cardl" ref={bind(`agent-cardl:${a.id}`)}>
               <div className="zv-card" ref={bind(`agent-card:${a.id}`)} role="presentation" onClick={() => motion.agent(a.id)} />
@@ -759,7 +756,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
             return a && i ? <LinkNode key={l.key} k={l.key} agent={a} item={i} shared={i.owners.length} bind={bind} onClick={stable(`link:${l.key}`, () => (zoomStore.get().dir === 'items' ? tapAgent(a.id, `link-coin:${l.key}`) : motion.item(i.id)))} /> : null
           })}
           {shownItems.map((i) => <ItemNode key={i.id} item={i} names={namesOf.get(i.id) ?? []} bind={bind} onClick={stable(`item:${i.id}`, () => motion.item(i.id))} onDelete={onDelete ? stable(`item-del:${i.id}`, () => onDelete(i.id)) : undefined} />)}
-          {model.agents.map((a) => <AgentNode key={a.id} agent={a} card={cardIds.has(a.id)} bind={bind} onOpen={stable(`agent:${a.id}`, () => tapAgent(a.id, `agent-av:${a.id}`))} onDelete={onDelete ? stable(`agent-del:${a.id}`, () => onDelete(a.id)) : undefined} onHoverIn={stable(`hover:${a.id}`, () => motion.hover(a.id))} onHoverOut={stable(`unhover:${a.id}`, () => motion.hover(null))} onDragStart={motion.dragStart} />)}
+          {model.agents.map((a) => <AgentNode key={a.id} agent={a} card={cardIds.has(a.id)} bind={bind} onOpen={stable(`agent:${a.id}`, () => tapAgent(a.id, `agent-av:${a.id}`))} onDelete={onDelete ? stable(`agent-del:${a.id}`, () => onDelete(a.id)) : undefined} />)}
           <button type="button" className="zv-shelf-more" ref={bind('shelfMore') as React.Ref<HTMLButtonElement>} style={CHIP_HIDDEN} onClick={turnShelf}
             title={shelf.more ? (shelf.more.last ? 'Back to the first agents' : `${shelf.more.rest} more agents`) : undefined}
             aria-label={shelf.more ? (shelf.more.last ? 'Back to the first agents' : `${shelf.more.rest} more agents`) : 'More agents'}>

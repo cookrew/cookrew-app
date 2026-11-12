@@ -13,7 +13,7 @@ export const modelOf = (agents: number, workspaces = 1): FrameModel => ({
   newest: null
 })
 
-const part = (): HTMLElement => ({ style: { setProperty: () => undefined } }) as unknown as HTMLElement
+const part = (): HTMLElement => ({ style: {} }) as unknown as HTMLElement
 
 /** The owner's workspace label ("13 COOKREW DEV 216 83"): about this wide and tall at 11px. */
 export const LABEL = { w: 200, h: 24 }

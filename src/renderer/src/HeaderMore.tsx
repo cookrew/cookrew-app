@@ -16,7 +16,6 @@ import { setSoundsOn, useSoundsOn } from './chime-sound'
 import { useTheme } from './color-scheme'
 import { skinInfo } from '../../shared/skins'
 import { SkinSheet } from './skins/SkinSheet'
-import { FOLD_LIGHTS, FOLD_LIGHT_NAMES, setFoldLight, useFoldLight } from './zoom/fold-light'
 import { canFullscreen, installedFullscreen, pageMedia, toggleFullscreen, useFullscreen } from './fullscreen'
 import { TelemetryRow } from './TelemetryRow'
 import { UpdateRows, useUpdateStatus } from './UpdateRow'
@@ -64,7 +63,6 @@ export function HeaderMore({
   const closeLaunchSheet = useCallback(() => setLaunchSheet(false), [])
   const sounds = useSoundsOn()
   const theme = useTheme()
-  const light = useFoldLight()
   const fullscreen = useFullscreen()
   const update = useUpdateStatus()
   // The phone only: Chrome on Android hides its bars this way; the desktop app has its own window.
@@ -198,20 +196,6 @@ export function HeaderMore({
           >
             <CrIcon name="skin" />
             <span className="cr-more-label">Skin: {skinInfo(theme).name}…</span>
-          </button>
-          <button
-            type="button"
-            className={`cr-more-item${light !== 'hover' ? ' on' : ''}`}
-            aria-pressed={light !== 'hover'}
-            title="How the crew is lit: only the agent under the pointer, every agent its own peak, or one terrain"
-            onClick={(e) => {
-              // A switch to try the looks in turn: the menu stays open.
-              e.stopPropagation()
-              setFoldLight(FOLD_LIGHTS[(FOLD_LIGHTS.indexOf(light) + 1) % FOLD_LIGHTS.length])
-            }}
-          >
-            <CrIcon name="dot" />
-            <span className="cr-more-label">Agent light: {FOLD_LIGHT_NAMES[light]}</span>
           </button>
           <WatchPairRow
             onPair={() => {

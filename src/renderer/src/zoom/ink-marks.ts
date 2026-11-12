@@ -167,16 +167,6 @@ const ensoClosed = (): Mark => ({ kind: 'spline', pts: arc(50, 50.5, 44, -1.95, 
 const tie = (): Mark => ({ kind: 'spline', pts: [[3, 50, 0.75], [22, 48.8, 1.05], [52, 48.5, 1], [80, 49.3, 0.8], [97, 50.4, 0.45]] })
 
 /**
- * WHAT MAKES THE FACE A BOT (owner 2026-11-12: "seen at a glance as an agent,
- * nothing loud, a plain line drawing"): an antenna on the crown and an ear at
- * each side. Drawn in the avatar's own box, round the head as InkAvatar sets
- * it (HEAD: centred at 50, 54.5, radius 38.7), not in the 100-box of a mark.
- */
-const antenna = (): Mark => ({ kind: 'linear', pts: [[50, 16.4, 1], [50.2, 11.2, 1], [50.5, 5.8, 0.9]] })
-const earLeft = (): Mark => ({ kind: 'linear', pts: [[12.4, 46, 0.9], [7, 46.6, 1], [6.2, 54.5, 1], [7, 62.4, 1], [12.4, 63, 0.9]] })
-const earRight = (): Mark => ({ kind: 'linear', pts: [[87.6, 46, 0.9], [93, 46.6, 1], [93.8, 54.5, 1], [93, 62.4, 1], [87.6, 63, 0.9]] })
-
-/**
  * The status brush (InkAvatar's status): red that rides the ensō, landing
  * where the ensō lands and running the same way. Working is a third of a turn
  * laid head first, so the wet drop leads as it laps; waiting runs past a full
@@ -196,7 +186,7 @@ const zee = (): Mark => ({
   pts: atCorner([[-7.8, -8.2, 0.75], [7.2, -8.9, 1], [7.2, -8.9, 1], [-7.8, 7.9, 1.05], [-7.8, 7.9, 1.05], [8.4, 7.2, 0.6]])
 })
 
-export const MARKS = { claude, codex, opencode, pi, shell, enso, ensoClosed, tie, antenna, earLeft, earRight, ringWorking, ringWaiting, tick, zee }
+export const MARKS = { claude, codex, opencode, pi, shell, enso, ensoClosed, tie, ringWorking, ringWaiting, tick, zee }
 export type MarkName = keyof typeof MARKS
 export type HarnessMark = 'claude' | 'codex' | 'opencode' | 'pi' | 'shell'
 
@@ -228,18 +218,8 @@ export interface BrushOpts {
   jitter: number
   dry: number
   seed: number
-  /** How much a mark's pressure swells and thins the line: 1 is the brush, 0 an even line. */
-  press: number
 }
-export const BRUSH: BrushOpts = { width: 5.2, nib: 0.55, angle: -0.6, jitter: 0.12, dry: 0.22, seed: 7, press: 1 }
-
-/**
- * BAIMIAO (白描): the same strokes as a fine, even line, the way a figure is
- * outlined before it is painted. The nib barely turns, the pressure barely
- * swells, no dry tail; the landing and the lift still taper, so it is drawn
- * by hand and not ruled. What an agent's face and its ties wear.
- */
-export const BAIMIAO: Partial<BrushOpts> = { nib: 0.15, jitter: 0.05, dry: 0, press: 0.25 }
+export const BRUSH: BrushOpts = { width: 5.2, nib: 0.55, angle: -0.6, jitter: 0.12, dry: 0.22, seed: 7 }
 
 const noise = (i: number, seed: number): number => 0.5 * Math.sin(i * 0.31 + seed) + 0.3 * Math.sin(i * 0.087 + seed * 1.7) + 0.2 * Math.sin(i * 1.13 + seed * 0.4)
 
@@ -252,8 +232,7 @@ function widthAt(line: Line, i: number, o: BrushOpts): number {
   const nib = 1 - o.nib + o.nib * Math.abs(Math.sin(theta - o.angle))
   const land = u < 0.04 ? 0.6 + 0.4 * (u / 0.04) : 1
   const lift = u > 0.86 ? Math.pow(Math.max(0, (1 - u) / 0.14), 0.65) : 1
-  const pressure = 1 + (line[i][2] - 1) * o.press
-  return Math.max(0.12, (o.width / 2) * nib * land * lift * pressure * (1 + o.jitter * noise(i, o.seed)))
+  return Math.max(0.12, (o.width / 2) * nib * land * lift * line[i][2] * (1 + o.jitter * noise(i, o.seed)))
 }
 
 export interface BrushPaths {
@@ -313,7 +292,7 @@ export function brushPath(name: MarkName, opts: Partial<BrushOpts> = {}): BrushP
 const pathCache = new Map<string, BrushPaths>()
 /** brushPath, remembered: an avatar is drawn many times and its strokes never change. */
 export function brushPathCached(name: MarkName, opts: Partial<BrushOpts> = {}): BrushPaths {
-  const key = `${name}|${opts.width ?? ''}|${opts.nib ?? ''}|${opts.dry ?? ''}|${opts.seed ?? ''}|${opts.jitter ?? ''}|${opts.press ?? ''}`
+  const key = `${name}|${opts.width ?? ''}|${opts.nib ?? ''}|${opts.dry ?? ''}|${opts.seed ?? ''}`
   let paths = pathCache.get(key)
   if (!paths) {
     paths = brushPath(name, opts)
