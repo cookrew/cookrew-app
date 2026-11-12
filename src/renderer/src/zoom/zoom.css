@@ -182,6 +182,31 @@
   animation: ink-blink 1.2s ease-in-out infinite;
 }
 
+/* A harness's own logo (harness-logos.tsx) keeps its colours in every state:
+   waiting blinks it, never reddens it. Where a logo is one colour on its
+   maker's tile (OpenCode's white), it takes the avatar's ink, read here,
+   above the glyph's waiting red. */
+.ink-avatar {
+  --zv-logo-ink: var(--zv-ink, var(--sumi-ink, #1d1a16));
+}
+
+/* The antenna's tip: an open ring in ink at rest, lit red while the agent
+   works, and blinking with the ring while it waits on you. */
+.ink-avatar .ink-tip {
+  --zv-ink-status: var(--sumi-wait, #c0392b);
+  fill: none;
+  stroke: var(--zv-ink, var(--sumi-ink, #1d1a16));
+}
+
+.ink-avatar:is(.working, .waiting) .ink-tip {
+  fill: var(--zv-ink-status);
+  stroke: var(--zv-ink-status);
+}
+
+.ink-avatar.waiting .ink-tip {
+  animation: ink-blink 1.2s ease-in-out infinite;
+}
+
 .ink-avatar .ink-corner {
   animation: ink-in 0.4s ease-out both;
 }
@@ -213,8 +238,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ink-avatar :is(.ink-lap, .ink-zhu, .ink-glyph, .ink-corner),
-  .ink-avatar.waiting :is(.ink-zhu, .ink-glyph) {
+  .ink-avatar :is(.ink-lap, .ink-zhu, .ink-glyph, .ink-corner, .ink-tip),
+  .ink-avatar.waiting :is(.ink-zhu, .ink-glyph, .ink-tip) {
     animation: none;
   }
 }
@@ -404,23 +429,66 @@
   );
 }
 
-/* A cable between two terminals: 400 long at scale 1, stretched from its left end. */
+/* A cable between two terminals: placed and turned at its first end; its line
+   is 400 long at scale 1, stretched from that end, and a port at each end
+   stays round (zoom-frame.ts · ties). A plain line, two open sockets. */
 .zv-tie {
   position: absolute;
   left: 0;
   top: 0;
-  width: 400px;
-  height: 24px;
-  margin-top: -12px;
-  transform-origin: 0 50%;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
   pointer-events: none;
   will-change: transform, opacity;
+}
+
+.zv-tie-line {
+  position: absolute;
+  left: 0;
+  top: -12px;
+  width: 400px;
+  height: 24px;
+  transform-origin: 0 50%;
 }
 
 .zv-tie svg {
   display: block;
   width: 400px;
   height: 24px;
+}
+
+/* The tie's shadow, just under it: the thread is lifted off the page. */
+.ink-tie .ink-tie-shade .ink-body {
+  fill: var(--zv-shadow, rgba(40, 30, 15, 0.1));
+}
+
+/* The fold's faces round a hovered agent (zoom-frame.ts · foldFaces): drawn in
+   the crew's own units, under the ties and the faces. */
+.zv-glow,
+.zv-fold {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.zv-tie-port {
+  position: absolute;
+  left: -3.5px;
+  top: -3.5px;
+  width: 7px;
+  height: 7px;
+  box-sizing: border-box;
+  border: 1.4px solid var(--zv-ink);
+  border-radius: 50%;
+  /* A bead, lit from the top left like the shadows. */
+  background: radial-gradient(circle at 35% 30%, var(--zv-card) 0 30%, var(--zv-paper) 70%, var(--zv-paper-2, var(--zv-paper)) 100%);
+  box-shadow: 0.6px 1px 1.4px var(--zv-shadow, rgba(40, 30, 15, 0.1));
 }
 
 /* ── the group's label: seal, name, totals ── */
@@ -602,6 +670,20 @@
   display: block;
   width: 64px;
   height: 64px;
+}
+
+/* Lifted by the fold round a hovered agent (zoom-frame.ts · foldAt), a face
+   casts its shadow on the page: the higher, the further and softer. */
+/* A face a dragged one is over is ringed in the seal: a drop there swaps them (crew-slots.ts). */
+.zv-m > .zv-av {
+  box-shadow:
+    0 0 0 calc(var(--zv-drop, 0) * 3px) var(--zv-seal, #a8692b),
+    0 calc(var(--zv-lift, 0) * 14px) calc(var(--zv-lift, 0) * 22px) calc(var(--zv-lift, 0) * -4px) var(--zv-shadow, rgba(40, 30, 15, 0.1));
+}
+
+/* A face standing in its workspace's tile shows its ears only at the front (zoom-frame.ts · --zv-ears). */
+.zv-av .ink-ears {
+  opacity: var(--zv-ears, 1);
 }
 
 

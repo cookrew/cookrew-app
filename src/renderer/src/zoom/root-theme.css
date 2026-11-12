@@ -61,6 +61,8 @@
   --phos-dim: #8a2323;
   --phos-glow: #ff8a8a;
   --phos-bg: #050706;
+  /* How strongly the fold's faces show their light and shade (zoom-frame.ts): more on black. */
+  --zv-fold-a: 1.3;
   background: #050706;
 }
 

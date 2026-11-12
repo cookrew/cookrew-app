@@ -25,6 +25,48 @@
   will-change: auto;
 }
 
+/* A row of bots: the faces behind the front one show their antennas, not their ears. */
+.zv-mark-av:not(.front) .ink-ears {
+  display: none;
+}
+
+/* ── the crew's tie to its deck (WorkspaceTile · CrewLink): the crew's own tie, a port at each end ── */
+.zv-tile-link {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+
+.zv-tile-link-line {
+  position: absolute;
+  left: 0;
+  top: -12px;
+  width: 400px;
+  height: 24px;
+  transform-origin: 0 50%;
+}
+
+.zv-tile-link-line svg {
+  display: block;
+  width: 400px;
+  height: 24px;
+}
+
+.zv-tile-link-port {
+  position: absolute;
+  left: -3.5px;
+  top: -3.5px;
+  width: 7px;
+  height: 7px;
+  box-sizing: border-box;
+  border: 1.4px solid var(--zv-ink);
+  border-radius: 50%;
+  background: var(--zv-card);
+}
+
 .zv-tile {
   position: absolute;
   left: -112px;
@@ -112,12 +154,12 @@
   width: 168px;
   height: 108px;
   border-radius: calc(3px * var(--zv-k, 1));
-  box-shadow: 0 calc(1px * var(--zv-k, 1)) calc(2.5px * var(--zv-k, 1)) var(--zv-shadow);
 }
 
-/* Its edge in the faces' ink: the two groups weigh the same on the tile. */
+/* Its edge in the faces' line, as fine as theirs and riding the camera as they
+   do: the two groups are one drawing on the tile (baimiao, no shadow). */
 .zv-sheet.zv-th::before {
-  box-shadow: inset 0 0 0 calc(1px * var(--zv-k, 1)) var(--zv-rule);
+  box-shadow: inset 0 0 0 1.6px var(--zv-ink);
 }
 
 .zv-sheet.zv-th.blank::before {
@@ -136,6 +178,8 @@
 .zv-mark .zv-sheet .zv-bar {
   height: 20px;
   padding-left: 0;
+  border-bottom: 1.2px solid var(--zv-rule);
+  background: none;
 }
 
 .zv-mark .zv-sheet .zv-shot {
@@ -147,26 +191,26 @@
   padding: 11px 13px;
 }
 
+/* No picture yet: the page drawn in line, not filled. */
 .zv-mark .zv-sheet .zv-pg b {
   height: 26px;
   border-radius: 4px;
+  background: none !important;
+  box-shadow: inset 0 0 0 1.2px var(--zv-rule);
+  opacity: 1;
 }
 
-.zv-mark .zv-sheet .zv-pg i {
-  height: 8px;
-  border-radius: 4px;
+.zv-mark .zv-sheet :is(.zv-pg, .zv-nt) i {
+  display: block;
+  height: 0;
+  border-radius: 0;
+  border-top: 1.2px solid var(--zv-rule);
+  background: none;
 }
 
 .zv-mark .zv-sheet .zv-nt {
   gap: 11px;
   padding: 24px 16px 0;
-}
-
-.zv-mark .zv-sheet .zv-nt i {
-  display: block;
-  height: 8px;
-  border-radius: 4px;
-  background: var(--zv-hair-2);
 }
 
 .zv-sheet.zv-th.note {

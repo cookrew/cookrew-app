@@ -1,8 +1,8 @@
 import { memo } from 'react'
-import { InkAvatar } from './InkAvatar'
+import { InkAvatar, InkTie } from './InkAvatar'
 import { Counts, Page, type Bind } from './page-parts'
 import { sameProps } from './same-props'
-import { DECK_POSE, fanOf } from './zoom-layout'
+import { DECK_POSE, FAN_FACE, fanOf } from './zoom-layout'
 import type { ItemView, MarkView } from './zoom-model'
 import './workspace-tile.css'
 
@@ -12,6 +12,12 @@ import './workspace-tile.css'
  * its own door: the agents' faces open the crew, the artifacts' deck deals out
  * the grid. The doors say what they open, so the stop needs no hint line, and
  * every word lives inside the frame, so no label can run over its neighbour's.
+ *
+ * ONE PICTURE OF ONE MEANING (owner 2026-11-12: "agents and artifacts drawn
+ * together, as they mean"): an artifact is the crew's, held through a cable,
+ * so the front face is tied to the deck by the crew's own tie, ports and all
+ * (ZoomView · zv-tie). The crew stands as a row of bots, only the front one
+ * with its ears; the deck is drawn in the faces' line, real pages framed in it.
  *
  * Every workspace draws this, the open one too: there the faces
  * are the scene's own, standing in the tile, so the tile goes and they go on
@@ -25,6 +31,30 @@ export const deckDepth = (total: number): number => DECK_DEPTHS.filter((n) => to
 
 /** A sheet's place in the deck, top first: the top one square-on, each under it a little further out. */
 const sheetPose = (i: number): string => `translate(${i * 6}px, ${i * -5}px) rotate(${i === 0 ? -1.5 : i * 2.2}deg)`
+
+/** Room between a port and what it plugs into, in a mark's units. */
+const LINK_GAP = 5
+
+/** The crew's tie to its deck: from the front face's edge to the top sheet's, level with both. */
+export function linkOf(faces: number): { x: number; y: number; len: number } {
+  const front = fanOf(faces)[Math.min(faces, 6) - 1]
+  const from = front.x + 32 * FAN_FACE + LINK_GAP
+  const to = DECK_POSE.x - 84 * DECK_POSE.s - LINK_GAP
+  return { x: from, y: DECK_POSE.y, len: Math.max(0, to - from) }
+}
+
+const CrewLink = memo(function CrewLink({ faces }: { faces: number }): React.JSX.Element {
+  const { x, y, len } = linkOf(faces)
+  return (
+    <div className="zv-tile-link" style={{ transform: `translate(${x}px, ${y}px)` }} aria-hidden="true">
+      <div className="zv-tile-link-line" style={{ transform: `scale(${len / 400}, 1)` }}>
+        <InkTie />
+      </div>
+      <i className="zv-tile-link-port" />
+      <i className="zv-tile-link-port" style={{ transform: `translate(${len}px, 0)` }} />
+    </div>
+  )
+})
 
 const ArtifactDeck = memo(function ArtifactDeck({ items, total }: { items: readonly ItemView[]; total: number }): React.JSX.Element {
   const depth = deckDepth(total)
@@ -72,12 +102,13 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
       {!open && (
         <>
           {shown.map((preset, i) => (
-            <div key={i} className="zv-av zv-mark-av" style={{ transform: `translate(${fan[i].x}px, ${fan[i].y}px) rotate(${fan[i].r}deg) scale(${fan[i].s})`, zIndex: i }}>
+            <div key={i} className={`zv-av zv-mark-av${i === shown.length - 1 ? ' front' : ''}`} style={{ transform: `translate(${fan[i].x}px, ${fan[i].y}px) rotate(${fan[i].r}deg) scale(${fan[i].s})`, zIndex: i }}>
               <InkAvatar id={`${mark.id}:${i}`} preset={preset} />
             </div>
           ))}
         </>
       )}
+      {n > 0 && known && total > 0 && <CrewLink faces={n} />}
       {known && <ArtifactDeck items={mark.deck} total={total} />}
       <button type="button" className={`zv-door agents${itemsDoor ? '' : ' whole'}`} aria-current={open ? 'true' : undefined} aria-label={`Open ${mark.name} agents, ${plural(n, 'agent')}${mark.waitingCount > 0 ? `, ${mark.waitingCount} waiting` : ''}`} title={`${mark.name} · ${plural(n, 'agent')}`} onClick={onOpen} />
       {itemsDoor && (

@@ -578,6 +578,8 @@ export const sumiTokens = (p: Pal, accent: string): Record<string, string> => {
     '--phos-dim': p.mute,
     '--phos-glow': accent,
     '--phos-bg': p.paper,
+    // How strongly the fold's faces show their light and shade (zoom-frame.ts · foldFacesSvg): more on a dark page.
+    '--zv-fold-a': p.dark ? '1.3' : '1',
     background: p.paper
   }
 }
