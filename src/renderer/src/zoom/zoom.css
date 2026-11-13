@@ -655,7 +655,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font: 600 15px/1.2 var(--zv-serif);
+  /* Light, as an app's label under its icon (2026-11-13). */
+  font: 500 15px/1.2 var(--zv-serif);
   color: var(--zv-ink);
   cursor: pointer;
 }

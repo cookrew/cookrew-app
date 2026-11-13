@@ -80,7 +80,7 @@ describe('a phone draws every word at one size, wherever the camera is', () => {
   // The whole path, in steps finer than a frame of any zoom: devices, workspaces, the group, the crew, the card, the full view.
   const PATH = Array.from({ length: 81 }, (_, i) => -2 + i * 0.05)
 
-  it('a name is body and a state, a label and a mark caption on every frame, at every pick, on three phones', () => {
+  it('a name is control size and a state, a label and a mark caption on every frame, at every pick, on three phones', () => {
     const want: Record<string, number> = { name: SCENE_TYPE.name, state: SCENE_TYPE.small, label: SCENE_TYPE.small, mark: SCENE_TYPE.small }
     for (const [w, h] of PHONES) {
       for (const n of CREWS) {

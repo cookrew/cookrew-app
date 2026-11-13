@@ -885,34 +885,42 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const shown = Math.max(0, len - 2 * cut)
     put(el, `translate(${f1(a.x + Math.cos(ang) * cut)}px, ${f1(a.y + Math.sin(ang) * cut)}px) rotate(${f4(ang)}rad) scale(${f4(shown / 400)}, 1)`, len < 2 * cut + 4 ? 0 : tieIn)
   }
-  // THE CREW'S LIGHT AT REST, every agent its own peak or one terrain, where the agents now stand;
-  // half as strong while a hovered fold stands out of it.
+  // THE CREW'S LIGHT AT REST, every agent its own peak or one terrain. Drawn where the agents rest
+  // on the crew, not where this frame has them: the drawing then changes only when the crew does,
+  // never on each frame of a zoom (a phone's raster could not keep up and left the page undrawn,
+  // 2026-11-13). It gives way while a hovered fold stands out of it, so the two never disagree.
   if (els.glow) {
     const mode = st.light ?? 'hover'
     let drawn = ''
     if (mode !== 'hover' && tieIn > 0.01) {
-      if (mode === 'terrain') drawn = foldFacesSvg(terrainFaces(agentAt, model.ties), 'zv-glow')
+      if (mode === 'terrain') drawn = foldFacesSvg(terrainFaces(rest, model.ties), 'zv-glow')
       else {
         const near = new Map<string, Pos[]>()
         for (const t of model.ties) {
-          const a = agentAt[t.a]
-          const b = agentAt[t.b]
+          const a = rest[t.a]
+          const b = rest[t.b]
           if (!a || !b || t.a === t.b) continue
           near.set(t.a, [...(near.get(t.a) ?? []), b])
           near.set(t.b, [...(near.get(t.b) ?? []), a])
         }
-        drawn = [...near].map(([id, ridges], k) => foldFacesSvg(foldFaces(agentAt[id], ridges), `zv-glow-${k}`)).join('')
+        drawn = [...near].map(([id, spokes], k) => foldFacesSvg(foldFaces(rest[id], spokes), `zv-glow-${k}`)).join('')
       }
     }
     if (els.glow._h !== drawn) {
       els.glow.innerHTML = drawn
       els.glow._h = drawn
     }
-    put(els.glow, null, mode === 'hover' || !drawn ? 0 : AT_REST[mode] * tieIn * (1 - 0.5 * fw))
+    put(els.glow, null, mode === 'hover' || !drawn ? 0 : AT_REST[mode] * tieIn * (1 - fw))
   }
-  // The fold's faces, where the agents now stand, drawn only while it folds.
+  // The fold's faces, drawn once where the fold takes the agents when it is all the way up, and
+  // brought in by their opacity alone: easing in or out they are the same drawing, so the page is
+  // not drawn again on every frame of it (the same phone, 2026-11-13).
   if (els.fold) {
-    const drawn = fw > 0 && hov && agentAt[hov.id] ? foldFacesSvg(foldFaces(agentAt[hov.id], [...onFold].flatMap((id) => agentAt[id] ?? []))) : ''
+    const up = (p: Pos): Pos => {
+      const f = foldAt(p, peak ?? p, ridges)
+      return { x: p.x + f.dx, y: p.y + f.dy }
+    }
+    const drawn = fw > 0 && peak ? foldFacesSvg(foldFaces(peak, ridges.map(up))) : ''
     if (els.fold._h !== drawn) {
       els.fold.innerHTML = drawn
       els.fold._h = drawn

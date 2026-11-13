@@ -1,6 +1,7 @@
 // THE FOLD (owner 2026-11-12): hovering an agent bends the crew's space along
 // its ties, a slight, angled fold the others move with, so the agent and its
 // ties stand out in depth.
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { FOLD, foldAt, foldFaces, foldFacesSvg, foldHeight, layoutOf, paint, terrainFaces, type AgentEls, type FoldLight, type FrameEls, type FrameModel } from '../src/renderer/src/zoom/zoom-frame'
 import { modelOf } from './zoom-qa-helpers'
@@ -125,7 +126,7 @@ describe('the painter, with the pointer on an agent', () => {
     } as unknown as FrameEls
     paint(model, layoutOf(model, false), els, { dir: 'agents', sv, focus: model.agents[0].id, leaving: null, leavingAmt: 0, focusItem: null, w: 1400, h: 900, narrow: false, hover, light })
     const face = (id: string) => ({ at: nums(agents.get(id)!.node.style.transform, 'translate'), o: Number(agents.get(id)!.node.style.opacity), s: nums(agents.get(id)!.av.style.transform, 'scale')[0] })
-    return Object.assign(face, { faces: (fold.innerHTML ?? '').match(/<path /g)?.length ?? 0, glow: (glow.innerHTML ?? '').match(/<path /g)?.length ?? 0, glowO: Number(glow.style.opacity) })
+    return Object.assign(face, { faces: (fold.innerHTML ?? '').match(/<path /g)?.length ?? 0, glow: (glow.innerHTML ?? '').match(/<path /g)?.length ?? 0, glowO: Number(glow.style.opacity), foldO: Number(fold.style.opacity), foldSvg: fold.innerHTML ?? '', glowSvg: glow.innerHTML ?? '' })
   }
   const crew = (): FrameModel => ({ ...modelOf(6), ties: [{ key: 't1', a: 'a0', b: 'a1' }, { key: 't2', a: 'a0', b: 'a2' }] })
 
@@ -152,11 +153,39 @@ describe('the painter, with the pointer on an agent', () => {
     expect(run(lit(), null, 1, 'terrain').glow).toBeGreaterThan(0)
   })
 
-  it('sets the light at rest back while a hovered fold stands out of it', () => {
+  it('gives the light at rest up as a hovered fold comes, so the two never disagree', () => {
     const still = run(crew(), null, 1, 'every').glowO
+    const coming = run(crew(), { id: 'a0', amt: 0.5 }, 1, 'every').glowO
     const hovered = run(crew(), { id: 'a0', amt: 1 }, 1, 'every').glowO
-    expect(hovered).toBeLessThan(still)
-    expect(hovered).toBeGreaterThan(0)
+    expect(coming).toBeLessThan(still)
+    expect(coming).toBeGreaterThan(0)
+    expect(hovered).toBe(0)
+  })
+
+  // A PHONE LEFT PARTS OF THE PAGE UNDRAWN (owner, 2026-11-13): the faces were drawn anew on every
+  // frame of a fold and of a zoom, more than its raster could keep up with. Now one drawing each.
+  it('draws the fold once: easing in or out it is the same drawing, only its opacity moves', () => {
+    const part = run(crew(), { id: 'a0', amt: 0.3 })
+    const full = run(crew(), { id: 'a0', amt: 1 })
+    expect(part.foldSvg).not.toBe('')
+    expect(part.foldSvg).toBe(full.foldSvg)
+    expect(part.foldO).toBeLessThan(full.foldO)
+  })
+
+  it('draws the light at rest where the crew rests: the same drawing on every frame of a zoom into it', () => {
+    const lit = (): FrameModel => ({ ...modelOf(8), ties: [{ key: 't1', a: 'a0', b: 'a1' }, { key: 't2', a: 'a0', b: 'a2' }, { key: 't3', a: 'a6', b: 'a7' }, { key: 't4', a: 'a6', b: 'a5' }] })
+    for (const light of ['every', 'terrain'] as const) {
+      const arriving = run(lit(), null, 0.9, light)
+      const there = run(lit(), null, 1, light)
+      expect(there.glowSvg, light).not.toBe('')
+      expect(arriving.glowSvg, light).toBe(there.glowSvg)
+    }
+  })
+
+  it('never folds for a finger: a tap focuses the face, and only a focus the keyboard brought folds', () => {
+    const parts = readFileSync(new URL('../src/renderer/src/zoom/ZoomParts.tsx', import.meta.url), 'utf8')
+    expect(parts).toMatch(/onPointerEnter=\{\(e\) => e\.pointerType !== 'touch' && onHoverIn\?\.\(\)\}/)
+    expect(parts).toMatch(/onFocus=\{\(e\) => e\.currentTarget\.matches\(':focus-visible'\) && onHoverIn\?\.\(\)\}/)
   })
 
   it('folds only at the crew: on the way to a card the crew lies flat', () => {
