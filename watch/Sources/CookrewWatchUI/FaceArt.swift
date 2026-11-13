@@ -1,8 +1,8 @@
 import CookrewCore
 import SwiftUI
 
-// A FACE'S DISC AND LOGO, as the Mac draws them (src/renderer/src/zoom/InkAvatar.tsx · Disc,
-// harness-logo.tsx): the harness's own logo on a light disc, a little skeuomorphic (owner
+// A FACE'S DISC AND LOGO, as the Mac draws them (src/renderer/src/zoom/InkAvatar.tsx · Disc
+// and HarnessLogo): the harness's own logo on a light disc, a little skeuomorphic (owner
 // 2026-11-13: "浅色底带点拟物，不要黑色框了"). Both draw in the face's 100-box (InkFace · inFace).
 // Gradients only, no blur: a crew grid of faces costs no extra pass.
 
@@ -56,7 +56,7 @@ func drawFaceDisc(_ context: inout GraphicsContext, orch: Bool) {
   }
 }
 
-/** A logo's width in the 100-box, and its own viewBox (origin, side), as harness-logo.tsx sets them. */
+/** A logo's width in the 100-box, and its own viewBox (origin, side), as InkAvatar.tsx · HarnessLogo sets them. */
 private let logoBox: [InkMark: (size: Double, origin: Double, side: Double)] = [
   .claude: (54, 0, 248), .codex: (50, 0, 24), .opencode: (46, 96, 320), .pi: (48, 140, 520)
 ]
