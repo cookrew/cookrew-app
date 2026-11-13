@@ -1,10 +1,11 @@
 import CookrewCore
 import SwiftUI
 
-// AN AGENT IN INK: its harness mark inside an ensō (src/renderer/src/zoom/
-// InkAvatar.tsx). Its status is a second brush in red over the same ink: working
-// laps a third of a turn, waiting closes the ring and blinks it with the mark,
-// done ticks the shoulder, offline fades the ink and writes a z.
+// AN AGENT: its harness's own logo on a light disc (src/renderer/src/zoom/
+// InkAvatar.tsx; FaceArt.swift), a plain shell keeping the ink prompt. Its status
+// is a brush in red over the disc's edge: working laps a third of a turn, waiting
+// closes the ring and blinks it with the mark (an ink prompt reddens, a logo keeps
+// its colours), done ticks the shoulder, offline fades the face and writes a z.
 
 private let viewBox = 108.0
 private let glyphAt = CGPoint(x: 14.5, y: 15)
@@ -88,11 +89,12 @@ public struct InkFace: View {
   private var own: some View {
     Canvas { context, canvas in
       inFace(&context, canvas)
-      let color = ink.ink
       let fade = status == .offline ? 0.34 : 1
-      // The ensō steps aside round a corner mark: a cut, so it works on any ground.
-      context.drawLayer { layer in
-        draw(brushStroke(orch ? .ensoClosed : .enso, width: mini ? 8.5 : 4.6, seed: seed), &layer, color: color, opacity: fade)
+      // The disc steps aside round a corner mark: a cut, so it works on any ground.
+      var base = context
+      base.opacity = fade
+      base.drawLayer { layer in
+        drawFaceDisc(&layer, orch: orch)
         if let cornerName {
           var cut = layer
           cut.blendMode = .destinationOut
@@ -105,13 +107,18 @@ public struct InkFace: View {
           cut.fill(path, with: .color(.black))
         }
       }
-      if !mini, status != .waiting {
-        var glyph = context
-        glyph.translateBy(x: glyphAt.x, y: glyphAt.y)
-        glyph.scaleBy(x: glyphScale, y: glyphScale)
-        draw(brushStroke(harnessMark(preset), width: 6.2, seed: seed), &glyph, color: color, opacity: fade)
-      }
+      if status != .waiting { drawMark(&context, shell: faceGlyphInk, opacity: fade) }
     }
+  }
+
+  /** The middle of the face: the harness's own logo, or for a plain shell the ink prompt in `shell`. A mini face keeps it: a bare disc says nothing. */
+  private func drawMark(_ context: inout GraphicsContext, shell: Color, opacity: Double) {
+    let mark = harnessMark(preset)
+    if drawFaceLogo(mark, &context, opacity: opacity) { return }
+    var glyph = context
+    glyph.translateBy(x: glyphAt.x, y: glyphAt.y)
+    glyph.scaleBy(x: glyphScale, y: glyphScale)
+    draw(brushStroke(mark, width: mini ? 9 : 6.2, seed: seed), &glyph, color: shell, opacity: opacity)
   }
 
   private func cornerStroke(_ mark: InkMark) -> BrushStroke {
@@ -138,12 +145,7 @@ public struct InkFace: View {
     Canvas { context, canvas in
       inFace(&context, canvas)
       draw(brushStroke(.ringWaiting, width: ride * 1.22 * weight.rawValue, seed: seed, dry: 0.08), &context, color: ink.wait)
-      if !mini {
-        var glyph = context
-        glyph.translateBy(x: glyphAt.x, y: glyphAt.y)
-        glyph.scaleBy(x: glyphScale, y: glyphScale)
-        draw(brushStroke(harnessMark(preset), width: 6.2, seed: seed), &glyph, color: ink.wait)
-      }
+      drawMark(&context, shell: ink.wait, opacity: 1)
     }
     .opacity(dimmed ? 0.2 : 1)
   }

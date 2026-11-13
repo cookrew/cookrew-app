@@ -156,6 +156,7 @@
 
 .pf-new .pf-disc .ink-avatar {
   --zv-ink: var(--sumi-ink-soft, var(--muted));
+  --zv-glyph-ink: var(--sumi-ink-soft, var(--muted));
   width: 74%;
   height: 74%;
 }
@@ -308,6 +309,7 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
 
 .pf-chip-face.pf-new .ink-avatar {
   --zv-ink: var(--sumi-ink-soft, var(--muted));
+  --zv-glyph-ink: var(--sumi-ink-soft, var(--muted));
   width: 76%;
   height: 76%;
 }
