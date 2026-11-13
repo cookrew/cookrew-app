@@ -10,8 +10,10 @@
  * its size ON SCREEN on every frame, as a map draws its labels, and a word
  * that has no room at that size fades instead of shrinking.
  *
- *   a name        13 (body): under a face at every per-row pick, in the open
- *                 card's head, in the full view's head
+ *   a name        11 (control): under a face at every per-row pick, in the open
+ *                 card's head, in the full view's head (2026-11-13: "smaller
+ *                 and lighter, to hold more of a name, near a phone app's
+ *                 label under its icon")
  *   a small word  10 (caption): a state, counts, a workspace's label, the
  *                 newest's caption, a machine's counts
  *   a machine     14 (title): its name at the devices stop and over its marks
@@ -53,7 +55,7 @@ export const SHELF_NAME_S = 0.78
 const NAME_GAP = 8
 
 /** Each kind of word in the scene, on screen, on a phone. */
-export const SCENE_TYPE = { name: PHONE_TYPE.body, small: PHONE_TYPE.caption, machine: PHONE_TYPE.title } as const
+export const SCENE_TYPE = { name: PHONE_TYPE.control, small: PHONE_TYPE.caption, machine: PHONE_TYPE.title } as const
 /** As zoom.css sets them, in a word's own px. */
 export const SCENE_CSS = { name: NAME.px, small: STATUS.px, newCap: 9.5 } as const
 

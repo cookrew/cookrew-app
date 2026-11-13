@@ -135,7 +135,8 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
   const title = useNameEdit(agent.id, agent.name, { onPress: onOpen })
   return (
     <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`} data-card-id={agent.id}>
-      {/* A pointer resting on the face, or the keyboard's focus, folds the space round it (zoom-frame.ts · foldAt); a finger never does. Dragged onto another face, it swaps places with it (crew-slots.ts). */}
+      {/* A pointer resting on the face, or the keyboard's focus, folds the space round it (zoom-frame.ts · foldAt); a finger never does:
+          a tap focuses the face too, so only a focus the keyboard brought (:focus-visible) folds. Dragged onto another face, it swaps places with it (crew-slots.ts). */}
       <div
         ref={bind(`agent-av:${agent.id}`)}
         className="zv-av"
@@ -143,7 +144,7 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
         onPointerEnter={(e) => e.pointerType !== 'touch' && onHoverIn?.()}
         onPointerLeave={(e) => e.pointerType !== 'touch' && onHoverOut?.()}
         onPointerDown={(e) => onDragStart?.(agent.id, e)}
-        onFocus={onHoverIn}
+        onFocus={(e) => e.currentTarget.matches(':focus-visible') && onHoverIn?.()}
         onBlur={onHoverOut}
         {...press(onOpen, `${agent.name}, ${agent.word}`)}
       >
