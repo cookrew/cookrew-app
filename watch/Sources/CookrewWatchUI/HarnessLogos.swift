@@ -1,4 +1,4 @@
-// GENERATED from src/renderer/src/zoom/harness-logo.tsx (the makers' own logo paths) by a converter
+// GENERATED from src/renderer/src/zoom/InkAvatar.tsx · HarnessLogo (the makers' own logo paths) by a converter
 // that makes every command absolute and turns arcs into cubics; do not edit by hand, regenerate.
 // Each path is in its logo's own viewBox (LogoArt.viewBox), the same box the renderer draws it in.
 import SwiftUI
