@@ -26,6 +26,7 @@ import {
 import type { MachineProfile } from '../../src/shared/fleet'
 import { BAD, readAppVersion, readProfile } from './v2-fleet'
 import type { ProviderId, VerifiedEmail } from '../../src/shared/oauth'
+import { isSkinId, type SkinId } from '../../src/shared/skins'
 
 /**
  * IDENTITY v2 — THE ACCOUNT STORE.
@@ -194,6 +195,12 @@ export interface V2Account {
   email?: VerifiedEmail | null
   displayName: string
   avatar: string | null
+  /**
+   * The whole app's look, picked once for every Mac on the account
+   * (src/shared/skins.ts). Older files' silence is no pick: each Mac wears its
+   * own until one chooses.
+   */
+  skin?: SkinId | null
   claimedAt: number
   devices: readonly V2Device[]
   desktops: readonly V2Desktop[]
@@ -1010,7 +1017,7 @@ export class V2Accounts {
 
   setProfile(
     username: string,
-    input: { displayName?: unknown; avatar?: unknown }
+    input: { displayName?: unknown; avatar?: unknown; skin?: unknown }
   ): { ok: true } | Refused<'not_found' | 'bad_profile'> {
     const account = this.get(username)
     if (!account) return { ok: false, reason: 'not_found' }
@@ -1028,7 +1035,13 @@ export class V2Accounts {
         return { ok: false, reason: 'bad_profile' }
       } else avatar = input.avatar
     }
-    this.replace({ ...account, displayName, avatar })
+    let skin = account.skin ?? null
+    if (input.skin !== undefined) {
+      if (input.skin === null) skin = null
+      else if (!isSkinId(input.skin)) return { ok: false, reason: 'bad_profile' }
+      else skin = input.skin
+    }
+    this.replace({ ...account, displayName, avatar, skin })
     return { ok: true }
   }
 

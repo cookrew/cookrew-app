@@ -13,7 +13,9 @@ import { StatusCoin } from './nodes/AgentAvatar'
 import { PathBadge } from './PathBadge'
 import { RoutingEntry } from './routing/RoutingPanel'
 import { setSoundsOn, useSoundsOn } from './chime-sound'
-import { setTheme, useTheme } from './color-scheme'
+import { useTheme } from './color-scheme'
+import { skinInfo } from '../../shared/skins'
+import { SkinSheet } from './skins/SkinSheet'
 import { canFullscreen, installedFullscreen, pageMedia, toggleFullscreen, useFullscreen } from './fullscreen'
 import { TelemetryRow } from './TelemetryRow'
 import { UpdateRows, useUpdateStatus } from './UpdateRow'
@@ -56,6 +58,8 @@ export function HeaderMore({
   const [open, setOpen] = useState(false)
   const [pairingWatch, setPairingWatch] = useState(false)
   const [launchSheet, setLaunchSheet] = useState(false)
+  const [skinSheet, setSkinSheet] = useState(false)
+  const closeSkinSheet = useCallback(() => setSkinSheet(false), [])
   const closeLaunchSheet = useCallback(() => setLaunchSheet(false), [])
   const sounds = useSoundsOn()
   const theme = useTheme()
@@ -185,13 +189,13 @@ export function HeaderMore({
           </button>
           <button
             type="button"
-            className={`cr-more-item${theme === 'root' ? ' on' : ''}`}
-            aria-pressed={theme === 'root'}
-            title="Root: the same app in black, phosphor green and one red"
-            onClick={() => setTheme(theme === 'root' ? 'ink' : 'root')}
+            className="cr-more-item"
+            aria-haspopup="dialog"
+            title="The whole app's look, for every Mac and phone on your account"
+            onClick={() => setSkinSheet(true)}
           >
-            <CrIcon name="terminal" />
-            <span className="cr-more-label">{theme === 'root' ? 'Theme: Root' : 'Theme: Ink'}</span>
+            <CrIcon name="skin" />
+            <span className="cr-more-label">Skin: {skinInfo(theme).name}…</span>
           </button>
           <WatchPairRow
             onPair={() => {
@@ -229,6 +233,7 @@ export function HeaderMore({
     </div>
     {pairingWatch && <WatchPairSheet onClose={() => setPairingWatch(false)} />}
     {launchSheet && <LaunchSettingsSheet onClose={closeLaunchSheet} />}
+    {skinSheet && <SkinSheet onClose={closeSkinSheet} />}
     </>
   )
 }

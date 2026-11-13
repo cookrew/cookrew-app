@@ -255,6 +255,20 @@ describe('the profile, the desktops and the password', () => {
     expect(store.setProfile('drej', { avatar: `data:image/png;base64,${'A'.repeat(90_000)}` }).ok).toBe(false)
   })
 
+  it('keeps the account’s skin: one Cookrew draws, or none, and an older file is none', async () => {
+    await store.create({ username: 'drej', password: PASSWORD, device: device() })
+    expect(store.get('drej')?.skin ?? null).toBeNull()
+    expect(store.setProfile('drej', { skin: 'shanshui' }).ok).toBe(true)
+    expect(store.get('drej')?.skin).toBe('shanshui')
+    expect(store.setProfile('drej', { displayName: 'Drej' }).ok).toBe(true)
+    expect(store.get('drej')?.skin).toBe('shanshui')
+    expect(store.setProfile('drej', { skin: 'Shanshui' }).ok).toBe(false)
+    expect(store.setProfile('drej', { skin: 42 }).ok).toBe(false)
+    expect(store.get('drej')?.skin).toBe('shanshui')
+    expect(store.setProfile('drej', { skin: null }).ok).toBe(true)
+    expect(store.get('drej')?.skin).toBeNull()
+  })
+
   it('records a desktop’s workspaces by name and id, and bounds both', async () => {
     const d = device()
     await store.create({ username: 'drej', password: PASSWORD, device: d })

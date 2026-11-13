@@ -63,6 +63,8 @@ export interface AccountProfile {
   username: string
   displayName: string
   avatar: string | null
+  /** The account's skin (shared/skins.ts); absent from a registry that keeps none. */
+  skin?: string | null
   claimedAt: number
   devices: readonly AccountDevice[]
   desktops: readonly AccountDesktop[]

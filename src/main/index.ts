@@ -296,6 +296,8 @@ import { REFUSAL_FOR_A_PERSON } from './host-claim'
 import { findChrome } from './headless-chrome'
 import { interactiveBrowserDefault, relayOrigin, widenedPath } from './launch-defaults'
 import { createLaunchSettings, launchSettingsPath } from './launch-settings'
+import { createSkinStore, skinPath } from './skin-store'
+import { isSkinId, type SkinId } from '../shared/skins'
 import { forgetCardWindow } from './use-window-memory'
 import { addPaneDirs, installerDirs, panePath } from './pane-path'
 import { bootStep, paintFailure } from './boot-failure'
@@ -1062,6 +1064,38 @@ const ENV_HANDLE = process.env.COOKREW_HANDLE ?? ''
 let gateAccountChanged: (() => void) | null = null
 /** Set once the trust state exists, further down: the account's change listener is declared before it. */
 let machineTrustLearn: (() => Promise<unknown>) | null = null
+/**
+ * THE ACCOUNT'S SKIN (skin-store.ts): the whole app's look, kept in the
+ * account's profile so every Mac on it wears the same, with this Mac's copy
+ * for its windows and its phones. The account is only asked from inside these
+ * calls, never while this file is still being evaluated.
+ */
+const skins = createSkinStore({
+  file: skinPath(homedir()),
+  account: {
+    read: async () => {
+      if (accounts.account() === null) return undefined
+      const result = await accounts.profile()
+      // A registry that keeps no skins says nothing, which is not "none".
+      if (!result.ok || result.value.skin === undefined) return undefined
+      return isSkinId(result.value.skin) ? result.value.skin : null
+    },
+    write: async (skin) => accounts.account() !== null && (await accounts.setProfile({ skin })).ok
+  }
+})
+skins.bus.on('skin', (skin: SkinId) => {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.webContents.isDestroyed()) window.webContents.send('skin:changed', skin)
+  }
+})
+/** Another Mac's pick arrives when this one is next looked at, at most once a minute. */
+const SKIN_PULL_MS = 60_000
+let skinPulledAt = 0
+const pullSkin = (force = false): void => {
+  if (!force && Date.now() - skinPulledAt < SKIN_PULL_MS) return
+  skinPulledAt = Date.now()
+  void skins.pull()
+}
 const accounts = new Accounts({
   // "<model> · <host>" (v3, D12): two Macs of one model are told apart by
   // host, and a name already on the account gets a counter — decided here,
@@ -1106,6 +1140,8 @@ const accounts = new Accounts({
     // the identical shape, and on the first run of the product it meant the
     // only rung a factorless account has was never announced at all.
     followAccount()
+    // A sign-in brings the account's skin with it (or gives it this Mac's).
+    pullSkin(true)
     // AND THE DOORS (V3-FIX-SERVING-ID). Same trigger, same reason: the name
     // this Mac serves under is decided by the account, so it moves when the
     // account does — not when the process happened to start.
@@ -7146,6 +7182,9 @@ function createWindow(): void {
   // And it is the moment the owner can actually answer a waiting device, so
   // the queue is re-read then rather than waiting out the poll (D6).
   mainWindow.on('focus', () => void requests.refresh())
+  // The account's skin, picked on another Mac: asked now, and when the window is next looked at.
+  pullSkin()
+  mainWindow.on('focus', () => pullSkin())
 
   // The window holds the owner's bridge: a page only ever leaves it for the
   // browser. Followed in here it would inherit the preload (owner-grant.ts · isOwnerPage).
@@ -7940,6 +7979,8 @@ app.whenReady().then(() => {
     // The browser card's socket over plain HTTP, for a phone on the relay.
     socketBridge: createSocketBridge({ port: MOBILE_PORT }),
     build: { id: () => buildId, bus: buildBus },
+    // The account's skin: the phone wears it and may pick another (skin-store.ts).
+    skin: skins,
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
     // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only
@@ -9186,6 +9227,9 @@ function registerIpc(handlers: RestoreHandlers): void {
   const launchSettings = createLaunchSettings({ file: launchSettingsPath(homedir()), boot: launchBoot, signedIn: () => accounts.account() !== null })
   ipcMain.handle('launch-settings:status', (event) => (ownerFrame(event) ? launchSettings.status() : null))
   ipcMain.handle('launch-settings:save', (event, input: unknown) => (ownerFrame(event) ? launchSettings.save(input) : { ok: false, reason: 'not-owner' }))
+  // The account's skin: any window reads it, the app's own page picks it.
+  ipcMain.handle('skin:get', () => skins.get())
+  ipcMain.handle('skin:set', (event, input: unknown) => (ownerFrame(event) ? skins.choose(input) : null))
   ipcMain.handle('update:status', () => updateCheck?.status() ?? null)
   ipcMain.handle('update:set', (event, on: unknown) => {
     if (updateCheck === null) return null

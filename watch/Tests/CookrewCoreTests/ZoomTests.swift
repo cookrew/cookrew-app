@@ -107,6 +107,33 @@ struct ScopeTests {
     #expect(s.workspaces.map(\.id) == ["goat", "dev"])
   }
 
+  // Owner 2026-11-12: a face on the devices or workspaces stop's bar goes straight to that card.
+  @Test("a card picked from a bar above its workspace keeps its page on the way in; else the first card")
+  func pickedFromAbove() async {
+    let api = ScopedAPI()
+    let all = [card("a", .waiting, goat), card("b", .working, dev), card("c", .waiting, dev)]
+    api.replies = [CardsReply(cards: all, activeWorkspaceId: "dev"), CardsReply(cards: all, activeWorkspaceId: "dev"), CardsReply(cards: all, activeWorkspaceId: "dev"), CardsReply(cards: all, activeWorkspaceId: "dev")]
+    let s = store(api, felt: Felt())
+    await s.refresh()
+    s.page = "c"
+    await s.enter(workspace: "dev")
+    #expect(s.page == "c")
+    // A page from another workspace is not this one's: the first card of the one gone into.
+    await s.enter(workspace: nil)
+    s.page = "a"
+    await s.enter(workspace: "dev")
+    #expect(s.page == "b")
+  }
+
+  @Test("a workspace with no cards has no page: there is no new agent's page any more, the bar's ＋ is")
+  func noNewAgentPage() async {
+    let api = ScopedAPI()
+    api.replies = [CardsReply(cards: [], activeWorkspaceId: "dev")]
+    let s = store(api, felt: Felt())
+    await s.refresh()
+    #expect(s.page == nil)
+  }
+
   @Test("tiles come from the Mac when it sends them")
   func tilesFromMac() async {
     let api = ScopedAPI()

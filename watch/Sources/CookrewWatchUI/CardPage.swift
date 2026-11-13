@@ -428,17 +428,14 @@ public struct CardPage: View {
   let onFace: () -> Void
   /** A thumbnail was tapped. */
   let onItem: (CardItem) -> Void
-  /** The box drawn open (the shots draw both states). */
-  let startOpen: Bool
 
   @Environment(\.ink) private var ink
 
-  public init(store: WatchStore, card: Card, onFace: @escaping () -> Void, onItem: @escaping (CardItem) -> Void, startOpen: Bool = false) {
+  public init(store: WatchStore, card: Card, onFace: @escaping () -> Void, onItem: @escaping (CardItem) -> Void) {
     self.store = store
     self.card = card
     self.onFace = onFace
     self.onItem = onItem
-    self.startOpen = startOpen
   }
 
   public var body: some View {
@@ -459,9 +456,9 @@ public struct CardPage: View {
         .clipped()
         .contentShape(Rectangle())
       }
-      // The bar is the way about as well as the box (WatchBar.swift): always there, its face
-      // shut while a menu takes rows only.
-      WatchBar(store: store, card: card, page: card.id, onOut: onFace, onItem: onItem, open: startOpen)
+      // On a card the bar is its box, open (WatchBar.swift · ReplyBar; owner 2026-11-12): dimmed
+      // in place while a menu takes rows only. The way out is the head's, top left.
+      ReplyBar(store: store, card: card)
         .padding(.horizontal, boxSides)
         .padding(.bottom, boxFloor)
     }
@@ -520,69 +517,5 @@ struct OutChevron: View {
       .font(.system(size: 15, weight: .semibold))
       .foregroundStyle(ink.sealText)
       .frame(width: 18, height: 30)
-  }
-}
-
-/** The page after the last card: the box with nobody on it makes a new agent. */
-public struct NewAgentPage: View {
-  let store: WatchStore
-  let onThisWatch: () -> Void
-  let onOut: (() -> Void)?
-  let onItem: (CardItem) -> Void
-  let startOpen: Bool
-  @Environment(\.ink) private var ink
-
-  public init(store: WatchStore, onThisWatch: @escaping () -> Void = {}, onOut: (() -> Void)? = nil, onItem: @escaping (CardItem) -> Void = { _ in }, startOpen: Bool = false) {
-    self.store = store
-    self.onThisWatch = onThisWatch
-    self.onOut = onOut
-    self.onItem = onItem
-    self.startOpen = startOpen
-  }
-
-  public var body: some View {
-    VStack(spacing: 0) {
-      HStack(spacing: 4) {
-        if let onOut {
-          Button(action: onOut) { OutChevron().padding(.horizontal, 4).contentShape(Rectangle()) }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Back to the crew")
-        }
-        // The one page there always is: with no cards it is the only way to this watch's own page.
-        Button(action: onThisWatch) {
-          Text("THIS WATCH")
-            .font(InkType.word())
-            .tracking(1)
-            .foregroundStyle(ink.muted)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 26)
-            .padding(.trailing, clockRoom)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-      }
-      .padding(.leading, onOut == nil ? 10 : 2)
-      Spacer(minLength: 0)
-      ZStack {
-        Circle().strokeBorder(ink.dim, style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
-        Text("＋").font(.system(size: 22)).foregroundStyle(ink.sealText)
-      }
-      .frame(width: 58, height: 58)
-      Text("New agent").font(InkType.name(17)).foregroundStyle(ink.ink).padding(.top, 8)
-      if let workspace = store.newAgentWorkspace {
-        Text("in \(workspace)").font(InkType.words(13)).foregroundStyle(ink.muted).padding(.top, 1)
-      }
-      if let sent = store.sent(newAgentPage) {
-        Text("Started · \(sent)").font(InkType.words(12.5)).foregroundStyle(ink.sealText).lineLimit(2).padding(.top, 6).padding(.horizontal, 12)
-      } else if let notice = store.notice, store.page == newAgentPage {
-        Text(notice).font(InkType.words(12.5)).foregroundStyle(ink.wait).padding(.top, 6).padding(.horizontal, 12)
-      }
-      Spacer(minLength: 0)
-      WatchBar(store: store, card: nil, page: newAgentPage, onOut: onOut, onItem: onItem, open: startOpen)
-        .padding(.horizontal, boxSides)
-        .padding(.bottom, boxFloor)
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(ink.paper)
   }
 }

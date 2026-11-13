@@ -160,9 +160,20 @@
 
 /* ── an agent's status in ink (InkAvatar status, ink-status.ts) ──
    Red rides the ensō: working laps a third of a turn, waiting closes the ring
-   and blinks it with the harness mark (red too), done ticks the shoulder in
+   and blinks it with the harness mark (an ink prompt reddens, a logo only blinks), done ticks the shoulder in
    red, offline fades the ink under an ink z. Motion is a rotation and an
    opacity only; idle, done and offline stand still. */
+/* The mark sits on a light disc in every skin, so its ink is dark in every skin: OpenCode's frame in its
+   own near-black (a fixed fill, so waiting never recolours a logo), the shell's prompt in a warm ink
+   that waiting still reddens (.ink-avatar.waiting .ink-glyph wins: it is the more specific). */
+.ink-avatar {
+  --zv-logo-ink: #131010;
+}
+
+.ink-avatar .ink-glyph {
+  --zv-ink: var(--zv-glyph-ink, #2a2520);
+}
+
 .ink-avatar :is(.ink-zhu, .ink-glyph) {
   --zv-ink-status: var(--sumi-wait, #c0392b);
 }
