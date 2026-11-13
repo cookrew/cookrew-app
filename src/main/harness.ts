@@ -13,6 +13,7 @@ import type { TurnRecord } from '../shared/turn'
 import { claudeWatchFile } from './claude-fork'
 import { claudeTuning } from './claude-tuning'
 import { codexWatchFile, sessionIdFromRolloutPath } from './codex-bind'
+import { codexTurnParserFor } from './codex-lineage'
 import { codexTuning } from './codex-tuning'
 import { piTuning } from './pi-tuning'
 import {
@@ -152,6 +153,17 @@ export interface Harness {
   /** Session-file lines → TurnRecords; present exactly when turns === 'file'. */
   parseTurns?: (lines: string[]) => TurnRecord[]
   /**
+   * The turn parser for ONE session file, when that file's history does not
+   * start in the file itself (a Codex continuation rollout carries on from a
+   * prefix of an earlier one — codex-lineage.ts). Absent means `parseTurns`.
+   * Must return the same object for the same file: SessionTurnSync re-watches
+   * by parser identity.
+   */
+  parseTurnsFor?: (
+    file: string,
+    options: HarnessWatchOptions
+  ) => (lines: string[]) => TurnRecord[]
+  /**
    * The session file SessionTurnSync should poll for this node, or null when
    * unbound/unusable. Owned by the harness so adding one is registry-only
    * (contract rule 4) — each resolver carries its own security validation
@@ -209,6 +221,10 @@ const CODEX: Harness = {
   // turn writes `turn_aborted` instead and stays non-final — correct).
   turnFinality: 'native',
   parseTurns: parseCodexTurns,
+  // A backtrack continues the conversation in a new rollout that holds only
+  // what came after the cut; the ledger must still see what came before it.
+  parseTurnsFor: (file, options) =>
+    codexTurnParserFor(file, { sessionsDir: options.codexSessionsDir }),
   watchFile: codexWatchFile,
   // READ ONLY: codex stamps every turn with its model and effort, but changes
   // them only in its own picker — see codex-tuning.

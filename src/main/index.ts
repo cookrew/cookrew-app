@@ -238,7 +238,8 @@ import {
   roleSessionDir,
   saveRoleSessionCopy
 } from './claude-fork'
-import { isCodexCommand, resolveCodexRolloutByPid } from './codex-bind'
+import { isCodexCommand, resolveCodexRolloutByPid, validCodexSessionRef } from './codex-bind'
+import { codexRolloutToFollow } from './codex-lineage'
 import { codexInlineLine } from './codex-inline'
 import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
 import { isPiCommand, piAdoptableSession, piLaunchBinding, resolvePiSessionByPane } from './pi-bind'
@@ -607,7 +608,12 @@ const sessionSync = new SessionTurnSync(turns, undefined, {
   // but is never its sole representation (Sol r3).
   holdFact: (terminalId) => turns.hasOpenTurnFact(terminalId),
   isInTurn: (terminalId) => turns.inTurn(terminalId),
-  onStale: (terminalId) => void rebindRotatedClaudeSession(terminalId),
+  onStale: (terminalId) => {
+    // Each is a no-op for the other harness. A Codex card whose bound rollout
+    // went quiet mid-turn is exactly what a backtrack looks like from here.
+    followMovedCodexRollout(terminalId)
+    void rebindRotatedClaudeSession(terminalId)
+  },
   // Lets a subscriber START observation on a never-watched terminal — the
   // subscription is then the only hold, so a peek leaks nothing.
   resolveWatch: (terminalId) => traces.watchSpec(terminalId)
@@ -3851,6 +3857,13 @@ function spawnTracked(t: {
       }, delay)
     }
     attempt([3000, 8000, 20000, 45000])
+  } else if (isCodexCommand(command) && t.codexSessionRef) {
+    // An ALREADY-BOUND card may have been backtracked while nobody watched:
+    // `codex resume` then writes the newest continuation, which can be days
+    // old. Once the process has opened its rollout, look across the tree.
+    for (const delay of [8000, 45000]) {
+      setTimeout(() => followMovedCodexRollout(t.id, 'everywhere'), delay).unref()
+    }
   }
   // OpenCode session bind (Tinker recipe): the ses_<id>.json appears at/after
   // the first turn, so retry on a schedule until it binds (MEDIUM-3 — the
@@ -4323,8 +4336,14 @@ const oracleSweep = setInterval(() => {
   // instead of stalling the main thread for the whole fleet in one go.
   let coldLookups = 0
   for (const node of store.terminalsAcross()) {
-    if (!isClaudeCommand(node.command) || !node.claudeSessionId) continue
     if (!ptys.get(node.id)) continue
+    // Codex: disk-only until a continuation of the bound rollout exists, so
+    // a quiet fleet pays a few readdirs here, never a process lookup.
+    if (isCodexCommand(node.command) && node.codexSessionRef) {
+      followMovedCodexRollout(node.id)
+      continue
+    }
+    if (!isClaudeCommand(node.command) || !node.claudeSessionId) continue
     if (!panePids.isWarm(node.id) && coldLookups++ > 0) continue
     void rebindRotatedClaudeSession(node.id, 'oracle')
   }
@@ -4482,6 +4501,61 @@ function commitRotatedClaudeSession(
       `${bound.slice(0, 8)} → ${rotated.slice(0, 8)}`
     )
   )
+}
+
+/**
+ * Move a Codex card onto the rollout its process moved to.
+ *
+ * A Codex backtrack (Esc-Esc edit) keeps the thread but writes every later
+ * turn to a NEW rollout that continues a prefix of the old one
+ * (codex-lineage.ts). The spawn bind only ever binds an UNBOUND card, so
+ * without this the card stays on the abandoned file and CHAT freezes on the
+ * exchange the backtrack dropped (Theme System, 2026-11-13).
+ *
+ * Same migration as a Claude rotation: the ref lands on the node, the
+ * observer is REBOUND (pins, subscribers and drain state survive), and the
+ * move is recorded. The stream needs nothing: its chain is the bound file,
+ * and its read-repair already answers a cursor whose file left the chain.
+ */
+function followMovedCodexRollout(
+  terminalId: string,
+  scope: 'recent' | 'everywhere' = 'recent'
+): void {
+  try {
+    const hit = store.nodeAcrossWorkspaces(terminalId)
+    if (!hit || hit.node.kind !== 'terminal') return
+    const node = hit.node as TerminalNodeData
+    if (!isCodexCommand(node.command)) return
+    const bound = validCodexSessionRef(node.codexSessionRef)
+    const moved = codexRolloutToFollow(
+      {
+        bound,
+        held: () => resolveCodexRolloutByPid(panePids.pidOf(terminalId)),
+        ownedElsewhere: (file) =>
+          isRefOwned(store.terminalsAcross(), terminalId, 'codexSessionRef', file)
+      },
+      { everywhere: scope === 'everywhere' }
+    )
+    if (moved === null || bound === null) return
+    store.updateNodeAcrossWorkspacesUnsafe(terminalId, { codexSessionRef: moved })
+    agents.setSessionRef(terminalId, moved)
+    const spec = traces.watchSpec(terminalId)
+    if (spec) {
+      sessionSync.rebind(terminalId, spec.file, spec.parse)
+      multiplexer()?.reportAgentSession?.(sessionNameFor(terminalId), spec.file)
+    }
+    store.withOpContext({ actor: 'agent' }, () =>
+      store.recordEventIn(
+        hit.workspaceId,
+        'terminal.session-rotated',
+        terminalId,
+        node.name,
+        `${path.basename(bound)} → ${path.basename(moved)}`
+      )
+    )
+  } catch (error) {
+    console.error('Codex rollout follow failed:', error)
+  }
 }
 
 /** Pi sessions already bound to OTHER terminals — a shared-dir session is

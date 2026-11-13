@@ -949,7 +949,12 @@ describe('the successor probe runs at SPAWN/ADOPT, not only when a pane goes qui
   })
 
   it('keeps the staleness watcher as the other trigger', () => {
-    expect(indexSource).toContain('onStale: (terminalId) => void rebindRotatedClaudeSession(terminalId)')
+    // onStale now names both harnesses' moves: a codex card follows its
+    // backtrack continuation here too (codex-backtrack.test.ts), so the one
+    // hook handles whichever agent the card actually runs.
+    expect(indexSource).toContain('onStale: (terminalId) => {')
+    expect(indexSource).toContain('void rebindRotatedClaudeSession(terminalId)')
+    expect(indexSource).toContain('followMovedCodexRollout(terminalId)')
   })
 
   it('still commits through the verdict, so the spawn trigger inherits the refusals', () => {

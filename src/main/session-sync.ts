@@ -428,7 +428,15 @@ export class SessionTurnSync {
     parse: SessionTurnParser,
     opts: SessionWatchOptions = {}
   ): void {
-    const prior = this.watched.get(terminalId) ?? this.dormant.get(terminalId)
+    const live = this.watched.get(terminalId)
+    // ALREADY THE BINDING: watch() would drop a draining dispatch's pin
+    // here just as surely as a real rotation would (a Codex backtrack is
+    // picked up by BOTH this and the quiet-pane watcher, and the sweep too).
+    if (live && live.file === file && live.parse === parse) {
+      if (opts.deferInitial !== true) this.reconcile(terminalId)
+      return
+    }
+    const prior = live ?? this.dormant.get(terminalId)
     this.dormant.delete(terminalId)
     this.watched.set(terminalId, {
       file,

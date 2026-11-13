@@ -16,7 +16,6 @@ import {
   TracePage,
   TracePageRequest,
   createClaudeTraceAccumulator,
-  createCodexTraceAccumulator,
   createPiTraceAccumulator,
   pageTraceBlocks,
   traceIndexOf,
@@ -27,7 +26,8 @@ import { locateClaudeSessionFile } from './claude-fork'
 import { sessionChain } from './session-lineage-walk'
 import { reachableLineage } from './lineage-spill'
 import { isClaudeCommand } from '../shared/claude-fork'
-import { isCodexCommand, validCodexSessionRef } from './codex-bind'
+import { isCodexCommand, rolloutIdFromRolloutPath, validCodexSessionRef } from './codex-bind'
+import { codexBaseChain, codexTraceAccumulatorFor } from './codex-lineage'
 import { harnessFor , type TurnFinality } from './harness'
 import { isPiCommand, piSessionHome } from './pi-bind'
 import type { SessionTurnParser } from './session-sync'
@@ -266,6 +266,9 @@ interface CacheEntry {
   tailLineBytes?: number
   blocks: TraceBlock[]
   compactMarkers: TraceBoundaryMarker[]
+  /** The continuation ancestry used to build this parser. A base file can
+   * arrive after the child header, so this is part of the cache key. */
+  lineageKey: string
   /**
    * The parser, mid-fold (perf, 2026-10-04). An append feeds it the new lines
    * ALONE; `blocks` above is what it has accumulated. This is what turned
@@ -612,12 +615,15 @@ export class TraceReader {
     const node = hit.node
     const harness = harnessFor(node.command)
     if (!harness?.parseTurns || !harness.watchFile) return null
-    const file = harness.watchFile(node, {
+    const options = {
       ...this.options,
       piSessionsRoot: this.options.piSessionsRootFor?.(node) ?? this.options.piSessionsRoot,
       piAgentDir: this.options.piAgentDirFor?.(node) ?? this.options.piAgentDir
-    })
-    return file ? { file, parse: harness.parseTurns, finality: harness.turnFinality } : null
+    }
+    const file = harness.watchFile(node, options)
+    if (!file) return null
+    const parse = harness.parseTurnsFor?.(file, options) ?? harness.parseTurns
+    return { file, parse, finality: harness.turnFinality }
   }
 
   /**
@@ -806,8 +812,14 @@ export class TraceReader {
   ): Promise<TraceBlock[]> {
     try {
       const info = await stat(file)
+      const lineageKey =
+        kind === 'codex' && rolloutIdFromRolloutPath(file) !== null
+          ? codexBaseChain(file, { sessionsDir: this.options.codexSessionsDir })
+              .map((segment) => `${segment.file}:${segment.endByteOffset}`)
+              .join('|')
+          : ''
       const cached = this.cache.get(file)
-      if (cached && info.size === cached.bytesRead) {
+      if (cached && info.size === cached.bytesRead && cached.lineageKey === lineageKey) {
         // Unchanged: zero I/O — but still a TOUCH. The old FIFO only
         // refreshed recency on growth, so an idle-but-viewed file aged
         // toward the eviction tail exactly as if nobody was looking at it.
@@ -816,9 +828,11 @@ export class TraceReader {
         this.cache.set(file, touched)
         return touched.blocks
       }
-      if (cached && info.size > cached.bytesRead) {
-        // Append-only growth: read ONLY the new bytes, and PARSE only them —
-        // the cached parser resumes where it stopped.
+      if (cached && info.size > cached.bytesRead && cached.lineageKey === lineageKey) {
+        // Append-only growth with the SAME ancestry: read ONLY the new bytes,
+        // and PARSE only them — the cached parser resumes where it stopped.
+        // When a base appears/disappears, the parser is incompatible with the
+        // new lineage and the full-file path below must rebuild it from zero.
         const fresh: string[] = []
         const remainder = await readLines(
           file,
@@ -827,7 +841,7 @@ export class TraceReader {
           cached.remainder,
           (line) => fresh.push(line)
         )
-        return this.ingest(file, kind, fresh, remainder, info.size, cached)
+        return this.ingest(file, kind, fresh, remainder, info.size, cached, lineageKey)
       }
       // First read or a shrink (/rewind truncation): reload — streamed, so a
       // 90MB session file is never four copies of itself in flight.
@@ -835,7 +849,7 @@ export class TraceReader {
       const remainder = await readLines(file, 0, info.size, Buffer.alloc(0), (line) =>
         lines.push(line)
       )
-      return this.ingest(file, kind, lines, remainder, info.size)
+      return this.ingest(file, kind, lines, remainder, info.size, undefined, lineageKey)
     } catch (error) {
       console.error('Trace read failed:', error)
       return []
@@ -857,9 +871,10 @@ export class TraceReader {
     fresh: string[],
     remainder: Buffer,
     bytesRead: number,
-    carry?: Pick<CacheEntry, 'parser' | 'lineCount' | 'tailLineBytes'>
+    carry?: Pick<CacheEntry, 'parser' | 'lineCount' | 'tailLineBytes'>,
+    lineageKey = ''
   ): TraceBlock[] {
-    const parser = carry?.parser ?? parserFor(kind)
+    const parser = carry?.parser ?? this.parserFor(kind, file)
     parser.feed(fresh)
     const blocks = parser.blocks()
     const claude = isClaudeParser(parser) ? parser : null
@@ -878,17 +893,24 @@ export class TraceReader {
       ...(tailLineBytes !== undefined ? { tailLineBytes } : {}),
       blocks,
       compactMarkers: claude?.markers() ?? [],
+      lineageKey,
       parser,
       ...(tailBlockBytes !== undefined ? { tailBlockBytes } : {})
     })
     return blocks
   }
-}
 
-/** A fresh, resumable parser for one harness's transcript. */
-function parserFor(kind: 'claude' | 'codex' | 'pi'): TraceBlockAccumulator {
-  if (kind === 'claude') return createClaudeTraceAccumulator()
-  return kind === 'codex' ? createCodexTraceAccumulator() : createPiTraceAccumulator()
+  /**
+   * A fresh, resumable parser for one harness's transcript. A Codex
+   * continuation rollout starts out holding the base history it carries on
+   * from (codex-lineage.ts), so its blocks number on from the conversation
+   * rather than from 1 — and keep the identities the base gave them.
+   */
+  private parserFor(kind: 'claude' | 'codex' | 'pi', file: string): TraceBlockAccumulator {
+    if (kind === 'claude') return createClaudeTraceAccumulator()
+    if (kind === 'pi') return createPiTraceAccumulator()
+    return codexTraceAccumulatorFor(file, { sessionsDir: this.options.codexSessionsDir })
+  }
 }
 
 /** Only Claude's parser knows compact boundaries and where each block opened. */
