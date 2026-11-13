@@ -239,6 +239,7 @@ import {
   saveRoleSessionCopy
 } from './claude-fork'
 import { isCodexCommand, resolveCodexRolloutByPid } from './codex-bind'
+import { codexInlineLine } from './codex-inline'
 import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
 import { isPiCommand, piAdoptableSession, piLaunchBinding, resolvePiSessionByPane } from './pi-bind'
 import {
@@ -3753,7 +3754,10 @@ function spawnTracked(t: {
   const spawnRoute = route && !served ? { env: { ...route.env, ...access?.env }, args: [...route.args, ...(access?.args ?? []), ...mcpArgs] } : null
   // A routed card runs the route's model: a launch pick's model gives way to it.
   // A direct claude card's alias is spelled for the gateway its own settings name (claude-model-route.ts).
-  const launched = spawnRoute && route && (route.effective !== 'direct' || access) ? withoutRoutedPick(effective, harnessFor(effective)?.id) : directClaudeLine(effective)
+  // Codex runs inline, never on its own alternate screen (codex-inline.ts).
+  const launched = codexInlineLine(
+    spawnRoute && route && (route.effective !== 'direct' || access) ? withoutRoutedPick(effective, harnessFor(effective)?.id) : directClaudeLine(effective)
+  )
   const fresh = !ptys.get(t.id)
   let session: PtySession
   try {
