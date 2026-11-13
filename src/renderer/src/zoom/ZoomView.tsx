@@ -34,7 +34,6 @@ import { backHolder } from '../prompt/back-guard'
 import { useZoomFleetView } from './use-zoom-fleet'
 import { MachineGaugeLine } from './MachineGauges'
 import { gaugedMachines } from './gauged-machines'
-import { RemoteDeskPanel } from './RemoteDeskPanel'
 import { RemoteMachineView } from './RemoteMachineView'
 import { remotePlace, remoteStop } from './remote-machine-store'
 import { canEnterMachines } from './use-remote-machine'
@@ -633,7 +632,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         {/* Its own boundary: the real full view is a lazy chunk, and waiting for it must never blank the navigator. */}
         <Suspense fallback={null}>{zoom.full ? children : null}</Suspense>
       </div>
-      <RemoteDeskPanel />
       <div className="zv-overview" ref={overview}
         onPointerDown={(e) => {
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
