@@ -187,6 +187,9 @@ export interface WatchWorkspace {
   readonly waiting: number
   readonly working: number
   readonly done: number
+  /** Compact workspace-avatar data; empty when a desktop cannot read the canvas. */
+  readonly presets: readonly string[]
+  readonly artifacts: readonly WatchItem[]
 }
 
 export interface WatchWorkspacesInput {
@@ -197,6 +200,7 @@ export interface WatchWorkspacesInput {
   /** The agents on a workspace's canvas, recent or not. */
   readonly agentsIn: (workspaceId: string) => number
   readonly active: (agentId: string) => boolean
+  readonly avatarOf?: (workspaceId: string) => { presets: readonly string[]; artifacts: readonly WatchItem[] }
 }
 
 /**
@@ -215,6 +219,7 @@ export function watchWorkspaces(input: WatchWorkspacesInput): WatchWorkspace[] {
       .filter((row) => row.workspace.id === id)
       .map((row) => (input.active(row.terminalId) ? STATUS_OF[row.phase] : 'offline'))
     const counted = (status: WatchStatus): number => statuses.filter((one) => one === status).length
+    const avatar = input.avatarOf?.(id) ?? { presets: [], artifacts: [] }
     return {
       id,
       name,
@@ -222,7 +227,9 @@ export function watchWorkspaces(input: WatchWorkspacesInput): WatchWorkspace[] {
       agents: Math.max(input.agentsIn(id), statuses.length),
       waiting: counted('waiting'),
       working: counted('working'),
-      done: counted('done')
+      done: counted('done'),
+      presets: avatar.presets,
+      artifacts: avatar.artifacts.slice(0, 3)
     }
   })
 }
@@ -234,7 +241,7 @@ export const rowsOfWorkspace = (rows: readonly BoardRow[], workspaceId: string |
 /** A browser's letter on its coin: the title's first letter or digit (zoom-model.ts · itemInitial). */
 const initialOf = (title: string): string => (title.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase()
 
-function itemOf(node: CanvasNode): WatchItem | null {
+export function itemOf(node: CanvasNode): WatchItem | null {
   if (node.kind === 'browser') {
     const tab = activeBrowserTab(node)
     const title = tab.title?.trim() || node.name

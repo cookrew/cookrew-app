@@ -2,7 +2,6 @@ import { memo } from 'react'
 import { InkAvatar } from './InkAvatar'
 import { Counts, Page, type Bind } from './page-parts'
 import { sameProps } from './same-props'
-import { DECK_POSE, fanOf } from './zoom-layout'
 import type { ItemView, MarkView } from './zoom-model'
 import './workspace-tile.css'
 
@@ -23,29 +22,27 @@ import './workspace-tile.css'
 const DECK_DEPTHS = [1, 2, 6, 30] as const
 export const deckDepth = (total: number): number => DECK_DEPTHS.filter((n) => total >= n).length
 
-/** A sheet's place in the deck, top first: the top one square-on, each under it a little further out. */
-const sheetPose = (i: number): string => `translate(${i * 6}px, ${i * -5}px) rotate(${i === 0 ? -1.5 : i * 2.2}deg)`
-
-const ArtifactDeck = memo(function ArtifactDeck({ items, total }: { items: readonly ItemView[]; total: number }): React.JSX.Element {
-  const depth = deckDepth(total)
-  const style = { transform: `translate(${DECK_POSE.x}px, ${DECK_POSE.y}px) scale(${DECK_POSE.s})` }
-  if (depth === 0) return <div className="zv-deck" style={style}><div className="zv-sheet empty" /></div>
+const WorkspaceArtifact = memo(function WorkspaceArtifact({ item, total }: { item?: ItemView; total: number }): React.JSX.Element {
   return (
-    <div className="zv-deck" style={style}>
-      {Array.from({ length: depth }, (_, i) => depth - 1 - i).map((i) => {
-        const item = items[i]
-        return (
-          <div key={i} className={`zv-sheet zv-th ${item?.kind ?? 'blank'}`} style={{ transform: sheetPose(i) }}>
-            {item && <Page item={item} words={false} />}
-          </div>
-        )
-      })}
+    <div className="zv-workspace-artifact" aria-label={item ? `${item.kind}: ${item.title}` : `${total} artifacts`}>
+      <div className={`zv-workspace-folder ${item?.kind ?? 'empty'}`}>
+        {item ? <Page item={item} words={false} /> : <div className="zv-workspace-empty" />}
+      </div>
     </div>
   )
 }, sameProps)
 
 /** What a deck draws: two rebuilds of the same things are the same deck (the model makes new objects each time, same-props.ts compares them by identity). */
-const sameDeck = (a: readonly ItemView[], b: readonly ItemView[]): boolean => a.length === b.length && a.every((x, i) => x.id === b[i].id && x.kind === b[i].kind && x.title === b[i].title && x.host === b[i].host)
+const sameDeck = (a: readonly ItemView[], b: readonly ItemView[]): boolean =>
+  a.length === b.length &&
+  a.every((x, i) =>
+    x.id === b[i].id &&
+    x.kind === b[i].kind &&
+    x.title === b[i].title &&
+    x.host === b[i].host &&
+    x.owners.length === b[i].owners.length &&
+    x.owners.every((owner, j) => owner === b[i].owners[j])
+  )
 type TileProps = { mark: MarkView; open?: boolean; bind: Bind; onOpen: () => void; onOpenItems?: () => void }
 export const sameTile = (a: TileProps, b: TileProps): boolean =>
   sameDeck(a.mark.deck, b.mark.deck) && sameProps({ ...a, mark: { ...a.mark, deck: [] } }, { ...b, mark: { ...b.mark, deck: [] } })
@@ -61,24 +58,22 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
   const browsers = mark.browsers ?? 0
   const notes = mark.notes ?? 0
   const total = browsers + notes
-  // Bottom → top, the first agent on top, as the open crew's fan (zoom-layout.ts · stackOf).
-  const shown = mark.presets.slice(0, 6).reverse()
-  const fan = fanOf(shown.length)
+  const shown = mark.presets.slice(0, 8)
   // Nothing behind it, no door: a tap would only land on an empty grid.
   const itemsDoor = known && total > 0 && onOpenItems
   return (
     <div ref={bind(open ? 'openMark' : `mark:${mark.id}`)} className="zv-mark" data-open={open || undefined} data-waiting={mark.waitingCount > 0 || undefined}>
       <div className="zv-tile" />
       {!open && (
-        <>
+        <div className="zv-workspace-agents" aria-label={`${n} agents`}>
           {shown.map((preset, i) => (
-            <div key={i} className="zv-av zv-mark-av" style={{ transform: `translate(${fan[i].x}px, ${fan[i].y}px) rotate(${fan[i].r}deg) scale(${fan[i].s})`, zIndex: i }}>
+            <div key={i} className="zv-av zv-workspace-agent" style={{ zIndex: shown.length - i }}>
               <InkAvatar id={`${mark.id}:${i}`} preset={preset} />
             </div>
           ))}
-        </>
+        </div>
       )}
-      {known && <ArtifactDeck items={mark.deck} total={total} />}
+      {known && <WorkspaceArtifact item={mark.deck[0]} total={total} />}
       <button type="button" className={`zv-door agents${itemsDoor ? '' : ' whole'}`} aria-current={open ? 'true' : undefined} aria-label={`Open ${mark.name} agents, ${plural(n, 'agent')}${mark.waitingCount > 0 ? `, ${mark.waitingCount} waiting` : ''}`} title={`${mark.name} · ${plural(n, 'agent')}`} onClick={onOpen} />
       {itemsDoor && (
         <button type="button" className="zv-door items" aria-label={`Open ${mark.name} artifacts, ${plural(browsers, 'browser')}, ${plural(notes, 'note')}`} title={`${mark.name} · ${plural(browsers, 'browser')}, ${plural(notes, 'note')}`} onClick={onOpenItems} />

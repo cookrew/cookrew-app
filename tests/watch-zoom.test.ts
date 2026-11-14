@@ -28,9 +28,9 @@ describe('the workspaces a wrist zooms through', () => {
   it('lists every workspace in the Mac’s order, the empty ones too, with what needs the owner counted', () => {
     const agents: Record<string, number> = { dev: 4, goat: 3, empty: 0 }
     expect(watchWorkspaces({ workspaces: spaces, activeId: 'goat', rows: ROWS, agentsIn: (id) => agents[id] ?? 0, active: () => true })).toEqual([
-      { id: 'dev', name: 'Cookrew Dev', active: false, agents: 4, waiting: 1, working: 1, done: 0 },
-      { id: 'goat', name: 'GOAT Team', active: true, agents: 3, waiting: 1, working: 0, done: 1 },
-      { id: 'empty', name: 'Playground', active: false, agents: 0, waiting: 0, working: 0, done: 0 }
+      { id: 'dev', name: 'Cookrew Dev', active: false, agents: 4, waiting: 1, working: 1, done: 0, presets: [], artifacts: [] },
+      { id: 'goat', name: 'GOAT Team', active: true, agents: 3, waiting: 1, working: 0, done: 1, presets: [], artifacts: [] },
+      { id: 'empty', name: 'Playground', active: false, agents: 0, waiting: 0, working: 0, done: 0, presets: [], artifacts: [] }
     ])
   })
 
@@ -41,7 +41,7 @@ describe('the workspaces a wrist zooms through', () => {
 
   it('a row whose workspace the Mac no longer lists still gets a tile', () => {
     const lost = watchWorkspaces({ workspaces: [], activeId: 'dev', rows: [row('x', 'waiting', 'gone')], agentsIn: () => 0, active: () => true })
-    expect(lost).toEqual([{ id: 'gone', name: 'GONE', active: false, agents: 1, waiting: 1, working: 0, done: 0 }])
+    expect(lost).toEqual([{ id: 'gone', name: 'GONE', active: false, agents: 1, waiting: 1, working: 0, done: 0, presets: [], artifacts: [] }])
   })
 })
 

@@ -103,6 +103,59 @@ public struct DevicesPage: View {
 }
 
 /** The second stop: the paired Mac's workspaces, counted. */
+private struct WorkspaceAvatar: View {
+  let tile: WorkspaceTile
+  @Environment(\.ink) private var ink
+
+  var body: some View {
+    ZStack(alignment: .top) {
+      RoundedRectangle(cornerRadius: 11)
+        .fill(ink.card)
+        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(ink.hair2, lineWidth: 1))
+        .frame(height: 54)
+        .overlay(alignment: .center) {
+          if let item = tile.artifacts.first {
+            artifact(item)
+              .padding(.top, 8)
+          } else {
+            RoundedRectangle(cornerRadius: 3)
+              .fill(ink.hair2)
+              .frame(width: 66, height: 22)
+              .padding(.top, 8)
+          }
+        }
+      HStack(spacing: -5) {
+        ForEach(Array(tile.presets.prefix(6).enumerated()), id: \.offset) { index, preset in
+          InkFace(id: "\(tile.id):\(index)", preset: preset, status: .idle, size: 22, weight: .regular)
+            .background(Circle().fill(ink.paper))
+            .clipShape(Circle())
+            .overlay(Circle().strokeBorder(ink.paper, lineWidth: 1))
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.leading, 9)
+      .offset(y: -10)
+    }
+    .frame(height: 62)
+    .accessibilityLabel("\(tile.name), \(tile.agents) agents, \(tile.artifacts.count) artifacts")
+  }
+
+  private func artifact(_ item: CardItem) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      RoundedRectangle(cornerRadius: 2)
+        .fill(Color(css: item.tint))
+        .frame(height: 11)
+      RoundedRectangle(cornerRadius: 1)
+        .fill(ink.hair2)
+        .frame(height: 2)
+      RoundedRectangle(cornerRadius: 1)
+        .fill(ink.hair2)
+        .frame(width: 38, height: 2)
+    }
+    .frame(width: 72, alignment: .leading)
+  }
+}
+
 public struct WorkspacesPage: View {
   let tiles: [WorkspaceTile]
   /** The word for the machine they are on. */
@@ -131,8 +184,38 @@ public struct WorkspacesPage: View {
         }
         ForEach(tiles) { tile in
           Button { onOpen(tile.id) } label: {
-            // The dot is where a new agent starts: the Mac's active workspace.
-            StopRow(title: tile.name, line: line(tile), mark: tile.active ? ink.sealText : nil, badge: tile.waiting > 0 ? "\(tile.waiting)" : nil, quiet: tile.agents == 0)
+            VStack(alignment: .leading, spacing: 4) {
+              HStack(alignment: .center, spacing: 8) {
+                WorkspaceAvatar(tile: tile)
+                VStack(alignment: .leading, spacing: 2) {
+                  HStack(spacing: 5) {
+                    if tile.active { Circle().fill(ink.sealText).frame(width: 6, height: 6) }
+                    Text(tile.name)
+                      .font(InkType.name(14))
+                      .foregroundStyle(tile.agents == 0 ? ink.muted : ink.ink)
+                      .lineLimit(1)
+                      .minimumScaleFactor(0.78)
+                    if tile.waiting > 0 {
+                      Text("\(tile.waiting)")
+                        .font(InkType.word(9))
+                        .foregroundStyle(ink.onSeal)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(ink.wait))
+                    }
+                  }
+                  Text(line(tile))
+                    .font(InkType.word(9.5))
+                    .foregroundStyle(ink.muted)
+                    .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+              }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12).fill(ink.card))
           }
           .buttonStyle(.plain)
           .accessibilityLabel(tile.waiting > 0 ? "\(tile.name), \(tile.waiting) need you" : tile.name)

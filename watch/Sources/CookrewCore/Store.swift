@@ -221,7 +221,7 @@ public final class WatchStore {
 
   func adopt(_ reply: CardsReply, readFor asked: String? = nil) {
     let next = reply.cards
-    let tiles = reply.workspaces ?? tilesFrom(next)
+    let tiles = tilesWithAvatar(reply.workspaces ?? tilesFrom(next), cards: next)
     let first = link != .live && cards.isEmpty
     var events: [WatchEvent] = []
     if !first {
