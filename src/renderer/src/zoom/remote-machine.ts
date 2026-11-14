@@ -55,6 +55,8 @@ export interface RemoteTile {
   readonly waiting: number
   readonly working: number
   readonly done: number
+  readonly presets?: readonly string[]
+  readonly artifacts?: readonly RemoteItem[]
 }
 
 export interface RemoteCards {
@@ -176,7 +178,7 @@ function tileOf(raw: unknown): RemoteTile | null {
   const id = text(raw.id, 200)
   const name = text(raw.name, 500)
   if (!id || name === null) return null
-  return { id, name, active: raw.active === true, agents: count(raw.agents), waiting: count(raw.waiting), working: count(raw.working), done: count(raw.done) }
+  return { id, name, active: raw.active === true, agents: count(raw.agents), waiting: count(raw.waiting), working: count(raw.working), done: count(raw.done), presets: Array.isArray(raw.presets) ? raw.presets.flatMap((value) => text(value, 100) ?? []) : [], ...(Array.isArray(raw.artifacts) ? { artifacts: raw.artifacts.flatMap((value) => itemOf(value) ?? []) } : {}) }
 }
 
 /** The other machine's cards, or null for an answer that is not one. */
@@ -216,12 +218,12 @@ export function tileView(tile: RemoteTile): MarkView {
   return {
     id: tile.id,
     name: tile.name,
-    presets: Array.from({ length: Math.min(tile.agents, TILE_FACES) }, () => 'claude'),
+    presets: tile.presets?.length ? [...tile.presets] : Array.from({ length: Math.min(tile.agents, TILE_FACES) }, () => 'claude'),
     waiting: tile.waiting > 0,
     waitingCount: tile.waiting,
-    browsers: null,
-    notes: null,
-    deck: []
+    browsers: tile.artifacts && tile.artifacts.length < 24 ? tile.artifacts.filter((item) => item.kind === 'browser').length : null,
+    notes: tile.artifacts && tile.artifacts.length < 24 ? tile.artifacts.filter((item) => item.kind === 'note').length : null,
+    deck: (tile.artifacts ?? []).map((item) => ({ ...item, line: '', owners: [] }))
   }
 }
 

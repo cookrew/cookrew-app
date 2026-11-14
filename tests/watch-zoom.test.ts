@@ -43,6 +43,12 @@ describe('the workspaces a wrist zooms through', () => {
     const lost = watchWorkspaces({ workspaces: [], activeId: 'dev', rows: [row('x', 'waiting', 'gone')], agentsIn: () => 0, active: () => true })
     expect(lost).toEqual([{ id: 'gone', name: 'GONE', active: false, agents: 1, waiting: 1, working: 0, done: 0, presets: [], artifacts: [] }])
   })
+
+  it('sends a swipeable bounded artifact list, not only three sheets', () => {
+    const artifacts = Array.from({ length: CARD_ITEMS + 2 }, (_, index) => ({ id: `b${index}`, kind: 'browser' as const, title: `Page ${index}`, host: '', tint: '#123', initial: 'P' }))
+    const [tile] = watchWorkspaces({ workspaces: spaces, activeId: 'dev', rows: [], agentsIn: () => 0, active: () => true, avatarOf: () => ({ presets: [], artifacts }) })
+    expect(tile.artifacts).toHaveLength(CARD_ITEMS)
+  })
 })
 
 describe('one workspace’s cards', () => {

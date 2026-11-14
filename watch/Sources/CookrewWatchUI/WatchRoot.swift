@@ -452,7 +452,7 @@ struct ZoomStack: View {
     switch route {
     case .workspaces:
       HitlPage(store: store, onAgent: openCard, onItem: openItem) { _ in
-        WorkspacesPage(tiles: mergedTiles(store.workspaces, names: app.pairedMachine?.workspaces ?? []), machine: store.machine) { id in
+        WorkspacesPage(tiles: mergedTiles(store.workspaces, names: app.pairedMachine?.workspaces ?? []), machine: store.machine, store: store) { id in
           path.append(.agents(id))
         }
       }

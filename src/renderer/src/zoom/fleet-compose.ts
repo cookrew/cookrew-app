@@ -145,7 +145,7 @@ export function deckOf(w: Pick<ZoomFleetWorkspace, 'agents' | 'loose' | 'newest'
   const listed = [...w.agents.flatMap((a) => a.attachments ?? []), ...w.loose].reverse()
   const note = listed.find((a) => a.kind === 'note')
   const order = [w.newest, note, ...listed].filter((a): a is ZoomFleetAttachment => !!a)
-  return [...new Map(order.map((a) => [a.id, a])).values()].slice(0, DECK_SHOWN)
+  return [...new Map(order.map((a) => [a.id, a])).values()]
 }
 
 /** A desktop older than the feed's `newest`: the last browser it lists, its tray before its agents'. */

@@ -238,7 +238,7 @@ public func tilesFrom(_ cards: [Card]) -> [WorkspaceTile] {
       working: count(.working),
       done: count(.done),
       presets: crew.map(\.preset),
-      artifacts: Array(crew.flatMap(\.items).prefix(3))
+      artifacts: uniqueItems(crew.flatMap(\.items))
     )
   }
 }
@@ -257,9 +257,14 @@ public func tilesWithAvatar(_ tiles: [WorkspaceTile], cards: [Card]) -> [Workspa
       working: tile.working,
       done: tile.done,
       presets: crew.map(\.preset),
-      artifacts: Array(crew.flatMap(\.items).prefix(3))
+      artifacts: tile.artifacts.isEmpty ? uniqueItems(crew.flatMap(\.items)) : tile.artifacts
     )
   }
+}
+
+private func uniqueItems(_ items: [CardItem]) -> [CardItem] {
+  var seen = Set<String>()
+  return items.filter { seen.insert($0.id).inserted }
 }
 
 /**

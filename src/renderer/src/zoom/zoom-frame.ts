@@ -618,7 +618,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const avAt = focused && into > 0 ? local(FV.avatar.x, FV.avatar.y, x, y) : { x: 0, y: 0 }
     const avS = focused ? lerp(s, FV.avatar.size / (64 * S), into) : dock ? lerp(s, dock.size / (64 * S), docked) : s
     const avMove = focused && into > 0 ? `translate(${f1(avAt.x * into)}px, ${f1(avAt.y * into)}px) ` : ''
-    put(e.av, `${avMove}rotate(${r.toFixed(2)}deg) scale(${f4(avS)})`, (1 - ramp(iz * pc, 0, 0.35)) * (focused ? headOut : 1))
+    put(e.av, `${avMove}rotate(${r.toFixed(2)}deg) scale(${f4(avS)})`, ramp(zIn, -1, -0.6) * (1 - ramp(iz * pc, 0, 0.35)) * (focused ? headOut : 1))
     // What the fold lifts casts its shadow on the page below it (zoom.css · .zv-av, --zv-lift).
     const raised = Math.round(lift * 20) / 20
     if (e.av._l !== raised) {
