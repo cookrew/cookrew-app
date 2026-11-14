@@ -14,16 +14,19 @@ const fleetWith = (agent: Record<string, unknown>): ZoomFleet =>
   }) as unknown as ZoomFleet
 
 describe('createFleetViewReader', () => {
-  it('gives the same view while only what it does not draw changes, and a new one when it does', () => {
+  it('updates when an embedded agent card changes and ignores an undrawn status line', () => {
     let fleet = fleetWith({ phase: 'working', reply: 'Reading a.ts', status: 'Cerebrating…' })
     const read = createFleetViewReader(() => fleet)
     const first = read()
     expect(read()).toBe(first)
     fleet = fleetWith({ phase: 'working', reply: 'Editing b.ts', status: 'Pondering…' })
-    expect(read()).toBe(first)
+    const updated = read()
+    expect(updated).not.toBe(first)
+    fleet = fleetWith({ phase: 'working', reply: 'Editing b.ts', status: 'Still working…' })
+    expect(read()).toBe(updated)
     fleet = fleetWith({ phase: 'waiting', reply: 'Editing b.ts', status: null })
     const next = read()
     expect(next).not.toBe(first)
-    expect(next.machines[0].workspaces[0].agents).toEqual([{ harness: 'claude', phase: 'waiting' }])
+    expect(next.machines[0].workspaces[0].agents[0]).toMatchObject({ id: 'a', name: 'Forge', harness: 'claude', phase: 'waiting', reply: 'Editing b.ts' })
   })
 })

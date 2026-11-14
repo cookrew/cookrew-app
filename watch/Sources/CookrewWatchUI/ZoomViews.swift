@@ -105,39 +105,118 @@ public struct DevicesPage: View {
 /** The second stop: the paired Mac's workspaces, counted. */
 private struct WorkspaceAvatar: View {
   let tile: WorkspaceTile
+  let store: WatchStore?
+  let onOpen: () -> Void
   @Environment(\.ink) private var ink
+  @State private var itemIndex = 0
+  @State private var dragOffset: CGFloat = 0
+  @State private var expanded = false
+  @State private var closeTask: Task<Void, Never>?
+  @State private var selected: String?
+
+  private var crew: [Card] { store?.cards.filter { $0.workspace.id == tile.id } ?? [] }
+  private var currentItem: CardItem? { tile.artifacts.indices.contains(itemIndex) ? tile.artifacts[itemIndex] : nil }
+  private var tied: [Card] { guard let item = currentItem else { return [] }; return crew.filter { $0.items.contains { $0.id == item.id } } }
 
   var body: some View {
-    ZStack(alignment: .top) {
+    VStack(alignment: .leading, spacing: 3) {
+      HStack {
+        Button(action: onOpen) { Text(tile.name).font(InkType.name(14)).foregroundStyle(ink.ink).lineLimit(1) }.buttonStyle(.plain)
+        Spacer(minLength: 0)
+        if tile.waiting > 0 {
+          Text("\(tile.waiting)").font(InkType.word(9)).foregroundStyle(ink.onSeal).padding(3).background(Capsule().fill(ink.wait))
+        }
+      }
+      HStack(spacing: 3) {
+        if crew.isEmpty {
+          ForEach(Array(tile.presets.prefix(6).enumerated()), id: \.offset) { index, preset in
+            InkFace(id: "\(tile.id):\(index)", preset: preset, status: .idle, size: 18, weight: .regular)
+          }
+        } else {
+          ForEach(crew.prefix(6)) { card in
+            Button { selected = card.id; expanded = false } label: { InkFace(id: card.id, preset: card.preset, status: card.status, size: 18, weight: .regular) }.buttonStyle(.plain).accessibilityLabel(card.name)
+          }
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .clipped()
+      if let store, let card = crew.first(where: { $0.id == selected }) {
+        VStack(alignment: .leading, spacing: 2) {
+          HStack { Text(card.name).font(InkType.name(11)).lineLimit(1); Spacer(); Button("×") { selected = nil }.buttonStyle(.plain) }
+          ScrollView {
+            VStack(alignment: .leading, spacing: 3) {
+              if let wait = store.waitView(card) { WaitBlock(store: store, card: card, view: wait) }
+              else { CardWordsView(card: card, sent: store.sent(card.id)).lineLimit(2) }
+              if let item = card.items.first(where: { $0.kind == .browser }) { Text(item.title).font(InkType.word(9)).lineLimit(1).foregroundStyle(ink.muted) }
+              if let notice = store.notice { Text(notice).font(InkType.word(9)).foregroundStyle(ink.wait) }
+              ReplyBar(store: store, card: card)
+            }
+          }
+        }
+        .frame(height: 40)
+        .clipped()
+      } else {
       RoundedRectangle(cornerRadius: 11)
         .fill(ink.card)
         .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(ink.hair2, lineWidth: 1))
-        .frame(height: 54)
+        .frame(height: 40)
         .overlay(alignment: .center) {
-          if let item = tile.artifacts.first {
-            artifact(item)
-              .padding(.top, 8)
+          if !tile.artifacts.isEmpty {
+            ZStack {
+              ForEach(Array(tile.artifacts.dropFirst(min(itemIndex, tile.artifacts.count)).prefix(3).enumerated()).reversed(), id: \.element.id) { index, item in
+                artifact(item).padding(4).background(RoundedRectangle(cornerRadius: 3).fill(ink.card).strokeBorder(ink.hair2, lineWidth: 1)).rotationEffect(.degrees(Double(index) * 3 - 1.5)).offset(x: CGFloat(index) * 3 + (index == 0 ? dragOffset : 0), y: CGFloat(index) * -2)
+              }
+            }
           } else {
             RoundedRectangle(cornerRadius: 3)
               .fill(ink.hair2)
               .frame(width: 66, height: 22)
-              .padding(.top, 8)
           }
         }
-      HStack(spacing: -5) {
-        ForEach(Array(tile.presets.prefix(6).enumerated()), id: \.offset) { index, preset in
-          InkFace(id: "\(tile.id):\(index)", preset: preset, status: .idle, size: 22, weight: .regular)
-            .background(Circle().fill(ink.paper))
-            .clipShape(Circle())
-            .overlay(Circle().strokeBorder(ink.paper, lineWidth: 1))
+        .scaleEffect(expanded ? 1.12 : 1)
+        .contentShape(Rectangle())
+        .gesture(DragGesture(minimumDistance: 8).onChanged { value in
+          if abs(value.translation.width) > abs(value.translation.height) { dragOffset = value.translation.width }
+        }.onEnded { value in
+          if abs(value.translation.width) > 20 && abs(value.translation.width) > abs(value.translation.height) {
+            itemIndex = min(max(0, itemIndex + (value.translation.width < 0 ? 1 : -1)), max(0, tile.artifacts.count - 1))
+          }
+          dragOffset = 0
+          if expanded { closeLater() }
+        })
+        .simultaneousGesture(LongPressGesture(minimumDuration: 0.35).onEnded { _ in
+          guard !tile.artifacts.isEmpty else { return }
+          closeTask?.cancel()
+          withAnimation { expanded = true }
+          closeLater()
+        })
+        .overlay(alignment: .topTrailing) {
+          if expanded {
+            HStack(spacing: 2) {
+              ForEach(tied) { card in
+                Button { selected = card.id; expanded = false; closeTask?.cancel() } label: { InkFace(id: card.id, preset: card.preset, status: card.status, size: 18, weight: .regular) }.buttonStyle(.plain).accessibilityLabel(card.name)
+              }
+            }.offset(y: -5)
+          }
         }
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.leading, 9)
-      .offset(y: -10)
+      Text("\(tile.agents) agents · \(tile.artifacts.count) artifacts\(tile.artifacts.isEmpty ? "" : " · \(itemIndex + 1)/\(tile.artifacts.count)")").font(InkType.word(9)).foregroundStyle(ink.muted).lineLimit(1)
     }
-    .frame(height: 62)
+    .padding(8)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(RoundedRectangle(cornerRadius: 12).fill(ink.card))
     .accessibilityLabel("\(tile.name), \(tile.agents) agents, \(tile.artifacts.count) artifacts")
+    .onChange(of: tile.artifacts.count) { _, count in itemIndex = min(itemIndex, max(0, count - 1)) }
+    .onDisappear { closeTask?.cancel() }
+  }
+
+  private func closeLater() {
+    closeTask?.cancel()
+    closeTask = Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 2_500_000_000)
+      guard !Task.isCancelled else { return }
+      withAnimation { expanded = false }
+    }
   }
 
   private func artifact(_ item: CardItem) -> some View {
@@ -161,12 +240,14 @@ public struct WorkspacesPage: View {
   /** The word for the machine they are on. */
   let machine: String
   let onOpen: (String) -> Void
+  let store: WatchStore?
   @Environment(\.ink) private var ink
 
-  public init(tiles: [WorkspaceTile], machine: String = machineWord(nil), onOpen: @escaping (String) -> Void) {
+  public init(tiles: [WorkspaceTile], machine: String = machineWord(nil), store: WatchStore? = nil, onOpen: @escaping (String) -> Void) {
     self.tiles = tiles
     self.machine = machine
     self.onOpen = onOpen
+    self.store = store
   }
 
   private func line(_ tile: WorkspaceTile) -> String {
@@ -183,42 +264,7 @@ public struct WorkspacesPage: View {
           Text("Reading the \(machine)…").font(InkType.words(13)).foregroundStyle(ink.muted).padding(.horizontal, 6)
         }
         ForEach(tiles) { tile in
-          Button { onOpen(tile.id) } label: {
-            VStack(alignment: .leading, spacing: 4) {
-              HStack(alignment: .center, spacing: 8) {
-                WorkspaceAvatar(tile: tile)
-                VStack(alignment: .leading, spacing: 2) {
-                  HStack(spacing: 5) {
-                    if tile.active { Circle().fill(ink.sealText).frame(width: 6, height: 6) }
-                    Text(tile.name)
-                      .font(InkType.name(14))
-                      .foregroundStyle(tile.agents == 0 ? ink.muted : ink.ink)
-                      .lineLimit(1)
-                      .minimumScaleFactor(0.78)
-                    if tile.waiting > 0 {
-                      Text("\(tile.waiting)")
-                        .font(InkType.word(9))
-                        .foregroundStyle(ink.onSeal)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(ink.wait))
-                    }
-                  }
-                  Text(line(tile))
-                    .font(InkType.word(9.5))
-                    .foregroundStyle(ink.muted)
-                    .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-              }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12).fill(ink.card))
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel(tile.waiting > 0 ? "\(tile.name), \(tile.waiting) need you" : tile.name)
+          WorkspaceAvatar(tile: tile, store: store, onOpen: { onOpen(tile.id) })
         }
       }
       .padding(.horizontal, 6)

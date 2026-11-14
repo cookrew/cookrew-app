@@ -61,6 +61,7 @@ export interface MarkView {
   notes: number | null
   /** What its tile's deck shows, newest first (use-zoom-fleet.ts · deckOf); empty when the feed names none. */
   deck: ItemView[]
+  agents?: AgentView[]
 }
 export interface ZoomModel {
   frame: FrameModel
@@ -218,6 +219,18 @@ export interface ZoomInput {
 export interface SeatedAgent {
   harness: string
   phase: string
+  id?: string
+  name?: string
+  task?: string | null
+  reply?: string | null
+  orch?: boolean
+  attachments?: readonly { kind: 'browser' | 'note' }[]
+}
+function seatedView(agent: SeatedAgent): AgentView | null {
+  if (!agent.id) return null
+  const phase = agent.phase as AgentPhase
+  const status = inkStatusOfRow(phase, false)
+  return { id: agent.id, name: agent.name ?? agent.id, preset: agent.harness, orch: !!agent.orch, phase, status, word: statusWord(status), line: agent.reply || agent.task || 'Nothing said yet.', browsers: agent.attachments?.filter((item) => item.kind === 'browser').length ?? 0, notes: agent.attachments?.filter((item) => item.kind === 'note').length ?? 0, turn: null }
 }
 const waitingIn = (phases: readonly string[]): number => phases.filter((p) => p === 'waiting').length
 
@@ -319,7 +332,15 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       const presets = seated ? seated.map((a) => a.harness) : rows.map((r) => r.preset)
       const counted = input.counts?.get(w.id)
       const waitingCount = waitingIn((seated ?? rows).map((a) => a.phase))
-      return { id: w.id, name: w.name, presets, waiting: waitingCount > 0, waitingCount, browsers: counted?.browsers ?? null, notes: counted?.notes ?? null, deck: (input.decks?.get(w.id) ?? []).map(deckView) }
+      const knownRows = new Map(input.rows.filter((row) => row.workspaceId === w.id).map((row) => [row.id, row]))
+      const views = seated ? seated.flatMap((entry) => {
+        const row = entry.id ? knownRows.get(entry.id) : undefined
+        const feed = seatedView(entry)
+        if (!row) return feed ?? []
+        const view = agentViewOf(row, new Map())
+        return feed ? { ...view, browsers: feed.browsers, notes: feed.notes } : view
+      }) : rows.map((row) => agentViewOf(row, new Map()))
+      return { id: w.id, name: w.name, presets, agents: views, waiting: waitingCount > 0, waitingCount, browsers: counted?.browsers ?? null, notes: counted?.notes ?? null, deck: (input.decks?.get(w.id) ?? []).map(deckView) }
     })
   // The open workspace's crew, until its canvas comes: the feed's, or its tile would say "no agents".
   const openFeed = input.crews?.get(input.activeId)
@@ -353,13 +374,14 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       id: input.activeId,
       name: input.name,
       presets: openSeated ? openSeated.map((a) => a.harness) : agents.map((a) => a.preset),
+      agents: openSeated ? openSeated.flatMap((agent) => seatedView(agent) ?? []) : agents,
       waiting: openWaiting > 0,
       waitingCount: openWaiting,
       // Its canvas not read yet: unknown, not empty.
       browsers: input.loaded === false ? null : all.filter((n) => n.kind === 'browser').length,
       notes: input.loaded === false ? null : all.filter((n) => n.kind === 'note').length,
       // The open workspace's own things: their real thumbnails, not the feed's names.
-      deck: [...new Set([all.find((n) => n.kind === 'browser'), all.find((n) => n.kind === 'note'), ...all.slice(0, DECK_SHOWN)])].flatMap((n) => n ?? []).slice(0, DECK_SHOWN).flatMap((n) => itemViewOf(n, []) ?? [])
+      deck: all.slice(0, ITEMS_SHOWN).flatMap((n) => itemViewOf(n, owners.get(n.id) ?? []) ?? [])
     },
     machines: (input.machines ?? []).map(machineViewOf),
     name: input.name,

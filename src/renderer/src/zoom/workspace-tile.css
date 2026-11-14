@@ -73,6 +73,95 @@
   background: var(--zv-paper-2);
 }
 
+.zv-artifact-fan {
+  position: absolute;
+  left: 14%;
+  right: 14%;
+  top: 14px;
+  bottom: 12px;
+  transform-origin: 50% 100%;
+}
+
+.zv-artifact-sheet {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 100%;
+  filter: drop-shadow(0 1px 2px var(--zv-shadow));
+}
+
+.zv-artifact-page {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 5px 5px 0 0;
+  background: var(--zv-card);
+  box-shadow: inset 0 0 0 calc(1px * var(--zv-k, 1)) var(--zv-hair-2);
+}
+
+.zv-artifact-page > .zv-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  border-bottom: calc(1px * var(--zv-k, 1)) solid var(--zv-hair);
+  background: var(--zv-paper-2);
+  font: 9px/1 var(--zv-mono);
+  color: var(--zv-ink-soft);
+}
+
+.zv-artifact-page > .zv-shot {
+  display: block;
+  width: 100%;
+  height: calc(100% - 20px);
+  object-fit: cover;
+  object-position: top center;
+}
+
+.zv-artifact-page > .zv-pg {
+  display: grid;
+  gap: 8px;
+  padding: 28px 20px;
+}
+
+.zv-artifact-page > .zv-pg b {
+  display: block;
+  height: 34px;
+  border-radius: 5px;
+}
+
+.zv-artifact-page > .zv-pg i {
+  display: block;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--zv-hair-2);
+}
+
+.zv-artifact-page > .zv-pg i:last-child {
+  width: 62%;
+}
+
+.zv-artifact-page > .zv-nt {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 28px 20px;
+}
+
+.zv-artifact-page > .zv-nt b {
+  font: 600 15px/1.25 var(--zv-serif);
+  color: var(--zv-ink);
+}
+
+.zv-artifact-page > .zv-nt i {
+  display: block;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--zv-hair-2);
+}
+
 .zv-workspace-folder > .zv-bar,
 .zv-workspace-folder > .zv-shot,
 .zv-workspace-folder > .zv-pg,
@@ -158,10 +247,11 @@
   width: 352px;
   height: 70px;
   padding: 0 10px;
+  overflow: hidden;
   pointer-events: none;
 }
 
-.zv-workspace-agent {
+.zv-mark .zv-workspace-agent {
   position: relative;
   left: auto;
   top: auto;
@@ -472,3 +562,56 @@
 .zv-device[data-density='tiny'] .zv-mark {
   --zv-pad: 6px;
 }
+
+.zv-fan-window {
+  position: absolute;
+  left: -112px;
+  top: calc(var(--zv-tile-top, -174px) + 112px);
+  width: 430px;
+  height: calc(var(--zv-tile-h, 318px) - 160px);
+  z-index: 22;
+  overflow: hidden;
+  background: var(--zv-paper-2);
+  pointer-events: inherit;
+  touch-action: pan-y;
+  cursor: grab;
+  transition: top 420ms, height 420ms, border-radius 420ms;
+}
+
+.zv-fan-window.expanded {
+  z-index: 30;
+  top: var(--zv-tile-top, -174px);
+  height: var(--zv-tile-h, 318px);
+  border-radius: var(--zv-tile-r);
+}
+
+.zv-fan-window.dragging { cursor: grabbing; }
+.zv-fan-window .zv-workspace-artifact { inset: 0; width: auto; height: auto; }
+.zv-fan-window .zv-workspace-folder { border: 0; border-radius: 0; box-shadow: none; }
+.zv-fan-window .zv-workspace-folder::before { display: none; }
+.zv-fan-window .zv-artifact-fan { bottom: -12px; transition: inset 420ms; }
+.zv-fan-window.expanded .zv-artifact-fan { left: 10px; right: 24px; top: 20px; bottom: 10px; }
+.zv-fan-window .zv-artifact-sheet { transition: transform 360ms, opacity 360ms; }
+.zv-fan-window.dragging .zv-artifact-sheet { transition: none; }
+.zv-artifact-sheet:not(.front) .zv-bar { color: transparent; }
+.zv-artifact-sheet:not(.front) .zv-pg, .zv-artifact-sheet:not(.front) .zv-nt { visibility: hidden; }
+.zv-workspace-agents { top: calc(var(--zv-tile-top, -174px) + 35px); }
+.zv-tile-cap.agents { top: calc(var(--zv-tile-top, -174px) + 52px); left: 275px; max-width: 35px; }
+.zv-tile-cap.agents small { display: none; }
+.zv-tile-art-title { left: calc(-112px + var(--zv-pad) * var(--zv-k, 1)); top: calc(var(--zv-tile-top, -174px) + var(--zv-tile-h, 318px) - 23px * var(--zv-k, 1)); max-width: calc(195px / var(--zv-k, 1)); overflow: hidden; text-overflow: ellipsis; font: 11px/16px var(--zv-serif); color: var(--zv-ink); transform-origin: 0 0; }
+
+.zv-workspace-agents { z-index: 23; pointer-events: inherit; touch-action: pan-y; display: block; }
+.zv-mark .zv-workspace-agent { position: absolute; left: 10px; top: 9px; margin: 0; padding: 0; border: 0; cursor: pointer; transition: transform 260ms; }
+.zv-workspace-agents.dragging .zv-workspace-agent { transition: none; }
+.zv-tile-agent-name { position: absolute; left: 68px; top: 12px; width: 160px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 600 20px var(--zv-serif); color: var(--zv-ink); pointer-events: none; background: var(--zv-card); }
+.zv-tile-agent-name small { display: block; font: 12px var(--zv-mono); color: var(--zv-muted); }
+.zv-fan-tied { position: absolute; top: 8px; right: 8px; z-index: 300; display: flex; gap: 4px; }
+.zv-fan-tied button { border: 0; padding: 3px; border-radius: 50%; background: var(--zv-card); cursor: pointer; }
+.zv-tile-card-window { position: absolute; left: -112px; top: calc(var(--zv-tile-top, -174px) + 112px); width: 430px; height: calc(var(--zv-tile-h, 318px) - 112px); z-index: 22; overflow: hidden; background: var(--zv-card); pointer-events: inherit; }
+.zv-tile-card { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+.zv-tile-card .zv-tile-card-body { position: static; flex: 1; min-height: 0; width: auto; max-height: none; overflow: hidden; --zv-words-room: 100%; }
+.zv-tile-card-art { display: flex; flex: none; align-items: center; height: 48px; gap: 8px; background: var(--zv-paper-2); overflow: hidden; }
+.zv-tile-card-art .zv-artifact-page { position: relative; inset: auto; flex: none; width: 75px; height: 44px; }
+.zv-tile-card-art span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 14px var(--zv-mono); }
+.zv-tile-card .zv-tile-card-reply { position: static; flex: none; width: auto; height: 36px; }
+.zv-tile-card-back { position: absolute; top: 0; right: 0; border: 0; background: var(--zv-card); color: var(--zv-ink); cursor: pointer; }

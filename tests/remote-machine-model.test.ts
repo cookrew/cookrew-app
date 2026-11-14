@@ -89,6 +89,10 @@ describe('remoteAgentView', () => {
 })
 
 describe('tileView', () => {
+  it('uses the remote workspace avatar when the machine provides it', () => {
+    const read = parseRemoteCards(answer({ workspaces: [{ id: 'w-1', name: 'Box Lab', presets: ['Codex'], artifacts: [{ id: 'b-1', kind: 'browser', title: 'Box', host: 'example.com', tint: '#456', initial: 'B' }] }] }))!
+    expect(tileView(read.workspaces[0])).toMatchObject({ presets: ['Codex'], browsers: 1, notes: 0, deck: [{ id: 'b-1', owners: [] }] })
+  })
   it('a workspace tile in the zoom’s own form, faces for its agents', () => {
     const tile = parseRemoteCards(answer())!.workspaces[0]!
     expect(tileView(tile)).toMatchObject({ id: 'w-1', name: 'Box Lab', waiting: true, waitingCount: 1, browsers: null, notes: null, deck: [] })

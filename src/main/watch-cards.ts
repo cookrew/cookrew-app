@@ -229,7 +229,7 @@ export function watchWorkspaces(input: WatchWorkspacesInput): WatchWorkspace[] {
       working: counted('working'),
       done: counted('done'),
       presets: avatar.presets,
-      artifacts: avatar.artifacts.slice(0, 3)
+      artifacts: avatar.artifacts.slice(0, CARD_ITEMS)
     }
   })
 }

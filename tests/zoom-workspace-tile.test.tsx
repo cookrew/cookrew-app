@@ -174,7 +174,7 @@ describe('the deck', () => {
 
   it('leads with the newest browser and shows a note when there is one', () => {
     const deck = deckOf({ agents: [agent([att('a', 'browser'), att('n', 'note')])], loose: [att('b', 'browser'), att('c', 'browser')], newest: att('z', 'browser') })
-    expect(deck.map((i) => i.id)).toEqual(['z', 'n', 'c'])
+    expect(deck.map((i) => i.id)).toEqual(['z', 'n', 'c', 'b', 'a'])
   })
 
   it('lists each thing once, however many agents wear it', () => {
@@ -198,7 +198,7 @@ describe('a tile', () => {
     const html = render(mark())
     expect(html).toContain('aria-label="Open Goat Team agents, 2 agents"')
     expect(html).toContain('aria-label="Open Goat Team artifacts, 26 browsers, 6 notes"')
-    expect(html.match(/<button/g)).toHaveLength(2)
+    expect(html.match(/<button/g)).toHaveLength(4)
   })
 
   it('never shows a made-up zero: no feed, no artifacts door', () => {
@@ -235,10 +235,10 @@ describe('a tile', () => {
     expect(render(mark())).not.toContain('zv-tile-wait')
   })
 
-  it('leaves the faces to the scene when open', () => {
+  it('draws the tile row for both open and other workspaces', () => {
     const html = render(mark(), true)
     expect(html).toContain('data-open="true"')
-    expect(html).not.toContain('zv-av')
+    expect(html).toContain('zv-workspace-agent')
     expect(render(mark())).toContain('zv-av')
   })
 
@@ -281,5 +281,11 @@ describe('a tile through a rebuild', () => {
     expect(m.openMark.browsers).toBeNull()
     expect(m.openMark.notes).toBeNull()
     expect(buildZoomModel({ ...input, nodes: [], loaded: true }).openMark.browsers).toBe(0)
+  })
+
+  it('retains every active workspace artifact in newest-first order', () => {
+    const nodes = Array.from({ length: 5 }, (_, index) => ({ ...(node as object), id: `n${index}` }) as typeof node)
+    const model = buildZoomModel({ ...input, nodes })
+    expect(model.openMark.deck.map((item) => item.id)).toEqual(['n4', 'n3', 'n2', 'n1', 'n0'])
   })
 })

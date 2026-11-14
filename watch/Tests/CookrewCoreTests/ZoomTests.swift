@@ -41,6 +41,14 @@ private final class Felt {
 
 @Suite("the workspaces stop")
 struct WorkspaceTileTests {
+  @Test("a tile retains each distinct carried artifact")
+  func artifacts() {
+    let items = (0..<5).map { CardItem(id: "item\($0)", kind: .browser, title: "Page \($0)", host: "example.com", tint: "#123456", initial: "P") }
+    let first = Card(id: "first", name: "First", workspace: dev, status: .idle, word: "Idle", items: items)
+    let second = Card(id: "second", name: "Second", workspace: dev, status: .idle, word: "Idle", items: [items[0]])
+    #expect(tilesFrom([first, second])[0].artifacts == items)
+  }
+
   @Test("a Mac that sends no tiles still gets them, from its cards, in the order they came")
   func derived() {
     let tiles = tilesFrom([card("a", .waiting, goat), card("b", .working, dev), card("c", .done, goat), card("d", .idle, dev)])
