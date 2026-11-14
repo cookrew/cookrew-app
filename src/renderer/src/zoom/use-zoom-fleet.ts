@@ -502,7 +502,7 @@ export function fleetViewOf(fleet: ZoomFleet): ZoomFleetView {
       workspaces: m.workspaces.map((w) => {
         const owners = new Map<string, string[]>()
         for (const agent of w.agents) {
-          for (const item of agent.attachments) {
+          for (const item of agent.attachments ?? []) {
             owners.set(item.id, [...(owners.get(item.id) ?? []), agent.id])
           }
         }
