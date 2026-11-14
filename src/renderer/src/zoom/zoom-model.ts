@@ -227,6 +227,7 @@ export interface DeckSource {
   kind: 'browser' | 'note'
   title: string
   host?: string | null
+  owners?: string[]
 }
 /** How many things a tile's deck shows by name; the rest is its depth. */
 export { DECK_SHOWN }

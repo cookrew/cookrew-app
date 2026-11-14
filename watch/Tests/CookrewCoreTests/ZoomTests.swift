@@ -45,9 +45,10 @@ struct WorkspaceTileTests {
   func derived() {
     let tiles = tilesFrom([card("a", .waiting, goat), card("b", .working, dev), card("c", .done, goat), card("d", .idle, dev)])
     #expect(tiles == [
-      WorkspaceTile(id: "goat", name: "GOAT Team", active: false, agents: 2, waiting: 1, working: 0, done: 1),
-      WorkspaceTile(id: "dev", name: "Cookrew Dev", active: true, agents: 2, waiting: 0, working: 1, done: 0)
+      WorkspaceTile(id: "goat", name: "GOAT Team", active: false, agents: 2, waiting: 1, working: 0, done: 1, presets: ["Claude Code", "Claude Code"]),
+      WorkspaceTile(id: "dev", name: "Cookrew Dev", active: true, agents: 2, waiting: 0, working: 1, done: 0, presets: ["Claude Code", "Claude Code"])
     ])
+    #expect(tiles.map(\.presets) == [["Claude Code", "Claude Code"], ["Claude Code", "Claude Code"]])
   }
 
   @Test("the account's list sets the order and adds the empty workspaces an old Mac leaves out")

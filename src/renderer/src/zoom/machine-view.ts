@@ -29,7 +29,7 @@ const machineMarkOf = (w: NonNullable<ZoomInput['machines']>[number]['workspaces
 }
 
 /** One sheet of a workspace's deck, from what its machine said of it. */
-export const deckView = (d: DeckSource): ItemView => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? '', tint: tintOf(d.id), initial: itemInitial(d.title), line: '', owners: [] })
+export const deckView = (d: DeckSource): ItemView => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? '', tint: tintOf(d.id), initial: itemInitial(d.title), line: '', owners: d.owners ?? [] })
 
 /** A machine of the account as the devices stop draws it: its tiles, its counts, never a made-up zero. */
 export function machineViewOf(m: NonNullable<ZoomInput['machines']>[number]): MachineView {

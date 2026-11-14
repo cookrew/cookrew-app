@@ -450,6 +450,13 @@ interface CodexRecord {
     item?: { type?: string; content?: unknown; phase?: string }
     /** `task_complete` carries the closing reply verbatim. */
     last_agent_message?: string
+    /**
+     * session_meta of a CONTINUATION rollout (codex-cli paginated history):
+     * this file carries on from the first `end_byte_offset` bytes of an
+     * earlier rollout of the same thread. Written when a backtrack (Esc-Esc
+     * edit) drops the tail of the conversation — see main/codex-lineage.ts.
+     */
+    history_base?: unknown
   }
 }
 
@@ -457,6 +464,32 @@ export interface CodexSessionMeta {
   sessionId: string
   cwd: string
   timestampMs: number
+}
+
+/** Where a continuation rollout's history starts: a prefix of another file. */
+export interface CodexHistoryBase {
+  threadId: string
+  /** Codex's own ordinal of the first record NOT carried over. */
+  endOrdinalExclusive: number
+  /** Bytes of the base rollout this one carries on from. */
+  endByteOffset: number
+}
+
+/** The history_base of a session_meta line, or null for an ordinary rollout. */
+export function parseCodexHistoryBase(line: string): CodexHistoryBase | null {
+  const record = parseLine(line) as CodexRecord | null
+  if (!record || record.type !== 'session_meta') return null
+  const base = record.payload?.history_base as Record<string, unknown> | null | undefined
+  if (!base || typeof base !== 'object') return null
+  const { thread_id: threadId, end_ordinal_exclusive: ordinal, end_byte_offset: bytes } = base
+  if (typeof threadId !== 'string' || threadId.length === 0) return null
+  if (!Number.isSafeInteger(ordinal) || (ordinal as number) < 0) return null
+  if (!Number.isSafeInteger(bytes) || (bytes as number) < 0) return null
+  return {
+    threadId,
+    endOrdinalExclusive: ordinal as number,
+    endByteOffset: bytes as number
+  }
 }
 
 /** The binder's key: rollout line 1 is {type:'session_meta', payload:{...}}. */
@@ -519,17 +552,37 @@ function codexItemText(content: unknown): string | null {
  * ended, unsuccessfully, and a dispatch waiting on it must not strand until
  * the sweep. Either marker lets the TAIL block claim final; everything else
  * waits for the next-user boundary in turnRecordsOf.
+ *
+ * CONTINUATIONS (Codex backtrack, 2026-11-13). A rollout whose session_meta
+ * carries `history_base` continues a PREFIX of an earlier rollout of the same
+ * thread; main/codex-lineage.ts feeds that prefix in first, so numbering runs
+ * on. The blocks the continuation itself opens are namespaced by an explicit
+ * BRANCH KEY the caller derives from the rollout's own name
+ * (`<thread>:<branch>:p<N>`): the base rollout still holds the exchanges the
+ * backtrack dropped, under the very same `p<N>`, and one identity must never
+ * name two exchanges — not even two continuations born in the same
+ * millisecond. Blocks carried in from the prefix keep the identities their
+ * own file gave them. Only the FIRST session_meta owns the namespace.
  */
-export function createCodexTraceAccumulator(): TraceBlockAccumulator {
+export interface CodexTraceAccumulator extends TraceBlockAccumulator {
+  /** Called by the file reader before feeding each verified base/file segment. */
+  startFile(branch: string | null): void
+}
+
+export function createCodexTraceAccumulator(): CodexTraceAccumulator {
   const blocks: TraceBlock[] = []
   let current: TraceBlock | null = null
   let sawFinal = false
   let sessionId: string | null = null
+  let branch: string | null = null
+  /** Each explicitly started file has one header, supplied by the reader. */
+  let headerSeen = false
   const codexPending = new Map<string, TraceToolCall>()
 
   const open = (prompt: string, at: number): void => {
+    const namespace = `${sessionId ?? 'session'}${branch === null ? '' : `:${branch}`}`
     current = {
-      id: `${sessionId ?? 'session'}:p${blocks.length + 1}`,
+      id: `${namespace}:p${blocks.length + 1}`,
       index: blocks.length + 1,
       prompt,
       reply: '',
@@ -561,7 +614,12 @@ export function createCodexTraceAccumulator(): TraceBlockAccumulator {
     const at = timeMs(record.timestamp, current?.endedAt ?? 0)
     const payload = record.payload
     if (record.type === 'session_meta' && typeof payload.session_id === 'string') {
-      sessionId = payload.session_id
+      // The FIRST session_meta is the header; any later one is a foreign
+      // record and must never rewrite the namespace (review #2).
+      if (!headerSeen) {
+        headerSeen = true
+        sessionId = payload.session_id
+      }
       return
     }
     if (record.type === 'event_msg' && payload.type === 'user_message') {
@@ -649,6 +707,10 @@ export function createCodexTraceAccumulator(): TraceBlockAccumulator {
   }
 
   return {
+    startFile(nextBranch: string | null): void {
+      branch = nextBranch
+      headerSeen = false
+    },
     feed(lines: string[]): void {
       for (const line of lines) feedLine(line)
     },
@@ -1168,7 +1230,7 @@ function sameTurnRecord(a: TurnRecord, b: TurnRecord): boolean {
  *  the builder and with it the identity of the blocks() array; a changed
  *  array is the 'reset' signal (Codex and the linear Pi path keep one array
  *  for the accumulator's lifetime). */
-function turnAccumulatorOver(blockAccumulator: TraceBlockAccumulator): SessionTurnAccumulator {
+export function turnAccumulatorOver(blockAccumulator: TraceBlockAccumulator): SessionTurnAccumulator {
   /** takeDelta cursor: blocks projected by the last take… */
   let emittedCount = 0
   /** …the tail record exactly as it was handed out… */

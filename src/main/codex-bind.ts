@@ -65,7 +65,7 @@ export function codexWatchFile(
  * boundary is never corrupted. Returns null on I/O error; caps the scan so a
  * pathological newline-less file can't be slurped whole.
  */
-function readFirstLine(file: string): string | null {
+export function readFirstLine(file: string): string | null {
   try {
     const fd = openSync(file, 'r')
     try {
@@ -93,8 +93,8 @@ function readFirstLine(file: string): string | null {
   }
 }
 
-/** Rollout day dirs to scan for a moment: its UTC date and the day before. */
-function dayDirs(base: string, aroundMs: number): string[] {
+/** Rollout day dirs to scan for a moment: its UTC date and the days either side. */
+export function dayDirs(base: string, aroundMs: number): string[] {
   const dirs: string[] = []
   for (const deltaDays of [0, -1, 1]) {
     const d = new Date(aroundMs + deltaDays * 86_400_000)
@@ -179,11 +179,26 @@ export interface CodexBindOptions {
   preferSessionId?: string | null
 }
 
-/** The rollout uuid baked into a ref's filename, for rebind preference. */
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
+/**
+ * The THREAD uuid baked into a ref's filename — the key `codex resume` takes.
+ * A continuation rollout (written after a backtrack, codex-lineage.ts) is
+ * named `rollout-<ts>-<thread>_<rollout>.jsonl`: same thread, so the same key.
+ */
 export function sessionIdFromRolloutPath(file: string): string | null {
-  const match = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(
-    file
-  )
+  const match = new RegExp(`-(${UUID})(?:_${UUID})?\\.jsonl$`, 'i').exec(file)
+  return match ? match[1] : null
+}
+
+/**
+ * The ROLLOUT uuid after the `_` in a continuation's name, or null for an
+ * original rollout. This is what namespaces the blocks a continuation opens
+ * (trace-blocks.ts): unique per file even when two backtracks land in the
+ * same millisecond.
+ */
+export function rolloutIdFromRolloutPath(file: string): string | null {
+  const match = new RegExp(`-${UUID}_(${UUID})\\.jsonl$`, 'i').exec(file)
   return match ? match[1] : null
 }
 

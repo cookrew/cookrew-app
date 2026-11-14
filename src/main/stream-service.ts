@@ -334,9 +334,11 @@ export function createStreamService(deps: StreamServiceDeps): StreamService {
       }
       const { rows, ...unknown } = windowRows(index.entries, request, STREAM_PAGE_DEFAULT_LIMIT, gone)
       // A file the chain no longer lists is still an address: it rotated out
-      // of the lineage, not off the disk. Only Claude chains have more than
-      // one member, so that is the parser such a file is read with.
-      const kindOf = (file: string): TraceKind => members.get(file)?.kind ?? 'claude'
+      // of the lineage, not off the disk. It is read with the chain's own
+      // parser — a Claude lineage member, or the rollout a Codex card left
+      // when a backtrack moved it to a continuation (codex-lineage.ts).
+      const chainKind = chain.files[chain.files.length - 1]?.kind ?? 'claude'
+      const kindOf = (file: string): TraceKind => members.get(file)?.kind ?? chainKind
       const sessionIdOf = (file: string): string =>
         members.get(file)?.sessionId ?? path.basename(file, path.extname(file))
       const documents = new Map(

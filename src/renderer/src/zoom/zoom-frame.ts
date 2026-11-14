@@ -60,7 +60,7 @@ export interface FrameModel {
   deviceCols?: number
 }
 
-type Put = HTMLElement & { _t?: string; _o?: number }
+type Put = HTMLElement & { _t?: string; _o?: number; _l?: number; _h?: string; _d?: number }
 export interface AgentEls {
   node: Put
   cardl: Put
@@ -97,6 +97,10 @@ export interface FrameEls {
   links: Map<string, { node: Put; th: Put; coin: Put; badge: Put | null }>
   items: Map<string, { node: Put; ttl: Put }>
   ties: Map<string, Put>
+  /** The fold's faces round a hovered agent, one drawing under the ties (ZoomView · .zv-fold); absent where nothing draws them. */
+  fold?: Put | null
+  /** The crew's light at rest, under the fold's (ZoomView · .zv-glow). */
+  glow?: Put | null
   marks: Map<string, Put>
   /** The machine's title over its marks (ZoomView · .zv-device-label). */
   deviceLabel?: Put | null
@@ -131,6 +135,210 @@ export interface FrameState {
   tilesPan?: number
   /** The page of the shelf over the thumbnails: taps on its "+N" chip, wrapping (zoom-layout.ts · shelfPage). */
   shelf?: number
+  /** The agent the pointer rests on, and how far the fold round it has come (0–1, use-zoom-motion eases it). */
+  hover?: { id: string; amt: number } | null
+  /** How the crew is lit at rest (FoldLight); hover only when absent. */
+  light?: FoldLight
+  /** An agent's face being dragged at the crew, and how far from where it stands, in px on screen (use-zoom-motion). */
+  drag?: { id: string; dx: number; dy: number } | null
+}
+
+/**
+ * THE FOLD (owner 2026-11-12: "hovering an agent bends the space along its
+ * ties, a slight, angled fold; the others move with it, so the agent and its
+ * ties stand out in depth"). The hovered agent is a peak, its ties the ridges
+ * running down from it, each tied agent part-way up its ridge; between two
+ * ridges the ground is one flat face, so the fold creases along the ties.
+ * Seen from above in perspective, centred on the peak: what stands higher
+ * grows and moves out from it, the far ground sinks a little and draws in.
+ */
+export interface Fold {
+  /** How far a point moves, in the crew's units. */
+  readonly dx: number
+  readonly dy: number
+  /** How much what stands there grows. */
+  readonly k: number
+  /** How high it stands: the peak 1, a tied agent its ridge, the far ground below 0. */
+  readonly h: number
+}
+
+/** Heights: the peak, a tied agent on its ridge, and the ground the fold sinks to. */
+/** How near a dragged face must come to another's place for a drop to swap them, in the crew's units. */
+const DROP_REACH = 56
+
+export const FOLD = { peak: 1, ridge: 0.55, ground: -0.3, depth: 0.16, reach: 260 } as const
+
+/** The fold's height at p: on the face between the two ridges p lies between, or a cone where no two close round it. */
+export function foldHeight(p: Pos, peak: Pos, ridges: readonly Pos[]): number {
+  const vx = p.x - peak.x
+  const vy = p.y - peak.y
+  const far = Math.hypot(vx, vy)
+  if (far < 1e-6) return FOLD.peak
+  const spokes = ridges
+    .map((r) => ({ r, ang: Math.atan2(r.y - peak.y, r.x - peak.x), len: Math.hypot(r.x - peak.x, r.y - peak.y) }))
+    .filter((q) => q.len > 1)
+    .sort((m, n) => m.ang - n.ang)
+  const reach = spokes.length ? spokes.reduce((t, q) => t + q.len, 0) / spokes.length : FOLD.reach
+  const cone = FOLD.peak - ((FOLD.peak - FOLD.ridge) * far) / reach
+  if (spokes.length < 2) return Math.max(FOLD.ground, cone)
+  const ang = Math.atan2(vy, vx)
+  // The two ridges either side of p, going round.
+  const next = spokes.findIndex((q) => q.ang > ang)
+  const one = spokes[next <= 0 ? spokes.length - 1 : next - 1]
+  const two = spokes[next === -1 ? 0 : next]
+  const gap = (two.ang - one.ang + 2 * Math.PI) % (2 * Math.PI) || 2 * Math.PI
+  // A face wider than a half turn is the fold's open side: a cone there, not a plane run off to the sky.
+  if (gap >= Math.PI - 0.05) return Math.max(FOLD.ground, cone)
+  // The plane through the peak and the two ridges' agents: z = peak + g·(p − peak), with g·r1 = g·r2 = ridge − peak.
+  const ax = one.r.x - peak.x
+  const ay = one.r.y - peak.y
+  const bx = two.r.x - peak.x
+  const by = two.r.y - peak.y
+  const det = ax * by - ay * bx
+  if (Math.abs(det) < 1e-6) return Math.max(FOLD.ground, cone)
+  const drop = FOLD.ridge - FOLD.peak
+  const gx = (drop * by - drop * ay) / det
+  const gy = (ax * drop - bx * drop) / det
+  return Math.max(FOLD.ground, FOLD.peak + gx * vx + gy * vy)
+}
+
+/** Where the fold carries a point, and how much it grows there, seen from above the peak. */
+export function foldAt(p: Pos, peak: Pos, ridges: readonly Pos[]): Fold {
+  const h = foldHeight(p, peak, ridges)
+  const k = 1 / (1 - FOLD.depth * h)
+  return { dx: (p.x - peak.x) * (k - 1), dy: (p.y - peak.y) * (k - 1), k, h }
+}
+
+/**
+ * THE FOLD'S FACES, IN LIGHT (owner 2026-11-12: "imagine a space of more
+ * dimensions: the light on these prism faces shows it"; then "the same colour
+ * as the ground, no colours"). The faces the fold raises round the hovered
+ * agent, where the agents now stand: one between each two of its ties that
+ * close an angle, and a narrow one on a tie's open side, so every ridge has a
+ * face either way. Each face turns its own way in depth, so each catches its
+ * own light, and its light is all its colour (foldFacesSvg).
+ */
+export interface FoldFace {
+  readonly pts: readonly [Pos, Pos, Pos]
+  /** How squarely it faces the light: 0 to 1. */
+  readonly light: number
+}
+
+/** The fold's height in px, to turn heights into slopes; and where the light comes from (top left, in front). */
+const FACE_DEPTH = 140
+const LIGHT_3D = (() => {
+  const v = [-0.5, -0.7, 0.6]
+  const n = Math.hypot(v[0], v[1], v[2])
+  return v.map((c) => c / n)
+})()
+
+/** A face through three points at their heights, lit by the way it turns (see foldFaces). */
+function litFace(p0: Pos, z0: number, p1: Pos, z1: number, p2: Pos, z2: number): FoldFace {
+  const u = [p1.x - p0.x, p1.y - p0.y, (z1 - z0) * FACE_DEPTH]
+  const v = [p2.x - p0.x, p2.y - p0.y, (z2 - z0) * FACE_DEPTH]
+  let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+  const m = Math.hypot(n[0], n[1], n[2]) || 1
+  n = n.map((c) => c / m)
+  if (n[2] < 0) n = n.map((c) => -c)
+  const light = Math.max(0, n[0] * LIGHT_3D[0] + n[1] * LIGHT_3D[1] + n[2] * LIGHT_3D[2])
+  return { pts: [p0, p1, p2], light: Math.round(light * 100) / 100 }
+}
+
+export function foldFaces(peak: Pos, ridges: readonly Pos[]): FoldFace[] {
+  const spokes = ridges
+    .map((r) => ({ r, ang: Math.atan2(r.y - peak.y, r.x - peak.x), len: Math.hypot(r.x - peak.x, r.y - peak.y) }))
+    .filter((q) => q.len > 1)
+    .sort((m, n) => m.ang - n.ang)
+  const out: FoldFace[] = []
+  const face = (p0: Pos, z0: number, p1: Pos, z1: number, p2: Pos, z2: number): void => void out.push(litFace(p0, z0, p1, z1, p2, z2))
+  const sliver = (s: (typeof spokes)[number], side: 1 | -1): void => {
+    const w = Math.min(46, Math.max(14, s.len * 0.22))
+    const normal = s.ang + (side * Math.PI) / 2
+    const tip = { x: (peak.x + s.r.x) / 2 + w * Math.cos(normal), y: (peak.y + s.r.y) / 2 + w * Math.sin(normal) }
+    face(peak, FOLD.peak, s.r, FOLD.ridge, tip, (FOLD.peak + FOLD.ridge) / 2 - 0.35)
+  }
+  if (spokes.length === 1) {
+    sliver(spokes[0], 1)
+    sliver(spokes[0], -1)
+    return out
+  }
+  spokes.forEach((one, i) => {
+    const two = spokes[(i + 1) % spokes.length]
+    const gap = (two.ang - one.ang + 2 * Math.PI) % (2 * Math.PI) || 2 * Math.PI
+    if (gap < Math.PI - 0.05) face(peak, FOLD.peak, one.r, FOLD.ridge, two.r, FOLD.ridge)
+    else {
+      sliver(one, 1)
+      sliver(two, -1)
+    }
+  })
+  return out
+}
+
+/**
+ * THE CREW AS ONE TERRAIN (owner 2026-11-12, to compare with every agent its
+ * own peak): one space for the whole crew, each agent as high as it has ties
+ * (a hub is a peak), and in each angle two of an agent's ties close a face out
+ * to their middles, so the faces from a tie's two ends meet on it. Lit as the
+ * fold's faces are, so its light and shade show the crew's shape.
+ */
+export function terrainFaces(at: Readonly<Record<string, Pos>>, ties: readonly { a: string; b: string }[]): FoldFace[] {
+  const near = new Map<string, string[]>()
+  for (const t of ties) {
+    if (t.a === t.b || !at[t.a] || !at[t.b]) continue
+    near.set(t.a, [...(near.get(t.a) ?? []), t.b])
+    near.set(t.b, [...(near.get(t.b) ?? []), t.a])
+  }
+  const top = Math.max(1, ...[...near.values()].map((n) => n.length))
+  const z = (id: string): number => (near.get(id)?.length ?? 0) / top
+  const out: FoldFace[] = []
+  for (const [id, list] of near) {
+    if (list.length < 2) continue
+    const p = at[id]
+    const spokes = list.map((n) => ({ id: n, r: at[n], ang: Math.atan2(at[n].y - p.y, at[n].x - p.x) })).sort((m, n) => m.ang - n.ang)
+    spokes.forEach((one, i) => {
+      const two = spokes[(i + 1) % spokes.length]
+      const gap = (two.ang - one.ang + 2 * Math.PI) % (2 * Math.PI) || 2 * Math.PI
+      if (gap >= Math.PI - 0.05) return
+      const h1 = { x: (p.x + one.r.x) / 2, y: (p.y + one.r.y) / 2 }
+      const h2 = { x: (p.x + two.r.x) / 2, y: (p.y + two.r.y) / 2 }
+      out.push(litFace(p, z(id), h1, (z(id) + z(one.id)) / 2 - 0.15, h2, (z(id) + z(two.id)) / 2 - 0.15))
+    })
+  }
+  return out
+}
+
+/** How the crew is lit at rest: only the hovered agent's fold, every agent its own peak, or one terrain. */
+export type FoldLight = 'hover' | 'every' | 'terrain'
+/** How strong the light at rest is, under a hovered fold's. */
+const AT_REST: Readonly<Record<Exclude<FoldLight, 'hover'>, number>> = { every: 0.55, terrain: 0.85 }
+
+const c1 = (n: number): string => n.toFixed(1)
+
+/** How a face lying flat is lit (LIGHT_3D's height): the paper's own tone, neither lighter nor darker. */
+const FLAT_LIGHT = LIGHT_3D[2]
+
+/**
+ * The faces as a drawing, in the page's own paper (owner 2026-11-12: "the
+ * same colour as the ground, no colours"): a face turned to the light is the
+ * paper a little lighter, one turned away a little darker, one lying flat the
+ * paper itself, each strongest at its peak and gone into the paper at its rim.
+ * Folded paper: depth from light and shade alone.
+ */
+export function foldFacesSvg(faces: readonly FoldFace[], prefix = 'zv-fold'): string {
+  let defs = ''
+  let body = ''
+  faces.forEach((f, i) => {
+    const [p0, p1, p2] = f.pts
+    const rim = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
+    const tone = Math.max(-1, Math.min(1, (f.light - FLAT_LIGHT) * 2.4))
+    const toward = tone >= 0 ? '#fff' : '#000'
+    const share = Math.round(Math.abs(tone) * (tone >= 0 ? 55 : 35))
+    const color = `color-mix(in srgb, var(--zv-paper, var(--sumi-paper, #f4efe4)) ${100 - share}%, ${toward} ${share}%)`
+    const stop = (at: string, alpha: number): string => `<stop offset="${at}" style="stop-color:${color};stop-opacity:calc(${alpha.toFixed(2)} * var(--zv-fold-a, 1))"/>`
+    defs += `<linearGradient id="${prefix}-${i}" gradientUnits="userSpaceOnUse" x1="${c1(p0.x)}" y1="${c1(p0.y)}" x2="${c1(rim.x)}" y2="${c1(rim.y)}">${stop('0', 0.9)}${stop('.6', 0.55)}${stop('1', 0.1)}</linearGradient>`
+    body += `<path d="M${c1(p0.x)} ${c1(p0.y)}L${c1(p1.x)} ${c1(p1.y)}L${c1(p2.x)} ${c1(p2.y)}Z" fill="url(#${prefix}-${i})"/>`
+  })
+  return faces.length ? `<defs>${defs}</defs>${body}` : ''
 }
 
 /** What the view reports after a frame: how opaque it still is (it hands over to the real full view), and the scene's scale. */
@@ -141,6 +349,8 @@ export interface FrameOut {
   panMax: number
   /** How far the workspaces' tiles can scroll, in px: 0 when they fit. */
   tilesMax: number
+  /** The agent a dragged face is over, which a drop swaps it with (crew-slots.ts); null when none. */
+  dropOn: string | null
 }
 
 const f1 = (n: number): string => n.toFixed(1)
@@ -332,18 +542,59 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   const headOut = FV.headFades ? 1 - ramp(z, 2.6, 2.86) : 1
   // The shelf's page: the faces it shows, and where the others wait (behind its "+N" chip).
   const shelf = shelfPage(L.thumbs.shelf, st.shelf ?? 0)
+  // THE FOLD round the hovered agent (foldAt): at the crew only, never on the way to a card, the
+  // thumbnails or the full view. Reckoned on the crew's own places, so nothing it moves moves it.
+  // A DRAGGED FACE (crew-slots.ts): it stands where the pointer has taken it, and the fold is worked
+  // out from there, so its prism changes under the hand; over another agent, a drop swaps them.
+  const drag = st.drag && L.crew.at[st.drag.id] && z > 0.8 && z < 1.2 ? st.drag : null
+  const rest: Record<string, Pos> = drag
+    ? { ...L.crew.at, [drag.id]: { x: L.crew.at[drag.id].x + drag.dx / S, y: L.crew.at[drag.id].y + drag.dy / S } }
+    : L.crew.at
+  let dropOn: string | null = null
+  if (drag) {
+    const p = rest[drag.id]
+    let best = DROP_REACH
+    for (const [id, q] of Object.entries(L.crew.at)) {
+      const d = Math.hypot(q.x - p.x, q.y - p.y)
+      if (id !== drag.id && d < best) {
+        best = d
+        dropOn = id
+      }
+    }
+  }
+  const hov = st.hover && st.hover.amt > 0.001 && rest[st.hover.id] ? st.hover : null
+  const fw = hov ? hov.amt * ramp(z, 0.8, 0.98) * (1 - ramp(z, 1.05, 1.3)) * (1 - pc) : 0
+  const peak = hov ? rest[hov.id] : null
+  const onFold = new Set<string>(hov ? model.ties.flatMap((t) => (t.a === hov.id ? [t.b] : t.b === hov.id ? [t.a] : [])) : [])
+  const ridges = [...onFold].flatMap((id) => rest[id] ?? [])
   model.agents.forEach((a, i) => {
     const e = els.agents.get(a.id)
     if (!e) return
     const zi = zOf(a.id)
     zm[a.id] = zi
     const far = L.stack[a.id] ?? { x: 0, y: 0, s: 0.84, r: 0 }
-    const mid = L.crew.at[a.id] ?? { x: 0, y: 0 }
+    const mid = rest[a.id] ?? { x: 0, y: 0 }
     const t = ease(ramp(z, Math.min(i, 6) * 0.03, 0.8 + Math.min(i, 6) * 0.03))
     let x = lerp(far.x, mid.x, t)
     let y = lerp(far.y, mid.y, t)
     let s = lerp(far.s, 1, t) * lerp(1, 0.62, ease(clamp01(zi - 1)))
     const r = lerp(far.r, 0, t)
+    // The fold carries the agent where its place on the crew lies, and grows it as it stands higher;
+    // one neither hovered nor tied to it steps back.
+    let lift = 0
+    if (fw > 0 && peak) {
+      const fold = foldAt(mid, peak, ridges)
+      x += fw * fold.dx
+      y += fw * fold.dy
+      s *= 1 + fw * (fold.k - 1)
+      lift = Math.max(0, fold.h) * fw
+    }
+    // In the hand: a little larger, and off the page.
+    if (drag && a.id === drag.id) {
+      s *= 1.06
+      lift = 1
+    }
+    const back = fw > 0 && hov && a.id !== hov.id && !onFold.has(a.id) ? 1 - 0.45 * fw : 1
     // To the shelf as the thumbs unfold.
     const shown = a.id in shelf.x
     const sh = { x: shown ? shelf.x[a.id] : shelf.more?.x ?? 0, y: L.thumbs.shelf.y }
@@ -363,11 +614,23 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const docked = ease(ramp(z, 2, 2.5))
     const nodeX = dockP ? lerp(x, dockP.x, docked) : x
     const nodeY = dockP ? lerp(y, dockP.y, docked) : y
-    put(e.node, `translate(${f1(nodeX)}px, ${f1(nodeY)}px)`, (dock ? lerp(1, dock.o, ramp(docked, 0, 0.6)) : 1) * onShelf)
+    put(e.node, `translate(${f1(nodeX)}px, ${f1(nodeY)}px)`, (dock ? lerp(1, dock.o, ramp(docked, 0, 0.6)) : 1) * onShelf * back)
     const avAt = focused && into > 0 ? local(FV.avatar.x, FV.avatar.y, x, y) : { x: 0, y: 0 }
     const avS = focused ? lerp(s, FV.avatar.size / (64 * S), into) : dock ? lerp(s, dock.size / (64 * S), docked) : s
     const avMove = focused && into > 0 ? `translate(${f1(avAt.x * into)}px, ${f1(avAt.y * into)}px) ` : ''
     put(e.av, `${avMove}rotate(${r.toFixed(2)}deg) scale(${f4(avS)})`, (1 - ramp(iz * pc, 0, 0.35)) * (focused ? headOut : 1))
+    // What the fold lifts casts its shadow on the page below it (zoom.css · .zv-av, --zv-lift).
+    const raised = Math.round(lift * 20) / 20
+    if (e.av._l !== raised) {
+      e.av.style.setProperty('--zv-lift', String(raised))
+      e.av._l = raised
+    }
+    // The face a dragged one is over is ringed: a drop there swaps them.
+    const target = a.id === dropOn ? 1 : 0
+    if (e.av._d !== target) {
+      e.av.style.setProperty('--zv-drop', String(target))
+      e.av._d = target
+    }
     const cBase = ramp(zi, 1.3, 1.85) * gone
     const ce = ease(cBase)
     put(e.cardl, `translate(${f1(x)}px, ${f1(y)}px)`, focused ? 1 - ramp(z, 2.04, 2.14) : 1 - ramp(z, 2, 2.3))
@@ -622,6 +885,48 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const shown = Math.max(0, len - 2 * cut)
     put(el, `translate(${f1(a.x + Math.cos(ang) * cut)}px, ${f1(a.y + Math.sin(ang) * cut)}px) rotate(${f4(ang)}rad) scale(${f4(shown / 400)}, 1)`, len < 2 * cut + 4 ? 0 : tieIn)
   }
+  // THE CREW'S LIGHT AT REST, every agent its own peak or one terrain. Drawn where the agents rest
+  // on the crew, not where this frame has them: the drawing then changes only when the crew does,
+  // never on each frame of a zoom (a phone's raster could not keep up and left the page undrawn,
+  // 2026-11-13). It gives way while a hovered fold stands out of it, so the two never disagree.
+  if (els.glow) {
+    const mode = st.light ?? 'hover'
+    let drawn = ''
+    if (mode !== 'hover' && tieIn > 0.01) {
+      if (mode === 'terrain') drawn = foldFacesSvg(terrainFaces(rest, model.ties), 'zv-glow')
+      else {
+        const near = new Map<string, Pos[]>()
+        for (const t of model.ties) {
+          const a = rest[t.a]
+          const b = rest[t.b]
+          if (!a || !b || t.a === t.b) continue
+          near.set(t.a, [...(near.get(t.a) ?? []), b])
+          near.set(t.b, [...(near.get(t.b) ?? []), a])
+        }
+        drawn = [...near].map(([id, spokes], k) => foldFacesSvg(foldFaces(rest[id], spokes), `zv-glow-${k}`)).join('')
+      }
+    }
+    if (els.glow._h !== drawn) {
+      els.glow.innerHTML = drawn
+      els.glow._h = drawn
+    }
+    put(els.glow, null, mode === 'hover' || !drawn ? 0 : AT_REST[mode] * tieIn * (1 - fw))
+  }
+  // The fold's faces, drawn once where the fold takes the agents when it is all the way up, and
+  // brought in by their opacity alone: easing in or out they are the same drawing, so the page is
+  // not drawn again on every frame of it (the same phone, 2026-11-13).
+  if (els.fold) {
+    const up = (p: Pos): Pos => {
+      const f = foldAt(p, peak ?? p, ridges)
+      return { x: p.x + f.dx, y: p.y + f.dy }
+    }
+    const drawn = fw > 0 && peak ? foldFacesSvg(foldFaces(peak, ridges.map(up))) : ''
+    if (els.fold._h !== drawn) {
+      els.fold.innerHTML = drawn
+      els.fold._h = drawn
+    }
+    put(els.fold, null, fw * tieIn)
+  }
 
   // The empty seat: at the end of the crew, gone at group zoom and past the cards.
   {
@@ -698,5 +1003,5 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   // The shelf's "+N" chip: after its page's last face, as the thumbnails unfold, gone into an item's full view.
   const more = shelf.more
   put(els.shelfMore, more ? `translate(${f1(more.x - SHELF_FACE / 2)}px, ${f1(L.thumbs.shelf.y - SHELF_FACE / 2)}px)` : null, more ? ease(ramp(P, 0.4, 0.9)) * (1 - ramp(iz * pc, 0, 0.35)) : 0)
-  return { cover, scale: S, panMax, tilesMax: dc.panMax }
+  return { cover, scale: S, panMax, tilesMax: dc.panMax, dropOn }
 }

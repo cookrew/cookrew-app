@@ -22,7 +22,7 @@ import { readJson, respondJson } from './mobile-http'
 import { sendTagged, validatorOf } from './http-compress'
 import type { TerminalActivity } from '../shared/turn'
 import type { LatestCheckpoint } from '../renderer/src/turn-view-model'
-import { crewRows, itemsOfAgent, MAX_CREW, rowsOfWorkspace, watchCards, watchWorkspaces, type WatchCard, type WatchItem, type WatchWorkspace } from './watch-cards'
+import { crewRows, itemOf, itemsOfAgent, MAX_CREW, rowsOfWorkspace, watchCards, watchWorkspaces, type WatchCard, type WatchItem, type WatchWorkspace } from './watch-cards'
 import type { WatchPairing } from './watch-pairing'
 import type { ViewerWho } from '../shared/remote-access'
 import { createScreenLeases, type LeasedScreen } from './screen-lease'
@@ -391,7 +391,19 @@ async function cards(
       activeId: board.activeWorkspaceId,
       rows: board.rows,
       agentsIn: (id) => canvasOf(id).nodes.filter((node) => node.kind === 'terminal').length,
-      active: ctx.active
+      active: ctx.active,
+      avatarOf: (id) => {
+        const canvas = canvasOf(id)
+        const presets = canvas.nodes.filter((node) => node.kind === 'terminal').map((node) => node.preset)
+        const artifacts = canvas.nodes
+          .filter((node) => node.kind === 'browser' || node.kind === 'note')
+          .reverse()
+          .flatMap((node) => {
+            const item = itemOf(node)
+            return item ? [item] : []
+          })
+        return { presets, artifacts }
+      }
     })
   }
 }

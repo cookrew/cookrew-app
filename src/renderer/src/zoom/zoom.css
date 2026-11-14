@@ -434,6 +434,21 @@
   height: 24px;
 }
 
+/* The crew's prism (zoom-frame.ts · foldFaces, terrainFaces): the fold's faces
+   round a hovered agent and the light at rest, drawn in the crew's own units,
+   under the faces. They take the place of the cables at the crew. */
+.zv-glow,
+.zv-fold {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+  opacity: 0;
+}
+
 /* ── the group's label: seal, name, totals ── */
 .zv-grp {
   position: absolute;
@@ -615,6 +630,15 @@
   height: 64px;
 }
 
+/* Lifted by the fold round a hovered agent (zoom-frame.ts · foldAt), a face
+   casts its shadow on the page: the higher, the further and softer. A face a
+   dragged one is over is ringed in the seal: a drop there swaps them (crew-slots.ts). */
+.zv-m > .zv-av {
+  box-shadow:
+    0 0 0 calc(var(--zv-drop, 0) * 3px) var(--zv-seal, #a8692b),
+    0 calc(var(--zv-lift, 0) * 14px) calc(var(--zv-lift, 0) * 22px) calc(var(--zv-lift, 0) * -4px) var(--zv-shadow, rgba(40, 30, 15, 0.1));
+}
+
 
 .zv-nm,
 .zv-st,
@@ -631,7 +655,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font: 600 15px/1.2 var(--zv-serif);
+  /* Light, as an app's label under its icon (2026-11-13). */
+  font: 500 15px/1.2 var(--zv-serif);
   color: var(--zv-ink);
   cursor: pointer;
 }

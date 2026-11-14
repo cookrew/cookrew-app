@@ -38,6 +38,147 @@
     0 calc(1px * var(--zv-k, 1)) calc(3px * var(--zv-k, 1)) var(--zv-shadow-sm);
 }
 
+/* A workspace avatar: one artifact folder is the body, with the agents seated
+   across its top edge. The body stays the same size at every zoom pick. */
+.zv-workspace-artifact {
+  position: absolute;
+  left: -82px;
+  top: -118px;
+  width: 370px;
+  height: 230px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.zv-workspace-folder {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border: calc(1.5px * var(--zv-k, 1)) solid var(--zv-rule);
+  border-radius: 13px 13px 16px 16px;
+  background: var(--zv-paper-2);
+  box-shadow: 0 calc(2px * var(--zv-k, 1)) calc(7px * var(--zv-k, 1)) var(--zv-shadow-sm);
+}
+
+.zv-workspace-folder::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: -13px;
+  width: 110px;
+  height: 28px;
+  border: inherit;
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  background: var(--zv-paper-2);
+}
+
+.zv-workspace-folder > .zv-bar,
+.zv-workspace-folder > .zv-shot,
+.zv-workspace-folder > .zv-pg,
+.zv-workspace-folder > .zv-nt {
+  position: absolute;
+  inset: 0;
+}
+
+.zv-workspace-folder > .zv-bar {
+  z-index: 2;
+  height: 28px;
+  padding: 0 16px;
+  border-bottom: calc(1px * var(--zv-k, 1)) solid var(--zv-hair);
+  background: var(--zv-paper-2);
+  font: 12px/28px var(--zv-mono);
+  color: var(--zv-ink-soft);
+}
+
+.zv-workspace-folder > .zv-shot {
+  top: 28px;
+  width: 100%;
+  height: calc(100% - 28px);
+  object-fit: cover;
+  object-position: top center;
+}
+
+.zv-workspace-folder > .zv-pg {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 58px 34px 24px;
+}
+
+.zv-workspace-folder > .zv-pg b {
+  display: block;
+  height: 54px;
+  border-radius: 8px;
+}
+
+.zv-workspace-folder > .zv-pg i {
+  display: block;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--zv-hair-2);
+}
+
+.zv-workspace-folder > .zv-pg i:last-child {
+  width: 62%;
+}
+
+.zv-workspace-folder.note {
+  background: var(--zv-card);
+  clip-path: polygon(0 0, calc(100% - 24px) 0, 100% 24px, 100% 100%, 0 100%);
+}
+
+.zv-workspace-folder > .zv-nt {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 56px 32px 24px;
+}
+
+.zv-workspace-folder > .zv-nt b {
+  font: 600 18px/1.25 var(--zv-serif);
+  color: var(--zv-ink);
+}
+
+.zv-workspace-folder > .zv-nt i {
+  display: block;
+  height: 9px;
+  border-radius: 5px;
+  background: var(--zv-hair-2);
+}
+
+.zv-workspace-agents {
+  position: absolute;
+  left: -74px;
+  top: -152px;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 352px;
+  height: 70px;
+  padding: 0 10px;
+  pointer-events: none;
+}
+
+.zv-workspace-agent {
+  position: relative;
+  left: auto;
+  top: auto;
+  flex: none;
+  width: 52px;
+  height: 52px;
+  transform: scale(.81);
+  transform-origin: center;
+  background: var(--zv-paper);
+  box-shadow: 0 2px 5px var(--zv-shadow-sm);
+}
+
+.zv-workspace-agent .ink-avatar {
+  width: 52px;
+  height: 52px;
+}
+
 /* The open one: in ink. The header says its name too; this says which tile that is. */
 .zv-mark[data-open] .zv-tile {
   box-shadow:

@@ -483,7 +483,7 @@ export interface ZoomFleetView {
     signedIn?: boolean
     os: string | null
     display: MachineDisplay | null
-    workspaces: { id: string; name: string; icon: string | null; agents: { harness: string; phase: string }[]; counts: ZoomCounts | null; deck: { id: string; kind: 'browser' | 'note'; title: string; host: string | null }[] }[]
+    workspaces: { id: string; name: string; icon: string | null; agents: { harness: string; phase: string }[]; counts: ZoomCounts | null; deck: { id: string; kind: 'browser' | 'note'; title: string; host: string | null; owners: string[] }[] }[]
   }[]
 }
 
@@ -499,7 +499,22 @@ export function fleetViewOf(fleet: ZoomFleet): ZoomFleetView {
       ...(m.signedIn === undefined ? {} : { signedIn: m.signedIn }),
       os: m.profile?.os ?? null,
       display: m.display ?? null,
-      workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, icon: w.icon, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts, deck: deckOf(w).map((d) => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? null })) }))
+      workspaces: m.workspaces.map((w) => {
+        const owners = new Map<string, string[]>()
+        for (const agent of w.agents) {
+          for (const item of agent.attachments) {
+            owners.set(item.id, [...(owners.get(item.id) ?? []), agent.id])
+          }
+        }
+        return {
+          id: w.id,
+          name: w.name,
+          icon: w.icon,
+          agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })),
+          counts: w.counts,
+          deck: deckOf(w).map((d) => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? null, owners: owners.get(d.id) ?? [] }))
+        }
+      })
     }))
   }
 }

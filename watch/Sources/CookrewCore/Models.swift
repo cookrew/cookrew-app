@@ -154,8 +154,11 @@ public struct WorkspaceTile: Decodable, Equatable, Identifiable, Sendable {
   public let waiting: Int
   public let working: Int
   public let done: Int
+  /** The compact avatar data, present on newer desktops and empty on older ones. */
+  public let presets: [String]
+  public let artifacts: [CardItem]
 
-  public init(id: String, name: String, active: Bool, agents: Int, waiting: Int, working: Int, done: Int) {
+  public init(id: String, name: String, active: Bool, agents: Int, waiting: Int, working: Int, done: Int, presets: [String] = [], artifacts: [CardItem] = []) {
     self.id = id
     self.name = name
     self.active = active
@@ -163,6 +166,25 @@ public struct WorkspaceTile: Decodable, Equatable, Identifiable, Sendable {
     self.waiting = waiting
     self.working = working
     self.done = done
+    self.presets = presets
+    self.artifacts = artifacts
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case id, name, active, agents, waiting, working, done, presets, artifacts
+  }
+
+  public init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    id = try values.decode(String.self, forKey: .id)
+    name = try values.decode(String.self, forKey: .name)
+    active = try values.decode(Bool.self, forKey: .active)
+    agents = try values.decode(Int.self, forKey: .agents)
+    waiting = try values.decode(Int.self, forKey: .waiting)
+    working = try values.decode(Int.self, forKey: .working)
+    done = try values.decode(Int.self, forKey: .done)
+    presets = try values.decodeIfPresent([String].self, forKey: .presets) ?? []
+    artifacts = try values.decodeIfPresent([CardItem].self, forKey: .artifacts) ?? []
   }
 }
 
@@ -207,7 +229,36 @@ public func tilesFrom(_ cards: [Card]) -> [WorkspaceTile] {
   return order.map { workspace in
     let crew = byId[workspace.id] ?? []
     let count = { (status: CardStatus) in crew.filter { $0.status == status }.count }
-    return WorkspaceTile(id: workspace.id, name: workspace.name, active: workspace.active, agents: crew.count, waiting: count(.waiting), working: count(.working), done: count(.done))
+    return WorkspaceTile(
+      id: workspace.id,
+      name: workspace.name,
+      active: workspace.active,
+      agents: crew.count,
+      waiting: count(.waiting),
+      working: count(.working),
+      done: count(.done),
+      presets: crew.map(\.preset),
+      artifacts: Array(crew.flatMap(\.items).prefix(3))
+    )
+  }
+}
+
+/** Adds the workspace avatar's compact data to a newer desktop's count tiles. */
+public func tilesWithAvatar(_ tiles: [WorkspaceTile], cards: [Card]) -> [WorkspaceTile] {
+  let derived = Dictionary(grouping: cards, by: { $0.workspace.id })
+  return tiles.map { tile in
+    guard let crew = derived[tile.id], !crew.isEmpty else { return tile }
+    return WorkspaceTile(
+      id: tile.id,
+      name: tile.name,
+      active: tile.active,
+      agents: tile.agents,
+      waiting: tile.waiting,
+      working: tile.working,
+      done: tile.done,
+      presets: crew.map(\.preset),
+      artifacts: Array(crew.flatMap(\.items).prefix(3))
+    )
   }
 }
 

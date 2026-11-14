@@ -128,14 +128,26 @@ export const ItemNode = memo(function ItemNode({ item, names, bind, onClick, onD
  * parts: its latest, the empty strip and the quick reply. One card instance,
  * not one per agent behind the crew; the pets open this same card.
  */
-export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onOpen, onDelete }: { agent: AgentView; card?: boolean; bind: Bind; onOpen: () => void; onDelete?: () => void }): React.JSX.Element {
+export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onOpen, onDelete, onHoverIn, onHoverOut, onDragStart }: { agent: AgentView; card?: boolean; bind: Bind; onOpen: () => void; onDelete?: () => void; onHoverIn?: () => void; onHoverOut?: () => void; onDragStart?: (id: string, e: React.PointerEvent) => void }): React.JSX.Element {
   const reply = useQuickReply(agent.id, undefined, card)
   const typing = typingOf(reply.draft, agent.turn?.pendingInput, agent.name)
   // A click on the name opens, as the face does; a double-click renames it in place (NameEdit.tsx).
   const title = useNameEdit(agent.id, agent.name, { onPress: onOpen })
   return (
     <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`} data-card-id={agent.id}>
-      <div ref={bind(`agent-av:${agent.id}`)} className="zv-av" title={`${agent.name} · ${agent.word}`} {...press(onOpen, `${agent.name}, ${agent.word}`)}>
+      {/* A pointer resting on the face, or the keyboard's focus, folds the space round it (zoom-frame.ts · foldAt); a finger never does:
+          a tap focuses the face too, so only a focus the keyboard brought (:focus-visible) folds. Dragged onto another face, it swaps places with it (crew-slots.ts). */}
+      <div
+        ref={bind(`agent-av:${agent.id}`)}
+        className="zv-av"
+        title={`${agent.name} · ${agent.word}`}
+        onPointerEnter={(e) => e.pointerType !== 'touch' && onHoverIn?.()}
+        onPointerLeave={(e) => e.pointerType !== 'touch' && onHoverOut?.()}
+        onPointerDown={(e) => onDragStart?.(agent.id, e)}
+        onFocus={(e) => e.currentTarget.matches(':focus-visible') && onHoverIn?.()}
+        onBlur={onHoverOut}
+        {...press(onOpen, `${agent.name}, ${agent.word}`)}
+      >
         <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={agent.status} weight="large" />
       </div>
       <div ref={bind(`agent-nm:${agent.id}`)} className="zv-nm" {...press(onOpen, `${agent.name}, ${agent.word}`)} {...title.hostProps}>
