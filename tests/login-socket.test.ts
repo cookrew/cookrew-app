@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { NO_APP_SOCKET_ON_WINDOWS } from './support/ipc-path'
 import { startSocketServer, type SocketServerDeps } from '../src/main/socket-server'
 import type { AccountDoor, LoginAudit } from '../src/main/login-cli'
 import { paneInputs } from '../src/main/pane-input'
@@ -104,7 +105,9 @@ const connect = async () => {
 const open = (send: (fields: Record<string, unknown>) => Promise<Record<string, unknown>>, cmd = 'login') =>
   send({ cmd, args: ['open', 'drej'], flags: { tty: true } })
 
-describe('the password on the socket', () => {
+// Skipped on Windows: this is the app's own Unix-socket server, which Windows
+// cannot bind and the app has no named-pipe transport for (support/ipc-path.ts).
+describe.skipIf(NO_APP_SOCKET_ON_WINDOWS)('the password on the socket', () => {
   it('reaches the account and comes back in no answer, log or audit line', async () => {
     const heard: string[] = []
     signIn = async (input) => {
@@ -162,7 +165,7 @@ describe('the password on the socket', () => {
   })
 })
 
-describe('the owner rule, at the socket', () => {
+describe.skipIf(NO_APP_SOCKET_ON_WINDOWS)('the owner rule, at the socket', () => {
   it('refuses a plain shell', async () => {
     const { socket, send } = await connect()
     const answer = await send({ cmd: 'login', terminalId: '', args: ['open'], flags: { tty: true } })
@@ -242,7 +245,7 @@ describe('the owner rule, at the socket', () => {
   })
 })
 
-describe('the seal, at the socket', () => {
+describe.skipIf(NO_APP_SOCKET_ON_WINDOWS)('the seal, at the socket', () => {
   it('is held from the first prompt, with or without a session here, and let go when the CLI dies', async () => {
     const { socket, send } = await connect()
     await open(send)
@@ -252,7 +255,7 @@ describe('the seal, at the socket', () => {
   })
 })
 
-describe('whoami', () => {
+describe.skipIf(NO_APP_SOCKET_ON_WINDOWS)('whoami', () => {
   it('answers a plain request and exits 1 for nobody', async () => {
     const { socket, send } = await connect()
     const answer = await send({ cmd: 'whoami' })
