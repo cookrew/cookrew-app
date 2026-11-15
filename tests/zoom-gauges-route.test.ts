@@ -6,6 +6,7 @@ import type http from 'node:http'
 import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { NO_SEATBELT_ON_WINDOWS } from './support/native-path'
 import type { MachineGauges } from '../src/shared/machine-gauges'
 import { isDoorPath } from '../src/shared/relay-frame'
 import { scopedRouteSupported } from '../src/main/mobile-slug-route'
@@ -170,7 +171,8 @@ describe('everyone else is refused, and refused before anything is sampled', () 
     await refused(await ask(PATH, null, {}, 'GET', '127.0.0.1'), 401)
     await refused(await ask(PATH, DOOR_BEARER, {}, 'GET', '127.0.0.1'), 401)
   })
-  it('a sandbox cannot go and fetch the credential either', () => {
+  // Skipped on Windows: Seatbelt is macOS's sandbox; see NO_SEATBELT_ON_WINDOWS.
+  it.skipIf(NO_SEATBELT_ON_WINDOWS)('a sandbox cannot go and fetch the credential either', () => {
     const profile = seatbeltProfile({ sandbox: '/s/svc/ana-1', siblingRoot: '/s/svc', sessionsRoot: '/s', secretPaths: ownerSecretPaths('/home/owner/.cookrew', '/home/owner') })
     const deny = '(deny file-read* (subpath "/home/owner/.cookrew/pairing-token")'
     expect(profile).toContain(deny)

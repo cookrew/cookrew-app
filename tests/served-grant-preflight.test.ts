@@ -74,14 +74,12 @@ describe('the production runner', () => {
     // A stand-in harness that behaves like pi/claude on a pipe: it reads
     // stdin until EOF and only then prints. With stdin left open this never
     // returns (the bug: 60s, then 'grant-unusable' for a perfectly good grant).
-    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-probe-'))
-    const fake = path.join(dir, 'fake-pi')
-    writeFileSync(fake, '#!/bin/sh\ncat >/dev/null\necho OK\n', { mode: 0o755 })
+    // Node is the stand-in so the same harness runs on every OS (no sh on Windows).
+    const readsToEof = "process.stdin.resume(); process.stdin.on('end', () => process.stdout.write('OK\\n'))"
     const started = Date.now()
-    const ok = await requestHarnessCompletion({ harness: 'pi', file: fake, args: [], env: {}, files: [] })
+    const ok = await requestHarnessCompletion({ harness: 'pi', file: process.execPath, args: ['-e', readsToEof], env: {}, files: [] })
     expect(ok).toBe(true)
     expect(Date.now() - started).toBeLessThan(5000)
-    rmSync(dir, { recursive: true, force: true })
   })
 })
 
@@ -115,9 +113,14 @@ describe('minimal native harness requests', () => {
     // shell's and is expanded to the real home, not handed to execFile.
     expect(completionRequest('./x-pi', {})?.file).toBe('pi')
     expect(completionRequest('/a/../../tmp/x-pi', {})?.file).toBe('pi')
-    expect(completionRequest('~/.cookrew/bin/qwen-pi', {})?.file).toMatch(/^\/.*\/\.cookrew\/bin\/qwen-pi$/)
     expect(completionRequest('pi --provider "a b"', {})?.args).not.toContain('--provider')
     expect(completionRequest('bash -lc anything', {})).toBeNull()
+  })
+
+  // Skipped on Windows: a served harness wrapper is a POSIX path (piExecutable
+  // takes only [A-Za-z0-9._/-]), and the served sandbox does not exist there.
+  it.skipIf(process.platform === 'win32')('expands a ~ wrapper path to the real home', () => {
+    expect(completionRequest('~/.cookrew/bin/qwen-pi', {})?.file).toMatch(/^\/.*\/\.cookrew\/bin\/qwen-pi$/)
   })
 })
 

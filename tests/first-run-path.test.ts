@@ -65,7 +65,9 @@ describe('what the check reads', () => {
     ...over
   })
 
-  it('finds a tool only where a pane would: what the login shell knows is adopted first', async () => {
+  // Skipped on Windows: pane dirs are learned from a POSIX login shell and
+  // joined onto PATH as POSIX dirs; Windows has no login shell to learn from.
+  it.skipIf(process.platform === 'win32')('finds a tool only where a pane would: what the login shell knows is adopted first', async () => {
     const facts = await probeTools(deps({ shellDirs: async () => ['/home/new/.nvm/bin'], exists: (p) => p === '/home/new/.nvm/bin/npm' }))
     expect(facts.npm).toBe('found')
     expect(panePath('/usr/bin')).toContain('/home/new/.nvm/bin')

@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
 import { expectMode } from './support/file-mode'
 import { accessHandlers, ACCESS_CHANNELS, registerAccessIpc } from '../src/main/access-ipc'
 import { AccessStore, accessLaunch, fileKey, paneKeyName, probeEndpoint } from '../src/main/agent-access'
@@ -241,7 +242,7 @@ describe('where it is kept', () => {
 
   it('is out of a served seat’s reach, like the sealed slots it copies', () => {
     const denied = ownerSecretPaths('/Users/owner/.cookrew', '/Users/owner')
-    expect(denied).toEqual(expect.arrayContaining(['/Users/owner/.cookrew/secrets', '/Users/owner/.cookrew/access-keys', '/Users/owner/.cookrew/access.json']))
+    expect(denied).toEqual(expect.arrayContaining([native('/Users/owner/.cookrew/secrets'), native('/Users/owner/.cookrew/access-keys'), native('/Users/owner/.cookrew/access.json')]))
   })
 
   it('survives a relaunch, the simple-mode choice with it', () => {
@@ -384,7 +385,7 @@ describe('the keychain, where there is one (N4)', () => {
   })
 
   it('is out of a served seat’s reach: on today’s rules a seat could read it, measured with a canary', () => {
-    expect(ownerSecretPaths('/Users/owner/.cookrew', '/Users/owner')).toContain('/Users/owner/Library/Keychains')
+    expect(ownerSecretPaths('/Users/owner/.cookrew', '/Users/owner')).toContain(native('/Users/owner/Library/Keychains'))
   })
 })
 
