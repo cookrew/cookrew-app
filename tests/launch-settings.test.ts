@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
 import { bootLaunchSettings, createLaunchSettings, launchEnvOf, launchSettingsPath, readLaunchChoices } from '../src/main/launch-settings'
 import { LAUNCH_DEFAULTS, parseLaunchChoices, registryValue } from '../src/shared/launch-settings'
 
@@ -31,7 +32,7 @@ describe('the defaults', () => {
 
 describe('what is kept', () => {
   it('lives with the rest of the app state', () => {
-    expect(launchSettingsPath('/Users/me')).toBe('/Users/me/.cookrew/launch-settings.json')
+    expect(launchSettingsPath('/Users/me')).toBe(native('/Users/me/.cookrew/launch-settings.json'))
   })
 
   it('drops what it cannot use, and keeps the rest', () => {

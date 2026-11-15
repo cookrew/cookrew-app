@@ -178,10 +178,12 @@ export function xdotoolCalls(gesture: Gesture, frame: ScreenPoints, area: Displa
 }
 
 /** Where a tool is: along PATH (absolute entries only), then where packages put it. */
+// An X11 tool on a Linux PATH: POSIX paths whatever the host, so the lookup
+// reads the same in a test on any OS as it does on the box it runs on.
 export function findTool(name: string, env: { readonly PATH?: string }, exists: (file: string) => boolean = existsSync): string | null {
-  const dirs = [...(env.PATH ?? '').split(path.delimiter).filter((dir) => path.isAbsolute(dir)), ...SEARCH_DIRS]
+  const dirs = [...(env.PATH ?? '').split(path.posix.delimiter).filter((dir) => path.posix.isAbsolute(dir)), ...SEARCH_DIRS]
   for (const dir of dirs) {
-    const file = path.join(dir, name)
+    const file = path.posix.join(dir, name)
     if (exists(file)) return file
   }
   return null

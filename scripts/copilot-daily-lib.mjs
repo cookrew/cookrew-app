@@ -151,7 +151,8 @@ export function releaseBar(checks) {
 }
 
 function failuresOfFile(file, root) {
-  const name = path.relative(root, file.name)
+  // Named with '/' on every OS, the way vitest and tsc name a file.
+  const name = path.relative(root, file.name).split(path.sep).join('/')
   const failed = (file.assertionResults ?? []).filter((test) => test.status === 'failed')
   if (failed.length > 0) return failed.map((test) => `${name} > ${test.fullName}`)
   return file.status === 'failed' ? [`${name} > (suite failed to load)`] : []

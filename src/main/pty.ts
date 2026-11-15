@@ -581,7 +581,7 @@ export class PtySession extends EventEmitter {
       terminalId: options.terminalId,
       socketPath: options.socketPath,
       cliDir: options.cliDir,
-      path: `${options.cliDir}:${options.served ? (process.env.PATH ?? '') : panePath()}`,
+      path: `${options.cliDir}${path.delimiter}${options.served ? (process.env.PATH ?? '') : panePath()}`,
       cwd: options.cwd,
       card: options.card,
       ...(options.served ? {} : ownerSpawnExtras(options.route))

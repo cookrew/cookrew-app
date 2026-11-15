@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
 import { expectMode } from './support/file-mode'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -64,9 +65,9 @@ describe('PendingCheckouts', () => {
   it('a served seat cannot read whose payments are in flight', () => {
     const denied = ownerSecretPaths('/Users/owner/.cookrew', '/Users/owner')
     expect(denied).toEqual(
-      expect.arrayContaining(['/Users/owner/.cookrew/checkout-pending.json', '/Users/owner/.cookrew/checkout-pending.json.tmp'])
+      expect.arrayContaining([native('/Users/owner/.cookrew/checkout-pending.json'), native('/Users/owner/.cookrew/checkout-pending.json.tmp')])
     )
-    expect(pendingCheckoutsPath('/Users/owner/.cookrew')).toBe('/Users/owner/.cookrew/checkout-pending.json')
+    expect(pendingCheckoutsPath('/Users/owner/.cookrew')).toBe(native('/Users/owner/.cookrew/checkout-pending.json'))
   })
 
   it('drops only the session it was told about: a newer one for the same door is not lost to a late answer', () => {
