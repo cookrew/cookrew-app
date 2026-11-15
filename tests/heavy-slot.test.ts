@@ -124,7 +124,11 @@ describe('takeHeavySlot', () => {
   })
 
   it('an unwritable directory never stops a test run', async () => {
-    const out = await takeHeavySlot(opts('/dev/null/nope'))
+    // Under a plain file: no OS can make a directory there. ('/dev/null/nope'
+    // was that only on POSIX; Windows simply created C:\dev\null\nope.)
+    const file = path.join(fresh(), 'a-file')
+    writeFileSync(file, '')
+    const out = await takeHeavySlot(opts(path.join(file, 'nope')))
     expect(out.taken).toBe(false)
   })
 })

@@ -309,7 +309,9 @@ describe('the foreground read', () => {
   })
 })
 
-describe('the runner, on the real sh', () => {
+// Skipped on Windows: there the line is typed into the pane as is
+// (setup-line.ts, the win32 branch) and this sh runner never runs.
+describe.skipIf(process.platform === 'win32')('the runner, on the real sh', () => {
   const runScript = async (line: string): Promise<{ code: number | null; status: string; said: string }> => {
     const status = path.join(dir, 'x.status')
     const script = path.join(dir, 'x.sh')
