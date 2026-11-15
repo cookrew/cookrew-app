@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { Duplex } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { testSocketPath } from './support/ipc-path'
 import { createBrowserCast } from '../src/main/browser-cast'
 import { VphoneInstance } from '../src/main/vphone-instance'
 import { createSocketGuest } from '../src/main/vphone-socket'
@@ -88,7 +89,7 @@ afterEach(async () => {
 const fakeVphoned = async (): Promise<{ file: string; inputs: Array<[string, unknown]> }> => {
   const dir = mkdtempSync(path.join(tmpdir(), 'vphone-e2e-'))
   dirs.push(dir)
-  const file = path.join(dir, 'vphone.sock')
+  const file = testSocketPath(dir, 'vphone.sock')
   const inputs: Array<[string, unknown]> = []
   const server = net.createServer((socket) => {
     let data = ''
