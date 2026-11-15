@@ -6,9 +6,10 @@ on:
   pull_request:
 
 # A new push to a pull request makes its running checks stale: cancel them.
-# Pushes to main are never cancelled: every commit there keeps its own record.
+# Pushes to main get a group of their own (the run id), so nothing ever cancels
+# or queues them, not even a second push of the same commit.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -106,8 +107,11 @@ jobs:
           path: node_modules
           key: node-modules-${{ runner.os }}-${{ steps.deps.outputs.key }}
 
-      - run: npm test -- --shard=${{ matrix.shard }}/3
+      - id: test
+        run: npm test -- --shard=${{ matrix.shard }}/3
 
-      # The app bundle, once per OS.
-      - if: matrix.shard == 1
+      # The app bundle, once per OS, whatever the tests said: the Windows leg is
+      # red on known failures, and a build that only runs after green tests
+      # would never run there. Not when the install failed (tests skipped).
+      - if: ${{ !cancelled() && matrix.shard == 1 && steps.test.outcome != 'skipped' }}
         run: npm run build

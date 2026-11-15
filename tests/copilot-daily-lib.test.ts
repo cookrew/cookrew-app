@@ -162,10 +162,13 @@ describe('the assets a public release needs', () => {
 })
 
 describe('the release bar', () => {
-  const checks = (ubuntu: string, macos: string) => [
-    { name: 'check (ubuntu-latest)', bucket: ubuntu },
-    { name: 'check (macos-latest)', bucket: macos },
-    { name: 'check (windows-2022)', bucket: 'fail' },
+  const checks = (ubuntu: string, macos: string, typecheck = 'pass') => [
+    { name: 'static', bucket: typecheck },
+    { name: 'check (ubuntu-latest, 1/3)', bucket: 'pass' },
+    { name: 'check (ubuntu-latest, 2/3)', bucket: ubuntu },
+    { name: 'check (macos-latest, 1/3)', bucket: 'pass' },
+    { name: 'check (macos-latest, 3/3)', bucket: macos },
+    { name: 'check (windows-2022, 1/3)', bucket: 'fail' },
     { name: 'gates (ubuntu-latest)', bucket: 'fail' }
   ]
 
@@ -179,6 +182,14 @@ describe('the release bar', () => {
 
   it('fails on either', () => {
     expect(releaseBar(checks('fail', 'pass'))).toBe('failed')
+  })
+
+  it('fails on the typecheck and rename guard, which run in `static` only', () => {
+    expect(releaseBar(checks('pass', 'pass', 'fail'))).toBe('failed')
+  })
+
+  it('waits while `static` is not listed', () => {
+    expect(releaseBar(checks('pass', 'pass').filter((check) => check.name !== 'static'))).toBe('pending')
   })
 
   it('waits when the checks have not been created yet', () => {

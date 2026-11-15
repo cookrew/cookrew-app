@@ -5,12 +5,14 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
 import { depsKey, versionlessLock } from '../scripts/ci-deps-key.mjs'
+import { releaseBar } from '../scripts/copilot-daily-lib.mjs'
 
 const yaml = createRequire(import.meta.url)('js-yaml') as { load(text: string): unknown }
 
 type Step = { run?: string; if?: string; uses?: string; id?: string; with?: Record<string, unknown> }
 type Job = {
   if?: string
+  name?: string
   needs?: string | string[]
   'runs-on'?: string
   strategy?: { matrix?: { os?: string[]; shard?: number[] } }
@@ -46,9 +48,28 @@ describe('ci.yml', () => {
     expect(runs).toContain('maestri')
   })
 
-  it('still builds the app once per OS', () => {
+  it('still builds the app once per OS, red tests or not', () => {
     const build = check.steps.find((s) => s.run === 'npm run build') as Step
-    expect(build.if).toBe('matrix.shard == 1')
+    const test = check.steps.find((s) => s.run?.startsWith('npm test')) as Step
+    expect(build.if).toBe(`\${{ !cancelled() && matrix.shard == 1 && steps.${test.id}.outcome != 'skipped' }}`)
+  })
+
+  // The patch release merges dev into main once this bar is green; a job it
+  // does not name is a check a release can ship past.
+  it('every job but Windows is in the release bar', () => {
+    const names = ['static']
+    for (const os of check.strategy?.matrix?.os ?? []) {
+      for (const shard of check.strategy?.matrix?.shard ?? []) {
+        names.push(String(check.name).replace('${{ matrix.os }}', os).replace('${{ matrix.shard }}', String(shard)))
+      }
+    }
+    expect(Object.keys(ci.jobs).sort()).toEqual(['check', 'static'])
+    const green = names.map((name) => ({ name, bucket: 'pass' }))
+    expect(releaseBar(green)).toBe('passed')
+    for (const name of names.filter((n) => !n.includes('windows'))) {
+      const red = green.map((c) => (c.name === name ? { ...c, bucket: 'fail' } : c))
+      expect(releaseBar(red), name).toBe('failed')
+    }
   })
 
   it('installs unless the cached tree for exactly these dependencies was restored', () => {
@@ -76,7 +97,7 @@ describe('ci.yml', () => {
 
   it('cancels superseded pull request runs, never a push to main', () => {
     expect(ci.concurrency?.['cancel-in-progress']).toBe("${{ github.event_name == 'pull_request' }}")
-    expect(ci.concurrency?.group).toContain('github.event.pull_request.number')
+    expect(ci.concurrency?.group).toBe('ci-${{ github.event.pull_request.number || github.run_id }}')
   })
 })
 
