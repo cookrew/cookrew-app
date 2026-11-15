@@ -85,15 +85,26 @@ jobs:
       - name: Restore node_modules
         id: nm-cache
         if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-${{ steps.deps.outputs.key }}
 
       # npm ci triggers postinstall (electron-rebuild for node-pty against
       # Electron's ABI), so native toolchains on the runners are exercised here.
-      - if: steps.nm-cache.outputs.cache-hit != 'true'
+      - name: npm ci
+        if: steps.nm-cache.outputs.cache-hit != 'true'
         run: npm ci
+
+      # Saved right after the install, not at the end of the job: actions/cache
+      # saves only when the whole job is green, so a red test run would never
+      # leave a tree behind; and nothing the tests write gets into the cache.
+      - name: Save node_modules
+        if: runner.os == 'Windows' && steps.nm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ steps.deps.outputs.key }}
 
       - run: npm test -- --shard=${{ matrix.shard }}/3
 

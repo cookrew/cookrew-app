@@ -52,11 +52,26 @@ describe('ci.yml', () => {
   })
 
   it('installs unless the cached tree for exactly these dependencies was restored', () => {
-    const cache = check.steps.find((s) => s.uses?.startsWith('actions/cache')) as Step
+    const cache = check.steps.find((s) => s.uses?.startsWith('actions/cache/restore')) as Step
     expect(cache.if).toBe("runner.os == 'Windows'")
     expect(String(cache.with?.key)).toContain('steps.deps.outputs.key')
     const install = check.steps.find((s) => s.run === 'npm ci') as Step
     expect(install.if).toBe(`steps.${cache.id}.outputs.cache-hit != 'true'`)
+  })
+
+  // actions/cache saves only from a green job; the Windows leg is not always
+  // green, so the tree is saved explicitly, before the tests can touch it.
+  it('saves a fresh install right after it, under the key it was restored by', () => {
+    const steps = check.steps
+    const cache = steps.find((s) => s.uses?.startsWith('actions/cache/restore')) as Step
+    const save = steps.find((s) => s.uses?.startsWith('actions/cache/save')) as Step
+    const install = steps.findIndex((s) => s.run === 'npm ci')
+    const test = steps.findIndex((s) => s.run?.startsWith('npm test'))
+    expect(save.with?.key).toBe(cache.with?.key)
+    expect(save.if).toContain(`steps.${cache.id}.outputs.cache-hit != 'true'`)
+    expect(steps.indexOf(save)).toBe(install + 1)
+    expect(steps.indexOf(save)).toBeLessThan(test)
+    expect(steps.some((s) => s.uses === 'actions/cache@v4')).toBe(false)
   })
 
   it('cancels superseded pull request runs, never a push to main', () => {
