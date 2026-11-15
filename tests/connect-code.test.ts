@@ -111,8 +111,8 @@ describe('createConnectCodes', () => {
     expect(denied).toContain(native('/Users/me/.cookrew/connect-code.was'))
     expect(denied).toContain(native('/Users/me/.cookrew/connect-code.was.tmp'))
     expect(denied).toContain(native('/Users/me/.cookrew/connect-code'))
-    expect(denied).toContain('/Users/me/.cookrew/connect-code.tmp')
-    expect(denied).toContain('/Users/me/.cookrew/unlock-key.json.tmp')
+    expect(denied).toContain(native('/Users/me/.cookrew/connect-code.tmp'))
+    expect(denied).toContain(native('/Users/me/.cookrew/unlock-key.json.tmp'))
   })
 })
 
