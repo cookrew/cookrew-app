@@ -330,6 +330,10 @@ describe('EventLog', () => {
       const rewritten = event({ type: 'note.created', entityId: 'rewrite-in', timestamp: 7 })
       expect(JSON.stringify(rewritten).length).toBe(JSON.stringify(swapped).length)
       fs.writeFileSync(target, JSON.stringify(rewritten) + '\n', 'utf8')
+      // The premise is a NEW mtime. Two writes this close can share one clock
+      // tick (Windows' file times are that coarse), so the move is made explicit.
+      const later = new Date(fs.statSync(target).mtimeMs + 2000)
+      fs.utimesSync(target, later, later)
       expect(log.query({ type: 'note.created' }).map((r) => r.entityId)).toEqual(['rewrite-in'])
     })
 

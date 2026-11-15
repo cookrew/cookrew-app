@@ -160,7 +160,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await up?.close()
-  rmSync(dir, { recursive: true, force: true })
+  // Retried: on Windows a file the server just let go of can still hold the
+  // directory for a moment (ENOTEMPTY/EBUSY).
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 })
 
 describe('a deleted name, read for in every file', () => {
