@@ -70,7 +70,7 @@ describe('seeding a Conductor', () => {
 
   it('finds the tool in a later dir of the path', () => {
     const r = room()
-    const seed = seedWith(r, `${r.empty}:${claudeIn(r.folder('bin'))}`)
+    const seed = seedWith(r, [r.empty, claudeIn(r.folder('bin'))].join(path.delimiter))
     expect(terminals(r, open(r, 'one', seed).id)).toHaveLength(1)
   })
 

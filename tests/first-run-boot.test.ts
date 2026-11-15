@@ -57,7 +57,7 @@ describe('a real launch', () => {
   // Merged from Agent Truth with process.env.PATH, it would have refused on a source
   // build the very agent the tool check calls Found: bug 3 over again.
   it('has one PATH: the launch check looks where a pane will', () => {
-    expect(source).toMatch(/const paneSearchPath = \(\): string => `\$\{ptys\.runtimeDir\}:\$\{panePath\(\)\}`/)
+    expect(source).toMatch(/const paneSearchPath = \(\): string => `\$\{ptys\.runtimeDir\}\$\{path\.delimiter\}\$\{panePath\(\)\}`/)
   })
 
   it('asks the launch check whether a tool is here, on every backend', () => {
