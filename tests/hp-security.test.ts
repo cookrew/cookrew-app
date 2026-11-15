@@ -5,6 +5,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { NO_SEATBELT_ON_WINDOWS, native } from './support/native-path'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
 import { confinedSpawn, sandboxRoot, seatbeltProfile, serviceRoot } from '../src/main/session-sandbox'
 import { scrubInboxRow, scrubSousResult } from '../src/main/scrub-surfaces'
@@ -15,7 +16,7 @@ import type { InboxRow } from '../src/shared/inbox-rank'
 describe('a served pane and the owner\'s screen', () => {
   it('names the frames and screenshots on disk, and the remote desktop file', () => {
     const paths = ownerSecretPaths('/h/.cookrew', '/h', 'cookrew', {})
-    for (const p of ['/h/Library/Application Support/cookrew/use-capture', '/h/Library/Application Support/cookrew/use-shots', '/h/.cookrew/remote-control.json']) expect(paths).toContain(p)
+    for (const p of ['/h/Library/Application Support/cookrew/use-capture', '/h/Library/Application Support/cookrew/use-shots', '/h/.cookrew/remote-control.json']) expect(paths).toContain(native(p))
   })
 
   it('the profile refuses the tools and the window server a capture needs', () => {
@@ -49,17 +50,18 @@ describe('the served deny list (item 1)', () => {
       '/home/owner/.cookrew/sous-gateway.key',
       '/home/owner/.cookrew/magpie.json'
     ]) {
-      expect(paths).toContain(p)
+      expect(paths).toContain(native(p))
     }
     // Still there from before.
-    expect(paths).toContain('/home/owner/.cookrew/secrets')
-    expect(paths).toContain('/home/owner/.cookrew/pairing-token')
+    expect(paths).toContain(native('/home/owner/.cookrew/secrets'))
+    expect(paths).toContain(native('/home/owner/.cookrew/pairing-token'))
   })
   it('no XDG dir when the variable is unset or empty', () => {
     expect(ownerSecretPaths('/h/.cookrew', '/h', undefined, {})).not.toContain('/magpie')
-    expect(ownerSecretPaths('/h/.cookrew', '/h', undefined, { XDG_CONFIG_HOME: '' }).filter((p) => p.endsWith('/magpie'))).toEqual(['/h/.config/magpie'])
+    expect(ownerSecretPaths('/h/.cookrew', '/h', undefined, { XDG_CONFIG_HOME: '' }).filter((p) => p.endsWith(native('/magpie')))).toEqual([native('/h/.config/magpie')])
   })
-  it('the profile denies each, after the broad read allow', () => {
+  // Skipped on Windows: Seatbelt is macOS's sandbox; see NO_SEATBELT_ON_WINDOWS.
+  it.skipIf(NO_SEATBELT_ON_WINDOWS)('the profile denies each, after the broad read allow', () => {
     const profile = seatbeltProfile({ sandbox: '/s/svc/a', siblingRoot: '/s/svc', sessionsRoot: '/s', secretPaths: paths })
     for (const p of ['/home/owner/.config/magpie', '/xdg/magpie', '/home/owner/.cookrew/sous-decisions.jsonl', '/home/owner/.cookrew/route.json', '/home/owner/.cookrew/magpie.json']) {
       const rule = `(deny file-read* (subpath "${p}") (literal "${p}"))`

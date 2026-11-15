@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
 import { expectMode } from './support/file-mode'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
 import { fileWindowMemory, forgetCardWindow } from '../src/main/use-window-memory'
@@ -57,7 +58,7 @@ describe('fileWindowMemory', () => {
 
   it('a served seat cannot read which windows the owner has', () => {
     const denied = ownerSecretPaths('/Users/me/.cookrew', '/Users/me', 'cookrew', {})
-    expect(denied).toContain('/Users/me/.cookrew/use-windows.json')
-    expect(denied).toContain('/Users/me/.cookrew/use-windows.json.tmp')
+    expect(denied).toContain(native('/Users/me/.cookrew/use-windows.json'))
+    expect(denied).toContain(native('/Users/me/.cookrew/use-windows.json.tmp'))
   })
 })

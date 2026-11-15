@@ -1,4 +1,6 @@
+import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { native } from './support/native-path'
 import { loginShellDirs, probeTools, type ProbeDeps } from '../src/main/preflight'
 import { appendedPath, widenedPath } from '../src/main/launch-defaults'
 import { UNKNOWN_FACTS } from '../src/shared/preflight'
@@ -13,7 +15,7 @@ const deps = (over: Partial<ProbeDeps> = {}): ProbeDeps => {
   const dirs = ['/usr/bin', '/bin']
   return {
   home: '/Users/new',
-  panePath: () => dirs.join(':'),
+  panePath: () => dirs.join(path.delimiter),
   adoptDirs: (more) => void dirs.push(...more),
   platform: 'darwin',
   exists: () => false,
@@ -36,19 +38,19 @@ describe('the facts', () => {
   })
 
   it('finds a tool on PATH by its file', async () => {
-    const facts = await probeTools(deps({ exists: (p) => p === '/usr/bin/tmux' || p === '/usr/bin/brew' }))
+    const facts = await probeTools(deps({ exists: (p) => p === native('/usr/bin/tmux') || p === native('/usr/bin/brew') }))
     expect(facts.tmux).toBe('found')
     expect(facts.brew).toBe('found')
     expect(facts.herdr).toBe('missing')
   })
 
   it('finds what only the login shell knows: the agents will run there', async () => {
-    const facts = await probeTools(deps({ shellDirs: async () => ['/Users/new/.nvm/bin'], exists: (p) => p === '/Users/new/.nvm/bin/npm' }))
+    const facts = await probeTools(deps({ shellDirs: async () => ['/Users/new/.nvm/bin'], exists: (p) => p === native('/Users/new/.nvm/bin/npm') }))
     expect(facts.npm).toBe('found')
   })
 
   it('still answers when the login shell cannot be read', async () => {
-    const facts = await probeTools(deps({ shellDirs: async () => { throw new Error('no shell') }, exists: (p) => p === '/usr/bin/tmux' }))
+    const facts = await probeTools(deps({ shellDirs: async () => { throw new Error('no shell') }, exists: (p) => p === native('/usr/bin/tmux') }))
     expect(facts.tmux).toBe('found')
   })
 
@@ -82,7 +84,7 @@ describe('a sign-in that is a key in the environment (C-7)', () => {
 
 describe('a check that fails', () => {
   it('is unknown, alone', async () => {
-    const facts = await probeTools(deps({ chrome: () => { throw new Error('no') }, exists: (p) => p === '/usr/bin/tmux' }))
+    const facts = await probeTools(deps({ chrome: () => { throw new Error('no') }, exists: (p) => p === native('/usr/bin/tmux') }))
     expect(facts.chrome).toBe('unknown')
     expect(facts.tmux).toBe('found')
   })
@@ -113,7 +115,7 @@ describe('a check that fails', () => {
 
 describe('the login shell’s PATH', () => {
   it('reads the marked line and ignores what the rc files print around it', () => {
-    expect(loginShellDirs('Welcome!\n__COOKREW_PATH__/a:/b:\nbye\n')).toEqual(['/a', '/b'])
+    expect(loginShellDirs(`Welcome!\n__COOKREW_PATH__/a${path.delimiter}/b${path.delimiter}\nbye\n`)).toEqual(['/a', '/b'])
   })
 
   it('is nothing when the mark is absent', () => {
@@ -123,7 +125,7 @@ describe('the login shell’s PATH', () => {
 
 describe('a Dock launch gets the same tools as a terminal launch', () => {
   it('appends the places installers use, the person’s own PATH first', () => {
-    const wide = widenedPath({ PATH: '/usr/bin:/bin' }, '/Users/new')
+    const wide = widenedPath({ PATH: '/usr/bin:/bin' }, '/Users/new', 'darwin')
     expect(wide.split(':').slice(0, 2)).toEqual(['/usr/bin', '/bin'])
     expect(wide.split(':')).toEqual(expect.arrayContaining(['/opt/homebrew/bin', '/usr/local/bin', '/Users/new/.local/bin']))
   })
@@ -131,7 +133,7 @@ describe('a Dock launch gets the same tools as a terminal launch', () => {
   it('adds nothing twice, so a terminal launch keeps its PATH as it is', () => {
     // A real shell's PATH: /etc/paths always lists /usr/sbin and /sbin.
     const full = '/opt/homebrew/bin:/usr/local/bin:/Users/new/.local/bin:/Users/new/.claude/local:/Users/new/.opencode/bin:/usr/bin:/bin:/usr/sbin:/sbin'
-    expect(widenedPath({ PATH: full }, '/Users/new')).toBe(full)
+    expect(widenedPath({ PATH: full }, '/Users/new', 'darwin')).toBe(full)
   })
 
   it('leaves another system’s PATH alone', () => {
@@ -139,7 +141,7 @@ describe('a Dock launch gets the same tools as a terminal launch', () => {
   })
 
   it('keeps the PATH it was given to the character, whatever it adds', () => {
-    expect(widenedPath({ PATH: '/usr/bin::/bin' }, '/Users/new').startsWith('/usr/bin::/bin:')).toBe(true)
+    expect(widenedPath({ PATH: '/usr/bin::/bin' }, '/Users/new', 'darwin').startsWith('/usr/bin::/bin:')).toBe(true)
   })
 
   it('appends dirs not already there, and nothing else', () => {
@@ -149,6 +151,6 @@ describe('a Dock launch gets the same tools as a terminal launch', () => {
   })
 
   it('works from no PATH at all', () => {
-    expect(widenedPath({}, '/Users/new').split(':')).toContain('/opt/homebrew/bin')
+    expect(widenedPath({}, '/Users/new', 'darwin').split(':')).toContain('/opt/homebrew/bin')
   })
 })

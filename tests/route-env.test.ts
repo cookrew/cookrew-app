@@ -63,7 +63,7 @@ describe('routeEnv', () => {
   it('opencode: one config file per card named by OPENCODE_CONFIG, the model scoped magpie/', () => {
     const r = routeEnv({ harness: 'opencode', gateway, model: 'group/smart', cardId: 'card-3' })
     expect(r.routable).toBe(true)
-    expect(r.env.OPENCODE_CONFIG).toMatch(/\.cookrew\/route\/card-3\/opencode\.json$/)
+    expect(r.env.OPENCODE_CONFIG).toMatch(/\.cookrew[\\/]route[\\/]card-3[\\/]opencode\.json$/)
     expect(r.args).toEqual(['--model', 'magpie/group/smart'])
     expect(r.files).toHaveLength(1)
     const config = JSON.parse(r.files[0].content) as {
@@ -81,8 +81,8 @@ describe('routeEnv', () => {
   it('pi: a per-card agent dir with one models.json, sessions left where the binding looks, the provider on the line', () => {
     const r = routeEnv({ harness: 'pi', gateway, model: 'ollama/qwen2.5:1.5b', cardId: 'card-4' })
     expect(r.routable).toBe(true)
-    expect(r.env.PI_CODING_AGENT_DIR).toMatch(/\.cookrew\/route\/card-4\/pi$/)
-    expect(r.env.PI_CODING_AGENT_SESSION_DIR).toMatch(/\.pi\/agent\/sessions$/)
+    expect(r.env.PI_CODING_AGENT_DIR).toMatch(/\.cookrew[\\/]route[\\/]card-4[\\/]pi$/)
+    expect(r.env.PI_CODING_AGENT_SESSION_DIR).toMatch(/\.pi[\\/]agent[\\/]sessions$/)
     expect(r.args).toEqual(['--provider', 'magpie', '--model', 'ollama/qwen2.5:1.5b'])
     expect(r.files).toHaveLength(1)
     expect(r.files[0].path).toBe(`${r.env.PI_CODING_AGENT_DIR}/models.json`)

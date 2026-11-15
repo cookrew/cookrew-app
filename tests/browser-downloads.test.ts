@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { native } from './support/native-path'
 import {
   browserDownloadsDir,
   DownloadWatcher,
@@ -67,7 +68,7 @@ describe('downloadFileName', () => {
 describe('browserDownloadsDir', () => {
   it('is one directory per card, outside the folder macOS guards', () => {
     expect(browserDownloadsDir('card-1')).toBe(path.join(homedir(), '.cookrew', 'downloads', 'card-1'))
-    expect(browserDownloadsDir('card-1', '/root')).toBe('/root/card-1')
+    expect(browserDownloadsDir('card-1', '/root')).toBe(native('/root/card-1'))
   })
 })
 
