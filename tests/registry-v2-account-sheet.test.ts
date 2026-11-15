@@ -236,6 +236,17 @@ const settle = async (turns = 8): Promise<void> => {
   for (let at = 0; at < turns; at += 1) await new Promise((resolve) => setTimeout(resolve, 1))
 }
 
+/**
+ * Wait for what the page DOES, not for a number of turns. The sign-in key is
+ * proven with a WebCrypto signature, whose work runs off the event loop: on a
+ * loaded machine it landed after the 16th turn, and the request list was read
+ * half way through the flow. The flow ends when the page navigates, so that is
+ * what is waited for; the cap only turns a real hang into a failure.
+ */
+const until = async (done: () => boolean, turns = 2_000): Promise<void> => {
+  for (let at = 0; at < turns && !done(); at += 1) await new Promise((resolve) => setTimeout(resolve, 1))
+}
+
 describe('the sign-in hash', () => {
   it('opens the v2 sheet on #account when the registry has no sign-in page', async () => {
     const page = mount('#account', false, false, await heldDevice())
@@ -253,7 +264,7 @@ describe('the sign-in hash', () => {
   it('goes to the one sign-in page when the registry serves it, the key proven first', async () => {
     const device = await heldDevice()
     const page = mount('#account', false, true, device)
-    await settle(16)
+    await until(() => page.assigned.length > 0)
     expect(page.sheet.open).toBe(false)
     expect(page.asked.map((a) => a.path)).toEqual(['/v2/auth/requests', '/v2/auth/requests/r1/proof'])
     expect(page.asked[0].body).toEqual({
@@ -269,7 +280,7 @@ describe('the sign-in hash', () => {
 
   it('#create asks the page for its create-account screen', async () => {
     const page = mount('#create', false, true, await heldDevice())
-    await settle(16)
+    await until(() => page.assigned.length > 0)
     expect(page.asked[0].body.intent).toBe('create')
     expect(page.assigned).toEqual(['https://auth.cookrew.dev/?request=r1'])
   })
