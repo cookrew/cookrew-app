@@ -143,7 +143,15 @@ function sharedRoutes(up: () => Booted, who: () => Signed): void {
   })
 }
 
+/**
+ * Skipped on Windows: registry:build is a POSIX shell line (`\"$(git rev-parse
+ * HEAD)\"`) run through /bin/sh, and the registry is built and deployed from
+ * Linux. `npm run registry:build` does not run under cmd.exe either.
+ */
+const NO_REGISTRY_BUILD = process.platform === 'win32'
+
 beforeAll(() => {
+  if (NO_REGISTRY_BUILD) return
   dir = mkdtempSync(path.join(tmpdir(), 'registry-bundle-'))
   bundle = path.join(dir, 'registry.mjs')
   execFileSync('/bin/sh', ['-c', buildCommand()], { cwd: ROOT, stdio: 'pipe' })
@@ -167,7 +175,7 @@ describe('registry:build', () => {
   })
 })
 
-describe('the minified bundle', () => {
+describe.skipIf(NO_REGISTRY_BUILD)('the minified bundle', () => {
   let up: Booted
   let who: Signed
   beforeAll(async () => {
@@ -192,7 +200,7 @@ describe('the minified bundle', () => {
 
 // The live deployment's arguments still name the retired shell bundle and its
 // mount. They must keep booting until someone tidies the cluster.
-describe('the minified bundle under the old deployment arguments', () => {
+describe.skipIf(NO_REGISTRY_BUILD)('the minified bundle under the old deployment arguments', () => {
   let up: Booted
   let who: Signed
   beforeAll(async () => {
