@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { OWNED_BINARY, cliWrapper, publishCliRuntime } from '../src/main/cli-shim'
+import { testSocketPath } from './support/ipc-path'
 // @ts-expect-error the installer lib ships no types; the test exercises runtime behaviour.
 import { OWNED_BINARY as OWNED_BINARY_LAUNCHER, launcherScript } from '../scripts/install-cli-lib.mjs'
 
@@ -22,9 +23,16 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
+/**
+ * The shim and the PATH launcher are POSIX sh, run through /bin/sh. Windows has
+ * no /bin/sh to run them, so the tests that EXECUTE a script are POSIX-only;
+ * what the scripts say is still checked everywhere.
+ */
+const RUNS_SH = process.platform !== 'win32'
+
 /** A PATH holding sh's own tools and no node, checked rather than assumed. */
 const NO_NODE_PATH = '/usr/bin:/bin'
-const noNodeOnPath = spawnSync('/bin/sh', ['-c', 'command -v node'], { env: { PATH: NO_NODE_PATH } }).status !== 0
+const noNodeOnPath = RUNS_SH && spawnSync('/bin/sh', ['-c', 'command -v node'], { env: { PATH: NO_NODE_PATH } }).status !== 0
 
 const executable = (file: string, body: string): string => {
   writeFileSync(file, body)
@@ -41,14 +49,14 @@ describe('cliWrapper', () => {
     expect(cliWrapper('/tmp/c.mjs', '/app/Cookrew').startsWith('#!/bin/sh\n')).toBe(true)
   })
 
-  it("runs the script on the app's own binary, in node mode, with no node anywhere", () => {
+  it.skipIf(!RUNS_SH)("runs the script on the app's own binary, in node mode, with no node anywhere", () => {
     const dir = scratch()
     const wrapper = executable(path.join(dir, 'cookrew'), cliWrapper('/tmp/c.mjs', fakeRuntime(dir)))
     const out = execFileSync(wrapper, ['list', '--all'], { env: { PATH: NO_NODE_PATH }, encoding: 'utf8' })
     expect(out.trim()).toBe('mode=1 args=/tmp/c.mjs list --all')
   })
 
-  it('survives a path with a space and a quote in it', () => {
+  it.skipIf(!RUNS_SH)('survives a path with a space and a quote in it', () => {
     const dir = scratch()
     const runtime = fakeRuntime(dir)
     const script = path.join(dir, "it's here.mjs")
@@ -57,7 +65,7 @@ describe('cliWrapper', () => {
     expect(out.trim()).toBe(`mode=1 args=${script}`)
   })
 
-  it('falls back to a node on PATH when the app binary is gone', () => {
+  it.skipIf(!RUNS_SH)('falls back to a node on PATH when the app binary is gone', () => {
     const dir = scratch()
     executable(path.join(dir, 'node'), '#!/bin/sh\necho "system node $*"\n')
     const wrapper = executable(path.join(dir, 'cookrew'), cliWrapper('/tmp/c.mjs', '/gone/Cookrew'))
@@ -65,7 +73,7 @@ describe('cliWrapper', () => {
     expect(out.trim()).toBe('system node /tmp/c.mjs list')
   })
 
-  it('does not run a binary at its old path that has become a stranger’s', () => {
+  it.skipIf(!RUNS_SH)('does not run a binary at its old path that has become a stranger’s', () => {
     const dir = scratch()
     const planted = path.join(dir, 'planted')
     symlinkSync('/bin/echo', planted)
@@ -97,7 +105,7 @@ describe('the PATH launcher', () => {
     expect(OWNED_BINARY_LAUNCHER).toBe(OWNED_BINARY)
   })
 
-  it('prefers the binary the app published, and sets node mode', () => {
+  it.skipIf(!RUNS_SH)('prefers the binary the app published, and sets node mode', () => {
     const dir = scratch()
     const repo = executable(path.join(dir, 'cookrew.mjs'), '')
     const pointer = path.join(dir, 'runtime')
@@ -108,7 +116,7 @@ describe('the PATH launcher', () => {
   })
 
   // After an AppImage quits, the pointer names a dead /tmp/.mount_* path anyone can recreate.
-  it('takes a published binary only from the caller or root', () => {
+  it.skipIf(!RUNS_SH)('takes a published binary only from the caller or root', () => {
     const dir = scratch()
     const repo = executable(path.join(dir, 'cookrew.mjs'), '')
     const pointer = path.join(dir, 'runtime')
@@ -120,7 +128,7 @@ describe('the PATH launcher', () => {
     expect(execFileSync(launcher, [], { env: { PATH: NO_NODE_PATH }, encoding: 'utf8' }).trim()).toBe(`mode=1 args=${repo}`)
   })
 
-  it('takes a published binary root owns: an installed app, or an AppImage mount', () => {
+  it.skipIf(!RUNS_SH)('takes a published binary root owns: an installed app, or an AppImage mount', () => {
     const dir = scratch()
     const repo = executable(path.join(dir, 'cookrew.mjs'), 'exit 0')
     const pointer = path.join(dir, 'runtime')
@@ -129,7 +137,7 @@ describe('the PATH launcher', () => {
     expect(execFileSync(launcher, ['hi'], { env: { PATH: NO_NODE_PATH }, encoding: 'utf8' }).trim()).toBe(`${repo} hi`)
   })
 
-  it('sets node mode on the baked interpreter too: that may be Electron itself', () => {
+  it.skipIf(!RUNS_SH)('sets node mode on the baked interpreter too: that may be Electron itself', () => {
     const dir = scratch()
     const repo = executable(path.join(dir, 'cookrew.mjs'), '')
     const launcher = executable(
@@ -195,7 +203,7 @@ describe('node mode stops at the CLI', () => {
   it('is not handed on to a command run by `secret exec`', async () => {
     // Left in the environment it turns any Electron app the command starts into
     // a bare node, and `cookrew secret exec x -- npm run dev` stops working.
-    const socketPath = path.join(scratch(), 'app.sock')
+    const socketPath = testSocketPath(scratch(), 'app.sock')
     const server = net.createServer((socket) => {
       socket.on('data', (chunk) => {
         const request = JSON.parse(chunk.toString().trim()) as { id: string }
