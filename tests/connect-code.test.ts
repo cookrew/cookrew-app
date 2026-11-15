@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
 import { expectMode } from './support/file-mode'
 import { createConnectCodes } from '../src/main/connect-code'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
@@ -107,9 +108,9 @@ describe('createConnectCodes', () => {
 
   it('a served seat cannot read it, nor catch it on its way to disk', () => {
     const denied = ownerSecretPaths('/Users/me/.cookrew', '/Users/me', 'cookrew', {})
-    expect(denied).toContain('/Users/me/.cookrew/connect-code.was')
-    expect(denied).toContain('/Users/me/.cookrew/connect-code.was.tmp')
-    expect(denied).toContain('/Users/me/.cookrew/connect-code')
+    expect(denied).toContain(native('/Users/me/.cookrew/connect-code.was'))
+    expect(denied).toContain(native('/Users/me/.cookrew/connect-code.was.tmp'))
+    expect(denied).toContain(native('/Users/me/.cookrew/connect-code'))
     expect(denied).toContain('/Users/me/.cookrew/connect-code.tmp')
     expect(denied).toContain('/Users/me/.cookrew/unlock-key.json.tmp')
   })

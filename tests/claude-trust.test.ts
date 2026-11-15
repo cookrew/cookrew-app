@@ -65,7 +65,8 @@ describe('directoryTrust', () => {
   it('reads an exact entry, an ancestor entry, no entry, and an unreadable file', () => {
     const { claudeJson } = scratch()
     expect(directoryTrust('/w/app', claudeJson)).toBe('untrusted')
-    writeFileSync(claudeJson, JSON.stringify({ projects: { '/w': { hasTrustDialogAccepted: true }, '/x': { hasTrustDialogAccepted: false } } }))
+    // Keyed the way the walk reads them: resolved on this host ('/w' is C:\w on Windows).
+    writeFileSync(claudeJson, JSON.stringify({ projects: { [path.resolve('/w')]: { hasTrustDialogAccepted: true }, [path.resolve('/x')]: { hasTrustDialogAccepted: false } } }))
     expect(directoryTrust('/w', claudeJson)).toBe('trusted')
     // Claude walks up from its folder, so a trusted parent answers for the child.
     expect(directoryTrust('/w/app/src', claudeJson)).toBe('trusted')

@@ -132,7 +132,8 @@ describe('ClaudeCardPrep.folderBlock', () => {
   })
 
   it('blocks nothing Claude already trusts itself, or that prepare will trust', () => {
-    const { home, prep } = scratch({ projects: { '/': { hasTrustDialogAccepted: true } } })
+    // The root of the disk the home is on: '/' here, C:\ on Windows.
+    const { home, prep } = scratch({ projects: { [path.parse(path.resolve(tmpdir())).root]: { hasTrustDialogAccepted: true } } })
     expect(prep.folderBlock(home, [home])).toBe(null)
     const fresh = scratch({})
     expect(fresh.prep.folderBlock(fresh.app, [fresh.app])).toBe(null)
