@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { expectMode } from './support/file-mode'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createServer, type AddressInfo } from 'node:net'
@@ -285,7 +286,7 @@ describe('the crossing, against a real registry', () => {
     if (!out.ok) return
     expect(out.value.username).toBe(HANDLE)
     const file = accountFilePath(home)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
     const stored = loadAccount(home)
     expect(stored?.username).toBe(HANDLE)
     expect(stored?.deviceId).toBe(deviceIdFor(stored?.publicKeyJwk ?? {}))

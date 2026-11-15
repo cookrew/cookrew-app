@@ -5,6 +5,7 @@ import path from 'node:path'
 import { isAddress } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { parseX402Terms, type X402Terms } from '../shared/x402-terms'
+import { openToOthers } from './file-privacy'
 import type { PaymentRequirements } from './x402-rail'
 
 /**
@@ -58,7 +59,7 @@ function callerPrivateKey(): `0x${string}` {
   } catch {
     throw new X402CallerError('no wallet is set up on this device')
   }
-  if ((mode & 0o077) !== 0) {
+  if (openToOthers(mode)) {
     throw new X402CallerError(`${file} must be private — run chmod 600 on it`)
   }
   const key = readEnvFile(file).get('X402_CALLER_PRIVATE_KEY')
