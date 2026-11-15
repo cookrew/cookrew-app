@@ -8,6 +8,7 @@ import path from 'node:path'
 import { ownerOf, runtimeDirFor } from '../src/main/runtime-dir'
 import { launchBlock } from '../src/main/launch-check'
 import { addPaneDirs, panePath, resetPaneDirs } from '../src/main/pane-path'
+import { NO_APP_SOCKET_ON_WINDOWS } from './support/ipc-path'
 
 /**
  * A SECOND LINUX USER GOT A BLACK SCREEN (round 2, bug 13): /tmp/cookrew-runtime
@@ -41,7 +42,9 @@ describe('the runtime dir', () => {
 
 // A plain shell with no pointer file yet: the CLI's last guess must be the dir the
 // app made for this user, or the second person is sent to the first one's.
-describe('the CLI, guessing the socket', () => {
+// Skipped on Windows: the guess is where the app's Unix socket lives, and the
+// app serves no socket there to be guessed (support/ipc-path.ts).
+describe.skipIf(NO_APP_SOCKET_ON_WINDOWS)('the CLI, guessing the socket', () => {
   const uid = process.getuid?.() ?? 0
   const guessFrom = async (dir: string): Promise<boolean> => {
     // Short: a unix socket path has a low limit.

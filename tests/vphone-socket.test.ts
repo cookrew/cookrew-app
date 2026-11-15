@@ -4,6 +4,7 @@ import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { testSocketPath } from './support/ipc-path'
 import { createSocketGuest, vphoneSocketPath } from '../src/main/vphone-socket'
 
 const dirs: string[] = []
@@ -16,7 +17,7 @@ afterEach(() => {
 const serve = async (reply: (request: Record<string, unknown>) => unknown): Promise<string> => {
   const dir = mkdtempSync(path.join(tmpdir(), 'vphone-sock-'))
   dirs.push(dir)
-  const file = path.join(dir, 'vphone.sock')
+  const file = testSocketPath(dir, 'vphone.sock')
   const server = net.createServer((socket) => {
     let data = ''
     socket.on('data', (chunk) => {
@@ -60,6 +61,6 @@ describe('the socket guest', () => {
   })
 
   it('names the socket under the library the way vphone-cli lays it out', () => {
-    expect(vphoneSocketPath('myphone', '/Users/x/.vphone/machines')).toBe('/Users/x/.vphone/machines/myphone/vphone.sock')
+    expect(vphoneSocketPath('myphone', '/Users/x/.vphone/machines')).toBe(path.join('/Users/x/.vphone/machines', 'myphone', 'vphone.sock'))
   })
 })

@@ -9,6 +9,7 @@ import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { testSocketPath } from './support/ipc-path'
 import { HELP_TEXT } from '../src/main/socket-server'
 import { stdinPlaceholderError } from '../src/main/cli-stdin'
 import type { CliRequest } from '../src/shared/model'
@@ -49,7 +50,7 @@ describe('cookrew ask/recruit with a lone - reads the brief from stdin', () => {
   })
 
   const fakeApp = async () => {
-    const socketPath = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-stdin-')), 'app.sock')
+    const socketPath = testSocketPath(mkdtempSync(path.join(tmpdir(), 'cookrew-stdin-')), 'app.sock')
     const seen: Seen[] = []
     const server = net.createServer((socket) => {
       let buffer = ''
