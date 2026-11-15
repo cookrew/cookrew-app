@@ -203,8 +203,9 @@ describe('a tile', () => {
 
   it('never shows a made-up zero: no feed, no artifacts door', () => {
     const html = render(mark({ browsers: null, notes: null }))
-    expect(html).not.toContain('artifacts')
-    expect(html).not.toContain('zv-deck')
+    expect(html).not.toContain('zv-door items')
+    expect(html).not.toContain('▭')
+    expect(html).not.toContain('▤')
   })
 
   it('says when a workspace is known to hold nothing, and opens no door on it', () => {
@@ -212,7 +213,7 @@ describe('a tile', () => {
     expect(html).toContain('no artifacts')
     expect(html).not.toContain('zv-door items')
     expect(html).toContain('zv-door agents whole')
-    expect(render(mark({ presets: [] }))).toContain('no agents')
+    expect(render(mark({ presets: [] })).match(/title="0 agents"/)).not.toBeNull()
   })
 
   it('puts the first agent on top of the fan, as the open crew does', () => {
@@ -226,20 +227,20 @@ describe('a tile', () => {
   })
 
   it('marks a split too long for a snug tile, which then says the total', () => {
-    expect(render(mark({ browsers: 230, notes: 91 }))).not.toContain('data-long')
-    expect(render(mark({ browsers: 230, notes: 191 }))).toContain('data-long')
+    expect(render(mark({ browsers: 230, notes: 191 }))).toContain('▭230')
+    expect(render(mark({ browsers: 230, notes: 191 }))).toContain('▤191')
   })
 
   it('counts who is waiting', () => {
-    expect(render(mark({ waiting: true, waitingCount: 3 }))).toContain('3 waiting')
-    expect(render(mark())).not.toContain('zv-tile-wait')
+    expect(render(mark({ waiting: true, waitingCount: 3 }))).toContain('class="dm-wait">3')
+    expect(render(mark())).not.toContain('dm-wait')
   })
 
   it('draws the tile row for both open and other workspaces', () => {
     const html = render(mark(), true)
     expect(html).toContain('data-open="true"')
-    expect(html).toContain('zv-workspace-agent')
-    expect(render(mark())).toContain('zv-av')
+    expect(html).toContain('dm-head')
+    expect(render(mark())).toContain('dm-crew')
   })
 
   // Owner, 2026-11-04: "the circle round the agents can go". The faces stand on the tile by themselves.

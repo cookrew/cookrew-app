@@ -1,15 +1,14 @@
-import { CardBody } from './CardBody'
-import { QuickReply, useQuickReply } from './quick-reply'
-import { Page } from './page-parts'
+import { AgentCard } from './AgentCard'
 import type { AgentView, ItemView } from './zoom-model'
 
-export default function WorkspaceTileCard({ agent, item }: { agent: AgentView; item: ItemView | null }): React.JSX.Element {
-  const reply = useQuickReply(agent.id)
+const KEEP_DRAFT = (): void => undefined
+
+export function WorkspaceTileCard({ agent, items, onOpen, onItem }: { agent: AgentView; items: readonly ItemView[]; onOpen: () => void; onItem: (id: string) => void }): React.JSX.Element {
   return (
-    <div className="zv-tile-card">
-      <CardBody agent={agent} sent={reply.sent} roomy className="zv-body zv-tile-card-body" />
-      {item && <div className="zv-tile-card-art"><div className="zv-artifact-page"><Page item={item} words /></div><span>{item.title}</span></div>}
-      <QuickReply agent={agent} reply={reply} className="zv-reply zv-tile-card-reply" />
+    <div className="dm-agent-card">
+      <div className="ag-card dm-agent-card-box">
+        <AgentCard agent={agent} items={items} onOpen={onOpen} onItem={onItem} onDraft={KEEP_DRAFT} />
+      </div>
     </div>
   )
 }
