@@ -39,11 +39,25 @@ on:
 permissions:
   contents: write
 
+# A new push to a pull request makes its packaging check stale: cancel it. A tag
+# or a dispatch gets a group of its own (its run id), so nothing ever cancels or
+# queues behind a release.
+concurrency:
+  group: release-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Nothing is built from a tag that fails its own tests or names another version.
+  #
+  # The whole suite, split three ways (vitest --shard) so the builds wait ~2
+  # minutes for it instead of ~5. `build` needs every shard: one red shard and
+  # nothing is built, exactly as with a single job.
   verify:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
 
@@ -56,9 +70,10 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run typecheck
+      - if: matrix.shard == 1
+        run: npm run typecheck
 
-      - run: npm test
+      - run: npm test -- --shard=${{ matrix.shard }}/3
 
   build:
     needs: verify
