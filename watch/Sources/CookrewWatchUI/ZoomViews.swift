@@ -200,7 +200,18 @@ private struct WorkspaceAvatar: View {
           }
         }
       }
-      Text("\(tile.agents) agents · \(tile.artifacts.count) artifacts\(tile.artifacts.isEmpty ? "" : " · \(itemIndex + 1)/\(tile.artifacts.count)")").font(InkType.word(9)).foregroundStyle(ink.muted).lineLimit(1)
+      HStack(spacing: 5) {
+        Text(currentItem?.title ?? "No artifacts").font(InkType.words(10)).foregroundStyle(currentItem == nil ? ink.muted : ink.ink).lineLimit(1)
+        Spacer(minLength: 0)
+        if !tile.artifacts.isEmpty {
+          Text("\(itemIndex + 1)/\(tile.artifacts.count)").font(InkType.word(9)).foregroundStyle(ink.muted)
+        }
+        let browsers = tile.artifacts.filter { $0.kind == .browser }.count
+        let notes = tile.artifacts.count - browsers
+        if browsers > 0 { Text("▭\(browsers)").font(InkType.word(9)).foregroundStyle(ink.soft) }
+        if notes > 0 { Text("▤\(notes)").font(InkType.word(9)).foregroundStyle(ink.soft) }
+      }
+      .lineLimit(1)
     }
     .padding(8)
     .frame(maxWidth: .infinity, alignment: .leading)
