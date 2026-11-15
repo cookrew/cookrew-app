@@ -148,3 +148,23 @@ describe('ci-deps-key', () => {
     expect(JSON.stringify(lock)).toBe(before)
   })
 })
+
+describe('perf.yml on pull requests', () => {
+  type PerfOn = { schedule?: unknown; workflow_dispatch?: unknown; pull_request?: { paths?: string[] } }
+  const perf = (yaml.load(readFileSync('.github/workflows/perf.yml', 'utf8')) as { on: PerfOn }).on
+
+  // Owner ruling 2026-11-15: app changes are measured nightly, not per PR.
+  it('runs on a PR only when the gates, their budgets or the workflow change', () => {
+    expect(perf.pull_request?.paths).toEqual([
+      'tests/perf/**',
+      'vitest.perf.config.ts',
+      'scripts/perf-*.mjs',
+      '.github/workflows/perf.yml'
+    ])
+  })
+
+  it('keeps the nightly and the manual run', () => {
+    expect(perf.schedule).toBeDefined()
+    expect(perf).toHaveProperty('workflow_dispatch')
+  })
+})

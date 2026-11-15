@@ -4,6 +4,12 @@ name: Perf
 # the 4,600-test CI suite: they time things and measure retained heap, so they
 # want a process and a runner to themselves. Nightly, on demand, and on any
 # change to the gates or their budgets.
+#
+# Not on every app change (owner ruling 2026-11-15): with src/renderer/**,
+# src/main/** and registry/** listed, nearly every pull request ran it, red on
+# known timing failures every time and holding a macOS runner for 3-4 minutes:
+# no signal on the PR, a slot taken from CI. App changes are measured by the
+# nightly run on main.
 on:
   schedule:
     - cron: '17 3 * * *'
@@ -13,9 +19,6 @@ on:
       - 'tests/perf/**'
       - 'vitest.perf.config.ts'
       - 'scripts/perf-*.mjs'
-      - 'src/renderer/**'
-      - 'src/main/**'
-      - 'registry/**'
       - '.github/workflows/perf.yml'
 
 concurrency:
