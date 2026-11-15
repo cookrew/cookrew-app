@@ -147,7 +147,9 @@ private struct WorkspaceAvatar: View {
             VStack(alignment: .leading, spacing: 3) {
               if let wait = store.waitView(card) { WaitBlock(store: store, card: card, view: wait) }
               else { CardWordsView(card: card, sent: store.sent(card.id)).lineLimit(2) }
-              if let item = card.items.first(where: { $0.kind == .browser }) { Text(item.title).font(InkType.word(9)).lineLimit(1).foregroundStyle(ink.muted) }
+              if let item = card.items.first(where: { $0.kind == .browser }) {
+                Button { show(item) } label: { Text(item.title).font(InkType.word(9)).lineLimit(1).foregroundStyle(ink.muted) }.buttonStyle(.plain)
+              }
               if let notice = store.notice { Text(notice).font(InkType.word(9)).foregroundStyle(ink.wait) }
               ReplyBar(store: store, card: card)
             }
@@ -184,7 +186,7 @@ private struct WorkspaceAvatar: View {
           dragOffset = 0
           if expanded { closeLater() }
         })
-        .simultaneousGesture(LongPressGesture(minimumDuration: 0.35).onEnded { _ in
+        .simultaneousGesture(TapGesture().onEnded {
           guard !tile.artifacts.isEmpty else { return }
           closeTask?.cancel()
           withAnimation { expanded = true }
@@ -228,6 +230,14 @@ private struct WorkspaceAvatar: View {
       guard !Task.isCancelled else { return }
       withAnimation { expanded = false }
     }
+  }
+
+  private func show(_ item: CardItem) {
+    if let index = tile.artifacts.firstIndex(where: { $0.id == item.id }) { itemIndex = index }
+    selected = nil
+    closeTask?.cancel()
+    withAnimation { expanded = true }
+    closeLater()
   }
 
   private func artifact(_ item: CardItem) -> some View {

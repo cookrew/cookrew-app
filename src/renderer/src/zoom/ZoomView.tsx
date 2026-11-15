@@ -78,16 +78,16 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
    * latest render: the memoised nodes (ZoomParts · sameProps) keep their
    * handler, and a click still does what this render says.
    */
-  const runs = useRef(new Map<string, () => void>())
-  const trampolines = useRef(new Map<string, () => void>())
-  const stable = (key: string, run: () => void): (() => void) => {
-    runs.current.set(key, run)
+  const runs = useRef(new Map<string, (...args: unknown[]) => void>())
+  const trampolines = useRef(new Map<string, (...args: unknown[]) => void>())
+  const stable = <A extends unknown[]>(key: string, run: (...args: A) => void): ((...args: A) => void) => {
+    runs.current.set(key, run as (...args: unknown[]) => void)
     let fn = trampolines.current.get(key)
     if (!fn) {
-      fn = () => runs.current.get(key)?.()
+      fn = (...args: unknown[]) => runs.current.get(key)?.(...args)
       trampolines.current.set(key, fn)
     }
-    return fn
+    return fn as unknown as (...args: A) => void
   }
   /** Bumped when an element joins or leaves the registry: collect's cache key. */
   const registryVersion = useRef(0)
@@ -592,14 +592,14 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     }
     motion.wake()
   }, [device, frameOf, words, model.marks, model.machines, narrow, motion.wake])
-  const switchWorkspace = useCallback(async (id: string, side: 'agents' | 'items' = 'agents') => {
+  const switchWorkspace = useCallback(async (id: string, side: 'agents' | 'items' = 'agents', target?: string) => {
     setError(null)
     try {
       await cookrew().switchWorkspace(id)
-      zoomStore.focusAgent(null)
-      zoomStore.focusItem(null)
-      if (side === 'items') zoomStore.go(0, 'items')
-      else zoomStore.go(1, 'agents')
+      zoomStore.focusAgent(side === 'agents' ? target ?? null : null)
+      zoomStore.focusItem(side === 'items' ? target ?? null : null)
+      if (side === 'items') zoomStore.go(target ? 1 : 0, 'items')
+      else zoomStore.go(target ? 2 : 1, 'agents')
     } catch (e) { setError(`Cannot open workspace: ${failureWords(e)}`) }
   }, [])
   const ghostItem = zoom.item ? (model.items.find((i) => i.id === zoom.item) ?? model.coinItems.find((i) => i.id === zoom.item) ?? null) : null
@@ -733,9 +733,9 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           </div>
           {/* In the grid's order, so Tab walks it as the eye does. The open tile's faces are the scene's, over it. */}
           {model.frame.workspaces.map((id) => {
-            if (id === model.frame.active) return <WorkspaceTile key={id} mark={model.openMark} open bind={bind} onOpen={stable('open-agents', () => motion.go(1, 'agents'))} onOpenItems={stable('open-items', () => motion.go(0, 'items'))} />
+            if (id === model.frame.active) return <WorkspaceTile key={id} mark={model.openMark} open bind={bind} onOpen={stable('open-agents', (agentId?: string) => { if (agentId) { zoomStore.focusAgent(agentId); motion.go(2, 'agents') } else motion.go(1, 'agents') })} onOpenItems={stable('open-items', (itemId?: string) => { if (itemId) { zoomStore.focusItem(itemId); motion.go(1, 'items') } else motion.go(0, 'items') })} />
             const m = markOf.get(id)
-            return m ? <WorkspaceTile key={id} mark={m} bind={bind} onOpen={stable(`mark:${id}`, () => void switchWorkspace(id))} onOpenItems={stable(`mark-items:${id}`, () => void switchWorkspace(id, 'items'))} /> : null
+            return m ? <WorkspaceTile key={id} mark={m} bind={bind} onOpen={stable(`mark:${id}`, (agentId?: string) => void switchWorkspace(id, 'agents', agentId))} onOpenItems={stable(`mark-items:${id}`, (itemId?: string) => void switchWorkspace(id, 'items', itemId))} /> : null
           })}
         </div>
         {/* The full view's sheet, UNDER the scene: the open card's parts travel over it to their places (full-poses.ts). */}
