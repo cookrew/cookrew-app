@@ -76,6 +76,6 @@ export function paneEnv(input: PaneEnvInput): Record<string, string> {
           COOKREW_SOCKET: input.socketPath,
           COOKREW_CLI: path.join(input.cliDir, 'cookrew')
         }),
-    PATH: served ? infraPath : `${input.cliDir}:${infraPath}`
+    PATH: served ? infraPath : `${input.cliDir}${path.delimiter}${infraPath}`
   }
 }

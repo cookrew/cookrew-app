@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
 import { expectMode } from './support/file-mode'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
 import { sealedSwitchMemory } from '../src/main/remote-switch-memory'
@@ -84,8 +85,8 @@ describe('sealedSwitchMemory', () => {
 
   it('a served seat cannot read or copy it', () => {
     const denied = ownerSecretPaths('/Users/me/.cookrew', '/Users/me', 'cookrew', {})
-    expect(denied).toContain('/Users/me/.cookrew/remote-switch')
-    expect(denied).toContain('/Users/me/.cookrew/remote-switch.tmp')
+    expect(denied).toContain(native('/Users/me/.cookrew/remote-switch'))
+    expect(denied).toContain(native('/Users/me/.cookrew/remote-switch.tmp'))
   })
 })
 

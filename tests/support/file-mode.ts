@@ -13,3 +13,11 @@ export function expectMode(file: string, mode: number): void {
   if (!HAS_POSIX_MODES) return
   expect(statSync(file).mode & 0o777).toBe(mode)
 }
+
+/**
+ * Why a test that LOCKS a path with chmod does not run on Windows: chmod there
+ * only toggles the read-only flag, so a folder chmod 000 still lists, a file
+ * 0644 still runs, and a read-only folder still takes new files. The refusal
+ * such a test stages never happens, and there is no execute bit to withhold.
+ */
+export const CHMOD_CANNOT_LOCK = !HAS_POSIX_MODES

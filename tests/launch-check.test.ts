@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
+import { CHMOD_CANNOT_LOCK } from './support/file-mode'
 import { blockStands, cleanTail, commandWord, exitFailure, launchBlock } from '../src/main/launch-check'
 
 describe('commandWord', () => {
@@ -88,7 +89,8 @@ describe('launchBlock', () => {
     expect(failure?.fix).toContain('tool install claude')
   })
 
-  it('a file that is not executable is not a command', () => {
+  // Skipped on Windows: chmod cannot lock a path there; see CHMOD_CANNOT_LOCK.
+  it.skipIf(CHMOD_CANNOT_LOCK)('a file that is not executable is not a command', () => {
     expect(check({ command: 'notexec' })?.kind).toBe('command-missing')
   })
 
@@ -117,12 +119,13 @@ describe('launchBlock', () => {
     }
   })
 
-  it('a command behind a PATH folder it may not read is not called missing', () => {
+  // Skipped on Windows: chmod cannot lock a path there; see CHMOD_CANNOT_LOCK.
+  it.skipIf(CHMOD_CANNOT_LOCK)('a command behind a PATH folder it may not read is not called missing', () => {
     const locked = path.join(root, 'lockedbin')
     mkdirSync(locked)
     chmodSync(locked, 0o000)
     try {
-      expect(check({ command: 'nothing-here', path: `${bin}:${locked}` })).toBeNull()
+      expect(check({ command: 'nothing-here', path: [bin, locked].join(path.delimiter) })).toBeNull()
     } finally {
       chmodSync(locked, 0o755)
     }

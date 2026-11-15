@@ -25,7 +25,9 @@ const ID = '106961c8-6d17-4414-9ce9-2713c93578ee'
 
 function world() {
   forgetClaudeSessionHomes()
-  const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'cookrew-session-home-')))
+  // .native: on Windows it also expands an 8.3 name like RUNNER~1, which a
+  // directory listing never shows, so a walk along the slug could not match it.
+  const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'cookrew-session-home-')))
   const projects = path.join(root, 'projects')
   const cardDir = path.join(root, 'goat-dev')
   const realDir = path.join(root, 'solis-orch')
@@ -111,7 +113,7 @@ describe('claudeLaunchDir', () => {
   })
 
   it('walks a dashed directory name as one segment', () => {
-    const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'cookrew-slug-')))
+    const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'cookrew-slug-')))
     const dashed = path.join(root, 'goat-testnet', 'solis-orch')
     mkdirSync(dashed, { recursive: true })
     expect(dirForSlug(claudeProjectSlug(dashed))).toBe(dashed)
