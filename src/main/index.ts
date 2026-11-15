@@ -3348,7 +3348,7 @@ function registryInput(terminalId: string): AgentRegistryUpsert | null {
 }
 
 /** What the pane's boot script will export, so a check here is a check there. */
-const paneSearchPath = (): string => `${ptys.runtimeDir}:${panePath()}`
+const paneSearchPath = (): string => `${ptys.runtimeDir}${path.delimiter}${panePath()}`
 
 /** The multiplexer's strict word on one pane: null when it could not say. */
 function panePresence(id: string): boolean | null {

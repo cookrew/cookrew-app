@@ -10,6 +10,7 @@ import http from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
 import { GatewayMonitor } from '../src/main/route/gateway'
 import { RouteService } from '../src/main/route/service'
 import type { TerminalNodeData } from '../src/shared/model'
@@ -252,8 +253,8 @@ describe('envFor', () => {
       w.nodes.set('p1', pi)
       const piSpawn = svc.envFor(pi)
       expect(piSpawn.effective).toBe('group/smart')
-      expect(piSpawn.env.PI_CODING_AGENT_DIR).toMatch(/route\/p1\/pi$/)
-      expect(w.files.some((f) => f.path.endsWith('/p1/pi/models.json'))).toBe(true)
+      expect(piSpawn.env.PI_CODING_AGENT_DIR).toMatch(/route[\\/]p1[\\/]pi$/)
+      expect(w.files.some((f) => f.path.endsWith(native('/p1/pi/models.json')))).toBe(true)
       const oc = terminal('o1', 'opencode', { route: 'group/smart' })
       w.nodes.set('o1', oc)
       // opencode is matched by the service's harnessOf; this fake maps only claude/codex/pi,

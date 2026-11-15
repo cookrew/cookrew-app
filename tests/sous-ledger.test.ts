@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
 import { expectMode } from './support/file-mode'
 import { SousLedger, SOUS_LEDGER_TTL_MS } from '../src/main/sous-ledger'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
@@ -82,6 +83,6 @@ describe('SousLedger', () => {
   })
 
   it('the ledger path is in the served deny list', () => {
-    expect(ownerSecretPaths('/tmp/base', '/Users/x').some((p) => p.endsWith('/.cookrew/sous-decisions.jsonl'))).toBe(true)
+    expect(ownerSecretPaths('/tmp/base', '/Users/x').some((p) => p.endsWith(native('/.cookrew/sous-decisions.jsonl')))).toBe(true)
   })
 })
