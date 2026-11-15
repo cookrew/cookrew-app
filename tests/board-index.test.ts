@@ -1091,26 +1091,38 @@ describe('createProbeSampler — review of #70', () => {
   })
 
   it('only an invalidation that changed the map drops the ladder', async () => {
-    const status = new Map<string, 'working' | 'idle'>([['t1', 'working']])
-    const sampler = createProbeSampler(
-      probeDeps({
-        listSessionsAsync: async () => ['cookrew_t1'],
-        capturePaneAsync: async () => WORKING_PANE,
-        knownTerminalIds: () => ['t1'],
-        askedStatus: (id) => status.get(id) ?? null
-      }),
-      PROBE_INTERVAL_MS,
-      { backoffMs: [20, 50, 200] }
-    )
-    const release = sampler.subscribe()
-    await sleep(120) // climb: 20 → 50 → 200
-    expect(sampler.stats().intervalMs).toBe(200)
-    await sampler.invalidate('t1') // herdr re-announcing the same fact
-    expect(sampler.stats().intervalMs).toBe(200) // no news, no reset
-    status.set('t1', 'idle')
-    await sampler.invalidate('t1')
-    expect(sampler.stats().intervalMs).toBe(20) // news
-    release()
+    // The ladder is climbed on a clock this test drives, rung by rung. It was
+    // a real 120 ms sleep, a race against how fast a loaded machine ran three
+    // async passes: a slow one was still on the 50 ms rung when it looked.
+    vi.useFakeTimers()
+    try {
+      const status = new Map<string, 'working' | 'idle'>([['t1', 'working']])
+      const sampler = createProbeSampler(
+        probeDeps({
+          listSessionsAsync: async () => ['cookrew_t1'],
+          capturePaneAsync: async () => WORKING_PANE,
+          knownTerminalIds: () => ['t1'],
+          askedStatus: (id) => status.get(id) ?? null
+        }),
+        PROBE_INTERVAL_MS,
+        { backoffMs: [20, 50, 200] }
+      )
+      const release = sampler.subscribe()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(sampler.stats().intervalMs).toBe(20) // the first pass: a change, the first rung
+      await vi.advanceTimersByTimeAsync(20)
+      expect(sampler.stats().intervalMs).toBe(50) // unchanged: the next rung
+      await vi.advanceTimersByTimeAsync(50)
+      expect(sampler.stats().intervalMs).toBe(200) // unchanged again: the top
+      await sampler.invalidate('t1') // herdr re-announcing the same fact
+      expect(sampler.stats().intervalMs).toBe(200) // no news, no reset
+      status.set('t1', 'idle')
+      await sampler.invalidate('t1')
+      expect(sampler.stats().intervalMs).toBe(20) // news
+      release()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('counts per-event pane reads as children, and is running while a pass is in flight', async () => {
