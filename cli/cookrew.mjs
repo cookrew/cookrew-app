@@ -113,6 +113,8 @@ const terminalId = process.env.COOKREW_TERMINAL_ID ?? ''
  * deep tree cannot make the CLI slow.
  */
 function ancestorSessionId() {
+  // Windows has no POSIX ps: the one a machine may have on PATH refuses -o.
+  if (process.platform === 'win32') return null
   const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
   const flag = new RegExp(`--(?:session-id|resume)[= ](${uuid})\\b`, 'i')
   try {
@@ -120,7 +122,9 @@ function ancestorSessionId() {
     for (let hop = 0; hop < 6 && pid > 1; hop += 1) {
       const out = execFileSync('ps', ['-o', 'ppid=,command=', '-p', String(pid)], {
         encoding: 'utf8',
-        timeout: 1000
+        timeout: 1000,
+        // A ps that complains must not print into the command's own output.
+        stdio: ['ignore', 'pipe', 'ignore']
       }).trim()
       if (!out) return null
       const match = flag.exec(out)
