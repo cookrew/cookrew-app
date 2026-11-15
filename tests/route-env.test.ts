@@ -4,6 +4,7 @@
 // gateway (src/main/route-env.ts header), so a drift here is a drift from
 // what was verified.
 
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { routeEnv, sessionHeaderLine } from '../src/main/route-env'
 import { shellQuote } from '../src/main/shell-quote'
@@ -85,7 +86,7 @@ describe('routeEnv', () => {
     expect(r.env.PI_CODING_AGENT_SESSION_DIR).toMatch(/\.pi[\\/]agent[\\/]sessions$/)
     expect(r.args).toEqual(['--provider', 'magpie', '--model', 'ollama/qwen2.5:1.5b'])
     expect(r.files).toHaveLength(1)
-    expect(r.files[0].path).toBe(`${r.env.PI_CODING_AGENT_DIR}/models.json`)
+    expect(r.files[0].path).toBe(path.join(r.env.PI_CODING_AGENT_DIR, 'models.json'))
     const models = JSON.parse(r.files[0].content) as { providers: { magpie: unknown } }
     expect(models.providers.magpie).toEqual({ baseUrl: 'http://127.0.0.1:3425/v1', api: 'openai-completions', apiKey: 'magpie-cookrew', headers: { 'X-Magpie-Session': 'cookrew:card-4' }, models: [{ id: 'ollama/qwen2.5:1.5b' }] })
   })

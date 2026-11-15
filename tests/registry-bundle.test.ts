@@ -168,7 +168,7 @@ describe('registry:build', () => {
     expect(scripts['registry:build']).not.toMatch(/--minify-(?:whitespace|syntax)/)
   })
 
-  it('fits one ConfigMap with room to grow', () => {
+  it.skipIf(NO_REGISTRY_BUILD)('fits one ConfigMap with room to grow', () => {
     const bytes = statSync(bundle).size
     expect(bytes).toBeLessThan(CONFIGMAP_MAX)
     expect(bytes).toBeLessThan(BUNDLE_BUDGET)

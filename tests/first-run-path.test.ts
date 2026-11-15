@@ -43,7 +43,9 @@ describe('the PATH panes get', () => {
     expect(installerDirs('C:\\Users\\new', 'win32')).toEqual([])
   })
 
-  it('is what a pane’s environment carries', () => {
+  // Skipped on Windows: a learned dir is a POSIX dir from a POSIX login shell,
+  // joined onto PATH with ':'; Windows learns none (addPaneDirs, pane-path.ts).
+  it.skipIf(process.platform === 'win32')('is what a pane’s environment carries', () => {
     addPaneDirs(['/home/new/.local/bin'])
     const env = paneEnv({ terminalId: 't', socketPath: '/s', cliDir: '/cli', ownerEnv: { PATH: panePath('/usr/bin') } })
     expect(env.PATH).toBe('/cli:/usr/bin:/home/new/.local/bin')
