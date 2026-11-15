@@ -1,5 +1,6 @@
-import { chmodSync, statSync } from 'node:fs'
+import { chmodSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import {
   admittedDevicesFile,
   createAdmittedDeviceStore,
@@ -28,7 +29,7 @@ describe('the admitted-devices file', () => {
   it('is written 0600 — it decides who opens this Mac', () => {
     const store = createAdmittedDeviceStore({ base: temp.base })
     store.record({ deviceId: PHONE })
-    expect(statSync(admittedDevicesFile(temp.base)).mode & 0o777).toBe(0o600)
+    expectMode(admittedDevicesFile(temp.base), 0o600)
   })
 
   it('reads an absent or corrupt file as nobody admitted, never as a crash', () => {

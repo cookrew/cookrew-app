@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { createHash, createHmac, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
@@ -39,7 +40,7 @@ describe('the account key', () => {
   it('is made once, kept 0600, and is the same account on the way back', () => {
     const base = dir()
     const first = accountKey(base)
-    expect(statSync(path.join(base, ACCOUNT_KEY_FILE)).mode & 0o777).toBe(0o600)
+    expectMode(path.join(base, ACCOUNT_KEY_FILE), 0o600)
     expect(first.jwk).toMatchObject({ kty: 'EC', crv: 'P-256' })
 
     // A SECOND CALL REUSES IT. Making a new one would silently orphan every
@@ -67,10 +68,10 @@ describe('the account key', () => {
     const file = path.join(base, ACCOUNT_KEY_FILE)
     const first = accountKey(base)
     chmodSync(file, 0o644)
-    expect(statSync(file).mode & 0o777).toBe(0o644)
+    expectMode(file, 0o644)
 
     const again = accountKey(base)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
     // And it is the SAME account: a new key would orphan every certificate
     // ordered under the old one.
     expect(again.thumbprint).toBe(first.thumbprint)

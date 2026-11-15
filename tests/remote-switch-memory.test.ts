@@ -1,9 +1,10 @@
 // THE SWITCH THAT OUTLIVES A RESTART. An agent running as this user can write any
 // file, so a file alone must never turn it on: only what the app's own key sealed.
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
 import { sealedSwitchMemory } from '../src/main/remote-switch-memory'
 import { confirmSwitchOn, singleConfirm } from '../src/main/remote-switch-confirm'
@@ -33,7 +34,7 @@ describe('sealedSwitchMemory', () => {
     expect(memory.read()).toBe(false)
     memory.write(true)
     expect(memory.read()).toBe(true)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
   })
 
   it('off leaves nothing behind', () => {

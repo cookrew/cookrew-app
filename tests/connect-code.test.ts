@@ -1,9 +1,10 @@
 // THE CONNECT CODE: what the relay has never seen. It goes into the seal's keys, so
 // it has to stay on this Mac, and a rotation has to end whoever came in on the old one.
-import { mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { createConnectCodes } from '../src/main/connect-code'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
 import { checkReplaced, connectCodeId, proveReplaced, SEAL_CODE_BYTES, startHandshake } from '../src/shared/canvas-seal'
@@ -23,7 +24,7 @@ describe('createConnectCodes', () => {
     const first = createConnectCodes(file).encoded()
     expect(bytes(first)).toHaveLength(SEAL_CODE_BYTES)
     expect(createConnectCodes(file).encoded()).toBe(first)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
   })
 
   it('names its code the way a phone does', async () => {
@@ -78,7 +79,7 @@ describe('createConnectCodes', () => {
       expect(await checkReplaced(old, hello, await proveReplaced(key as Uint8Array, hello))).toBe(true)
       expect(holder.replacedKeyFor(await connectCodeId(bytes(holder.encoded())))).toBeNull()
     }
-    expect(statSync(`${file}.was`).mode & 0o777).toBe(0o600)
+    expectMode(`${file}.was`, 0o600)
     expect(readFileSync(`${file}.was`, 'utf8')).not.toContain(Buffer.from(old).toString('base64url'))
     for (let turn = 0; turn < 5; turn++) codes.rotate()
     expect(codes.replacedKeyFor(oldId)).toBeNull()
