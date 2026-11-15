@@ -3,10 +3,11 @@
 // prompt answered it and claude exited 1 (Solis, 2026-11-09). The owner ruled
 // bypass permissions on for their own cards, so the acceptance is written the way
 // Claude 2.1.x writes it: skipDangerousModePermissionPrompt in ~/.claude/settings.json.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import {
   acceptBypassConsent,
   bypassConsentState,
@@ -35,8 +36,8 @@ describe('acceptBypassConsent', () => {
     const { settings } = scratch()
     expect(acceptBypassConsent(settings)).toBe('accepted')
     expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual({ skipDangerousModePermissionPrompt: true })
-    expect(statSync(settings).mode & 0o777).toBe(0o600)
-    expect(statSync(path.dirname(settings)).mode & 0o777).toBe(0o700)
+    expectMode(settings, 0o600)
+    expectMode(path.dirname(settings), 0o700)
     expect(bypassConsentState(settings)).toBe('accepted')
   })
 
@@ -50,7 +51,7 @@ describe('acceptBypassConsent', () => {
       permissions: { allow: ['Bash'] },
       skipDangerousModePermissionPrompt: true
     })
-    expect(statSync(settings).mode & 0o777).toBe(0o644)
+    expectMode(settings, 0o644)
   })
 
   it('writes nothing a second time', () => {

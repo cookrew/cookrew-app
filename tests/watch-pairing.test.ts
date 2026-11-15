@@ -1,7 +1,8 @@
-import { mkdtempSync, readFileSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { createHmac } from 'node:crypto'
 import {
   WATCH_CODE_GUESSES,
@@ -30,7 +31,7 @@ describe('a watch pairs with six digits', () => {
     expect(pairing.accepts(claim.token)).toBe(true)
     expect(pairing.accepts(`${claim.token}x`)).toBe(false)
     expect(pairing.accepts(null)).toBe(false)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
     expect(readFileSync(file, 'utf8').trim()).toBe(claim.token)
     expect(pairing.claim(code)).toEqual({ ok: false, reason: 'no-code' })
     pairing.unpair()

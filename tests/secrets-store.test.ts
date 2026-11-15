@@ -1,9 +1,10 @@
 // ONE FILE PER SECRET, UNDER A DIRECTORY NOBODY ELSE CAN LIST — and the
 // value comes out of exactly one call.
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { createSecretsStore, STALE_TMP_MS } from '../src/main/secrets-store'
 
 const fresh = () => {
@@ -21,8 +22,8 @@ describe('createSecretsStore', () => {
     const { base, store } = fresh()
     store.put('stripe-key', VALUE)
     const dir = path.join(base, 'secrets')
-    expect(statSync(dir).mode & 0o777).toBe(0o700)
-    expect(statSync(path.join(dir, 'stripe-key')).mode & 0o777).toBe(0o600)
+    expectMode(dir, 0o700)
+    expectMode(path.join(dir, 'stripe-key'), 0o600)
     expect(readdirSync(dir)).toEqual(['stripe-key'])
     expect(JSON.parse(readFileSync(path.join(dir, 'stripe-key'), 'utf8'))).toMatchObject({
       value: VALUE,
@@ -105,7 +106,7 @@ describe('the write is wx, and the sweep knows a crash from a live writer', () =
     store.put('stripe-key', VALUE)
     expect(store.read('stripe-key')?.value).toBe(VALUE)
     expect(readdirSync(dir)).toEqual(['stripe-key'])
-    expect(statSync(path.join(dir, 'stripe-key')).mode & 0o777).toBe(0o600)
+    expectMode(path.join(dir, 'stripe-key'), 0o600)
   })
 
   it('list() and remove() sweep a stale tmp file too', () => {

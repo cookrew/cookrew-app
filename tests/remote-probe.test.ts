@@ -1,9 +1,10 @@
 // THE READERS BEHIND THE DESK: the lock and the display, cached and shared; a
 // Linux session; what this build is called; the switch on disk.
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { createSessionReader, linuxSession, remoteBuild, remoteSettingsFile, SESSION_FRESH_MS } from '../src/main/remote-probe'
 
 describe('createSessionReader', () => {
@@ -126,7 +127,7 @@ describe('remoteSettingsFile', () => {
   it('only the owner can read or write it', () => {
     const at = file()
     remoteSettingsFile(at).write({ waiting: null, holdUntil: 1 })
-    expect(statSync(at).mode & 0o777).toBe(0o600)
+    expectMode(at, 0o600)
   })
 
   it('anything malformed is nothing', () => {

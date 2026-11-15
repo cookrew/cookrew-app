@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { expectMode } from './support/file-mode'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
@@ -54,7 +55,7 @@ describe('PendingCheckouts', () => {
     const dir = base()
     new PendingCheckouts({ base: dir }).put(entry())
     const file = pendingCheckoutsPath(dir)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
     const text = readFileSync(file, 'utf8')
     expect(Object.keys(JSON.parse(text)[0]).sort()).toEqual(['account', 'door', 'link', 'price', 'session', 'startedAt', 'url'])
     expect(text).not.toMatch(/token|bearer|secret|key/i)
