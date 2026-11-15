@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
+import { HAS_POSIX_MODES } from './support/file-mode'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
 import { generateKeyPairSync } from 'node:crypto'
 import { tmpdir } from 'node:os'
@@ -273,7 +274,9 @@ describe('HIGH-2 · the node lookup memo', () => {
 })
 
 describe('LOW-1 · nothing from this machine reaches an anonymous caller', () => {
-  it('keeps the key-mode message inside the process', () => {
+  // Skipped on Windows: it opens the file to others with chmod, which Windows
+  // cannot express, and openToOthers (file-privacy.ts) reads no bits there.
+  it.skipIf(!HAS_POSIX_MODES)('keeps the key-mode message inside the process', () => {
     const service = new CallCredentialService({ base, now: () => clock })
     service.mint('alice', 'ws')
     chmodSync(path.join(base, 'call-token-key.jwk'), 0o644)

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { HAS_POSIX_MODES } from './support/file-mode'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -95,7 +96,9 @@ describe('env grants', () => {
     expect(logged.join(' ')).toMatch(/HOME/)
   })
 
-  it('warns once when a lent credential file is readable by other users', () => {
+  // Skipped on Windows: it opens the file to others with chmod, which Windows
+  // cannot express, and openToOthers (file-privacy.ts) reads no bits there.
+  it.skipIf(!HAS_POSIX_MODES)('warns once when a lent credential file is readable by other users', () => {
     const envFile = path.join(base, 'loose.env')
     writeFileSync(envFile, 'K=v\n', { mode: 0o644 })
     writeConfig({ 'svc-x': { envFile, maxSessions: 1 } })
