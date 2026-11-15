@@ -340,8 +340,12 @@ describe('which facilitator a boot gets', () => {
   })
 })
 
-/** The built bundle, booted as the cluster boots it. */
-describe('the registry binary', () => {
+/**
+ * The built bundle, booted as the cluster boots it. Skipped on Windows:
+ * registry:build is a POSIX shell line run through /bin/sh, and the registry is
+ * built and deployed from Linux.
+ */
+describe.skipIf(process.platform === 'win32')('the registry binary', () => {
   const ROOT = fileURLToPath(new URL('..', import.meta.url))
   let dir = ''
   let bundle = ''

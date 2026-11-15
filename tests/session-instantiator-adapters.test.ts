@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import { CHMOD_CANNOT_LOCK } from './support/file-mode'
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -358,7 +359,8 @@ describe('makeOrdinalHistory — what a previous run left under sessions/', () =
     expect(tree()).toEqual(before)
   })
 
-  it('throws on a service dir it cannot read, rather than answering "nothing here"', () => {
+  // Skipped on Windows: chmod cannot lock a path there; see CHMOD_CANNOT_LOCK.
+  it.skipIf(CHMOD_CANNOT_LOCK)('throws on a service dir it cannot read, rather than answering "nothing here"', () => {
     leaveSandbox('svc', 'ana', 1)
     const root = serviceRoot(base, 'svc')
     chmodSync(root, 0o000)

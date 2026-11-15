@@ -37,7 +37,9 @@ function rig() {
 /** A slot held by this live test process, the same way a real run holds one. */
 const holdSlot = (dir: string) => writeFileSync(path.join(dir, `${Date.now() - 1000}-${process.pid}`), '')
 
-describe('the preload, in a real node', () => {
+// Skipped on Windows: the app never installs the gate there (tscGateEnv stays
+// off win32, below), so there is no Windows preload to run.
+describe.skipIf(process.platform === 'win32')('the preload, in a real node', () => {
   it('lets a tsc run through and leaves its slot behind for the next look to sweep', () => {
     const r = rig()
     const out = spawnSync(process.execPath, [r.tsc], { env: r.env(), encoding: 'utf8' })
@@ -205,7 +207,11 @@ describe('installTscGate', () => {
   })
 
   it('reports failure instead of throwing: boot must go on', () => {
-    expect(installTscGate('/dev/null/nope/tsc-gate.cjs')).toBe(false)
+    // Under a plain file: no OS can make a directory there ('/dev/null/nope'
+    // is only that on POSIX; Windows creates C:\dev\null\nope).
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'tsc-gate-')), 'a-file')
+    writeFileSync(file, '')
+    expect(installTscGate(path.join(file, 'nope', 'tsc-gate.cjs'))).toBe(false)
   })
 
   it('leaves an up-to-date file alone: every live pane loads it, so a boot must not truncate it', () => {
@@ -252,6 +258,6 @@ describe('tscGateEnv', () => {
   })
 
   it('carries the gate when it is', () => {
-    expect(tscGateEnv('--trace-warnings', '/g.cjs', () => true)).toEqual({ NODE_OPTIONS: '--trace-warnings --require=/g.cjs' })
+    expect(tscGateEnv('--trace-warnings', '/g.cjs', () => true, 'darwin')).toEqual({ NODE_OPTIONS: '--trace-warnings --require=/g.cjs' })
   })
 })
