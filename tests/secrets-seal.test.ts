@@ -4,10 +4,11 @@
 // `cookrew secret`, where the read is audited. Migration is the one place a
 // real value can be lost, so most of this file is about what it must not do.
 
-import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { createSecretsStore, type SecretSealer } from '../src/main/secrets-store'
 import { electronSealer, excludeFromBackup } from '../src/main/secrets-seal'
 
@@ -41,7 +42,7 @@ describe('sealing', () => {
     const stored = JSON.parse(raw) as Record<string, unknown>
     expect(stored.value).toBeUndefined()
     expect(typeof stored.sealed).toBe('string')
-    expect(statSync(fileIn(dir, 'stripe-key')).mode & 0o777).toBe(0o600)
+    expectMode(fileIn(dir, 'stripe-key'), 0o600)
     expect(store.read('stripe-key')).toMatchObject({ value: VALUE, served: true })
   })
 
@@ -134,7 +135,7 @@ describe('moving a clear file in', () => {
     const raw = readFileSync(fileIn(dir, 'dsv4'), 'utf8')
     expect(raw).not.toContain(VALUE)
     expect(store.read('dsv4')).toEqual({ value: VALUE, served: true, createdAt: 5, updatedAt: 9 })
-    expect(statSync(fileIn(dir, 'dsv4')).mode & 0o777).toBe(0o600)
+    expectMode(fileIn(dir, 'dsv4'), 0o600)
     expect(readdirSync(path.join(dir, 'secrets'))).toEqual(['dsv4'])
   })
 

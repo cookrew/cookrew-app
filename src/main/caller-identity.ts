@@ -3,6 +3,7 @@ import { createPrivateKey, generateKeyPairSync, sign } from 'node:crypto'
 import { homedir, userInfo } from 'node:os'
 import path from 'node:path'
 import { callAssertionPayload } from './call-ceremony'
+import { openToOthers } from './file-privacy'
 
 /**
  * THE CALLER'S ACCOUNT AT SOMEONE ELSE'S DOOR.
@@ -83,7 +84,7 @@ export interface CallerKey {
  *  a file this user should not trust — one others can read. */
 export function readCallerKey(file: string): CallerKey | null {
   try {
-    if ((statSync(file).mode & 0o077) !== 0) {
+    if (openToOthers(statSync(file).mode)) {
       throw new Error(`${file} is readable by others — chmod 600 it`)
     }
   } catch (error) {

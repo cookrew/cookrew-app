@@ -12,6 +12,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import {
   Accounts,
   DEFAULT_LOCK_AFTER_MS,
@@ -181,7 +182,7 @@ describe('the file: 0600, atomic, and forgiving of a corrupt one', () => {
     const base = scratch()
     writeAccount(sample(base), base)
     const file = accountFilePath(base)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
     expect(() => statSync(`${file}.tmp`)).toThrow()
   })
 

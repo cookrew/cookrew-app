@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { expectMode } from './support/file-mode'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -66,7 +67,7 @@ describe('phase 1 — claim, unlock, profile, devices', () => {
     expect(claimed.ok).toBe(true)
     const file = accountFilePath(home)
     expect(existsSync(file)).toBe(true)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
     const stored = loadAccount(home)
     expect(stored?.username).toBe(USERNAME)
     expect(stored?.kind).toBe('desktop')

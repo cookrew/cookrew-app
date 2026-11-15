@@ -2,12 +2,13 @@
 // certificate an iPhone will accept once the root is trusted.
 import { execFileSync } from 'node:child_process'
 import { X509Certificate } from 'node:crypto'
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import https from 'node:https'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { ensureCert, issuedByLocalCa, LEAF_DAYS, leafReplacement, localCaPem } from '../src/main/cert'
 
 const fresh = () => mkdtempSync(path.join(tmpdir(), 'cookrew-ca-'))
@@ -23,8 +24,8 @@ describe('the local root', () => {
     expect(ca.ca).toBe(true)
     expect(leaf.ca).toBe(false)
     expect(issuedByLocalCa(leaf, ca)).toBe(true)
-    expect(statSync(path.join(dir, 'ca-key.pem')).mode & 0o777).toBe(0o600)
-    expect(statSync(path.join(dir, 'key.pem')).mode & 0o777).toBe(0o600)
+    expectMode(path.join(dir, 'ca-key.pem'), 0o600)
+    expectMode(path.join(dir, 'key.pem'), 0o600)
     // The chain is served whole: the serving certificate first, then the root.
     expect(readFileSync(path.join(dir, 'cert.pem'), 'utf8').match(/BEGIN CERTIFICATE/g)).toHaveLength(2)
   })
