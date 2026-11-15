@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
 import { expectMode } from './support/file-mode'
 import {
   acceptBypassConsent,
@@ -81,7 +82,7 @@ describe('claudeSignedInBy', () => {
   it('reads an account, a saved key, a credentials file or a key in the environment', () => {
     expect(claudeSignedInBy({ oauthAccount: { emailAddress: 'a@b' } }, none)).toBe(true)
     expect(claudeSignedInBy({ primaryApiKey: 'sk-ant-x' }, none)).toBe(true)
-    expect(claudeSignedInBy({}, { ...none, exists: (f) => f === '/nowhere/.claude/.credentials.json' })).toBe(true)
+    expect(claudeSignedInBy({}, { ...none, exists: (f) => f === native('/nowhere/.claude/.credentials.json') })).toBe(true)
     expect(claudeSignedInBy({}, { ...none, env: { CLAUDE_CODE_OAUTH_TOKEN: 't' } })).toBe(true)
     expect(claudeSignedInBy({}, { ...none, env: { ANTHROPIC_API_KEY: 'k' } })).toBe(true)
     expect(claudeSignedInBy({}, { ...none, env: { ANTHROPIC_API_KEY: '' } })).toBe(false)

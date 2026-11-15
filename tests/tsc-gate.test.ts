@@ -106,7 +106,11 @@ describe('the preload, in a real node', () => {
 
   it('a slot directory it cannot use never stops a typecheck', () => {
     const r = rig()
-    const out = spawnSync(process.execPath, [r.tsc], { env: r.env({ COOKREW_TSC_SLOT_DIR: '/dev/null/nope' }), encoding: 'utf8', timeout: 5000 })
+    // Under a plain file: no OS can make a directory there ('/dev/null/nope'
+    // is only that on POSIX; Windows creates C:\dev\null\nope).
+    const file = path.join(path.dirname(r.slots), 'a-file')
+    writeFileSync(file, '')
+    const out = spawnSync(process.execPath, [r.tsc], { env: r.env({ COOKREW_TSC_SLOT_DIR: path.join(file, 'nope') }), encoding: 'utf8', timeout: 5000 })
     expect(out.stdout).toBe('ran')
     expect(out.status).toBe(0)
   })
@@ -238,7 +242,11 @@ describe('installTscGate', () => {
   })
 
   it('reports failure instead of throwing: boot must go on', () => {
-    expect(installTscGate('/dev/null/nope/tsc-gate.cjs')).toBe(false)
+    // Under a plain file: no OS can make a directory there ('/dev/null/nope'
+    // is only that on POSIX; Windows creates C:\dev\null\nope).
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'tsc-gate-')), 'a-file')
+    writeFileSync(file, '')
+    expect(installTscGate(path.join(file, 'nope', 'tsc-gate.cjs'))).toBe(false)
   })
 
   it('leaves an up-to-date file alone: every live pane loads it, so a boot must not truncate it', () => {
@@ -285,6 +293,6 @@ describe('tscGateEnv', () => {
   })
 
   it('carries the gate when it is', () => {
-    expect(tscGateEnv('--trace-warnings', '/g.cjs', () => true)).toEqual({ NODE_OPTIONS: '--trace-warnings --require=/g.cjs' })
+    expect(tscGateEnv('--trace-warnings', '/g.cjs', () => true, 'darwin')).toEqual({ NODE_OPTIONS: '--trace-warnings --require=/g.cjs' })
   })
 })

@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, u
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { CHMOD_CANNOT_LOCK } from './support/file-mode'
 import { sessionIdentity } from '../src/main/session-identity'
 import { sandboxRoot } from '../src/main/session-sandbox'
 import { servedSessionCandidates, servedSessionKey, writtenSincePlan } from '../src/main/storage-gc-served'
@@ -101,7 +102,8 @@ describe('servedSessionCandidates — one candidate per sandbox, or nothing', ()
     expect(servedSessionCandidates(path.join(base(), 'sessions'))).toEqual([])
   })
 
-  it('a store that exists but cannot be read answers NULL — abort, not "nothing here"', () => {
+  // Skipped on Windows: chmod cannot lock a path there; see CHMOD_CANNOT_LOCK.
+  it.skipIf(CHMOD_CANNOT_LOCK)('a store that exists but cannot be read answers NULL — abort, not "nothing here"', () => {
     const root = base()
     const sessions = path.join(root, 'sessions')
     fill(sessions, 'svc-a/ana-1/.claude.json', '{}', 40)
@@ -110,7 +112,8 @@ describe('servedSessionCandidates — one candidate per sandbox, or nothing', ()
     expect(servedSessionCandidates(sessions)).toBeNull()
   })
 
-  it('an unreadable service directory aborts the whole class, not just that service', () => {
+  // Skipped on Windows: chmod cannot lock a path there; see CHMOD_CANNOT_LOCK.
+  it.skipIf(CHMOD_CANNOT_LOCK)('an unreadable service directory aborts the whole class, not just that service', () => {
     const root = base()
     const sessions = path.join(root, 'sessions')
     fill(sessions, 'svc-a/ana-1/.claude.json', '{}', 40)
@@ -174,7 +177,8 @@ describe('the mint is a write the sweep can see', () => {
     expect(writtenSincePlan(candidate, Date.now(), 30 * DAY)).toBe(true)
   })
 
-  it('a sandbox with an unreadable corner is not a candidate at all — kept, never half-deleted', () => {
+  // Skipped on Windows: chmod cannot lock a path there; see CHMOD_CANNOT_LOCK.
+  it.skipIf(CHMOD_CANNOT_LOCK)('a sandbox with an unreadable corner is not a candidate at all — kept, never half-deleted', () => {
     const root = base()
     const sessions = path.join(root, 'sessions')
     fill(sessions, 'svc-a/ana-1/.claude.json', '{}', 90)
