@@ -568,15 +568,19 @@ describe('the watch', () => {
 })
 
 describe('the child runner', () => {
+  // The children are node scripts, so the same cases run on every OS (Windows
+  // has no /bin/sh); each one stands for the shell line it replaced.
+  const node = (script: string): [string, string[]] => [process.execPath, ['-e', script]]
+
   it('hands back what the child printed', async () => {
-    expect(await runGaugeChild('/bin/echo', ['hello'])).toEqual({ stdout: 'hello\n', failure: null })
+    expect(await runGaugeChild(...node("process.stdout.write('hello\\n')"))).toEqual({ stdout: 'hello\n', failure: null })
   })
   it('keeps what answered when the child exits non-zero: an unknown oid must not cost the rest', async () => {
-    const answer = await runGaugeChild('/bin/sh', ['-c', 'echo vm.swapusage: x; exit 1'])
+    const answer = await runGaugeChild(...node("process.stdout.write('vm.swapusage: x\\n'); process.exitCode = 1"))
     expect(answer).toEqual({ stdout: 'vm.swapusage: x\n', failure: null })
   })
   it('keeps nvidia-smi’s words when it exits 6 with no devices: that is how a GPU image says there is no card', async () => {
-    const answer = await runGaugeChild('/bin/sh', ['-c', 'echo "No devices were found"; exit 6'])
+    const answer = await runGaugeChild(...node("process.stdout.write('No devices were found\\n'); process.exitCode = 6"))
     expect(answer).toEqual({ stdout: 'No devices were found\n', failure: null })
   })
   it('names a missing binary, so it is not asked again', async () => {
@@ -584,7 +588,9 @@ describe('the child runner', () => {
   })
   it('ends at its deadline even when a grandchild holds the pipes open: execFile’s callback waits for them', async () => {
     const started = Date.now()
-    const answer = await runGaugeChild('/bin/sh', ['-c', 'sleep 3 & exec sleep 3'], 100)
+    // `sleep 3 & exec sleep 3`: a grandchild that inherits the pipes outlives the kill.
+    const holdsPipes = "require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], { stdio: 'inherit' }); setTimeout(() => {}, 3000)"
+    const answer = await runGaugeChild(...node(holdsPipes), 100)
     expect(answer).toEqual({ stdout: null, failure: 'timeout' })
     expect(Date.now() - started).toBeLessThan(100 + GAUGE_CHILD_GRACE_MS + 800)
   })
@@ -609,7 +615,7 @@ describe('the child runner', () => {
   })
   it('kills a child past its timeout, and ends even if the child ignores SIGTERM', async () => {
     const started = Date.now()
-    const answer = await runGaugeChild('/bin/sh', ['-c', 'trap "" TERM; exec sleep 30'], 100)
+    const answer = await runGaugeChild(...node("process.on('SIGTERM', () => {}); setTimeout(() => {}, 30000)"), 100)
     expect(answer).toEqual({ stdout: null, failure: 'timeout' })
     expect(Date.now() - started).toBeLessThan(5000)
   })

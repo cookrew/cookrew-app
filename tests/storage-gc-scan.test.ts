@@ -12,6 +12,7 @@ import {
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { CHMOD_CANNOT_LOCK } from './support/file-mode'
 import { sandboxRoot } from '../src/main/session-sandbox'
 import {
   collectReferencedSidecars,
@@ -314,7 +315,8 @@ describe('sweepStorage — team session sidecars', () => {
     expect(sweepStorage({ roots }).skipped).toEqual([])
   })
 
-  it('a sidecar that cannot be unlinked is reported failed', () => {
+  // Skipped on Windows: chmod cannot lock a path there; see CHMOD_CANNOT_LOCK.
+  it.skipIf(CHMOD_CANNOT_LOCK)('a sidecar that cannot be unlinked is reported failed', () => {
     const roots = store()
     const lost = team(roots, 'lost', null, [{ name: 'x.jsonl' }])
     chmodSync(lost, 0o500)
@@ -431,7 +433,8 @@ describe('sweepStorage — served-session sandboxes', () => {
     expect(existsSync(dir)).toBe(true)
   })
 
-  it('a sessions store that cannot be read plans nothing for the class', () => {
+  // Skipped on Windows: chmod cannot lock a path there; see CHMOD_CANNOT_LOCK.
+  it.skipIf(CHMOD_CANNOT_LOCK)('a sessions store that cannot be read plans nothing for the class', () => {
     const roots = store()
     const dir = sandbox(roots, 'svc-x/ana-1', 90)
     aged(path.join(roots.turns, 'dead-term.jsonl'), '{}')

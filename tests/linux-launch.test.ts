@@ -1,9 +1,10 @@
 import { spawnSync, spawn } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { expectExecutable } from './support/file-mode'
 
 /**
  * WHEN LINUX REFUSES THE SANDBOX, the binary aborts before one line of the app
@@ -231,7 +232,7 @@ describe('the pack step', () => {
     await afterPack.default({ electronPlatformName: 'linux', appOutDir: dir, packager: { executableName: 'cookrew' } })
     expect(readFileSync(path.join(dir, 'cookrew.bin'), 'utf8')).toBe('ELF')
     expect(readFileSync(path.join(dir, 'cookrew'), 'utf8').startsWith('#!/bin/sh\n')).toBe(true)
-    expect(statSync(path.join(dir, 'cookrew')).mode & 0o111).toBe(0o111)
+    expectExecutable(path.join(dir, 'cookrew'))
     rmSync(dir, { recursive: true })
   })
 

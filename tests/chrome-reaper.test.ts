@@ -96,7 +96,9 @@ describe('reapOrphans — the sweep at launch', () => {
   })
 })
 
-describe('guardChromeWithParent — the Chrome dies with its launcher', () => {
+// Skipped on Windows: the guard is a /bin/sh watchdog (kill -0, sleep), and the
+// test's stand-in processes are `sleep`; neither exists there.
+describe.skipIf(process.platform === 'win32')('guardChromeWithParent — the Chrome dies with its launcher', () => {
   it('kills the child once the parent disappears', async () => {
     const parent = spawn('sleep', ['60'], { stdio: 'ignore' })
     const child = spawn('sleep', ['60'], { stdio: 'ignore' })

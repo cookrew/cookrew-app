@@ -16,11 +16,16 @@ describe('parseProcessLine', () => {
 })
 
 describe('processFact', () => {
-  it('reads a real process', async () => {
+  it('concludes nothing on Windows, where there is no POSIX ps to ask', async () => {
+    await expect(processFact(process.pid, 'win32')).resolves.toEqual({ state: 'unknown' })
+  })
+
+  // Skipped on Windows: these read the real ps, which only POSIX hosts have.
+  it.skipIf(process.platform === 'win32')('reads a real process', async () => {
     await expect(processFact(process.pid)).resolves.toMatchObject({ state: 'running' })
   })
 
-  it('a pid nobody holds is gone', async () => {
+  it.skipIf(process.platform === 'win32')('a pid nobody holds is gone', async () => {
     await expect(processFact(4_000_000)).resolves.toEqual({ state: 'gone' })
   })
 })

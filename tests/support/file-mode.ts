@@ -14,6 +14,12 @@ export function expectMode(file: string, mode: number): void {
   expect(statSync(file).mode & 0o777).toBe(mode)
 }
 
+/** Executable by owner, group and other: the same claim, the same caveat. */
+export function expectExecutable(file: string): void {
+  if (!HAS_POSIX_MODES) return
+  expect(statSync(file).mode & 0o111).toBe(0o111)
+}
+
 /**
  * Why a test that LOCKS a path with chmod does not run on Windows: chmod there
  * only toggles the read-only flag, so a folder chmod 000 still lists, a file
