@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { expectMode } from './support/file-mode'
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { SEATS_FILE, V2Seats, teamAddress } from '../registry/src/v2-seats'
@@ -188,7 +189,7 @@ describe('the file under it', () => {
     granted(seats, 'mira')
     const file = path.join(dir, SEATS_FILE)
     expect(existsSync(file)).toBe(true)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
     // Temp file then rename: nothing is left behind for a reader to trip on.
     expect(readdirSync(dir).filter((f) => f.includes('.tmp'))).toEqual([])
     const reopened = new V2Seats(dir)

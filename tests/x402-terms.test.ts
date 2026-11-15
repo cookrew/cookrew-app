@@ -208,6 +208,8 @@ describe('buildX402Payment — the signer reads with the same parser, or signs n
   /** A wallet nobody owns, in a home nobody uses: a signature is made and never sent anywhere. */
   let home = ''
   const realHome = process.env.HOME
+  // os.homedir() reads USERPROFILE on Windows and HOME everywhere else.
+  const realProfile = process.env.USERPROFILE
   beforeAll(() => {
     home = mkdtempSync(path.join(tmpdir(), 'x402-terms-home-'))
     mkdirSync(path.join(home, '.cookrew'), { recursive: true, mode: 0o700 })
@@ -215,9 +217,12 @@ describe('buildX402Payment — the signer reads with the same parser, or signs n
     writeFileSync(file, `X402_CALLER_PRIVATE_KEY=0x${randomBytes(32).toString('hex')}\n`, { mode: 0o600 })
     chmodSync(file, 0o600)
     process.env.HOME = home
+    process.env.USERPROFILE = home
   })
   afterAll(() => {
     process.env.HOME = realHome
+    if (realProfile === undefined) delete process.env.USERPROFILE
+    else process.env.USERPROFILE = realProfile
     rmSync(home, { recursive: true, force: true })
   })
 

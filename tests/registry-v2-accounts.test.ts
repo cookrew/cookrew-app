@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { expectMode } from './support/file-mode'
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -309,7 +310,7 @@ describe('the file on disk', () => {
   it('is written atomically, private to its owner, and leaves no temp behind', async () => {
     await store.create({ username: 'drej', password: PASSWORD, device: device() })
     const file = path.join(dir, V2_FILE)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
     expect(readdirSync(dir).filter((n) => n.includes('.tmp'))).toEqual([])
     const reopened = new V2Accounts(dir)
     expect(reopened.has('drej')).toBe(true)

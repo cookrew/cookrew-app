@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { directoryTrust, isBroadFolder, prepareChoresDir, trustDirectory } from '../src/main/claude-trust'
 
 function scratch(): { home: string; claudeJson: string; chores: string } {
@@ -46,7 +47,7 @@ describe('trustDirectory', () => {
     const { claudeJson, chores } = scratch()
     writeFileSync(claudeJson, '{}', { mode: 0o640 })
     trustDirectory(chores, claudeJson)
-    expect(statSync(claudeJson).mode & 0o777).toBe(0o640)
+    expectMode(claudeJson, 0o640)
   })
 })
 
