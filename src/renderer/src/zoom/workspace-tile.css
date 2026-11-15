@@ -598,13 +598,43 @@
 .zv-workspace-agents { top: calc(var(--zv-tile-top, -174px) + 35px); }
 .zv-tile-cap.agents { top: calc(var(--zv-tile-top, -174px) + 52px); left: 275px; max-width: 35px; }
 .zv-tile-cap.agents small { display: none; }
-.zv-tile-art-title { left: calc(-112px + var(--zv-pad) * var(--zv-k, 1)); top: calc(var(--zv-tile-top, -174px) + var(--zv-tile-h, 318px) - 23px * var(--zv-k, 1)); max-width: calc(195px / var(--zv-k, 1)); overflow: hidden; text-overflow: ellipsis; font: 11px/16px var(--zv-serif); color: var(--zv-ink); transform-origin: 0 0; }
+.zv-tile-art-title {
+  left: calc(-112px + var(--zv-pad) * var(--zv-k, 1));
+  top: calc(var(--zv-tile-top, -174px) + var(--zv-tile-h, 318px) - 23px * var(--zv-k, 1));
+  max-width: calc(150px / var(--zv-k, 1));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 9px/14px var(--zv-serif);
+  color: var(--zv-ink);
+  transform-origin: 0 0;
+}
 
 .zv-workspace-agents { z-index: 23; pointer-events: inherit; touch-action: pan-y; display: block; }
 .zv-mark .zv-workspace-agent { position: absolute; left: 10px; top: 9px; margin: 0; padding: 0; border: 0; cursor: pointer; transition: transform 260ms; }
 .zv-workspace-agents.dragging .zv-workspace-agent { transition: none; }
-.zv-tile-agent-name { position: absolute; left: 68px; top: 12px; width: 160px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 600 20px var(--zv-serif); color: var(--zv-ink); pointer-events: none; background: var(--zv-card); }
-.zv-tile-agent-name small { display: block; font: 12px var(--zv-mono); color: var(--zv-muted); }
+.zv-tile-agent-name {
+  position: absolute;
+  left: 68px;
+  top: 9px;
+  width: 132px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: 600 12px/14px var(--zv-serif);
+  color: var(--zv-ink);
+  pointer-events: none;
+  background: transparent;
+}
+
+.zv-tile-agent-name small {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: 9px/12px var(--zv-mono);
+  color: var(--zv-muted);
+}
 .zv-fan-tied { position: absolute; top: 8px; right: 8px; z-index: 300; display: flex; gap: 4px; }
 .zv-fan-tied button { border: 0; padding: 3px; border-radius: 50%; background: var(--zv-card); cursor: pointer; }
 .zv-tile-card-window { position: absolute; left: -112px; top: calc(var(--zv-tile-top, -174px) + 112px); width: 430px; height: calc(var(--zv-tile-h, 318px) - 112px); z-index: 22; overflow: hidden; background: var(--zv-card); pointer-events: inherit; }
