@@ -1,10 +1,11 @@
 // The marks ledger: last-wins, append-only, 0600 — and it REFUSES to hold
 // the conversation, which is the invariant the one-stream design rests on.
 
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import {
   MARK_TITLE_MAX,
   MarkRefused,
@@ -57,8 +58,8 @@ describe('writeMark / readMarks', () => {
   it('writes 0600 files in a 0700 directory', () => {
     writeMark(ID, { identity: 'u1', seenAt: 1 }, { dir: path.join(dir, 'nested') })
     const file = path.join(dir, 'nested', `${ID}.jsonl`)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
-    expect(statSync(path.join(dir, 'nested')).mode & 0o777).toBe(0o700)
+    expectMode(file, 0o600)
+    expectMode(path.join(dir, 'nested'), 0o700)
   })
 
   it('an absent ledger reads as no marks, never an exception', () => {

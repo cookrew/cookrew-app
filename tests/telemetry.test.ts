@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { expectMode } from './support/file-mode'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
@@ -102,7 +103,7 @@ describe('off, which is the default', () => {
   it('keeps the file private', () => {
     const { telemetry } = client()
     telemetry.emit('installed')
-    expect(statSync(telemetryFile(base)).mode & 0o777).toBe(0o600)
+    expectMode(telemetryFile(base), 0o600)
   })
 })
 

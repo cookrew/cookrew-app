@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { X509Certificate, generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -324,7 +325,7 @@ describe('a Mac gets its own certificate', () => {
     expect((await postCert(site, mac, csrFor(mac.deviceId))).status).toBe(202)
     const done = await settle(site, mac, 'issued')
     const file = path.join(site.dir, ACCOUNT_KEY_FILE)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
     const key = readFileSync(file, 'utf8')
     expect(key).toContain('PRIVATE KEY')
     expect(JSON.stringify(done)).not.toContain('PRIVATE KEY')

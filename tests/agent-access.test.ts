@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { accessHandlers, ACCESS_CHANNELS, registerAccessIpc } from '../src/main/access-ipc'
 import { AccessStore, accessLaunch, fileKey, paneKeyName, probeEndpoint } from '../src/main/agent-access'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
@@ -224,8 +225,8 @@ describe('where it is kept', () => {
     store.launchFor('claude')
     const file = path.join(root, 'keys', `${paneKeyName(source)}.key`)
     expect(readFileSync(file, 'utf8')).toBe(KEY)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
-    expect(statSync(path.dirname(file)).mode & 0o777).toBe(0o700)
+    expectMode(file, 0o600)
+    expectMode(path.dirname(file), 0o700)
     expect(readdirSync(path.join(root, 'keys'))).toEqual([`${paneKeyName(source)}.key`])
   })
 

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { expectMode } from './support/file-mode'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
@@ -71,7 +72,7 @@ describe('the unsettled-receipt file', () => {
     }
     writeUnsettled([entry], base)
     expect(unsettledSeatsPath(base)).toBe(path.join(base, 'seats-unsettled.json'))
-    expect(statSync(unsettledSeatsPath(base)).mode & 0o777).toBe(0o600)
+    expectMode(unsettledSeatsPath(base), 0o600)
     expect(loadUnsettled(base)).toEqual([entry])
   })
 
