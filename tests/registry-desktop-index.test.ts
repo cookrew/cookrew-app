@@ -15,9 +15,10 @@ import { V2Accounts, V2_FILE } from '../registry/src/v2-accounts'
  * therefore buying a full scan per packet.
  *
  * So the two questions DNS asks are answered from an index kept in step by the
- * one function that writes an account, and the test is written twice over: an
- * absolute cost, and — the part that actually proves an index rather than a
- * lucky machine — that ten thousand accounts cost about what a hundred do.
+ * one function that writes an account. What proves an index rather than a
+ * lucky machine is the WORK, counted: a negative answer reads no account and
+ * walks no index, at a hundred accounts as at ten thousand. It was timed, and
+ * a 20x ratio of microseconds was a coin toss on a loaded runner.
  */
 
 const dirs: string[] = []
@@ -67,43 +68,79 @@ function storeOf(count: number): { accounts: V2Accounts; dir: string } {
   return { accounts: new V2Accounts(dir), dir }
 }
 
-/** Microseconds per negative answer: the two lookups a NXDOMAIN makes. */
-function costPerNegative(accounts: V2Accounts, rounds = 1000): number {
-  // Warm, so the first call's lazy compilation is not the measurement.
-  for (let i = 0; i < 200; i += 1) accounts.desktopFor(`missing-${i}`)
-  const started = performance.now()
+interface Reads {
+  /** Any touch of the accounts list: a find, a map, a length, an index. */
+  accounts: number
+  /** Any walk of the desktop index: values, entries, keys, forEach, for-of. */
+  walks: number
+  /** Point lookups in the desktop index. */
+  gets: number
+}
+
+/**
+ * Count every read the store makes of what it holds. A scan has to touch the
+ * accounts list or walk the index; an index answers with one `get`. The two
+ * fields are the store's own, and the guards fail loudly if they are renamed,
+ * rather than letting the count pass by measuring nothing.
+ */
+function counted(store: V2Accounts): Reads {
+  const held = store as unknown as { accounts: readonly unknown[]; desktops: Map<string, unknown> }
+  expect(Array.isArray(held.accounts)).toBe(true)
+  expect(held.desktops).toBeInstanceOf(Map)
+  const reads: Reads = { accounts: 0, walks: 0, gets: 0 }
+  held.accounts = new Proxy(held.accounts, {
+    get(target, key, receiver) {
+      reads.accounts += 1
+      return Reflect.get(target, key, receiver)
+    }
+  })
+  const walks = new Set<PropertyKey>(['values', 'entries', 'keys', 'forEach', Symbol.iterator])
+  const index = held.desktops
+  held.desktops = new Proxy(index, {
+    get(target, key) {
+      if (key === 'get') {
+        return (id: string) => {
+          reads.gets += 1
+          return target.get(id)
+        }
+      }
+      if (walks.has(key)) reads.walks += 1
+      const value = Reflect.get(target, key, target) as unknown
+      return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value
+    }
+  })
+  return reads
+}
+
+/** The two lookups a NXDOMAIN makes, `rounds` times over. */
+function negativeAnswers(accounts: V2Accounts, rounds: number): void {
   for (let i = 0; i < rounds; i += 1) {
     accounts.desktopFor(`no-such-device-${i}`)
     accounts.desktopsChangedAt()
   }
-  return ((performance.now() - started) * 1000) / rounds
 }
 
 describe('the desktop index', () => {
   it('answers a negative lookup in constant time, whatever the registry holds', () => {
-    const small = storeOf(100)
-    const large = storeOf(10_000)
+    for (const size of [100, 10_000]) {
+      const { accounts } = storeOf(size)
+      expect(accounts.desktopFor(UUID(size - 1))?.name).toBe('MacBook Pro')
+      expect(accounts.desktopFor(UUID(99_999))).toBeNull()
 
-    expect(large.accounts.desktopFor(UUID(9999))?.name).toBe('MacBook Pro')
-    expect(large.accounts.desktopFor(UUID(99_999))).toBeNull()
-
-    const cheap = costPerNegative(small.accounts)
-    const dear = costPerNegative(large.accounts)
-    // Generous on purpose: a laptop under a full test run is not a benchmark
-    // rig, and what is being pinned is the shape rather than the number.
-    expect(dear).toBeLessThan(200)
-    // THE PART THAT PROVES AN INDEX. A scan across 10 000 accounts cannot be
-    // within a small factor of a scan across 100; only a map can.
-    expect(dear).toBeLessThan(Math.max(cheap, 0.05) * 20)
-    console.log(`H2: ${cheap.toFixed(3)} µs at 100 accounts, ${dear.toFixed(3)} µs at 10 000`)
+      const reads = counted(accounts)
+      negativeAnswers(accounts, 1000)
+      // THE PART THAT PROVES AN INDEX. One point lookup per question, no
+      // account read and no walk: the same count at 100 accounts as at
+      // 10 000, which no scan can produce.
+      expect(reads).toEqual({ accounts: 0, walks: 0, gets: 1000 })
+    }
   })
 
   it('costs the same for the SOA serial, which every negative answer also reads', () => {
     const large = storeOf(10_000)
-    const started = performance.now()
+    const reads = counted(large.accounts)
     for (let i = 0; i < 10_000; i += 1) large.accounts.desktopsChangedAt()
-    const each = ((performance.now() - started) * 1000) / 10_000
-    expect(each).toBeLessThan(5)
+    expect(reads).toEqual({ accounts: 0, walks: 0, gets: 0 })
   })
 
   it('stays in step through a PUT, a revoke and a second account', () => {
