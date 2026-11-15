@@ -28,12 +28,14 @@ describe('landing a lane', () => {
     git(repo, 'init', '-q', '-b', 'dev')
     git(repo, 'config', 'user.name', 't')
     git(repo, 'config', 'user.email', 't@t')
+    // Byte for byte on every OS: a Windows git defaults to core.autocrlf=true.
+    git(repo, 'config', 'core.autocrlf', 'false')
     write(path.join(repo, 'a.txt'), 'one\n')
     write(path.join(repo, '.gitignore'), 'node_modules/\n')
     git(repo, 'add', '-A')
     git(repo, 'commit', '-qm', 'base')
     git(repo, 'worktree', 'add', '-q', '-b', 'daily/x', tree, 'dev')
-    spawnSync('git', ['clone', '-q', `file://${repo}`, lane, '--branch', 'dev'])
+    spawnSync('git', ['clone', '-q', '-c', 'core.autocrlf=false', `file://${repo}`, lane, '--branch', 'dev'])
   })
 
   afterEach(() => rmSync(root, { recursive: true, force: true }))
@@ -150,7 +152,9 @@ describe('one run at a time', () => {
   })
 })
 
-describe('stopping a session', () => {
+// Skipped on Windows: stopGroup signals the POSIX process group (kill -pid),
+// which Windows does not have; the daily copilot runs on the owner's Mac.
+describe.skipIf(process.platform === 'win32')('stopping a session', () => {
   it('reaches the process behind the loader, which a plain kill leaves running', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'daily-stop-'))
     const pidFile = path.join(dir, 'pid')
