@@ -75,7 +75,7 @@ describe('scanResidue — a report with sizes, never a plan', () => {
     fill(root, 'turns/0bd65d5f.jsonl.bak-20260823-105126', 'x'.repeat(40))
     fill(root, 'workspaces/712d/workspace.json.bak-1784623825914', '{}')
     fill(root, 'turns/0bd65d5f.jsonl', 'live')
-    expect(scanResidue(root).map((e) => [path.relative(root, e.path), e.files])).toEqual([
+    expect(scanResidue(root).map((e) => [path.relative(root, e.path).split(path.sep).join('/'), e.files])).toEqual([
       ['turns/0bd65d5f.jsonl.bak-20260823-105126', 1],
       ['workspaces/712d/workspace.json.bak-1784623825914', 1]
     ])
