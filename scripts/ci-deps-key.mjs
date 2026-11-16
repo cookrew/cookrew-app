@@ -8,8 +8,8 @@
 // does and not when the version does.
 //
 // Also in the key, because they shape what an install leaves on disk:
-//   - the postinstall command and the two scripts it runs (electron-rebuild of
-//     node-pty, the node-pty repair, cr-listen);
+//   - the postinstall command, the two scripts it runs (electron-rebuild of
+//     node-pty, the node-pty repair, cr-listen) and cr-listen's source;
 //   - the platform, arch and Node ABI of the Node that ran the install.
 //
 // Prints `key=<hex>` to $GITHUB_OUTPUT when it is set, and to stdout always.
@@ -17,7 +17,8 @@
 import { createHash } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 
-const POSTINSTALL_SCRIPTS = ['scripts/ensure-node-pty.mjs', 'scripts/build-cr-listen.mjs']
+// What postinstall runs, and what it compiles (macOS builds cr-listen from it).
+export const POSTINSTALL_SCRIPTS = ['scripts/ensure-node-pty.mjs', 'scripts/build-cr-listen.mjs', 'resources/cr-listen/cr-listen.m']
 
 function readJson(file) {
   try {

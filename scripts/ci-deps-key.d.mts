@@ -7,3 +7,4 @@ export function depsKey(input: {
   scripts: readonly string[]
   runtime: readonly string[]
 }): string
+export const POSTINSTALL_SCRIPTS: readonly string[]

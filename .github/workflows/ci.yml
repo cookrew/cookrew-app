@@ -25,10 +25,25 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      # Types only: no native rebuild, and no package runs code of its own.
-      - run: npm ci --ignore-scripts
+      # The check job's Linux tree is a full install, which typechecks the same.
+      - name: Dependency key
+        id: deps
+        run: node scripts/ci-deps-key.mjs
+
+      - name: Restore node_modules
+        id: nm-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            resources/cr-listen/cr-listen
+          key: node-modules-${{ runner.os }}-${{ steps.deps.outputs.key }}
+
+      # Types only: no native rebuild, and no package runs code of its own. Never
+      # saved: a tree without its install scripts must not answer for a full one.
+      - if: steps.nm-cache.outputs.cache-hit != 'true'
+        run: npm ci --ignore-scripts
 
       - run: npm run typecheck
 
@@ -67,28 +82,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No npm download cache: on a hit nothing reads it, and its key (the raw
+      # lockfile) changed with every version bump, leaving ~400 MB of copies
+      # per release that pushed the repository past the 10 GB cache limit.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      # On Windows `npm ci` is the slowest step after the tests (~2 min, most
-      # of it electron-rebuild compiling node-pty with MSVC), and it ran three
-      # times per push once the suite was split. The installed tree is cached,
-      # keyed on what decides it (scripts/ci-deps-key.mjs). macOS and Linux
-      # install in ~25 s and build cr-listen outside node_modules, so they
-      # always install.
+      # The installed tree is cached on every OS, keyed on what decides it
+      # (scripts/ci-deps-key.mjs: the lockfile minus the app's version, the
+      # install scripts, cr-listen's source, platform and Node ABI). npm ci was
+      # 2 min on Windows (electron-rebuild compiling node-pty with MSVC), 30 s
+      # on macOS, 18 s on Linux, on each of the nine jobs. macOS also keeps
+      # cr-listen, which its postinstall builds outside node_modules.
+      #
+      # A pull request reads the tree saved by main's own run (caches are
+      # scoped to a branch; the default branch is readable by all). The native
+      # toolchains run whenever the key moves, and on every release build.
       - name: Dependency key
         id: deps
-        if: runner.os == 'Windows'
         run: node scripts/ci-deps-key.mjs
 
       - name: Restore node_modules
         id: nm-cache
-        if: runner.os == 'Windows'
         uses: actions/cache/restore@v4
         with:
-          path: node_modules
+          path: |
+            node_modules
+            resources/cr-listen/cr-listen
           key: node-modules-${{ runner.os }}-${{ steps.deps.outputs.key }}
 
       # npm ci triggers postinstall (electron-rebuild for node-pty against
@@ -100,11 +121,14 @@ jobs:
       # Saved right after the install, not at the end of the job: actions/cache
       # saves only when the whole job is green, so a red test run would never
       # leave a tree behind; and nothing the tests write gets into the cache.
+      # One shard per OS saves; the other two would only race it.
       - name: Save node_modules
-        if: runner.os == 'Windows' && steps.nm-cache.outputs.cache-hit != 'true'
+        if: matrix.shard == 1 && steps.nm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: node_modules
+          path: |
+            node_modules
+            resources/cr-listen/cr-listen
           key: node-modules-${{ runner.os }}-${{ steps.deps.outputs.key }}
 
       - id: test
