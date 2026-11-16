@@ -1084,9 +1084,12 @@ function Canvas(): React.JSX.Element {
         zoomedId: zoomedNodeIdRef.current,
         max: THUMB_BATCH_MAX
       })
+      const tiles = new Set(thumbWants.tileIds())
+      const unseen: string[] = []
       for (const id of ids) {
         if (disposed) return
         const dataUrl = await snapshot(id).catch(() => null)
+        if (!dataUrl && tiles.has(id)) unseen.push(id)
         if (!disposed && dataUrl) {
           // A handed-off live frame is a blob; replacing one must revoke it,
           // exactly as the poll path does. set() dedupes identical strings.
@@ -1095,6 +1098,8 @@ function Canvas(): React.JSX.Element {
           thumbStore.set(id, dataUrl)
         }
       }
+      // A tile's page no screen has photographed: main starts it once to take one (browser-tile-wake.ts).
+      if (!disposed && unseen.length > 0) cookrew().browserTileWake?.(unseen)
     }
     void tick()
     const timer = setInterval(() => void tick(), BROWSER_SNAPSHOT_MS)
@@ -1172,14 +1177,18 @@ function Canvas(): React.JSX.Element {
       // Only what the item pets show (pets/thumb-wants.ts): the canvas and
       // its viewport are retired.
       const visible = [...thumbWants.ids()]
+      // A tile's page is the one picture its workspace shows: never backed off, and woken if it has none.
+      const tiles = new Set(thumbWants.tileIds())
       // Per-id failure backoff — the desktop's capture-storm lesson, applied to
       // the polling side. After an app restart NO engine is booted, so 40+
       // cards have no frame at once; re-asking them all every 5s was a
       // sustained storm (owner's Web Inspector, 2026-08-27).
       const now = Date.now()
-      const ids = thumbPollList(visible, thumbBackoffsRef.current, now).slice(0, THUMB_BATCH_MAX)
+      const ids = visible.filter((id) => tiles.has(id) || thumbPollList([id], thumbBackoffsRef.current, now).length > 0).slice(0, THUMB_BATCH_MAX)
       if (ids.length === 0) return
       const params = new URLSearchParams({ ids: ids.join(',') })
+      const wake = ids.filter((id) => tiles.has(id) && !(id in thumbVersionsRef.current))
+      if (wake.length > 0) params.set('wake', wake.join(','))
       const known = knownVersions(thumbVersionsRef.current, ids)
       if (known.length > 0) params.set('known', known)
       const failAll = (): void => {
