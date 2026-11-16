@@ -11,6 +11,16 @@ describe('widenedPath', () => {
     expect(wide).toContain('/opt/homebrew/bin')
   })
 
+  // 2026-11-16: the app relaunched with PATH=/usr/bin:/bin, so `lsof` (in
+  // /usr/sbin) exited 127 and no Codex card could bind its rollout: every new
+  // Codex card opened on "No conversation yet". sysctl and scutil too.
+  it('reaches the system tools in /usr/sbin and /sbin (lsof, sysctl, scutil) from a bare launch', () => {
+    const wide = widenedPath({ PATH: '/usr/bin:/bin' }, '/Users/new', 'darwin').split(':')
+    expect(wide).toContain('/usr/sbin')
+    expect(wide).toContain('/sbin')
+    expect(widenedPath({}, '/Users/new', 'linux').split(':')).toEqual(expect.arrayContaining(['/usr/bin', '/bin', '/usr/sbin', '/sbin']))
+  })
+
   it('keeps the person’s own order first, and adds nothing twice', () => {
     const wide = widenedPath({ PATH: '/opt/homebrew/bin:/usr/bin' }, '/Users/new', 'darwin').split(':')
     expect(wide.slice(0, 2)).toEqual(['/opt/homebrew/bin', '/usr/bin'])
