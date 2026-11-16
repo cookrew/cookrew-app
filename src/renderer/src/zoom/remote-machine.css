@@ -63,14 +63,14 @@
   gap: 24px;
   max-width: calc(2 * var(--rm-tile-w) + 24px);
   margin-inline: auto;
-  --rm-tile-w: 380px;
-  --rm-tile-s: calc(380 / 430);
+  --rm-tile-w: 260px;
+  --rm-tile-s: calc(260 / 430);
 }
 
 .rm-cell {
   position: relative;
   width: var(--rm-tile-w);
-  height: calc(318px * var(--rm-tile-s));
+  height: calc(486px * var(--rm-tile-s));
   border-radius: 12px;
 }
 
@@ -81,7 +81,7 @@
   transform: translate(calc(112px * var(--rm-tile-s)), calc(174px * var(--rm-tile-s))) scale(var(--rm-tile-s));
   transform-origin: 0 0;
   /* The words are drawn 1:1 on screen, as the painter keeps them (zoom-frame.ts · paintDeviceWords). */
-  --zv-k: calc(430 / 380);
+  --zv-k: calc(430 / 260);
 }
 
 .rm-cell .zv-tw {

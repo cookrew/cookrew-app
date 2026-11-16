@@ -45,18 +45,6 @@ export const CARD_POSE = {
   coin: { x: -27, y: -18, s: 0.45 }
 } as const
 
-type At = { readonly x: number; readonly y: number }
-/** Where a card's parts stand: the crew card's (CARD_POSE), or a host's own room for the same parts (WorkspaceTileCard). */
-export interface CardPose {
-  readonly origin: number
-  readonly face: number
-  readonly name: At
-  readonly meta: At
-  readonly body: At
-  readonly thumb: (k: number) => At
-  readonly coin: At & { readonly s: number }
-}
-
 const at = (p: { x: number; y: number }): React.CSSProperties => ({ transform: `translate(${p.x}px, ${p.y}px)` })
 
 export function AgentCard({
@@ -65,8 +53,7 @@ export function AgentCard({
   onOpen,
   onItem,
   onDelete,
-  onDraft,
-  pose = CARD_POSE
+  onDraft
 }: {
   agent: AgentView
   /** Its browsers and notes, newest wire first. */
@@ -78,13 +65,11 @@ export function AgentCard({
   onDelete?: () => void
   /** The draft, so a tap outside does not throw it away (PetTroop). */
   onDraft: (text: string) => void
-  /** The parts' places; absent, the crew card's. */
-  pose?: CardPose
 }): React.JSX.Element {
   const reply = useQuickReply(agent.id, onDraft)
   // Its name renames on a double-click, as the crew card's does (NameEdit.tsx).
   const title = useNameEdit(agent.id, agent.name)
-  const { origin, face, name, meta, body, thumb, coin } = pose
+  const { origin, face, name, meta, body, thumb, coin } = CARD_POSE
   return (
     <div className="ag-plate" style={{ left: origin, top: origin }}>
       <button type="button" className="zv-av cr-pet-card-face" style={{ transform: `scale(${face})` }} title={`Open ${agent.name} in full`} aria-label={`Open ${agent.name} in full`} onClick={onOpen}>

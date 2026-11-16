@@ -49,7 +49,8 @@ export const SWS = 0.62
  * mark's units (the group's own, drawn at SWS on the device), around the
  * group's centre, so the open workspace's real faces stand in its tile.
  */
-export const TILE = { left: -112, top: -174, w: 430, h: 318 } as const
+/** As tall as an agent card is for its width (260 x 244; owner, 2026-11-16): workspace-tile.css draws it 260 x 294: the card itself under the name and the crew row. */
+export const TILE = { left: -112, top: -174, w: 430, h: 486 } as const
 /** A tile's words on screen at a phone's picks, in px: its name's line over the bench, its counts' under it, and only a margin where it has no counts. */
 const TILE_HEAD_PX = { name: 28, caption: 21 }
 const TILE_FOOT_PX = { counts: 26, none: 8 }
@@ -379,7 +380,7 @@ export const DEVICE_COLS = { wide: [1, 2], narrow: [1, 2] } as const
 export const defaultDeviceCols = (narrow: boolean): number => (narrow ? 1 : 2)
 
 /** workspace-tile.css draws a tile this many px across, then scales it to TILE.w. */
-export const TILE_DRAWN_W = 380
+export const TILE_DRAWN_W = 260
 /**
  * A TILE'S TYPE, AS PICKED (owner, 2026-11-16: "bigger icons and words, and a
  * setting; the frame sized after the agent card, to hold its type"). 1 draws a

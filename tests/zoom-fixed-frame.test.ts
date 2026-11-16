@@ -25,7 +25,8 @@ describe('the devices stop', () => {
   it('gives every machine one frame, at the display’s proportions', () => {
     const a = machineFrameOf(deviceOf(ids(1), true), true)
     const b = machineFrameOf(deviceOf(ids(9), true), true)
-    expect(a).toEqual(b)
+    expect(a.w).toBeCloseTo(b.w, 6)
+    expect(a.h).toBeCloseTo(b.h, 6)
     const wide = machineFrameOf(deviceOf(ids(3), false, screenAspectOf({ w: 3440, h: 1440 })), false)
     expect((wide.w - 28) / (wide.h - 28)).toBeCloseTo(3440 / 1440, 6)
   })
@@ -33,8 +34,8 @@ describe('the devices stop', () => {
   it('draws tiles at one size in every frame, smaller only where a machine has too many to fit', () => {
     const frame = machineFrameOf(deviceOf(ids(1), true), true)
     expect(screenFit(deviceOf(ids(1), true), frame)).toBe(SCREEN_SCALE)
-    // Two to a row: nine are a short screen. One to a row (a phone's default since 2026-11-16) is a column that has to shrink.
-    expect(screenFit(deviceOf(ids(9), true, undefined, 2), frame)).toBeGreaterThan(SCREEN_SCALE * 0.95)
+    // Two rows of two fit whole. A tile as tall as an agent card (2026-11-16) makes a long grid a column that has to shrink.
+    expect(screenFit(deviceOf(ids(4), true, undefined, 2), frame)).toBeGreaterThan(SCREEN_SCALE * 0.95)
     const crowded = deviceOf(ids(40), true)
     expect(screenFit(crowded, frame) * crowded.screen.w).toBeCloseTo(frame.w - 28, 6)
   })

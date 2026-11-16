@@ -622,9 +622,9 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       : Math.abs(zoom.v + 1) < 0.25 && model.frame.workspaces.length > 1
         ? { what: 'workspaces', narrow, cols: deviceCols ?? defaultDeviceCols(narrow), onPick: setDeviceCols }
         : null
-  // A tile's type, where the tiles are seen and the window has room to grow them: a phone's tile already fills its width.
+  // A tile's type, where the tiles are seen: an agent card's own size, larger at a pick, on a desk and a phone alike.
   const tileSizeAt: TileSizePick | null =
-    !narrow && Math.abs(zoom.v + 1) < 0.25 && model.frame.workspaces.length > 0
+    Math.abs(zoom.v + 1) < 0.25 && model.frame.workspaces.length > 0
       ? { sizes: TILE_SIZES, size: tileSize ?? DEFAULT_TILE_SIZE, onPick: setTileSize }
       : null
   const side = barSide(zoom.dir, zoom.v)

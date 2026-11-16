@@ -143,12 +143,12 @@ describe('a workspace tile’s type', () => {
 
   it('a window too narrow for the pick shrinks to fit rather than cut a tile', () => {
     const d = deviceOf(ids(4), false, undefined, undefined, 1.3)
-    expect(onScreen(d, 900, 900, false)).toBeLessThan(1.3)
-    expect(d.box.w * deviceCam(d, 900, 900, false).S).toBeLessThanOrEqual(900 - 32 + 1e-6)
+    expect(onScreen(d, 600, 900, false)).toBeLessThan(1.3)
+    expect(d.box.w * deviceCam(d, 600, 900, false).S).toBeLessThanOrEqual(600 - 32 + 1e-6)
   })
 
-  it('a phone’s one tile to a row fills its width, near an agent card’s type', () => {
-    expect(onScreen(deviceOf(ids(3), true), 390, 844, true)).toBeGreaterThan(0.9)
+  it('a phone draws its one tile to a row at an agent card’s own type too', () => {
+    expect(onScreen(deviceOf(ids(3), true), 390, 844, true)).toBeCloseTo(1, 6)
   })
 
   it('only a size offered is a pick', () => {
