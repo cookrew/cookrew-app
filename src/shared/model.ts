@@ -254,6 +254,11 @@ export interface WorkspaceMeta {
    * only the desktop and its paired devices see it. Absent = unset.
    */
   brief?: string
+  /**
+   * A served (marketplace) session's workspace: a customer's, never the
+   * owner's to be notified about (main/store.ts · markServed). Absent = not.
+   */
+  served?: true
 }
 
 /** Git state of a workspace directory (main/git.ts). */

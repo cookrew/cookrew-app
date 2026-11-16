@@ -506,6 +506,24 @@ export class WorkspaceStore extends EventEmitter {
   }
 
   /**
+   * A SERVED WORKSPACE STAYS MARKED (plan docs/hitl-cross-workspace-2026-11-15):
+   * the served contexts live in memory, so after a restart a customer's
+   * workspace would look like the owner's own and its agents would land in the
+   * owner's HITL bar. The mark rides the list every surface already reads.
+   */
+  markServed(id: string): void {
+    const target = this.registry.workspaces.find((w) => w.id === id)
+    if (!target) throw new Error(`Workspace '${id}' not found`)
+    if (target.served === true) return
+    this.registry = {
+      ...this.registry,
+      workspaces: this.registry.workspaces.map((w) => (w.id === id ? { ...w, served: true } : w))
+    }
+    saveRegistry(this.baseDir, this.registry)
+    this.emit('workspaces', this.deskList())
+  }
+
+  /**
    * The owner's one-line brief (shared/workspace-brief.ts); a blank one
    * clears it. Throws on an unknown workspace or a brief that fails the check,
    * changing nothing. An unchanged brief is no event.
@@ -1340,16 +1358,30 @@ export class WorkspaceStore extends EventEmitter {
    */
   updateNodeUnsafe(id: string, patch: Partial<CanvasNode>): CanvasNode | undefined {
     let updated: CanvasNode | undefined
+    let before: CanvasNode | undefined
     const nodes = this.focusedState.nodes.map((n) => {
       if (n.id !== id) return n
+      before = n
       updated = { ...n, ...patch } as CanvasNode
       return updated
     })
-    if (!updated) return this.updateNodeAcrossWorkspacesUnsafe(id, patch)
+    if (!updated || !before) return this.updateNodeAcrossWorkspacesUnsafe(id, patch)
     this.mutate({ ...this.focusedState, nodes })
     if (updated.kind === 'note') void this.persistNoteFile(updated)
+    this.noteWordsChanged(before, updated, this.here)
     this.spillLineage(updated, patch)
     return updated
+  }
+
+  /**
+   * A NOTE'S WORDS CHANGED: one `note.updated`, by whoever the op context says
+   * (an agent's `cookrew note write`, the owner's own edit). The HITL bar and
+   * the notifications read the log (plan docs/hitl-cross-workspace-2026-11-15);
+   * a move, a resize or a rename is not a change of words.
+   */
+  private noteWordsChanged(before: CanvasNode, after: CanvasNode, workspaceId: string): void {
+    if (before.kind !== 'note' || after.kind !== 'note' || before.content === after.content) return
+    this.emitOp('note.updated', after.id, after.name, workspaceId)
   }
 
   /**
@@ -1393,6 +1425,7 @@ export class WorkspaceStore extends EventEmitter {
       })
     }))
     if (updated?.kind === 'note') void this.persistNoteFile(updated, hit.workspaceId)
+    if (updated) this.noteWordsChanged(hit.node, updated, hit.workspaceId)
     if (updated) this.spillLineage(updated, patch)
     return updated
   }
