@@ -185,7 +185,9 @@ import { sealedSwitchMemory } from './remote-switch-memory'
 import { singleConfirm } from './remote-switch-confirm'
 import { createConnectCodes } from './connect-code'
 import { IdleLock } from './lock'
-import { mintWatchInvite, registerAccountIpc } from './account-ipc'
+import { mintPhoneInvite, mintWatchInvite, registerAccountIpc } from './account-ipc'
+import { setPhoneInviter } from './phone-invite'
+import { createRefusedPhones, refusalOnForget } from './refused-phones'
 import type { AccountDoor, LoginAudit } from './login-cli'
 import { paneInputs } from './pane-input'
 import { injectWindowInput } from './ui-input'
@@ -1416,6 +1418,8 @@ const machineKeys = createMachineKeyStore(path.join(homedir(), '.cookrew', 'mach
 const MACHINE_KEYS_EVERY_MS = 10 * 60_000
 /** Machines of the account the owner forgot here: their passes are turned away at the door. */
 const refusedMachines = createRefusedMachines(path.join(homedir(), '.cookrew', 'machine-refused.json'))
+/** Trusted phones forgotten here: out until they join the account again with a new phone's code. */
+const refusedPhones = createRefusedPhones(path.join(homedir(), '.cookrew', 'phone-refused.json'))
 /** Present once cookrew.dev has taken this machine's one proof (registry issueMachineGrant). */
 const MACHINE_TRUSTED_FILE = path.join(homedir(), '.cookrew', 'machine-trusted')
 
@@ -1615,6 +1619,7 @@ const accountPairDoor = createAccountPairDoor({
   // Read when a watch arrives, long after startup: watchPairing is declared further down.
   watch: { enter: (deviceId) => watchPairing.enter(deviceId) },
   refusedMachine: (deviceId) => refusedMachines.has(deviceId),
+  refusedPhone: (deviceId, since) => refusedPhones.refuses(deviceId, since),
   log: (message: string) => console.error(`[cookrew] ${message}`)
 })
 
@@ -8745,7 +8750,11 @@ function registerIpc(handlers: RestoreHandlers): void {
       list: () => admittedDevices.list(),
       forget: (deviceId) => {
         // A machine of the account would come back with its pass: forgotten here, it stays out.
-        if (admittedDevices.list().some((device) => device.deviceId === deviceId && device.via === 'machine')) refusedMachines.add(deviceId)
+        const row = admittedDevices.list().find((device) => device.deviceId === deviceId)
+        if (row?.via === 'machine') refusedMachines.add(deviceId)
+        // So would a trusted phone, whatever pass it last came in on: out until it joins again with a new phone's code.
+        const keptOut = refusalOnForget(row, Date.now())
+        if (keptOut !== null) refusedPhones.add(deviceId, keptOut)
         const forgotten = admittedDevices.forget(deviceId)
         remoteDesk.forgetDevice(`device:${deviceId}`)
         return forgotten
@@ -9682,6 +9691,13 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle(
     'watch:invite',
     ownerOnly((current: unknown) => inviteWatch(watchHost, typeof current === 'string' ? current : '', true))
+  )
+  // ⋯ → Phone app: a phone's join code for the QR, minted on this Mac (a provider's trip may open here).
+  const invitePhone = (current: string, here: boolean) => mintPhoneInvite({ accounts, lock: ownerLock }, current, here)
+  setPhoneInviter(invitePhone)
+  ipcMain.handle(
+    'phone:invite',
+    ownerOnly((current: unknown) => invitePhone(typeof current === 'string' ? current : '', true))
   )
   ipcMain.handle(
     'watch:forget',

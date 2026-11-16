@@ -36,14 +36,24 @@ export const JOIN_CODE_TTL_MS = 10 * 60 * 1000
  */
 const JOIN_CODES_MAX = 1000
 
+/**
+ * What a code may make, when it is not "any device": a watch (⋯ → Apple Watch),
+ * or a trusted phone (⋯ → Phone app, owner 2026-11-16). Each enters every
+ * machine of the account on its pairing alone, so each is made only by a code
+ * minted for it, and that code makes nothing else.
+ */
+export type JoinPurpose = 'watch' | 'phone'
+
+export const isJoinPurpose = (value: unknown): value is JoinPurpose => value === 'watch' || value === 'phone'
+
 export interface JoinCode {
   /** The code as it is shown: two blocks of four, dashed. */
   code: string
   username: string
   at: number
   expiresAt: number
-  /** Minted for a watch (⋯ → Apple Watch): the only code a watch joins with, and it joins nothing else. */
-  purpose?: 'watch'
+  /** Minted for a watch or a trusted phone: the only code either joins with, and it joins nothing else. */
+  purpose?: JoinPurpose
 }
 
 /**
@@ -65,7 +75,7 @@ export class JoinCodes {
   }
 
   /** Mint one for this account, retiring whatever it had. */
-  mint(username: string, purpose?: 'watch'): JoinCode {
+  mint(username: string, purpose?: JoinPurpose): JoinCode {
     const at = this.now()
     this.sweep(at)
     for (const [key, held] of this.codes) {

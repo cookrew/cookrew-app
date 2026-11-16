@@ -121,7 +121,7 @@ export function PairBody({
  */
 const QUIET = 4
 
-function Qr({ text, label }: { text: string; label: string }): React.JSX.Element {
+export function Qr({ text, label }: { text: string; label: string }): React.JSX.Element {
   const modules = qrMatrix(text)
   if (!modules) return <p className="gs-paste-error">That code is too long to draw.</p>
   const span = modules.length + QUIET * 2

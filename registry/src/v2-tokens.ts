@@ -26,7 +26,7 @@ import path from 'node:path'
  * a stateless token cannot do for itself.
  */
 
-export type V2Scope = 'session' | 'call' | 'canvas' | 'grant' | 'watch-grant' | 'machine-grant'
+export type V2Scope = 'session' | 'call' | 'canvas' | 'grant' | 'watch-grant' | 'machine-grant' | 'phone-grant'
 
 export interface V2Claims {
   sub: string
@@ -50,6 +50,12 @@ export interface V2Claims {
   jkt?: string
   /** The sitting a device pass was minted under: its end (sign-out, a password change, "Not me") ends the pass. */
   sid?: string
+  /**
+   * When the phone a phone pass names was made a trusted phone (v2-accounts.ts ·
+   * phonePassAt). A machine that forgot the phone refuses passes no newer than
+   * the one it forgot, so a new phone's code is what brings it back.
+   */
+  since?: number
   /**
    * A SESSION OPENED BY THE CONSOLE'S PAGE (console-scope.ts): short, and good
    * for the console's few routes and nothing else. Absent on every other token.
@@ -207,6 +213,19 @@ export class V2Tokens {
     const exp = this.now() + GRANT_TTL_MS
     const jti = randomUUID()
     return { token: this.mint({ sub, dev, scope: 'machine-grant', exp, jti, jkt, sid }), exp, jti }
+  }
+
+  /**
+   * A TRUSTED PHONE'S PASS (owner 2026-11-16): the same shape as a grant, in its
+   * own scope, naming when the phone was trusted. A machine that knows it admits
+   * the phone until it is revoked; one older than it reads no pass at all.
+   */
+  mintPhoneGrant(sub: string, dev: string, jkt: string, sid: string, since: number): Minted {
+    if (!THUMBPRINT.test(jkt)) throw new Error('a grant names its device key by an RFC 7638 thumbprint')
+    if (!Number.isFinite(since)) throw new Error('a phone pass names when the phone was trusted')
+    const exp = this.now() + GRANT_TTL_MS
+    const jti = randomUUID()
+    return { token: this.mint({ sub, dev, scope: 'phone-grant', exp, jti, jkt, sid, since }), exp, jti }
   }
 
   mintGrant(sub: string, dev: string, jkt: string, sid: string): Minted {

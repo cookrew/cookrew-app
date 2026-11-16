@@ -38,3 +38,12 @@ export const isJoinCode = (raw: string): boolean => normaliseJoinCode(raw) !== n
  * names it.
  */
 export const joinLink = (site: string, code: string): string => `${site.replace(/\/+$/, '')}/join#${code}`
+
+/**
+ * ⋯ → PHONE APP (owner 2026-11-16): a phone's join code, its end and the link
+ * its QR holds; or why not, in the registry's reason words. One shape for the
+ * desktop's IPC and the companion's route (main/phone-invite.ts).
+ */
+export type PhoneInvite =
+  | { readonly ok: true; readonly code: string; readonly expiresAt: number; readonly url: string }
+  | { readonly ok: false; readonly reason: string; readonly message?: string }

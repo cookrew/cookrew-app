@@ -11,6 +11,7 @@ import type { LaunchFailure } from '../../shared/launch-failure'
 import type { TelemetryStatus } from '../../shared/funnel-events'
 import type { OpenBrowserStream } from './stream-line'
 import type { WatchCode, WatchInvite, WatchState } from './watch-code'
+import type { PhoneInvite } from '../../shared/join-code'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
@@ -894,6 +895,8 @@ export interface CookrewApi {
   /** One code for a watch anywhere: the account's join code, armed on this Mac as the claim too. */
   watchInvite?: (current: string) => Promise<WatchInvite>;
   watchForget?: () => Promise<unknown>;
+  /** ⋯ → Phone app: a phone's join code and the link its QR holds, under the account's step-up. Absent in the demo. */
+  phoneInvite?: (current: string) => Promise<PhoneInvite>;
   /**
    * The desktop's own line to a browser card's Chrome: a MessagePort from
    * main (browser-cast-ipc.ts). Absent on the phone and the demo, and on a
