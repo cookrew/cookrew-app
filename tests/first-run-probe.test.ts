@@ -129,7 +129,8 @@ describe('a Dock launch gets the same tools as a terminal launch', () => {
   })
 
   it('adds nothing twice, so a terminal launch keeps its PATH as it is', () => {
-    const full = '/opt/homebrew/bin:/usr/local/bin:/Users/new/.local/bin:/Users/new/.claude/local:/Users/new/.opencode/bin:/usr/bin:/bin'
+    // A real shell's PATH: /etc/paths always lists /usr/sbin and /sbin.
+    const full = '/opt/homebrew/bin:/usr/local/bin:/Users/new/.local/bin:/Users/new/.claude/local:/Users/new/.opencode/bin:/usr/bin:/bin:/usr/sbin:/sbin'
     expect(widenedPath({ PATH: full }, '/Users/new')).toBe(full)
   })
 
