@@ -266,3 +266,41 @@ describe('words typed in LIVE come back into the draft', () => {
     expect(getDraft(draftKey('a1'))).toBe('')
   })
 })
+
+// Owner 2026-11-16 (Codex, phone): a long Chinese message with a screenshot
+// reached Codex as "5 /Users/…/Screenshot_….jpg". The picture's path was on
+// the line; Codex folds a path that arrives as one burst into ONE [Image #1]
+// element, so each later edit's Backspaces over the path (71 by our count)
+// took the element with the first and the owner's words with the rest.
+describe('a picture in the draft', () => {
+  const pic = '/Users/drej/.cookrew/attachments/Screenshot_20261116_231745_Chrome.jpg'
+
+  it('is not typed into the line while the words are written', () => {
+    typeLine('a1', '输入被截断了')
+    typeLine('a1', `输入被截断了 ${pic}`)
+    typeLine('a1', `输入被截断了，然后 ${pic}`)
+    expect(typedKeys()).toEqual(['输入被截断了', '，然后'])
+    expect(typedKeys().join('')).not.toContain('\x7f')
+  })
+
+  it('goes with Enter, last, after every word', () => {
+    typeLine('a1', `输入被截断了 ${pic}`)
+    typeLine('a1', `输入被截断了，修复 ${pic}`)
+    submitLine('a1', `输入被截断了，修复 ${pic}`)
+    expect(typedKeys()).toEqual(['输入被截断了', '，修复', ` ${pic}`, '\r'])
+  })
+
+  it('stays in the draft when the words come back from LIVE', () => {
+    setDraft(draftKey('a1'), `fix ${pic}`)
+    observeLine('a1', activity({ pendingInput: 'fix' }), 0)
+    observeLine('a1', activity({ pendingInput: 'fix it' }), 10_000)
+    expect(getDraft(draftKey('a1'))).toBe(`fix it ${pic}`)
+  })
+
+  it('goes with the words when the line is emptied in LIVE (Enter or a clear there)', () => {
+    setDraft(draftKey('a1'), `fix ${pic}`)
+    observeLine('a1', activity({ pendingInput: 'fix' }), 0)
+    observeLine('a1', activity({ pendingInput: null }), 10_000)
+    expect(getDraft(draftKey('a1'))).toBe('')
+  })
+})
