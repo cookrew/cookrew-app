@@ -159,7 +159,8 @@ describe('round two: notes and browsers light the cable by direction', () => {
   const source = readFileSync(path.join(__dirname, '..', 'src', 'main', 'socket-server.ts'), 'utf8')
   const fn = (name: string): string => source.slice(source.indexOf(`function ${name}(`), source.indexOf('\n}\n', source.indexOf(`function ${name}(`)))
   const cmdNote = fn('cmdNote')
-  const cmdBrowser = fn('cmdBrowser')
+  // cmdBrowser logs HITL events around browserVerb, which runs the verb and lights the cable.
+  const cmdBrowser = fn('browserVerb')
 
   it('a note read runs note → agent; a write or edit runs agent → note; create and delete light nothing', () => {
     expect(cmdNote).toContain("deps.signal?.({ from: note.id, to: me.id, kind: noteVerbKind('read') ?? 'read' })")
@@ -178,7 +179,11 @@ describe('round two: notes and browsers light the cable by direction', () => {
   })
 
   it('a browser verb lights after it ran, by browserVerbKind, resolved to the browser the engine drove', () => {
-    expect(cmdBrowser.indexOf('await deps.browserCommand(request.args, me.id)')).toBeLessThan(cmdBrowser.indexOf('browserVerbKind('))
+    // `command` is deps.browserCommand with the acting agent attached (HITL events).
+    expect(cmdBrowser).toContain('deps.browserCommand(args, me.id')
+    const ran = cmdBrowser.indexOf('await command(request.args)')
+    expect(ran).toBeGreaterThan(-1)
+    expect(ran).toBeLessThan(cmdBrowser.indexOf('browserVerbKind('))
     expect(cmdBrowser).toContain("deps.store.nodeByName(name, 'browser')")
     expect(cmdBrowser).toContain("kind === 'write' ? { from: me.id, to: browser.id, kind } : { from: browser.id, to: me.id, kind }")
   })
