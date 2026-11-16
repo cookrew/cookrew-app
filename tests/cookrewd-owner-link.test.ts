@@ -124,6 +124,13 @@ describe('owner link', () => {
     expect(lines).toEqual([{ t: 'result', id: 4, ok: false, error: expect.stringMatching(/cannot cross/) }])
   })
 
+  it('answers an over-long result with an error, so the owner\'s client never has to close', async () => {
+    const { lines, say } = harness({ invoke: () => Promise.resolve(new Uint8Array(MAX_LINE)), send: vi.fn() })
+    say({ t: 'invoke', id: 9, channel: 'image:read', args: [] })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(lines).toEqual([{ t: 'result', id: 9, ok: false, error: expect.stringMatching(/over/) }])
+  })
+
   it('refuses requests beyond the in-flight cap', async () => {
     const { lines, say } = harness({ invoke: () => new Promise(() => undefined), send: vi.fn() })
     for (let id = 1; id <= MAX_IN_FLIGHT + 1; id += 1) say({ t: 'invoke', id, channel: 'hang', args: [] })
@@ -161,11 +168,20 @@ describe('owner link', () => {
     expect(send).toHaveBeenCalledWith('pty:input', ['t1', '你好'])
   })
 
-  it('closes on a line over the limit', async () => {
-    const { input, link, log } = harness({ invoke: () => Promise.resolve(null), send: vi.fn() })
+  it('skips a line over the limit and carries on with the next', async () => {
+    const send = vi.fn()
+    const { input, link, log } = harness({ invoke: () => Promise.resolve(null), send })
     input.write('x'.repeat(MAX_LINE + 1))
-    await link.closed
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/over the limit/))
+    input.write(`yyy\n${JSON.stringify({ t: 'send', channel: 'after', args: [] })}\n`)
+    await tick()
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/skipped/))
+    expect(send).toHaveBeenCalledWith('after', [])
+    expect(link.emit('still', [])).toBe(true)
+  })
+
+  it('reads window frames and refuses malformed ones', () => {
+    expect(readOwnerFrame('{"t":"window","target":"window","name":"focus","args":[{}]}')).toEqual({ t: 'window', target: 'window', name: 'focus', args: [{}] })
+    expect(readOwnerFrame('{"t":"window","target":"elsewhere","name":"focus","args":[]}')).toBeNull()
   })
 })
 
@@ -227,6 +243,24 @@ describe('the owner window in the shim', () => {
     const sink = vi.fn()
     connectOwner(sink)
     expect(sink).toHaveBeenCalledWith('workspace:state', [{ id: 'w0' }])
+  })
+
+  it('re-emits only allowlisted window events on the owner window', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { BrowserWindow, ownerDispatch } = await load()
+    const main = new BrowserWindow({ webPreferences: { preload: '/app/out/preload/index.cjs' } })
+    const focused = vi.fn()
+    const navigated = vi.fn()
+    const typed = vi.fn()
+    main.on('focus', focused)
+    main.webContents.on('did-start-navigation', navigated)
+    main.webContents.on('before-input-event', typed)
+    ownerDispatch.window('window', 'focus', [{}])
+    ownerDispatch.window('contents', 'did-start-navigation', [{ isMainFrame: true }])
+    ownerDispatch.window('contents', 'before-input-event', [{}, { key: 'q', meta: true }])
+    expect(focused).toHaveBeenCalledOnce()
+    expect(navigated).toHaveBeenCalledWith({ isMainFrame: true })
+    expect(typed).not.toHaveBeenCalled()
   })
 
   it('reaches ipcMain.on listeners with the owner event and the arguments', async () => {
