@@ -20,11 +20,15 @@ import { builtRendererPresent, rendererDir, startFixtureCompanion, type FixtureC
  * Skips, loudly, without Chrome or without out/renderer (CI builds first).
  */
 
+// The first card is the zoom view's (.zv-card). It was a canvas card
+// (.react-flow__node) until the canvas was retired (29765969, 2026-10-30);
+// from then on this marker never fired, firstCard stayed 0, and every count
+// below read an empty boot window.
 const OBSERVER = `(() => {
   const marks = { firstCard: null }
   window.__courier = marks
   const seen = () => {
-    if (marks.firstCard === null && document.querySelector('.react-flow__node')) {
+    if (marks.firstCard === null && document.querySelector('.zv-card')) {
       marks.firstCard = Date.now()
       observer.disconnect()
     }
@@ -35,7 +39,10 @@ const OBSERVER = `(() => {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
-const isStream = (p: string): boolean => /^\/api\/events(\?|$)|\/api\/terminal\/[^/]+\/stream(\?|$)/.test(p)
+// Every EventSource the renderer opens. /api/fleet/stream joined them with the
+// device fleet (remote-api.ts); the fixture has no fleet, so it reconnects.
+const isStream = (p: string): boolean =>
+  /^\/api\/events(\?|$)|\/api\/terminal\/[^/]+\/stream(\?|$)|^\/api\/fleet\/stream(\?|$)/.test(p)
 const isThumb = (p: string): boolean => /\/api\/browser\/[^/]+\/thumb|\/api\/browser\/thumbs/.test(p)
 
 const chrome = chromeBinary()
