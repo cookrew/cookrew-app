@@ -292,6 +292,7 @@ import { WatchPairing } from './watch-pairing'
 import { createWatchHost } from './watch-host'
 import { inviteWatch, setWatchHost } from './watch-routes'
 import { BrowserThumbCache } from './browser-thumb-cache'
+import { browserThumbKeep } from './browser-thumb-keep'
 import { machineCopy, registryArgument } from '../shared/machine-words'
 import { commandRunsInMain, mainDrawsCard } from './browser-owner'
 import { REFUSAL_FOR_A_PERSON } from './host-claim'
@@ -6767,6 +6768,8 @@ const browserWaiters = new Map<string, { resolve: (v: string) => void; reject: (
  * the headless page main itself owns with the flag on.
  */
 const browserThumbs = new BrowserThumbCache({
+  // The last picture of each browser, past a restart: a tile's front page shows the page as last seen.
+  keep: browserThumbKeep(),
   // peek, not get: drawing a thumbnail must never be what launches a browser.
   // A page that cannot be photographed right now (navigating, mid-resize) is
   // ordinary, not an error: the card keeps its last frame and the next poll
