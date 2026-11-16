@@ -1,0 +1,14 @@
+{
+  "name": "Cookrew",
+  "id": "dev.cookrew.phone",
+  "version": "0.1.0",
+  "build": 1,
+  "orientations": ["portrait"],
+  "ios": {
+    "team": "NT8ZMJPJMR",
+    "usage": {
+      "NSCameraUsageDescription": "To scan the code a Mac shows, which adds this phone to your Cookrew account.",
+      "NSFaceIDUsageDescription": "To open the key that lets this phone into your Macs."
+    }
+  }
+}
