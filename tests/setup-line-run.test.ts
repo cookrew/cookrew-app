@@ -1,8 +1,9 @@
 import { execFile, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { createSetupLines, foregroundArgs, lineScript, paneLastLine, parseForeground, type SetupLineDeps } from '../src/main/setup-line'
 import { SETUP_LINE_COPY } from '../src/shared/first-run-copy'
 import { askingPassword, lineEndWords } from '../src/shared/setup-line'
@@ -308,7 +309,9 @@ describe('the foreground read', () => {
   })
 })
 
-describe('the runner, on the real sh', () => {
+// Skipped on Windows: there the line is typed into the pane as is
+// (setup-line.ts, the win32 branch) and this sh runner never runs.
+describe.skipIf(process.platform === 'win32')('the runner, on the real sh', () => {
   const runScript = async (line: string): Promise<{ code: number | null; status: string; said: string }> => {
     const status = path.join(dir, 'x.status')
     const script = path.join(dir, 'x.sh')
@@ -351,8 +354,8 @@ describe('the runner, on the real sh', () => {
   it('keeps the runner and its status in a folder nobody else can list', async () => {
     const { lines } = rig({ dir: path.join(dir, 'made') })
     await lines.start(ask())
-    expect(statSync(path.join(dir, 'made')).mode & 0o777).toBe(0o700)
-    expect(statSync(path.join(dir, 'made', 't1.sh')).mode & 0o777).toBe(0o600)
+    expectMode(path.join(dir, 'made'), 0o700)
+    expectMode(path.join(dir, 'made', 't1.sh'), 0o600)
   })
 })
 

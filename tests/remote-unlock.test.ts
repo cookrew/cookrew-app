@@ -1,10 +1,11 @@
 // UNLOCKING THE MAC FROM A PHONE (owner 2026-11-05). A password crosses a relay
 // that must not read it, so every rule here is about what happens to that one
 // string: sealed to the Mac, good once, and never kept or said.
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { createUnlockDoor, loadUnlockKey, UNLOCK_ATTEMPTS, UNLOCK_CHALLENGE_MS, UNLOCK_MISSES_MAX, UNLOCK_REST_MS, type UnlockDoorDeps } from '../src/main/remote-unlock'
 import { generateSealKeyPair, packBody } from '../src/shared/relay-seal'
 import { UNLOCK_INFO } from '../src/shared/remote-unlock'
@@ -285,7 +286,7 @@ describe('loadUnlockKey', () => {
     const file = path.join(dir, 'unlock-key.json')
     const first = loadUnlockKey(file)
     expect(loadUnlockKey(file)).toEqual(first)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
     expect(readFileSync(file, 'utf8')).toContain(first.publicKey)
   })
 })

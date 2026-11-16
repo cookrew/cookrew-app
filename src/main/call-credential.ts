@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type { GateIssuer } from '../shared/gate'
+import { openToOthers } from './file-privacy'
 
 /**
  * THE OWNER'S ISSUER (§9, ④ · S1) — credentials for calling an exported agent.
@@ -180,7 +181,7 @@ export class CallCredentialService implements CallIssuer {
       // verified, so every call is refused rather than served on a key that
       // may not be private any more.
       const mode = statSync(this.keyFile).mode & 0o777
-      if ((mode & 0o077) !== 0) {
+      if (openToOthers(mode)) {
         throw new Error(
           `call signing key is readable by others (mode ${mode.toString(8)}); ` +
             'chmod 600 it, or delete it to mint a fresh one and re-enrol callers'

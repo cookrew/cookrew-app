@@ -73,7 +73,14 @@ const legacy = (withItem = true) => {
   return { base, security, store }
 }
 
-describe('a value in the old keychain item', () => {
+/**
+ * Why these do not run on Windows: the old item lives in macOS's keychain,
+ * reached through `security`, and the stand-in is a hashbang script, which
+ * Windows cannot start. No app on Windows ever wrote such an item to migrate.
+ */
+const NO_KEYCHAIN = process.platform === 'win32'
+
+describe.skipIf(NO_KEYCHAIN)('a value in the old keychain item', () => {
   it('still reads, and lists without asking the keychain', () => {
     const { security, store } = legacy()
     expect(store.read('stripe-key')).toMatchObject({ value: VALUE, served: true })
@@ -117,7 +124,7 @@ describe('a value in the old keychain item', () => {
   })
 })
 
-describe('above the store', () => {
+describe.skipIf(NO_KEYCHAIN)('above the store', () => {
   it('nothing changes: the same audit line, the same served refusal', () => {
     const { store } = legacy()
     store.migrate()

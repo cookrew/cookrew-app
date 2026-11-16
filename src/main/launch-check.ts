@@ -58,12 +58,30 @@ function isExecutableFile(file: string): boolean | null {
   }
 }
 
+/**
+ * The files a command word can be. Windows runs `claude` as claude.cmd or
+ * claude.exe, by PATHEXT, and has no execute bit to tell a script from a
+ * program; elsewhere the word is the file.
+ */
+function runnableFiles(file: string, platform: NodeJS.Platform = process.platform): string[] {
+  if (platform !== 'win32' || path.extname(file) !== '') return [file]
+  const extensions = (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter((ext) => ext.length > 0)
+  return [file, ...extensions.map((ext) => `${file}${ext.toLowerCase()}`)]
+}
+
+/** A PATH's directories, split the way this OS writes PATH: ':' here, ';' on Windows, whose dirs hold a ':' of their own. */
+const searchDirs = (searchPath: string): string[] => searchPath.split(path.delimiter).filter((dir) => dir.length > 0)
+
+/** Not certainly absent: some file the word can be might be there. */
+const mayRun = (file: string): boolean => runnableFiles(file).some((candidate) => isExecutableFile(candidate) !== false)
+
+/** Certainly there and runnable. */
+const surelyRuns = (file: string): boolean => runnableFiles(file).some((candidate) => isExecutableFile(candidate) === true)
+
 /** False only when it certainly is not there: a folder it may not read could hold it. */
 function resolves(word: string, cwd: string, searchPath: string): boolean {
-  if (word.includes('/')) return isExecutableFile(path.resolve(cwd, word)) !== false
-  return searchPath
-    .split(':')
-    .some((dir) => dir.length > 0 && isExecutableFile(path.join(path.resolve(cwd, dir), word)) !== false)
+  if (word.includes('/')) return mayRun(path.resolve(cwd, word))
+  return searchDirs(searchPath).some((dir) => mayRun(path.join(path.resolve(cwd, dir), word)))
 }
 
 /**
@@ -74,10 +92,8 @@ function resolves(word: string, cwd: string, searchPath: string): boolean {
 export function toolSeen(command: string, cwd: string, searchPath: string): boolean {
   const word = commandWord(command)
   if (word === null) return false
-  if (word.includes('/')) return isExecutableFile(path.resolve(cwd, word)) === true
-  return searchPath
-    .split(':')
-    .some((dir) => dir.length > 0 && isExecutableFile(path.join(path.resolve(cwd, dir), word)) === true)
+  if (word.includes('/')) return surelyRuns(path.resolve(cwd, word))
+  return searchDirs(searchPath).some((dir) => surelyRuns(path.join(path.resolve(cwd, dir), word)))
 }
 
 const failure = (over: Pick<LaunchFailure, 'kind' | 'why' | 'fix'> & Partial<LaunchFailure>): LaunchFailure => ({

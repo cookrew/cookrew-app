@@ -1,0 +1,9 @@
+# Check every text file out with LF, on every OS.
+#
+# Windows runners (and Git for Windows by default) set core.autocrlf=true, so a
+# checkout there turned every file into CRLF. The suite reads source, CSS,
+# workflow YAML and fixtures as text and matches them against LF patterns, and
+# vite-node only strips a hashbang line that ends in LF — so a CRLF checkout
+# broke ~25 test files on Windows without anything being wrong in the code.
+# The index is LF already; this only stops the working tree from diverging.
+* text=auto eol=lf

@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
 import {
   OWNER_FILE,
   claimHerdrSession,
@@ -75,11 +76,11 @@ describe('herdrSessionDir — the claim sits next to the socket herdr will actua
   })
 
   it('uses XDG_CONFIG_HOME before HOME', () => {
-    expect(herdrSessionDir('cookrew', { HOME: '/h', XDG_CONFIG_HOME: '/x' })).toBe('/x/herdr/sessions/cookrew')
+    expect(herdrSessionDir('cookrew', { HOME: '/h', XDG_CONFIG_HOME: '/x' })).toBe(native('/x/herdr/sessions/cookrew'))
   })
 
   it('falls back to ~/.config', () => {
-    expect(herdrSessionDir('cookrew', { HOME: '/h' })).toBe('/h/.config/herdr/sessions/cookrew')
+    expect(herdrSessionDir('cookrew', { HOME: '/h' })).toBe(native('/h/.config/herdr/sessions/cookrew'))
   })
 
   it('answers null when herdr itself could not locate a home', () => {

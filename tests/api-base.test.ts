@@ -278,7 +278,7 @@ describe('the streams are covered too', () => {
         else if (/\.tsx?$/.test(entry.name)) {
           // The code, not what its comments say about the rule.
           const source = readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-          const name = path.relative(RENDERER, file)
+          const name = path.relative(RENDERER, file).split(path.sep).join('/')
           if (CARRIES.test(source) && BYPASS.test(source) && !allowed.has(name)) found.push(name)
         }
       }
