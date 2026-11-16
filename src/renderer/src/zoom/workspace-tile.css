@@ -72,9 +72,12 @@
 .dm-fan-tied { position: absolute; top: 6px; right: 6px; z-index: 300; display: flex; gap: 3px; opacity: 0; translate: 0 -6px; pointer-events: none; transition: opacity 240ms ease, translate 240ms ease; }
 .dm-fan.open .dm-fan-tied { opacity: 1; translate: 0 0; pointer-events: auto; transition-delay: 140ms; }
 .dm-fan-tied button { display: grid; place-items: center; margin: 0; padding: 2px; border: 0; border-radius: 50%; background: var(--zv-card); box-shadow: 0 1px 3px var(--zv-shadow); cursor: pointer; }
-.dm-agent-card { position: absolute; left: 50%; top: 50%; width: 228px; height: 168px; transform: translate(-50%, -50%); }
-.dm-agent-card-box { position: absolute; left: -16px; top: -66px; width: 260px; height: 244px; }
+.dm-agent-card { position: absolute; inset: 10px 14px; }
+.dm-agent-card-box { position: absolute; inset: 0; }
 .dm-agent-card .ag-plate > :is(.zv-av, .zv-nm, .ag-meta, .zv-del) { display: none; }
+.dm-agent-card .zv-body { width: 352px; --zv-words-room: 116px; }
+.dm-agent-card .zv-lk > .zv-th { left: -56px; width: 112px; }
+.dm-agent-card .zv-reply { left: 0; top: 124px; width: 352px; }
 .zv-door { appearance: none; position: absolute; z-index: 1; top: -174px; height: 318px; margin: 0; padding: 0; border: 0; background: none; cursor: pointer; pointer-events: auto !important; }
 .zv-tile-name { max-width: calc(430px / var(--zv-k, 1)); overflow: hidden; text-overflow: ellipsis; }
 .zv-mark > .zv-door { pointer-events: inherit; }
