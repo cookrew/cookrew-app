@@ -36,6 +36,8 @@ export function featurePage(slug: string): Page | null {
   const steps = SEQUENCES[slug] ?? []
   const related = f.related.map((r) => LISTED_FEATURES.find((x) => x.slug === r)).filter((x): x is FeatureSpec => x !== undefined)
   const path = `/features/${f.slug}`
+  // A page still built for old links but listed nowhere is not to be indexed as current (LISTED_FEATURES).
+  const unlisted = !LISTED_FEATURES.some((x) => x.slug === f.slug)
   const visual =
     steps.length > 0
       ? `<ol class="steps">${steps.map(stepFigure).join('')}</ol>`
@@ -48,6 +50,7 @@ export function featurePage(slug: string): Page | null {
       active: 'features',
       description: f.short.slice(0, 160),
       path,
+      noindex: unlisted,
       jsonLd: [
         organization(),
         webPage({ path, name: f.title, description: f.definition }),

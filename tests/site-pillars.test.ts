@@ -106,6 +106,9 @@ describe('the pillars say where every claim stands', () => {
       expect(words(read(name)), name).not.toMatch(banned)
     }
     expect(words(read('index.html'))).not.toMatch(banned)
+    // The marketplace page is still built for old links: it says so to crawlers.
+    expect(read('features/marketplace.html')).toContain('<meta name="robots" content="noindex">')
+    expect(read('features/harnesses.html')).not.toContain('noindex')
   })
 })
 
