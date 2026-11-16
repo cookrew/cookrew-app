@@ -104,7 +104,10 @@ describe.skipIf(!ready)('the remote canvas boot asks for each thing once', () =>
   afterAll(async () => {
     cdp?.close()
     browser?.child.kill('SIGKILL')
-    if (profile) rmSync(profile, { recursive: true, force: true })
+    // A killed Chrome can still be flushing its profile for a moment, and a
+    // bare rmSync then fails the whole file with ENOTEMPTY (seen on CI
+    // 2026-11-15): node retries those errors when asked to.
+    if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     await companion?.close()
   })
 
