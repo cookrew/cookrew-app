@@ -33,7 +33,9 @@ on:
 # so a red run leaves a draft that went nowhere. Publishing IS shipping: every
 # running app with updates on picks it up within six hours.
 #
-# To cut a release, from main: `npm version <x.y.z> && git push --follow-tags`.
+# To cut a release: bump the version on dev, merge dev into main with a merge
+# commit, and tag THAT merge commit `v<x.y.z>`. verify refuses any other tag
+# (release-gate.mjs branch): not on main, not a merge, or not a merge of dev.
 # A tag with a suffix (v0.5.0-beta.1) publishes as a prerelease, which no updater
 # offers.
 permissions:
@@ -60,6 +62,10 @@ jobs:
         shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - run: node scripts/release-gate.mjs branch "$GITHUB_REF_NAME"
 
       - uses: actions/setup-node@v4
         with:

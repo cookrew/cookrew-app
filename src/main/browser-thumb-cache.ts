@@ -44,6 +44,15 @@ export interface ThumbCacheDeps {
   waitMs?: number
   /** A capture still running after this is let go, so the next ask takes a new one. */
   giveUpMs?: number
+  /** Where the last frame of each browser outlives the app (browser-thumb-keep.ts). */
+  keep?: ThumbKeep
+}
+
+/** The last frame of each browser, kept past a restart and past its page closing. */
+export interface ThumbKeep {
+  load(browserId: string): { data: Buffer; type: ThumbType; at: number } | null
+  save(browserId: string, data: Buffer, type: ThumbType): void
+  drop(browserId: string): void
 }
 
 const DEFAULT_FRESH_MS = 3000
@@ -66,6 +75,8 @@ const settleAfter = (ms: number): Promise<void> =>
 
 export class BrowserThumbCache {
   private readonly frames = new Map<string, ThumbFrame>()
+  /** Asked of the keep already: a browser it has nothing for is not read from disk on every poll. */
+  private readonly looked = new Set<string>()
   /** In-flight captures, so N pollers on one browser cost ONE screenshot. */
   private readonly pending = new Map<string, Promise<void>>()
   private readonly now: () => number
@@ -99,20 +110,31 @@ export class BrowserThumbCache {
     const held = this.frames.get(browserId)
     const same = held !== undefined && held.type === type && held.data.equals(data)
     this.frames.set(browserId, same ? { ...held, capturedAt: now } : { data, type, at: now, capturedAt: now })
+    if (!same) this.deps.keep?.save(browserId, data, type)
   }
 
   frame(browserId: string): ThumbFrame | undefined {
-    return this.frames.get(browserId)
+    const held = this.frames.get(browserId)
+    if (held || !this.deps.keep || this.looked.has(browserId)) return held
+    this.looked.add(browserId)
+    const kept = this.deps.keep.load(browserId)
+    if (!kept) return undefined
+    // As old as can be for the freshness window: a running page is asked for a newer one at once.
+    const frame: ThumbFrame = { data: kept.data, type: kept.type, at: kept.at, capturedAt: 0 }
+    this.frames.set(browserId, frame)
+    return frame
   }
 
   /** The frame as a data URL, for the renderer's `<img src>`. */
   dataUrl(browserId: string): string | null {
-    const frame = this.frames.get(browserId)
+    const frame = this.frame(browserId)
     return frame ? `data:${frame.type};base64,${frame.data.toString('base64')}` : null
   }
 
   forget(browserId: string): void {
     this.frames.delete(browserId)
+    this.looked.delete(browserId)
+    this.deps.keep?.drop(browserId)
   }
 
   /**
