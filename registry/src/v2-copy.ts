@@ -42,6 +42,8 @@ export type V2Error =
    * different refusal from a stranger's, and the sentence has to say so.
    */
   | 'not_this_desktop'
+  /** A phone's code is shown by a machine (⋯ → Phone app): a phone or a browser does not mint one. */
+  | 'not_machine'
   | 'bad_csr'
   | 'in_flight'
   | 'names_disabled'
@@ -83,6 +85,7 @@ const SENTENCES: Record<V2Error, string> = {
   confirm_mismatch: 'Type your username exactly as it is written to confirm.',
   account_deleted: 'This account was deleted.',
   not_this_desktop: 'Only that Mac itself can ask for its own certificate.',
+  not_machine: 'A code for the phone app is shown on a Mac: open ⋯ → Phone app there.',
   bad_csr:
     'That certificate request is not this Mac’s. It must ask for this Mac’s name and no other, with an EC P-256 or 2048-bit RSA key.',
   in_flight: 'This Mac already has a certificate on the way. Ask again in a moment.',

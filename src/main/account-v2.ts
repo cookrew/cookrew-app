@@ -1296,7 +1296,7 @@ export class Accounts {
    */
   async mintJoinCode(
     proof: StepUpProof,
-    purpose?: 'watch',
+    purpose?: 'watch' | 'phone',
   ): Promise<AccountResult<{ code: string; expiresAt: number; url: string }>> {
     const result = await this.authed<{ code?: unknown; expiresAt?: unknown }>('/v2/me/join-codes', {
       method: 'POST',

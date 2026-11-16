@@ -245,19 +245,56 @@ export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> 
  * than it does not read at all.
  */
 export function issueWatchGrant(ctx: V2Context, signed: Signed): void {
-  const { account, claims, device } = signed
-  if (device.kind !== 'watch') {
+  if (signed.device.kind !== 'watch') {
     return said(ctx, 403, 'not_watch', 'Only a watch is let into every machine on its pairing alone. Prove it is you instead.')
   }
+  issuePairedPass(ctx, signed, 'watch-grant', (sub, dev, jkt, sid) => ctx.v2.tokens.mintWatchGrant(sub, dev, jkt, sid))
+}
+
+/**
+ * A PASS FOR A DEVICE THAT PAIRED ONCE (a watch, a trusted phone): no proof,
+ * for its own key, under the sitting it asks from. One copy of the rules both
+ * keep — "Not me" stops it, a few a visit, a key that can be named — because a
+ * security boundary written twice drifts. The caller has checked what the
+ * device is.
+ */
+function issuePairedPass(
+  ctx: V2Context,
+  signed: Signed,
+  scope: 'watch-grant' | 'phone-grant',
+  mint: (sub: string, dev: string, jkt: string, sid: string) => { token: string; exp: number }
+): void {
+  const { account, claims, device } = signed
   if (ctx.v2.factors.store.mustChangePassword(account.username)) return said(ctx, 403, 'locked', SAID.locked)
-  // As the proved pass is limited: a watch asks a few times a visit, not a stream.
-  if (!ctx.v2.factors.options.take(`watch-grant|${device.id}`)) return said(ctx, 429, 'rate_limited', SAID.resting)
+  // As the proved pass is limited: a paired device asks a few times a visit, not a stream.
+  if (!ctx.v2.factors.options.take(`${scope}|${device.id}`)) return said(ctx, 429, 'rate_limited', SAID.resting)
   const jkt = jwkThumbprint(device.jwk)
   if (jkt === null) return said(ctx, 400, 'bad_device', SAID.badDevice)
   const sitting = ctx.v2.accounts.session(account.username, claims.jti)?.sitting ?? claims.jti
-  const minted = ctx.v2.tokens.mintWatchGrant(account.username, device.id, jkt, sitting)
+  const minted = mint(account.username, device.id, jkt, sitting)
   ctx.response.setHeader('cache-control', 'private, no-store')
   v2Json(ctx.response, 201, { grant: minted.token, exp: minted.exp, deviceId: device.id })
+}
+
+/**
+ * POST /v2/me/device-grant/phone — A TRUSTED PHONE PAIRS ONCE (owner, 2026-11-16).
+ *
+ * The native phone app's way into every machine, modelled on the watch's: its
+ * proof was made once, when it joined with a code a machine minted for a phone
+ * under the account's step-up (v2-join.ts), which marked it a trusted phone.
+ * "Phone" alone earns nothing — it is a kind any password sign-in may name — so
+ * the mark is what is asked for, never the kind. From then on it is handed a
+ * pass whenever it asks, for its own key, until the phone is revoked (its
+ * session goes, and each machine drops it when the revoked list names it), the
+ * password changes or "Not me" is pressed (the mark goes; v2-accounts.ts ·
+ * untrustOtherMachines). Its own scope: a machine older than it reads no pass.
+ */
+export function issuePhoneGrant(ctx: V2Context, signed: Signed): void {
+  const since = signed.device.phonePassAt
+  if (signed.device.kind !== 'phone' || since === undefined) {
+    return said(ctx, 403, 'not_phone', 'Only a phone joined with a code for a phone enters every machine on its pairing alone. Scan a new code from ⋯ → Phone app on a Mac.')
+  }
+  issuePairedPass(ctx, signed, 'phone-grant', (sub, dev, jkt, sid) => ctx.v2.tokens.mintPhoneGrant(sub, dev, jkt, sid, since))
 }
 
 /**
