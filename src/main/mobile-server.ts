@@ -57,7 +57,7 @@ import { handlePathReportRoutes } from './path-report-routes'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
 import { sendBody } from './http-compress'
 import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
-import { batchFrames, parseBatchIds, parseKnownVersions, scopedBrowserIds, scopedThumbLookup } from './browser-thumb-batch'
+import { batchFrames, ownerBrowserIds, parseBatchIds, parseKnownVersions, scopedBrowserIds, scopedThumbLookup } from './browser-thumb-batch'
 import { fetchRendererDevResource, rendererDevPathAllowed } from './renderer-dev-proxy'
 import { isViteHmrUpgrade, proxyViteHmrUpgrade } from './hmr-proxy'
 import {
@@ -1658,7 +1658,11 @@ export async function handle(
     // one workspace must not be able to read another's pictures by naming
     // their ids. Anything else asked for answers as "no frame".
     const ids = parseBatchIds(url.searchParams.get('ids'))
-    const browsers = scopedBrowserIds(scopedState().nodes)
+    // A slug reads its own canvas; the owner's unslugged client reads every workspace's.
+    const browsers =
+      scope !== null
+        ? scopedBrowserIds(scopedState().nodes)
+        : ownerBrowserIds(ids, (id) => deps.store.nodeAcrossWorkspaces(id)?.node)
     // The heartbeat for every card THIS canvas owns, frame or no frame yet —
     // under the headless runtime asking is what makes the picture exist.
     // Every asked id is answered; one outside the canvas answers no-frame.
