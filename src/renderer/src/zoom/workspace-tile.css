@@ -84,3 +84,9 @@
 .dm-tile ~ .zv-door { opacity: 0; }
 /* A feed (owner 2026-11-16): one workspace a page, its tile as tall as the page (zoom-layout.ts · deviceOf); no title over the pages. */
 .zv-device[data-view='feed'] .zv-device-label { visibility: hidden; }
+/* A tile taller than the card (a feed's page; owner 2026-11-17 "适配一下空白"): the same card, its latest words take the extra height, its thumbnails and reply box stand at the foot. */
+.dm-tile { --dm-card-extra: max(0px, calc(var(--zv-tile-h, 486px) * 260 / 430 - 294px)); }
+.dm-agent-card { height: calc(168px + var(--dm-card-extra)); }
+.dm-agent-card .zv-body { max-height: calc(64px + var(--dm-card-extra)); --zv-words-room: calc(132px + var(--dm-card-extra)); }
+.dm-agent-card :is(.zv-lk, .zv-reply) { translate: 0 var(--dm-card-extra); }
+.dm-agent-card .zv-body:is(.roomy, .open) { max-height: var(--zv-words-room); }

@@ -53,6 +53,13 @@ const FEED_WHEEL_TURN_PX = 24
 const FEED_SNAP_MS = 280
 const FEED_WHEEL_IDLE_MS = 140
 const FEED_GLIDE_MS = 450
+/**
+ * PAST THE EDGE, THE OTHER SIDE (owner, 2026-11-17: "agents视图上滑直接进入artifacts视图，再下滑返回agents视图").
+ * A swipe up begun at the crew's foot (or anywhere, when the crew fits) goes on to the artifacts;
+ * a swipe down begun at the artifacts' top comes back. A finger past this, or a wheel's run past that.
+ */
+const SIDE_SWIPE_PX = 64
+const SIDE_WHEEL_PX = 40
 /** A failure as a person reads it: its message, without the class name String() puts in front. */
 const failureWords = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
@@ -384,6 +391,26 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     motion.wake()
   }, [deviceView, device.feed?.step, model.frame.active, zoom.v]) // eslint-disable-line react-hooks/exhaustive-deps
   const wheelRun = useRef<{ from: number; timer: number; locked: number }>({ from: 0, timer: 0, locked: 0 })
+  /** The agents stop or the artifacts stop, at rest and not in a full view: where a swipe past the edge crosses over. */
+  const sideAt = (): 'agents' | 'items' | null => {
+    const z = zoomStore.get()
+    if (z.full !== null) return null
+    if (z.dir === 'agents' && Math.abs(z.v - 1) < 0.1) return 'agents'
+    if (z.dir === 'items' && Math.abs(z.v) < 0.1) return 'items'
+    return null
+  }
+  /** The side's scroll stands at the edge a swipe crosses from: the crew's foot, the artifacts' top. */
+  const atSideEdge = (side: 'agents' | 'items', pan: number): boolean =>
+    side === 'agents' ? pan >= (canPan() ? panMax.current : 0) - 1 : pan <= 1
+  /** `past`: how far the gesture went beyond the scroll, + up, − down. True when it crossed. */
+  const crossSide = (side: 'agents' | 'items', past: number, threshold: number): boolean => {
+    if (side === 'agents' && past > threshold) motion.go(0, 'items')
+    else if (side === 'items' && past < -threshold) motion.go(1, 'agents')
+    else return false
+    return true
+  }
+  /** One wheel gesture (its events a moment apart): it crosses only if it began at the edge, toward the other side; the rest of it, a trackpad's coast too, then goes nowhere. */
+  const sideRun = useRef<{ side: 'agents' | 'items' | null; acc: number; timer: number; swallow: boolean }>({ side: null, acc: 0, timer: 0, swallow: false })
   // The shelf's page: its "+N" chip turns it, "–" on the last goes back to the first.
   const shelf = shelfPage(layout.thumbs.shelf, shelfAt)
   const turnShelf = (): void => {
@@ -432,6 +459,30 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     const dx = e.deltaX * k
     const dy = e.deltaY * k
     if (Math.abs(dx) > Math.abs(dy)) return
+    const side = sideAt()
+    const run = sideRun.current
+    if (run.timer === 0) {
+      run.acc = 0
+      run.swallow = false
+      run.side = side && atSideEdge(side, panAt.current) && (side === 'agents' ? dy > 0 : dy < 0) ? side : null
+    }
+    window.clearTimeout(run.timer)
+    run.timer = window.setTimeout(() => {
+      run.timer = 0
+    }, FEED_WHEEL_IDLE_MS)
+    if (run.swallow) {
+      e.preventDefault()
+      return
+    }
+    if (run.side) {
+      e.preventDefault()
+      run.acc += dy
+      if (crossSide(run.side, run.acc, SIDE_WHEEL_PX)) {
+        run.side = null
+        run.swallow = true
+      }
+      return
+    }
     if (canPan()) {
       const step = feedStep()
       if (step) {
@@ -462,7 +513,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     return () => el.removeEventListener('wheel', wheel)
   }, [])
   /** A press that may become a scroll, up and down: a move mostly sideways is still a click. */
-  const drag = useRef<{ x: number; y: number; pan: number; scrolling: boolean } | null>(null)
+  /** `side`: begun at the edge of the agents or the artifacts, by a finger, so a swipe past it crosses over (sideAt). */
+  const drag = useRef<{ x: number; y: number; pan: number; scrolling: boolean; side: 'agents' | 'items' | null } | null>(null)
   const panned = useRef(false)
   // A web font that lands later changes every measured width: measure again.
   useEffect(() => {
@@ -712,8 +764,11 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
           moved.current = false
           panned.current = false
-          drag.current = pointers.current.size === 1 && canPan()
-            ? { x: e.clientX, y: e.clientY, pan: panNow(), scrolling: false }
+          // A finger only: a mouse dragging on the crew moves an agent (use-zoom-motion.ts · dragStart), and the wheel crosses for it.
+          const side = e.pointerType !== 'mouse' && !(e.target as Element | null)?.closest?.('textarea, input, select, [role="dialog"], .zv-body.open') ? sideAt() : null
+          const edgeSide = side && atSideEdge(side, panAt.current) ? side : null
+          drag.current = pointers.current.size === 1 && (canPan() || edgeSide)
+            ? { x: e.clientX, y: e.clientY, pan: panNow(), scrolling: false, side: edgeSide }
             : null
           if (drag.current && feedStep()) stopSnap()
           if (pointers.current.size === 2) {
@@ -740,7 +795,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
             if (!d.scrolling && Math.abs(dy) > 6 && Math.abs(dy) >= Math.abs(dx)) d.scrolling = true
             if (d.scrolling) {
               panned.current = true
-              scrollBy(d.pan + dy - panNow())
+              if (canPan()) scrollBy(d.pan + dy - panNow())
             }
           }
           const p = pinch.current
@@ -749,7 +804,13 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         onPointerUp={(e) => {
           pointers.current.delete(e.pointerId)
           if (pointers.current.size < 2) pinch.current = null
-          if (drag.current?.scrolling && feedStep()) snapFeed(drag.current.pan)
+          const d = drag.current
+          if (d?.scrolling && feedStep()) snapFeed(d.pan)
+          // How far the finger went beyond what the scroll could take: a long enough swipe off the edge crosses over.
+          if (d?.scrolling && d.side && pointers.current.size === 0) {
+            const wanted = d.pan + (d.y - e.clientY)
+            crossSide(d.side, d.side === 'agents' ? wanted - (canPan() ? panMax.current : 0) : wanted, SIDE_SWIPE_PX)
+          }
           drag.current = null
         }}
         // A drag that scrolled the crew is not a click on the face it ended on.
