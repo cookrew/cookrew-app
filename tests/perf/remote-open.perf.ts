@@ -44,6 +44,11 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 const isStream = (p: string): boolean =>
   /^\/api\/events(\?|$)|\/api\/terminal\/[^/]+\/stream(\?|$)|^\/api\/fleet\/stream(\?|$)/.test(p)
 const isThumb = (p: string): boolean => /\/api\/browser\/[^/]+\/thumb|\/api\/browser\/thumbs/.test(p)
+// The phone's black box posts its vitals on a 3 s clock (phone-beacon.ts), so
+// how many land in the window is the runner's speed, not the boot's cost: a
+// macOS runner drawing its first card at 2.0 s counted one more than Linux at
+// 0.8 s, with every other request the same.
+const isHeartbeat = (p: string): boolean => p === '/api/beacon'
 
 const chrome = chromeBinary()
 const built = builtRendererPresent()
@@ -122,7 +127,7 @@ describe.skipIf(!ready)('the remote canvas boot asks for each thing once', () =>
   })
 
   it(`performs at most ${REMOTE_OPEN.maxBootRequests} requests before and around first card`, () => {
-    const requests = boot().filter((p) => !isStream(p) && !isThumb(p))
+    const requests = boot().filter((p) => !isStream(p) && !isThumb(p) && !isHeartbeat(p))
     process.stdout.write(`perf: remote-open boot requests ${requests.length}: ${requests.join(' ')}\n`)
     expect(requests.length).toBeLessThanOrEqual(REMOTE_OPEN.maxBootRequests)
   })

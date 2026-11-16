@@ -203,8 +203,10 @@ export const LATENCY = {
  */
 export const REMOTE_OPEN = {
   /**
-   * Requests until first card plus the two seconds after, streams excluded.
-   * 24 when set (2026-09-08). Re-baselined to 32 on 2026-11-16 (owner ruling):
+   * Requests until first card plus the two seconds after; streams, thumbnails
+   * and the 3 s beacon heartbeat excluded.
+   * 24 when set (2026-09-08). Re-baselined on 2026-11-16 (owner ruling) to
+   * what the boot asks for today, 31 on Linux, macOS and a dev Mac alike:
    * the gate had read an empty window since the canvas went (10-30), so the
    * growth went unseen: boot endpoints added since (/api/route, /api/listen,
    * /api/terminal-session, /api/account, /api/tuning, /api/skin, /api/presets)
@@ -212,7 +214,7 @@ export const REMOTE_OPEN = {
    * relay round trip on a phone; batching them is follow-up work, and this
    * number comes back down with it.
    */
-  maxBootRequests: 32,
+  maxBootRequests: 31,
   maxWorkspaceFetches: 1,
   maxWorkspaceListFetches: 1,
   maxGitFetches: 0,
