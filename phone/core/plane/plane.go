@@ -71,11 +71,26 @@ func Check(resp *http.Response) (*http.Response, error) {
 	case (resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusBadGateway) && said.Error == "no_link":
 		return nil, ErrMachineOffline
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return nil, fmt.Errorf("%w (%d %s)", ErrRefused, resp.StatusCode, said.Error)
+		return nil, &RefusedError{Status: resp.StatusCode, Said: said.Error}
 	default:
 		return nil, &StatusError{Status: resp.StatusCode, Body: string(raw)}
 	}
 }
+
+// RefusedError is the machine's own 401 or 403, with its status: a 401 is a
+// token to get again, a 403 a refusal. errors.Is(err, ErrRefused) holds.
+type RefusedError struct {
+	Status int
+	// Said is the error the machine named, if any.
+	Said string
+}
+
+func (e *RefusedError) Error() string {
+	return fmt.Sprintf("%s (%d %s)", ErrRefused, e.Status, e.Said)
+}
+
+// Is makes a RefusedError an ErrRefused.
+func (e *RefusedError) Is(target error) bool { return target == ErrRefused }
 
 // StatusError is any other refusal, with what the machine said.
 type StatusError struct {

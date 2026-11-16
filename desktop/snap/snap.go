@@ -20,4 +20,9 @@ type Snap interface {
 	//
 	//asuka:mainthread
 	Keys(text string) error
+	// Wheel scrolls the mouse wheel over the window's terminal, lines up (or
+	// down, when negative), as AppKit delivers a real one.
+	//
+	//asuka:mainthread
+	Wheel(lines int) error
 }
