@@ -33,7 +33,8 @@ describe('the devices stop', () => {
   it('draws tiles at one size in every frame, smaller only where a machine has too many to fit', () => {
     const frame = machineFrameOf(deviceOf(ids(1), true), true)
     expect(screenFit(deviceOf(ids(1), true), frame)).toBe(SCREEN_SCALE)
-    expect(screenFit(deviceOf(ids(9), true), frame)).toBeGreaterThan(SCREEN_SCALE * 0.95)
+    // Two to a row: nine are a short screen. One to a row (a phone's default since 2026-11-16) is a column that has to shrink.
+    expect(screenFit(deviceOf(ids(9), true, undefined, 2), frame)).toBeGreaterThan(SCREEN_SCALE * 0.95)
     const crowded = deviceOf(ids(40), true)
     expect(screenFit(crowded, frame) * crowded.screen.w).toBeCloseTo(frame.w - 28, 6)
   })

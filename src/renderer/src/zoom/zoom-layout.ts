@@ -371,12 +371,25 @@ export function screenOf(box: Box, aspect: number): Box {
 }
 
 /**
- * Workspaces per row on the device: the same pick as the crew's (owner,
- * 2026-11-01: "per row 3 4 5 at the workspaces view too"), remembered apart
- * from it. Unpicked, the device keeps its old 2 on a phone and 3 on a desk.
+ * Workspaces per row on the device: 1 or 2 only (owner, 2026-11-16: a tile is
+ * drawn at an agent card's own type, and three across left it too small to
+ * read). Unpicked, a desk shows 2 and a phone 1.
  */
-export const DEVICE_COLS = CREW_COLS
-export const defaultDeviceCols = (narrow: boolean): number => (narrow ? 2 : 3)
+export const DEVICE_COLS = { wide: [1, 2], narrow: [1, 2] } as const
+export const defaultDeviceCols = (narrow: boolean): number => (narrow ? 1 : 2)
+
+/** workspace-tile.css draws a tile this many px across, then scales it to TILE.w. */
+export const TILE_DRAWN_W = 380
+/**
+ * A TILE'S TYPE, AS PICKED (owner, 2026-11-16: "bigger icons and words, and a
+ * setting; the frame sized after the agent card, to hold its type"). 1 draws a
+ * tile's px 1:1 on screen, so the agent card inside it reads as it does in the
+ * agents view; the larger picks grow the frame with its words.
+ */
+export const TILE_SIZES = [1, 1.15, 1.3] as const
+export const DEFAULT_TILE_SIZE = 1
+/** The device camera's scale that draws a tile's px at `size` on screen: the most it zooms in, room allowing. */
+export const tileFaceS = (size: number): number => (size * TILE_DRAWN_W) / (SWS * TILE.w)
 
 /** The device's title stands this far over the first row of tiles, and has this room above it (device units). */
 const TITLE_GAP = 14
@@ -396,8 +409,9 @@ export function deviceOf(
   ids: readonly string[],
   narrow: boolean,
   aspect = DEFAULT_SCREEN_ASPECT,
-  picked?: number
-): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number; gridTop: number; gridH: number; rowH: number; left: number; tile: { top: number; h: number } } {
+  picked?: number,
+  size: number = DEFAULT_TILE_SIZE
+): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number; gridTop: number; gridH: number; rowH: number; left: number; tile: { top: number; h: number }; face: number } {
   const pick = picked ?? defaultDeviceCols(narrow)
   const cols = Math.max(1, Math.min(pick, ids.length))
   const form = narrow ? 'narrow' : 'wide'
@@ -420,7 +434,7 @@ export function deviceOf(
   const top = titleBottom - TITLE_ROOM[form]
   const bottom = -gridTop + FOOT[form]
   const box = { w: gridW + SIDE[form], h: bottom - top, cy: (top + bottom) / 2 }
-  return { at, box, screen: screenOf(box, aspect), titleBottom, dx, gridTop, gridH, rowH: dy, left, tile }
+  return { at, box, screen: screenOf(box, aspect), titleBottom, dx, gridTop, gridH, rowH: dy, left, tile, face: tileFaceS(size) }
 }
 
 /**

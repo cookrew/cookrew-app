@@ -58,6 +58,8 @@ export interface FrameModel {
   crewCols?: number
   /** Workspaces per row on the device, as the owner picked them (crew-cols.ts); absent, the form factor's default. */
   deviceCols?: number
+  /** A workspace tile's type, as the owner picked it (crew-cols.ts · useTileSize); absent, an agent card's own. */
+  tileSize?: number
 }
 
 type Put = HTMLElement & { _t?: string; _o?: number; _l?: number; _h?: string; _d?: number }
@@ -424,7 +426,7 @@ const WASH = { w: 1200, h: 540 }
 export function layoutOf(model: FrameModel, narrow: boolean): Layout {
   // A tree under the leads, by the cables between agents (zoom-layout.ts · crewRows).
   const crew = crewOf(model.agents, narrow, model.crewCols, model.ties)
-  const device = deviceOf(model.workspaces, narrow, model.screenAspect, model.deviceCols)
+  const device = deviceOf(model.workspaces, narrow, model.screenAspect, model.deviceCols, model.tileSize)
   // Every machine of the account in one row, this one first, each the one frame: the devices stop frames them all (zoom-layout.ts · machinesAt).
   const machines = machinesAt(model.otherMachines, machineFrameOf(device, narrow), narrow)
   return {

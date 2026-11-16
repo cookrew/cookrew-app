@@ -18,9 +18,9 @@ import { hostPlatform } from '../../../shared/machine-words'
 import { MachineTrustRow, useMachineTrust } from './MachineTrustRow'
 import { ShelfCard } from './ShelfCard'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
-import { defaultCrewCols, defaultDeviceCols, deviceOf, machineFrameOf, machinesAt, shelfPage } from './zoom-layout'
-import { useCrewCols, usePerRow } from './crew-cols'
-import { ViewTools, type PerRow } from './ViewTools'
+import { DEFAULT_TILE_SIZE, defaultCrewCols, defaultDeviceCols, deviceOf, machineFrameOf, machinesAt, shelfPage, TILE_SIZES } from './zoom-layout'
+import { useCrewCols, usePerRow, useTileSize } from './crew-cols'
+import { ViewTools, type PerRow, type TileSizePick } from './ViewTools'
 import { deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
@@ -238,9 +238,13 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const narrow = size.w < 760
   const [crewCols, setCrewCols] = useCrewCols(narrow)
   const [deviceCols, setDeviceCols] = usePerRow('device', narrow)
+  const [tileSize, setTileSize] = useTileSize()
   const frame = useMemo(
-    () => (crewCols === null && deviceCols === null ? model.frame : { ...model.frame, crewCols: crewCols ?? undefined, deviceCols: deviceCols ?? undefined }),
-    [model.frame, crewCols, deviceCols]
+    () =>
+      crewCols === null && deviceCols === null && tileSize === null
+        ? model.frame
+        : { ...model.frame, crewCols: crewCols ?? undefined, deviceCols: deviceCols ?? undefined, tileSize: tileSize ?? undefined },
+    [model.frame, crewCols, deviceCols, tileSize]
   )
   const motion = useZoomMotion(frame, collect, root, pan)
   const layout = useMemo(() => layoutOf(frame, narrow), [frame, narrow])
@@ -548,7 +552,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const namesOf = useMemo(() => new Map(model.items.map((i) => [i.id, i.owners.map((id) => agentOf.get(id)?.name ?? id)])), [model.items, agentOf])
   // The grid's items and the coins' others: a coin's face is drawn either way.
   const itemOf = useMemo(() => new Map([...model.items, ...model.coinItems].map((i) => [i.id, i])), [model.items, model.coinItems])
-  const device = useMemo(() => deviceOf(model.frame.workspaces, narrow, model.frame.screenAspect, deviceCols ?? undefined), [model.frame.workspaces, model.frame.screenAspect, narrow, deviceCols])
+  const device = useMemo(() => deviceOf(model.frame.workspaces, narrow, model.frame.screenAspect, deviceCols ?? undefined, tileSize ?? undefined), [model.frame.workspaces, model.frame.screenAspect, narrow, deviceCols, tileSize])
   const activeSlot = device.at[model.frame.active] ?? { x: 0, y: 0 }
   // The one frame every machine is drawn in on the devices stop, this one too (zoom-layout.ts · machineFrameOf).
   const frameOf = useMemo(() => machineFrameOf(device, narrow), [device, narrow])
@@ -618,6 +622,11 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       : Math.abs(zoom.v + 1) < 0.25 && model.frame.workspaces.length > 1
         ? { what: 'workspaces', narrow, cols: deviceCols ?? defaultDeviceCols(narrow), onPick: setDeviceCols }
         : null
+  // A tile's type, where the tiles are seen and the window has room to grow them: a phone's tile already fills its width.
+  const tileSizeAt: TileSizePick | null =
+    !narrow && Math.abs(zoom.v + 1) < 0.25 && model.frame.workspaces.length > 0
+      ? { sizes: TILE_SIZES, size: tileSize ?? DEFAULT_TILE_SIZE, onPick: setTileSize }
+      : null
   const side = barSide(zoom.dir, zoom.v)
   // Pinch only changes the scene; the full terminal keeps its own native scroll.
   const pointers = useRef(new Map<number, { x: number; y: number }>())
@@ -771,7 +780,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           </div>
           {newestAlone && <NewestThumb item={newestAlone} workspace={model.name} onOpen={stable('newest-alone', () => motion.go(0, 'items'))} thumbRef={bind('newThumb')} caption={false} />}
           <div className="zv-newcap" ref={bind('newCap')}>{newest ? <>newest · {newest.title}</> : null}</div>
-          {model.agents.length === 0 && firstStage !== null && firstStage !== 'preflight' && firstStage !== 'task' && <div className="zv-empty">No agents here yet. Add an agent from the dock.</div>}
+          {model.agents.length === 0 && zoom.v > -0.5 && firstStage !== null && firstStage !== 'preflight' && firstStage !== 'task' && <div className="zv-empty">No agents here yet. Add an agent from the dock.</div>}
         </div>
         {/* An item's full-view head, crisp, laid where the real one will be (StageView · zv-fv-head):
             the grown thumbnail fades into it rather than blowing its words up. */}
@@ -791,7 +800,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       {/* THE VIEW'S TOOLBAR (ViewTools.tsx; owner 2026-11-12): top right at every stop of this machine,
           per row where a row is seen (the crew's agents, the device's workspaces; owner 2026-11-01)
           beside this machine's remote desktop. Inside another machine its stops are that machine's. */}
-      {!zoom.full && inside === null && <ViewTools perRow={perRowAt} />}
+      {!zoom.full && inside === null && <ViewTools perRow={perRowAt} tileSize={tileSizeAt} />}
       {!zoom.full && Math.abs(zoom.v + 1) < 0.25 && onNewWorkspace && (
         <button type="button" className="zv-new-workspace" onClick={onNewWorkspace}>
           <span aria-hidden="true">＋</span> New workspace

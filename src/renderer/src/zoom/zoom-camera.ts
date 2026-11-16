@@ -74,9 +74,9 @@ export interface DeviceWords {
 type Device = ReturnType<typeof deviceOf>
 export function deviceWords(device: Device, w: number, h: number, narrow: boolean): DeviceWords {
   const cam = deviceCam(device, w, h, narrow).S
-  // A phone draws them 1:1 on screen, at its own type; a desk only grows its 11px words to DEVICE_TEXT_PX.
-  const markK = narrow ? 1 / (SWS * cam) : Math.max(1, DEVICE_TEXT_PX / (11 * SWS * cam))
-  const titleK = narrow ? 1 / cam : Math.max(1, DEVICE_TEXT_PX / (11 * cam))
+  // A phone draws them 1:1 on screen, at its own type; a desk at DEVICE_TEXT_PX, whichever way the camera went to show its tiles.
+  const markK = narrow ? 1 / (SWS * cam) : DEVICE_TEXT_PX / (11 * SWS * cam)
+  const titleK = narrow ? 1 / cam : DEVICE_TEXT_PX / (11 * cam)
   const tilePx = TILE.w * SWS * cam
   const density: TileDensity = tilePx >= TILE_ROOMY_PX ? 'roomy' : tilePx >= TILE_SNUG_PX ? 'snug' : tilePx >= TILE_COMPACT_PX ? 'compact' : 'tiny'
   return { cam, markK, density, titleK, titleMax: narrow ? (w - PILL_ROOM) / (titleK * cam) : (device.box.w - 100) / titleK }
@@ -144,19 +144,19 @@ const DESK_MARGIN = 16
  */
 export const PHONE_HEAD = 56
 const PHONE_SIDE = 16
-/** The rows a desk frames before the grid scrolls instead of shrinking. */
-const DESK_DEVICE_ROWS = 3
+/** The rows a desk frames before the grid scrolls instead of shrinking: one, as a tile is drawn at an agent card's type. */
+const DESK_DEVICE_ROWS = 1
 export function deviceCam(device: Device, w: number, h: number, narrow: boolean, pan = 0): { S: number; Oy: number; panMax: number } {
   const { box } = device
   if (narrow) {
-    const S = Math.min(1, (w - PHONE_SIDE * 2) / box.w)
+    const S = Math.min(device.face, (w - PHONE_SIDE * 2) / box.w)
     const panMax = Math.max(0, PHONE_HEAD + device.gridH * S + PHONE_MARGIN - (h - PHONE_BAR))
     return { S, Oy: PHONE_HEAD - device.gridTop * S - Math.min(Math.max(pan, 0), panMax), panMax }
   }
-  // Three rows and the two gaps between them, the same whether there are three rows or thirty.
+  // A row's worth, the same whether there is one row or thirty; up to the tile's own type (zoom-layout.ts · tileFaceS).
   const rows = (DESK_DEVICE_ROWS - 1) * device.rowH + SWS * device.tile.h
   const framed = box.h - device.gridH + Math.min(device.gridH, rows)
-  const S = fitScale({ ...box, h: framed }, w, h - DESK_BAR)
+  const S = Math.min(device.face, (w - 32) / box.w, (h - DESK_BAR - 32) / framed)
   const panMax = framed < box.h ? Math.max(0, DESK_MARGIN + box.h * S - (h - DESK_BAR)) : 0
   if (panMax === 0) return { S, Oy: (h - DESK_BAR) / 2 - box.cy * S, panMax }
   return { S, Oy: DESK_MARGIN - (box.cy - box.h / 2) * S - Math.min(Math.max(pan, 0), panMax), panMax }

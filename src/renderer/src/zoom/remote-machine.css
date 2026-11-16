@@ -55,14 +55,16 @@
   color: var(--zv-muted);
 }
 
-/* ── the workspaces: the zoom's own tiles (WorkspaceTile.tsx), at a fixed size ── */
+/* ── the workspaces: the zoom's own tiles (WorkspaceTile.tsx), at an agent card's type, two to a row at most ── */
 .rm-tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, var(--rm-tile-w));
   justify-content: center;
   gap: 24px;
-  --rm-tile-w: 290px;
-  --rm-tile-s: calc(290 / 430);
+  max-width: calc(2 * var(--rm-tile-w) + 24px);
+  margin-inline: auto;
+  --rm-tile-w: 380px;
+  --rm-tile-s: calc(380 / 430);
 }
 
 .rm-cell {
@@ -79,7 +81,7 @@
   transform: translate(calc(112px * var(--rm-tile-s)), calc(174px * var(--rm-tile-s))) scale(var(--rm-tile-s));
   transform-origin: 0 0;
   /* The words are drawn 1:1 on screen, as the painter keeps them (zoom-frame.ts · paintDeviceWords). */
-  --zv-k: calc(430 / 290);
+  --zv-k: calc(430 / 380);
 }
 
 .rm-cell .zv-tw {
@@ -396,13 +398,13 @@
   }
 
   .rm-tiles {
-    --rm-tile-w: 160px;
-    --rm-tile-s: calc(160 / 430);
+    --rm-tile-w: 336px;
+    --rm-tile-s: calc(336 / 430);
     gap: 12px;
   }
 
   .rm-cell > .rm-tile-at {
-    --zv-k: calc(430 / 160);
+    --zv-k: calc(430 / 336);
   }
 
   .rm-crew {
@@ -426,13 +428,13 @@
 }
 
 .rm-ws-block .rm-tiles {
-  grid-template-columns: repeat(var(--rm-cols, 3), var(--rm-tile-w));
+  grid-template-columns: repeat(var(--rm-cols, 2), var(--rm-tile-w));
   justify-content: start;
 }
 
 @media (max-width: 700px) {
   .rm-ws-block .rm-tiles {
-    grid-template-columns: repeat(min(var(--rm-cols, 2), 2), var(--rm-tile-w));
+    grid-template-columns: repeat(1, var(--rm-tile-w));
   }
 }
 

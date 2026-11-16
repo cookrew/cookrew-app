@@ -96,8 +96,8 @@ describe('the phone camera at the workspaces stop', () => {
   })
 
   it('does not scroll what fits', () => {
-    expect(deviceCam(deviceOf(ids(8), true), 360, 724, true).panMax).toBe(0)
-    expect(deviceCam(deviceOf(ids(8), false), 1440, 828, false).panMax).toBe(0)
+    expect(deviceCam(deviceOf(ids(2), true), 360, 724, true).panMax).toBe(0)
+    expect(deviceCam(deviceOf(ids(2), false), 1440, 828, false).panMax).toBe(0)
   })
 
   it('scrolls a desk of many rows, past three, instead of shrinking', () => {

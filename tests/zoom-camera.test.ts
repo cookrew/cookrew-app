@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { deskThumbs, layoutOf, phoneCamera, phoneThumbs, type FrameModel } from '../src/renderer/src/zoom/zoom-frame'
 import { deviceOf, fitScale, shelfPage, shelfPer, SHELF_FACE, SHELF_MORE_GAP, SHELF_STEP } from '../src/renderer/src/zoom/zoom-layout'
+import { deviceCam } from '../src/renderer/src/zoom/zoom-camera'
 
 const crewOf = (n: number): FrameModel => ({
   agents: Array.from({ length: n }, (_, i) => ({ id: `a${i}`, name: `A${i}`, preset: 'Claude Code', orch: false, waiting: false })),
@@ -192,8 +193,8 @@ describe('the thumbnails on a desktop', () => {
 describe('the device on a phone', () => {
   it('draws its workspaces large enough that a label set at 32px reads at 10px, down to a 375 x 812 phone', () => {
     const d = deviceOf(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'], true)
-    // A mark is drawn at 0.62 inside the device (zoom-frame.ts · SWS); the zoom view is the screen less the header and the dock.
-    expect(32 * fitScale(d.box, PHONE.w, PHONE.h) * 0.62).toBeGreaterThanOrEqual(10)
-    expect(32 * fitScale(d.box, 375, 812 - 150) * 0.62).toBeGreaterThanOrEqual(10)
+    // A mark is drawn at 0.62 inside the device (zoom-frame.ts · SWS); the phone's camera fills the width and scrolls the rest.
+    expect(32 * deviceCam(d, PHONE.w, PHONE.h, true).S * 0.62).toBeGreaterThanOrEqual(10)
+    expect(32 * deviceCam(d, 375, 812 - 150, true).S * 0.62).toBeGreaterThanOrEqual(10)
   })
 })

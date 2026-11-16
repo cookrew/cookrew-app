@@ -13,6 +13,9 @@ type TileProps = { mark: MarkView; open?: boolean; bind: Bind; onOpen: (agentId?
 type Mode = 'bag' | 'agent'
 const DWELL_MS = 800
 const LINGER_MS = 2500
+/** An agent's face in the row, and the room each takes: an agent card's type wants a face to match (owner 2026-11-16). */
+const HEAD_PX = 36
+const HEAD_STEP = 42
 const DECK_DEPTHS = [1, 2, 6, 30] as const
 export const deckDepth = (total: number): number => DECK_DEPTHS.filter((n) => total >= n).length
 const clamp = (value: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, value))
@@ -175,7 +178,7 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
   const total = (mark.browsers ?? 0) + (mark.notes ?? 0)
   const items = mark.deck
   const artifacts = useSwipe(items.length, 220)
-  const row = useSwipe(Math.max(agents.length, mark.presets.length), 38, () => setMode('agent'))
+  const row = useSwipe(Math.max(agents.length, mark.presets.length), HEAD_STEP, () => setMode('agent'))
   const at = clamp(Math.round(row.pos), 0, Math.max(0, agents.length - 1))
   const selected = agents[at] ?? null
   const clearTimer = (timer: { current: number | null }): void => { if (timer.current !== null) window.clearTimeout(timer.current); timer.current = null }
@@ -205,7 +208,7 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
               const distance = index - row.pos
               if (distance < -1.5 || distance > 14) return null
               const agent = agents[index]
-              return <button key={agent?.id ?? `${mark.id}:${index}`} type="button" className="dm-head" style={{ transform: `translate(${(12 + distance * 38 + (mode === 'agent' ? Math.max(0, Math.min(1, distance)) * 170 : 0)).toFixed(1)}px, -50%)`, opacity: distance < 0 ? clamp(1 + distance * 1.4, 0, 1) : 1 }} aria-label={agent?.name ?? `Agent ${index + 1}`} onClick={(event) => { event.stopPropagation(); if (agent) selectAgent(agent); else onOpen() }}><InkAvatar id={agent?.id ?? `${mark.id}:${index}`} preset={preset} status={agent?.status} size={32} weight="small" /></button>
+              return <button key={agent?.id ?? `${mark.id}:${index}`} type="button" className="dm-head" style={{ transform: `translate(${(12 + distance * HEAD_STEP + (mode === 'agent' ? Math.max(0, Math.min(1, distance)) * 176 : 0)).toFixed(1)}px, -50%)`, opacity: distance < 0 ? clamp(1 + distance * 1.4, 0, 1) : 1 }} aria-label={agent?.name ?? `Agent ${index + 1}`} onClick={(event) => { event.stopPropagation(); if (agent) selectAgent(agent); else onOpen() }}><InkAvatar id={agent?.id ?? `${mark.id}:${index}`} preset={preset} status={agent?.status} size={HEAD_PX} weight="small" /></button>
             })}
             <span className="dm-count agents" title={`${mark.presets.length} agents`}><i className="dm-seal">{mark.presets.length}</i></span>
           </div>
@@ -220,7 +223,7 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
           onPointerCancel={(event) => { artifacts.handlers.onPointerCancel(); if (event.pointerType !== 'mouse') { touching.current = false; if (openFan) closeSoon() } }}
           onWheel={artifacts.handlers.onWheel} onClickCapture={artifacts.handlers.onClickCapture}
           onClick={() => { if (!openFan) showFan(pointer.current); else if (itemsDoor && front) onOpenItems?.(front.id) }}
-        ><Fan items={items} total={known ? total : items.length} position={artifacts.pos} owner={`tile:${mark.id}`} /><div className="dm-fan-tied">{tied.map((agent) => <button key={agent.id} type="button" tabIndex={openFan ? 0 : -1} aria-label={`${agent.name}, ${agent.word}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectAgent(agent) }}><InkAvatar id={agent.id} preset={agent.preset} status={agent.status} size={26} weight="mini" /></button>)}</div></div>
+        ><Fan items={items} total={known ? total : items.length} position={artifacts.pos} owner={`tile:${mark.id}`} /><div className="dm-fan-tied">{tied.map((agent) => <button key={agent.id} type="button" tabIndex={openFan ? 0 : -1} aria-label={`${agent.name}, ${agent.word}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectAgent(agent) }}><InkAvatar id={agent.id} preset={agent.preset} status={agent.status} size={30} weight="mini" /></button>)}</div></div>
       </section>
       <button type="button" className={`zv-door agents${itemsDoor ? '' : ' whole'}`} aria-current={open ? 'true' : undefined} aria-label={`Open ${mark.name} agents, ${plural(mark.presets.length, 'agent')}`} title={`${mark.name} · ${plural(mark.presets.length, 'agent')}`} onClick={() => onOpen()} />
       {itemsDoor && <button type="button" className="zv-door items" aria-label={`Open ${mark.name} artifacts, ${plural(mark.browsers ?? 0, 'browser')}, ${plural(mark.notes ?? 0, 'note')}`} title={`${mark.name} artifacts`} onClick={() => onOpenItems?.()} />}
