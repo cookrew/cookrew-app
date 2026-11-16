@@ -3,7 +3,14 @@ name: Perf
 # The perf gates (tests/perf/*.perf.ts) run on their own schedule, not inside
 # the 4,600-test CI suite: they time things and measure retained heap, so they
 # want a process and a runner to themselves. Nightly, on demand, and on any
-# change to the gates or their budgets.
+# change to the gates, their budgets or the app they measure.
+#
+# On a pull request, Linux only (owner ruling 2026-11-16): the gates assert
+# structure (reads, requests, retained heap), which a regression breaks on
+# any OS, so one runner catches it before merge without taking a macOS slot
+# from CI. macOS runs nightly and on demand. (For a day, 2026-11-15, the app
+# paths were dropped as "red on timing"; the reds were in fact five stale
+# structural gates, fixed in fix/perf-gates.)
 on:
   schedule:
     - cron: '17 3 * * *'
@@ -28,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

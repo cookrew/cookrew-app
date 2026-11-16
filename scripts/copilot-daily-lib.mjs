@@ -143,11 +143,18 @@ export function missingAssets(names) {
   return ['.dmg', '.exe'].filter((suffix) => !names.some((name) => name.endsWith(suffix)))
 }
 
-/** Windows is issue #80 and `gates` the stale perf gates: neither is the release bar. */
+/**
+ * Windows is issue #80 and `gates` the stale perf gates: neither is the release bar.
+ * `static` is: ci.yml typechecks and runs the rename guard there, once, not in `check`.
+ * Every one of the three has to be present, so a run whose jobs are not all listed yet waits.
+ */
+const RELEASE_BAR = [/^static$/, /^check \(ubuntu/, /^check \(macos/]
+
 export function releaseBar(checks) {
-  const bar = checks.filter((check) => /^check \((ubuntu|macos)/.test(check.name))
+  const bar = checks.filter((check) => RELEASE_BAR.some((name) => name.test(check.name)))
   if (bar.some((check) => check.bucket === 'fail' || check.bucket === 'cancel')) return 'failed'
-  return bar.length >= 2 && bar.every((check) => check.bucket === 'pass') ? 'passed' : 'pending'
+  const complete = RELEASE_BAR.every((name) => bar.some((check) => name.test(check.name)))
+  return complete && bar.every((check) => check.bucket === 'pass') ? 'passed' : 'pending'
 }
 
 function failuresOfFile(file, root) {

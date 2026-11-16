@@ -5,53 +5,49 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a pull request makes its running checks stale: cancel them.
+# Pushes to main get a group of their own (the run id), so nothing ever cancels
+# or queues them, not even a second push of the same commit.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  check:
-    strategy:
-      fail-fast: false
-      matrix:
-        # Windows is an EXPERIMENT leg (continue-on-error), not a gate.
-        #
-        # Two blockers were recorded here. The first — "the app requires tmux"
-        # — is now weaker: every tmux call sits behind the Multiplexer seam and
-        # pty.ts already falls back to a plain node-pty spawn when no
-        # multiplexer is available, so Windows would run WITHOUT session
-        # persistence rather than not at all.
-        #
-        # The second is empirical and said "currently", so this leg measures
-        # it. First run on windows-latest failed differently from the recorded
-        # symptom: not ERR_CHILD_PROCESS_STDIO_MAXBUFFER but
-        #   gyp ERR! find VS — Could not find any Visual Studio installation
-        # i.e. @electron/node-gyp's VS finder does not recognise the toolchain
-        # on the current windows-latest image. Pinned to windows-2022, whose
-        # VS 2022 layout that finder does understand. Still non-blocking until
-        # it passes consistently.
-        os: [ubuntu-latest, macos-latest, windows-2022]
-    runs-on: ${{ matrix.os }}
-    # Windows was exploratory while the node-pty rebuild was unproven. It
-    # builds on windows-2022 and the suite passes there now, so it gates like
-    # any other leg — otherwise a Windows regression lands silently.
-    continue-on-error: false
+  # What does not depend on the OS, once. tsc reads the same files on every
+  # runner, and Linux is the strict one (case-sensitive imports), so a check on
+  # macOS and Windows as well only repeated this one.
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      # npm ci triggers postinstall (electron-rebuild for node-pty against
-      # Electron's ABI), so native toolchains on the runners are exercised here.
-      - run: npm ci
+      # The check job's Linux tree is a full install, which typechecks the same.
+      - name: Dependency key
+        id: deps
+        run: node scripts/ci-deps-key.mjs
+
+      - name: Restore node_modules
+        id: nm-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            resources/cr-listen/cr-listen
+          key: node-modules-${{ runner.os }}-${{ steps.deps.outputs.key }}
+
+      # Types only: no native rebuild, and no package runs code of its own. Never
+      # saved: a tree without its install scripts must not answer for a full one.
+      - if: steps.nm-cache.outputs.cache-hit != 'true'
+        run: npm ci --ignore-scripts
 
       - run: npm run typecheck
 
-      - run: npm test
-
-      - run: npm run build
-
       - name: Guard against pre-rename residue
-        if: runner.os != 'Windows'
         run: |
           if grep -rn --exclude-dir=node_modules --exclude-dir=out --exclude-dir=.git \
               --exclude=package-lock.json --exclude=launch-plan.html \
@@ -65,3 +61,81 @@ jobs:
             echo "::error::Found 'maestri' references — product copy must stand on its own (see above)"
             exit 1
           fi
+
+  # THE WHOLE SUITE ON EVERY OS, SPLIT THREE WAYS. One runner per OS spent 4-9
+  # minutes in `npm test` (1,205 files): vitest --shard hands each runner a
+  # third of the files, so every file still runs on every OS, in parallel.
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows gates like any other leg: it builds on windows-2022 and the
+        # suite runs there, so a Windows regression must not land silently.
+        # windows-2022, not windows-latest: @electron/node-gyp's VS finder does
+        # not recognise the toolchain layout on the current latest image
+        # ("gyp ERR! find VS — Could not find any Visual Studio installation").
+        os: [ubuntu-latest, macos-latest, windows-2022]
+        shard: [1, 2, 3]
+    name: check (${{ matrix.os }}, ${{ matrix.shard }}/3)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # No npm download cache: on a hit nothing reads it, and its key (the raw
+      # lockfile) changed with every version bump, leaving ~400 MB of copies
+      # per release that pushed the repository past the 10 GB cache limit.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The installed tree is cached on every OS, keyed on what decides it
+      # (scripts/ci-deps-key.mjs: the lockfile minus the app's version, the
+      # install scripts, cr-listen's source, platform and Node ABI). npm ci was
+      # 2 min on Windows (electron-rebuild compiling node-pty with MSVC), 30 s
+      # on macOS, 18 s on Linux, on each of the nine jobs. macOS also keeps
+      # cr-listen, which its postinstall builds outside node_modules.
+      #
+      # A pull request reads the tree saved by main's own run (caches are
+      # scoped to a branch; the default branch is readable by all). The native
+      # toolchains run whenever the key moves, and on every release build.
+      - name: Dependency key
+        id: deps
+        run: node scripts/ci-deps-key.mjs
+
+      - name: Restore node_modules
+        id: nm-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            resources/cr-listen/cr-listen
+          key: node-modules-${{ runner.os }}-${{ steps.deps.outputs.key }}
+
+      # npm ci triggers postinstall (electron-rebuild for node-pty against
+      # Electron's ABI), so native toolchains on the runners are exercised here.
+      - name: npm ci
+        if: steps.nm-cache.outputs.cache-hit != 'true'
+        run: npm ci
+
+      # Saved right after the install, not at the end of the job: actions/cache
+      # saves only when the whole job is green, so a red test run would never
+      # leave a tree behind; and nothing the tests write gets into the cache.
+      # One shard per OS saves; the other two would only race it.
+      - name: Save node_modules
+        if: matrix.shard == 1 && steps.nm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            node_modules
+            resources/cr-listen/cr-listen
+          key: node-modules-${{ runner.os }}-${{ steps.deps.outputs.key }}
+
+      - id: test
+        run: npm test -- --shard=${{ matrix.shard }}/3
+
+      # The app bundle, once per OS, whatever the tests said: the Windows leg is
+      # red on known failures, and a build that only runs after green tests
+      # would never run there. Not when the install failed (tests skipped).
+      - if: ${{ !cancelled() && matrix.shard == 1 && steps.test.outcome != 'skipped' }}
+        run: npm run build
