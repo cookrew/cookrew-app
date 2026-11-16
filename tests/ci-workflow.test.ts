@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
-import { depsKey, versionlessLock } from '../scripts/ci-deps-key.mjs'
+import { POSTINSTALL_SCRIPTS, depsKey, versionlessLock } from '../scripts/ci-deps-key.mjs'
 import { releaseBar } from '../scripts/copilot-daily-lib.mjs'
 
 const yaml = createRequire(import.meta.url)('js-yaml') as { load(text: string): unknown }
@@ -74,8 +74,12 @@ describe('ci.yml', () => {
 
   it('installs unless the cached tree for exactly these dependencies was restored', () => {
     const cache = check.steps.find((s) => s.uses?.startsWith('actions/cache/restore')) as Step
-    expect(cache.if).toBe("runner.os == 'Windows'")
+    // Every OS: no condition on the restore, and the key is the tree's identity.
+    expect(cache.if).toBeUndefined()
     expect(String(cache.with?.key)).toContain('steps.deps.outputs.key')
+    expect(String(cache.with?.path)).toContain('node_modules')
+    // macOS builds cr-listen outside node_modules; a restored tree carries it.
+    expect(String(cache.with?.path)).toContain('resources/cr-listen/cr-listen')
     const install = check.steps.find((s) => s.run === 'npm ci') as Step
     expect(install.if).toBe(`steps.${cache.id}.outputs.cache-hit != 'true'`)
   })
@@ -89,10 +93,31 @@ describe('ci.yml', () => {
     const install = steps.findIndex((s) => s.run === 'npm ci')
     const test = steps.findIndex((s) => s.run?.startsWith('npm test'))
     expect(save.with?.key).toBe(cache.with?.key)
+    expect(save.with?.path).toBe(cache.with?.path)
     expect(save.if).toContain(`steps.${cache.id}.outputs.cache-hit != 'true'`)
+    expect(save.if).toContain('matrix.shard == 1')
     expect(steps.indexOf(save)).toBe(install + 1)
     expect(steps.indexOf(save)).toBeLessThan(test)
     expect(steps.some((s) => s.uses === 'actions/cache@v4')).toBe(false)
+  })
+
+  // The CI caches are the installed trees: setup-node's npm download cache was
+  // keyed on the raw lockfile, so every release left new copies behind.
+  it('keeps no npm download cache beside the installed tree', () => {
+    for (const job of [check, ci.jobs.static]) {
+      const setup = job.steps.find((s) => s.uses?.startsWith('actions/setup-node')) as Step
+      expect(setup.with?.cache).toBeUndefined()
+    }
+  })
+
+  // static installs without scripts, which is not the tree the key names.
+  it('lets static read the Linux tree and never write one', () => {
+    const steps = ci.jobs.static.steps
+    const restore = steps.find((s) => s.uses?.startsWith('actions/cache/restore')) as Step
+    expect(restore.with?.key).toBe(check.steps.find((s) => s.uses?.startsWith('actions/cache/restore'))?.with?.key)
+    expect(steps.some((s) => s.uses?.startsWith('actions/cache/save'))).toBe(false)
+    const install = steps.find((s) => s.run === 'npm ci --ignore-scripts') as Step
+    expect(install.if).toBe(`steps.${restore.id}.outputs.cache-hit != 'true'`)
   })
 
   it('cancels superseded pull request runs, never a push to main', () => {
@@ -132,6 +157,13 @@ describe('ci-deps-key', () => {
     const bumped = { ...lock, version: '0.7.0', packages: { ...lock.packages, '': { ...lock.packages[''], version: '0.7.0' } } }
     expect(depsKey({ ...base, lock: bumped })).toBe(depsKey(base))
     expect(versionlessLock(lock)).not.toHaveProperty('version')
+  })
+
+  // Each file postinstall runs or compiles: a cached tree must not outlive it.
+  it('reads every input of the install it stands for', () => {
+    expect(POSTINSTALL_SCRIPTS).toEqual(['scripts/ensure-node-pty.mjs', 'scripts/build-cr-listen.mjs', 'resources/cr-listen/cr-listen.m'])
+    const postinstall = (JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> }).scripts.postinstall
+    for (const script of POSTINSTALL_SCRIPTS.filter((file) => file.startsWith('scripts/'))) expect(postinstall).toContain(script)
   })
 
   it('a dependency, the install scripts or the runtime each move the key', () => {
