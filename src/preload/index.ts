@@ -569,6 +569,14 @@ const api = {
     ipcRenderer.on('event:new', listener)
     return () => ipcRenderer.removeListener('event:new', listener)
   },
+  // Desktop notifications (main/notifier.ts): the switch, and a click that brings an agent up.
+  getNotifications: () => ipcRenderer.invoke('notify:get'),
+  setNotifications: (on: boolean) => ipcRenderer.invoke('notify:set', on),
+  onHitlOpen: (cb: (target: { workspaceId: string; id: string }) => void) => {
+    const listener = (_e: unknown, target: { workspaceId: string; id: string }): void => cb(target)
+    ipcRenderer.on('hitl:open', listener)
+    return () => ipcRenderer.removeListener('hitl:open', listener)
+  },
   // A cable lit: one agent asked another, or answered (cable-signal.ts).
   // The route program (shared/route.ts): the gateway state, the owner's one
   // default, and each card's route. Pushed, never polled, like the dials.

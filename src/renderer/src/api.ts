@@ -546,6 +546,11 @@ export interface CookrewApi {
    * Optional — the demo api lacks them; consumers feature-detect (EventToast).
    */
   onEvent?: (cb: (event: unknown) => void) => () => void;
+  /** Desktop notifications on or off (main/notifier.ts); absent off the desktop. */
+  getNotifications?: () => Promise<boolean>;
+  setNotifications?: (on: boolean) => Promise<boolean>;
+  /** A notification was clicked: bring that agent up, in its workspace. */
+  onHitlOpen?: (cb: (target: { workspaceId: string; id: string }) => void) => () => void;
   /**
    * The route program (shared/route.ts): is the Magpie gateway here, what it
    * serves, where each turn went; and one card's route. Optional and

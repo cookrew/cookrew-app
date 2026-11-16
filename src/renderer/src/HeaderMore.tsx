@@ -13,6 +13,7 @@ import { StatusCoin } from './nodes/AgentAvatar'
 import { PathBadge } from './PathBadge'
 import { RoutingEntry } from './routing/RoutingPanel'
 import { setSoundsOn, useSoundsOn } from './chime-sound'
+import { useNotificationsOn } from './notify-switch'
 import { useTheme } from './color-scheme'
 import { skinInfo } from '../../shared/skins'
 import { SkinSheet } from './skins/SkinSheet'
@@ -63,6 +64,7 @@ export function HeaderMore({
   const closeSkinSheet = useCallback(() => setSkinSheet(false), [])
   const closeLaunchSheet = useCallback(() => setLaunchSheet(false), [])
   const sounds = useSoundsOn()
+  const notifications = useNotificationsOn()
   const theme = useTheme()
   const light = useFoldLight()
   const fullscreen = useFullscreen()
@@ -189,6 +191,18 @@ export function HeaderMore({
             <CrIcon name="speaker" />
             <span className="cr-more-label">{sounds ? 'Sounds on' : 'Sounds off'}</span>
           </button>
+          {notifications.supported && notifications.on !== null && (
+            <button
+              type="button"
+              className={`cr-more-item${notifications.on ? ' on' : ''}`}
+              aria-pressed={notifications.on === true}
+              title="A notification when an agent needs you or replies, while Cookrew is not in front"
+              onClick={() => notifications.set(!notifications.on)}
+            >
+              <CrIcon name="dot" />
+              <span className="cr-more-label">{notifications.on ? 'Notifications on' : 'Notifications off'}</span>
+            </button>
+          )}
           <button
             type="button"
             className="cr-more-item"
