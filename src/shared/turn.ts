@@ -50,6 +50,13 @@ export interface TerminalActivity {
    */
   paneRead?: true
   phase: TurnPhase
+  /**
+   * How many waits this tracked terminal has entered: one more each time the
+   * phase goes INTO 'waiting' (turn-tracker.ts · raiseWait). A second approval
+   * in the same turn is a new wait; a menu redraw is not. Absent on activities
+   * no screen stands behind (mirrorless).
+   */
+  waitSeq?: number
   /** Prompt that started the current turn, best-effort echo of typed input. */
   prompt: string | null
   /**

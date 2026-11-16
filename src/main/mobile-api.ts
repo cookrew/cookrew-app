@@ -2394,7 +2394,8 @@ export async function handleMobileApi(
     const events = deps.events.query(q);
     respondJson(response, 200, {
       events: hasPairing ? events : events.map(redactSecretDetails),
-      counts: deps.events.count(q),
+      // A typed read is the HITL bar's, which never shows counts: skip the walk.
+      ...(q.types ? {} : { counts: deps.events.count(q) }),
     });
     return true;
   }
@@ -2530,7 +2531,11 @@ export async function handleMobileApi(
 }
 
 /** ?workspaceId=&type=&since=&until=&limit= — all optional. */
-function parseEventQuery(params: URLSearchParams): EventQuery {
+/** How many types one query may name, and how long one type may be. */
+const QUERY_TYPES_MAX = 32;
+const QUERY_TYPE_LENGTH_MAX = 64;
+
+export function parseEventQuery(params: URLSearchParams): EventQuery {
   const num = (key: string): number | undefined => {
     const raw = params.get(key);
     const parsed = raw === null ? NaN : Number(raw);
@@ -2539,10 +2544,22 @@ function parseEventQuery(params: URLSearchParams): EventQuery {
   return {
     workspaceId: params.get("workspaceId") ?? undefined,
     type: params.get("type") ?? undefined,
+    // A few types at once (the HITL bar's boot read): one round trip, not one per type.
+    types: typesOf(params.get("types")),
     since: num("since"),
     until: num("until"),
     limit: num("limit"),
   };
+}
+
+function typesOf(raw: string | null): string[] | undefined {
+  if (raw === null) return undefined;
+  const types = raw
+    .split(",")
+    .map((one) => one.trim())
+    .filter((one) => one.length > 0 && one.length <= QUERY_TYPE_LENGTH_MAX)
+    .slice(0, QUERY_TYPES_MAX);
+  return types.length > 0 ? types : undefined;
 }
 
 /** A canvas position off the wire, or nothing — never a NaN the canvas cannot place. */

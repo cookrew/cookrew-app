@@ -40,6 +40,8 @@ import { adoptRequestPictures } from './picture-adopt'
 import { browserVerbKind, browserVerbUsesCard, noteVerbKind } from '../shared/cable-signal'
 import { servedUseRefusal } from './use-commands'
 import { cmdBrowserScoped } from './cli-browser'
+import { browserForCaller } from './browser-reach'
+import type { EventActor } from './event-log'
 import {
   dispatchEndError,
   deliverAndConfirm,
@@ -139,8 +141,11 @@ export interface SocketServerDeps {
   /** Fork an agent from one of its turns (same path as IPC forking). */
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData
   routines: RoutineScheduler
-  /** Ask the renderer to run a browser command; resolves with its output. */
-  browserCommand: (args: string[], terminalId: string) => Promise<string>
+  /**
+   * Ask the engine to run a browser command; resolves with its output. `actor`
+   * is who asked (agentActorOf): the card a create makes is logged as theirs.
+   */
+  browserCommand: (args: string[], terminalId: string, actor?: EventActor) => Promise<string>
   /**
    * Make a browser card in a workspace that is NOT on screen (an agent's own,
    * while the owner looks at another). No engine is booted for it: the page
@@ -450,6 +455,39 @@ async function dispatch(sent: CliRequest, deps: SocketServerDeps): Promise<strin
       return HELP_TEXT
     default:
       throw new Error(`Unknown command '${cmd}'. Run 'cookrew help'.`)
+  }
+}
+
+/**
+ * WHO DID IT, FOR THE ACTIVITY LOG (plan docs/hitl-cross-workspace-2026-11-15):
+ * an agent's own pane, or the owner at a terminal. A request with a pane
+ * identity whose card runs an agent is that agent (its orch, when it is one);
+ * a plain shell speaking `--as` has no pane identity, and a Shell card runs no
+ * command: both are the owner, whose changes never land in the HITL bar.
+ */
+export function agentActorOf(request: CliRequest, me: TerminalNodeData): Extract<EventActor, 'agent' | 'orch'> | null {
+  // A pane identity, as self() reads it: the env id, else the session that binds a
+  // pane (a background agent's env can be missing); `--as` is neither.
+  const fromPane = Boolean(request.terminalId) || (typeof request.flags.as !== 'string' && Boolean(request.sessionId))
+  if (!fromPane || me.command.trim().length === 0) return null
+  return me.orch ? 'orch' : 'agent'
+}
+
+/** Run a synchronous store write as `actor`; the owner's run as they always did. */
+function asActor<T>(deps: SocketServerDeps, actor: EventActor | null, fn: () => T): T {
+  return actor ? deps.store.withOpContext({ actor }, fn) : fn()
+}
+
+/** The browser verbs that change what a card shows: one `browser.navigated` each. */
+const NAVIGATING_VERBS = new Set(['navigate', 'tab-new', 'tab-select', 'tab-close'])
+
+/** One `browser.navigated`, by the agent that drove the card, in the card's own workspace. */
+function logNavigated(deps: SocketServerDeps, actor: EventActor, card: { id: string; name: string }, workspaceId: string, verb: string): void {
+  try {
+    deps.store.withOpContext({ actor }, () => deps.store.recordEventIn(workspaceId, 'browser.navigated', card.id, card.name, verb))
+  } catch (error) {
+    // The verb ran; a log row that cannot land is no reason to fail it.
+    console.error('browser.navigated could not be recorded:', error)
   }
 }
 
@@ -806,6 +844,29 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
   const bare = bareBrowserHint(request.args)
   if (bare) throw new Error(bare)
   const me = self(request, deps)
+  // An agent's navigate and tab verbs are one `browser.navigated` each, for the
+  // card resolved BEFORE the verb runs (a page can rename its card meanwhile)
+  // and logged only once the verb succeeded.
+  const actor = agentActorOf(request, me)
+  const [sub, name] = request.args
+  const card = actor && name && NAVIGATING_VERBS.has(sub ?? '') ? browserCardOf(deps, me, name) : null
+  const result = await browserVerb(request, deps, me, actor)
+  if (actor && card) logNavigated(deps, actor, card.node, card.workspaceId, sub ?? 'navigate')
+  return result
+}
+
+/** The browser card a name means for this caller: its own canvas, then its wires, then the screen. */
+function browserCardOf(deps: SocketServerDeps, me: TerminalNodeData, name: string): { node: BrowserNodeData; workspaceId: string } | null {
+  const hit = browserForCaller(deps.store, me.id, name, deps.isServed(me.id))
+  if (hit) return { node: hit.node as BrowserNodeData, workspaceId: hit.workspaceId }
+  const onScreen = deps.store.nodeByName(name, 'browser') as BrowserNodeData | undefined
+  return onScreen ? { node: onScreen, workspaceId: deps.store.focusedId } : null
+}
+
+async function browserVerb(request: CliRequest, deps: SocketServerDeps, me: TerminalNodeData, actor: EventActor | null): Promise<string> {
+  // Only an agent's call carries who asked: the owner's runs exactly as it always did.
+  const command = (args: string[]): Promise<string> => (actor ? deps.browserCommand(args, me.id, actor) : deps.browserCommand(args, me.id))
+  const createElsewhere = deps.createBrowserInWorkspace
   // Owner ruling 2026-11-04: every workspace works on its own. With the
   // headless engine nothing about a browser depends on the canvas on screen.
   if (deps.browserAnyWorkspace?.(request.args, me.id)) {
@@ -824,8 +885,11 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
           focused: deps.store.focusedId
         })
       },
-      browserCommand: deps.browserCommand,
-      createElsewhere: deps.createBrowserInWorkspace,
+      browserCommand: (args, terminalId) => (actor ? deps.browserCommand(args, terminalId, actor) : deps.browserCommand(args, terminalId)),
+      createElsewhere: createElsewhere ? (card) => asActor(deps, actor, () => createElsewhere(card)) : undefined,
+      navigated: (card, workspaceId) => {
+        if (actor) logNavigated(deps, actor, card, workspaceId, 'navigate')
+      },
       wire: (otherId, via) => wire(deps, me, otherId, via),
       signal: deps.signal
     })
@@ -871,10 +935,10 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
     if (scope.id !== activeId) {
       const [, url, requestedName] = request.args
       if (!url) throw new Error('Usage: cookrew browser create URL ["Name"] [--workspace <name>] [--new]')
-      if (!deps.createBrowserInWorkspace) {
+      if (!createElsewhere) {
         throw new Error(`This build cannot make a card in "${scope.name}" while "${active.name}" is on screen.`)
       }
-      const made = deps.createBrowserInWorkspace({ url, name: requestedName || 'Browser', terminalId: me.id, workspaceId: scope.id })
+      const made = asActor(deps, actor, () => createElsewhere({ url, name: requestedName || 'Browser', terminalId: me.id, workspaceId: scope.id }))
       return (
         `Created browser "${made.name}" in workspace "${scope.name}"` +
         (made.adopted ? ' (it was already there — wired to you and navigated)' : ' — it opens when that workspace is shown')
@@ -900,7 +964,10 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
         const wired = deps.store.connectedTo(me.id).some((n) => n.id === existing.id)
         if (!wired) deps.store.connect(me.id, existing.id)
         const navigated = url !== undefined && url !== existing.url
-        if (navigated) await deps.browserCommand(['navigate', existing.name, url], me.id)
+        if (navigated) {
+          await command(['navigate', existing.name, url])
+          if (actor) logNavigated(deps, actor, existing, deps.store.focusedId, 'navigate')
+        }
         const holders = deps.store
           .connectedTo(existing.id)
           .filter((n) => n.kind === 'terminal' && n.id !== me.id)
@@ -914,7 +981,7 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
         )
       }
     }
-    return deps.browserCommand(request.args, me.id)
+    return command(request.args)
   }
 
   // Fast path (this runs per snapshot/click/type): an in-memory scan of the
@@ -951,7 +1018,7 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
   }
   // Same repair for every other subcommand. These do not anchor a node, but the
   // id still names who is driving, and one identity per command beats two.
-  const result = await deps.browserCommand(request.args, me.id)
+  const result = await command(request.args)
   // The cable lights once the verb has run: driving the page is agent →
   // browser, reading it is browser → agent (shared/cable-signal browserVerbKind).
   const kind = browserVerbKind(sub ?? '')
@@ -1404,6 +1471,8 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
   // `cookrew note "Name"`, as the prompt box names a note, reads it (bare-card.ts).
   const [sub, ...rest] = bareNoteArgs(request.args)
   const me = self(request, deps)
+  // An agent's notes are logged as its own (agentActorOf): the HITL bar shows them.
+  const actor = agentActorOf(request, me)
   switch (sub) {
     case 'create': {
       const content = rest[0] ?? ''
@@ -1421,17 +1490,20 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       // one workspace; using the focused one put every agent's card on
       // whichever canvas the owner happened to be looking at, joined by an
       // edge that spanned two workspaces.
-      const note = deps.store.createNote(
-        {
-          customName: null,
-          content,
-          locked: false,
-          position: { x: me.position.x - DEFAULT_NOTE_SIZE.width - 60, y: me.position.y },
-          size: DEFAULT_NOTE_SIZE
-        },
-        deps.store.ownerOf(me.id)
-      )
-      deps.store.connectAcross(me.id, note.id)
+      const note = asActor(deps, actor, () => {
+        const made = deps.store.createNote(
+          {
+            customName: null,
+            content,
+            locked: false,
+            position: { x: me.position.x - DEFAULT_NOTE_SIZE.width - 60, y: me.position.y },
+            size: DEFAULT_NOTE_SIZE
+          },
+          deps.store.ownerOf(me.id)
+        )
+        deps.store.connectAcross(me.id, made.id)
+        return made
+      })
       return `Created note "${note.name}"`
     }
     case 'read': {
@@ -1451,7 +1523,7 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       const write = parseNoteWrite(rest, request.flags)
       const note = reachCard(request, deps, write.name, 'note', 'note write') as NoteNodeData
       if (note.locked) throw new Error(`Note '${note.name}' is locked`)
-      const written = deps.store.writeNote(note.id, write.content)
+      const written = asActor(deps, actor, () => deps.store.writeNote(note.id, write.content))
       if (!written) throw new Error(`Note '${note.name}' was not written`)
       // Writing puts words in: agent → note.
       deps.signal?.({ from: me.id, to: note.id, kind: noteVerbKind('write') ?? 'write' })
@@ -1469,7 +1541,7 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       if (!note.content.includes(oldText)) {
         throw new Error(`Text not found in note '${note.name}'`)
       }
-      if (!deps.store.writeNote(note.id, note.content.replace(oldText, newText))) {
+      if (!asActor(deps, actor, () => deps.store.writeNote(note.id, note.content.replace(oldText, newText)))) {
         throw new Error(`Note '${note.name}' was not written`)
       }
       deps.signal?.({ from: me.id, to: note.id, kind: noteVerbKind('edit') ?? 'write' })

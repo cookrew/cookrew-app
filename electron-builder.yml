@@ -64,6 +64,11 @@ extraResources:
   # main spawns.
   - from: resources/cr-listen/cr-listen
     to: cr-listen
+  # The browser cards' Chrome launcher (resources/cr-disclaim, built at
+  # postinstall): Chrome answers to macOS for itself, so Cookrew is never named
+  # as "prevented from modifying apps" for Chrome's own launch-time write.
+  - from: resources/cr-disclaim/cr-disclaim
+    to: cr-disclaim
   # The CLI. Main copies it next to the socket, and every pane gets it on PATH.
   - from: cli
     to: cli

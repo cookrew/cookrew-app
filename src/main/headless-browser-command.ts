@@ -14,12 +14,14 @@ import { parseUseUrl } from '../shared/use-url'
 import type { UseSignal } from '../shared/use-signal'
 import { handlesUseCommand, runUseCommand } from './use-commands'
 import { browserDownloadsDir, downloadsReport, listDownloads } from './browser-downloads'
+import type { EventActor } from './event-log'
 
 export interface HeadlessBrowserCommandDeps {
   store: WorkspaceStore
   manager: HeadlessBrowserManager
   /** Add a card to a workspace; without one, to the canvas on screen. */
-  addNode: (node: CanvasNode, workspaceId?: string) => CanvasNode
+  /** `actor`: who asked for the card (socket-server.ts · agentActorOf), so its `browser.created` is theirs. */
+  addNode: (node: CanvasNode, workspaceId?: string, actor?: EventActor) => CanvasNode
   updateNode: (id: string, patch: Partial<CanvasNode>) => CanvasNode | undefined
   connectNodes: (aId: string, bId: string) => void
   /** Every acting command, as the cursor the owner watches (shared/use-signal.ts). */
@@ -121,9 +123,9 @@ async function withElement(
 export class HeadlessBrowserCommandEngine {
   constructor(private readonly deps: HeadlessBrowserCommandDeps) {}
 
-  async run(args: string[], terminalId: string): Promise<string> {
+  async run(args: string[], terminalId: string, actor?: EventActor): Promise<string> {
     const [sub, ...rest] = args
-    if (sub === 'create') return this.create(rest, terminalId)
+    if (sub === 'create') return this.create(rest, terminalId, actor)
 
     const browserName = rest[0]
     if (!browserName) throw new Error(`Usage: cookrew browser ${sub} "Browser" ...`)
@@ -243,7 +245,7 @@ export class HeadlessBrowserCommandEngine {
     }
   }
 
-  private async create(params: string[], terminalId: string): Promise<string> {
+  private async create(params: string[], terminalId: string, actor?: EventActor): Promise<string> {
     const [url, requestedName] = params
     if (!url) throw new Error('Usage: cookrew browser create URL ["Name"] [--workspace <name>] [--new]')
     // The card goes to the caller's own workspace (homeOf), on screen or not,
@@ -270,7 +272,7 @@ export class HeadlessBrowserCommandEngine {
       position: { x: base.x + width + 80, y: base.y },
       size: { width: 720, height: 560 }
     }
-    const added = this.deps.addNode(node, home) as BrowserNodeData
+    const added = this.deps.addNode(node, home, actor) as BrowserNodeData
     if (terminal) this.deps.connectNodes(terminalId, added.id)
     await this.deps.manager.syncNode(added)
     return terminal
