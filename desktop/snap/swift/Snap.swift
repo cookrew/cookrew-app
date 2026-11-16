@@ -55,6 +55,26 @@ final class WindowSnap: Snap {
         }
     }
 
+    @MainActor func wheel(lines: Int) throws {
+        guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }),
+              let root = window.contentView, let terminal = Self.terminal(in: root),
+              let screen = NSScreen.screens.first,
+              let cg = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: Int32(clamping: lines), wheel2: 0, wheel3: 0)
+        else {
+            throw AsukaNativeError.unsupported("no terminal to scroll")
+        }
+        // Over the terminal's middle, in the window server's coordinates
+        // (top left of the main screen), and addressed to this window.
+        let inWindow = terminal.convert(NSPoint(x: terminal.bounds.midX, y: terminal.bounds.midY), to: nil)
+        let onScreen = window.convertPoint(toScreen: inWindow)
+        cg.location = CGPoint(x: onScreen.x, y: screen.frame.height - onScreen.y)
+        cg.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(window.windowNumber))
+        cg.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(window.windowNumber))
+        guard let event = NSEvent(cgEvent: cg) else { throw AsukaNativeError.unsupported("no wheel event") }
+        // Through the app's queue, so AppKit dispatches it as a real one.
+        NSApp.postEvent(event, atStart: false)
+    }
+
     /// The first SwiftTerm view under view.
     @MainActor private static func terminal(in view: NSView) -> NSView? {
         if String(describing: type(of: view)).contains("TerminalView") { return view }

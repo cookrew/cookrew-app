@@ -1,6 +1,18 @@
 // Command desktop is Cookrew's native Mac window (Asuka): a client of the
 // Cookrew running on this Mac, through its own API on loopback, as the phone
 // is one through the relay. D2 of docs/desktop-native-migration-2026-11-16.
+//
+// Build (no Apple ID; signed ad hoc), from this directory:
+//
+//	asuka build --platform mac   # asuka CLI at go.mod's version (v0.1.1)
+//
+// It needs Xcode, and Xcode's Metal Toolchain, which Xcode does not install by
+// itself: SwiftTerm (phone/term) compiles a Metal shader. Once per Mac:
+//
+//	xcodebuild -downloadComponent MetalToolchain
+//
+// Without it the build stops at "cannot execute tool 'metal' due to missing
+// Metal Toolchain".
 package main
 
 import (

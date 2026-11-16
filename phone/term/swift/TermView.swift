@@ -22,7 +22,9 @@ typealias PlatformFont = NSFont
 /// send(source: Terminal, …). Here the program runs on another machine, and
 /// those answers would be typed into its pane as if the user had: looking at an
 /// agent must never type into it. What the user types takes another road
-/// (TerminalView.send(data:)), which stays.
+/// (TerminalView.send(data:)), which stays. Dropped with the rest: the
+/// emulator's own click-to-move-the-cursor at a shell prompt (OSC 133 clicks).
+/// The wheel is the host's (ScreenBox), as SwiftTerm makes keys of it.
 final class PassiveTerminalView: SwiftTerm.TerminalView {
     override func send(source: SwiftTerm.Terminal, data: ArraySlice<UInt8>) {}
 }
@@ -160,6 +162,10 @@ final class InputRelay: TerminalViewDelegate {
 
     /// Called on the main thread, as the user types (SwiftTerm asserts it).
     func send(source: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {
+        #if os(macOS)
+        // A wheel is never typing (ScreenBox takes it; this is the backstop).
+        if NSApp.currentEvent?.type == .scrollWheel { return }
+        #endif
         MainActor.assumeIsolatedCompat {
             events.onTouch()
             events.onInput(data: Data(data))
@@ -171,9 +177,13 @@ final class InputRelay: TerminalViewDelegate {
     func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {}
     func scrolled(source: SwiftTerm.TerminalView, position: Double) {}
     func rangeChanged(source: SwiftTerm.TerminalView, startY: Int, endY: Int) {}
-    func clipboardCopy(source: SwiftTerm.TerminalView, content: Data) {
-        Clipboard.copy(content)
-    }
+    /// A program in the pane setting this device's clipboard (OSC 52) is
+    /// ignored: what it sends can be text the user only displayed (a file
+    /// they cat), and a swapped-in command waits for their next paste. A
+    /// prompt that shows what it would copy can allow it later.
+    func clipboardCopy(source: SwiftTerm.TerminalView, content: Data) {}
+    /// A program in the pane asking for this device's clipboard (OSC 52) gets nothing.
+    func clipboardRead(source: SwiftTerm.TerminalView) -> Data? { nil }
     func bell(source: SwiftTerm.TerminalView) {}
     func iTermContent(source: SwiftTerm.TerminalView, content: ArraySlice<UInt8>) {}
 

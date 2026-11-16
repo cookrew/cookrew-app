@@ -50,13 +50,9 @@ final class ScreenBox: UIView {
     func paint(_ color: UIColor) { backgroundColor = color }
 }
 
-enum Clipboard {
-    static func copy(_ data: Data) {
-        if let text = String(data: data, encoding: .utf8) { UIPasteboard.general.string = text }
-    }
-}
 #else
 import AppKit
+import SwiftTerm
 
 /// AppKit scales a view whose bounds differ from its frame, events included.
 private final class Scaler: NSView {
@@ -89,18 +85,57 @@ final class ScreenBox: NSView {
         onLayout?()
     }
 
-    /// A click in the box is the user's: note it, and let it through.
+    /// The terminal the box shows, for scrolling it.
+    private weak var terminal: SwiftTerm.TerminalView?
+    /// Wheel motion not yet a whole line.
+    private var wheelRest: CGFloat = 0
+
+    /// A click in the box is the user's: note it, and let it through. The
+    /// wheel and the scroller's track are the box's own: SwiftTerm turns both
+    /// into keys for the pane on the alternate screen (Up/Down, PageUp/Down),
+    /// and scrolling a view must never type into an agent.
     override func hitTest(_ point: NSPoint) -> NSView? {
-        let hit = super.hitTest(point)
-        if hit != nil, NSApp.currentEvent?.type == .leftMouseDown { onTouch?() }
-        return hit
+        guard let hit = super.hitTest(point) else { return nil }
+        switch NSApp.currentEvent?.type {
+        case .scrollWheel?:
+            return self
+        case .leftMouseDown?:
+            onTouch?()
+            return hit is NSScroller ? self : hit
+        default:
+            return hit
+        }
     }
+
+    /// Scrolls the local history only, a line per row of text as shown.
+    override func scrollWheel(with event: NSEvent) {
+        guard let terminal else { return }
+        if event.phase == .began || (wheelRest != 0 && (wheelRest > 0) != (event.scrollingDeltaY > 0)) {
+            wheelRest = 0 // a new gesture, or the other way: nothing left over
+        }
+        let shown = terminal.convert(NSSize(width: 0, height: terminal.font.pointSize * 1.25), to: self).height
+        let line = max(4, abs(shown))
+        wheelRest += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * line
+        let lines = Int(wheelRest / line)
+        wheelRest -= CGFloat(lines) * line
+        if lines > 0 {
+            terminal.scrollUp(lines: lines)
+        } else if lines < 0 {
+            terminal.scrollDown(lines: -lines)
+        }
+    }
+
+    // The scroller's clicks, taken above, go nowhere.
+    override func mouseDown(with event: NSEvent) {}
+    override func mouseDragged(with event: NSEvent) {}
+    override func mouseUp(with event: NSEvent) {}
 
     func show(_ view: NSView) {
         if view.superview !== scaler {
             view.removeFromSuperview()
             scaler.addSubview(view)
         }
+        terminal = view as? SwiftTerm.TerminalView
     }
 
     func hide(_ view: NSView) {
@@ -118,13 +153,6 @@ final class ScreenBox: NSView {
     func paint(_ color: NSColor) { layer?.backgroundColor = color.cgColor }
 }
 
-enum Clipboard {
-    static func copy(_ data: Data) {
-        guard let text = String(data: data, encoding: .utf8) else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-    }
-}
 #endif
 
 extension MainActor {

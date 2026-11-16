@@ -21,6 +21,9 @@ import (
 //	COOKREW_NATIVE_WORKSPACE=<id>  start on this workspace
 //	COOKREW_NATIVE_AGENT=<id>      open this agent's terminal at start
 //	COOKREW_NATIVE_QA_DIR=<dir>    SIGUSR1 writes the window to <dir>/shot-NN.png
+//	                               and SIGHUP scrolls the wheel 5 lines down over
+//	                               the open terminal (a real AppKit wheel event;
+//	                               AppKit delivers it only while unlocked)
 //	COOKREW_NATIVE_KEYS=<text>     with the QA dir, SIGUSR2 types <text> (Go
 //	                               escapes: \r is Return) into the open terminal
 
@@ -60,10 +63,14 @@ func listenQA() {
 		keys = ""
 	}
 	asked := make(chan os.Signal, 2)
-	ossignal.Notify(asked, syscall.SIGUSR1, syscall.SIGUSR2)
+	ossignal.Notify(asked, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGHUP)
 	go func() {
 		n := 0
 		for sig := range asked {
+			if sig == syscall.SIGHUP {
+				ui.Post(func() { report("wheel", pictures.Wheel(-5)) })
+				continue
+			}
 			if sig == syscall.SIGUSR2 {
 				if keys != "" {
 					ui.Post(func() { report("keys", pictures.Keys(keys)) })

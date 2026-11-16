@@ -191,12 +191,10 @@ final class Screen: Terminal {
     /// SwiftTerm's view, made on first use.
     @MainActor var terminalView: PassiveTerminalView {
         if let made { return made }
-        let view = PassiveTerminalView(frame: .zero, font: GridFit.font(size: GridFit.defaultSize))
-        let terminal = view.getTerminal()
-        terminal.options.scrollback = scrollback
-        terminal.options.cols = cols
-        terminal.options.rows = rows
-        terminal.setup(isReset: true) // empty yet: nothing to lose
+        // Kitty images a pane draws are kept up to 16 MB (SwiftTerm's default
+        // is 320 MB per screen, too much for a phone with several open).
+        let options = TerminalOptions(cols: cols, rows: rows, scrollback: scrollback, kittyImageCacheLimitBytes: 16 << 20)
+        let view = PassiveTerminalView(frame: .zero, font: GridFit.font(size: GridFit.defaultSize), options: options)
         made = view
         return view
     }
