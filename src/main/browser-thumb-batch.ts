@@ -74,6 +74,20 @@ export function scopedBrowserIds(
 }
 
 /**
+ * The browser cards of EVERY workspace, among the ids asked: what the owner's
+ * unslugged client may ask about. Its workspaces view shows each workspace's
+ * front page, and the focused canvas is only one of them — scoping the owner
+ * to it left every other tile on its line drawing until that workspace was
+ * opened (2026-11-16).
+ */
+export function ownerBrowserIds(
+  ids: readonly string[],
+  nodeOf: (id: string) => { readonly kind: string } | undefined
+): ReadonlySet<string> {
+  return new Set(ids.filter((id) => nodeOf(id)?.kind === 'browser'))
+}
+
+/**
  * A lookup that answers only for the browser cards of the canvas the client
  * is scoped to. The ids ride the query, so the slug layer's node-membership
  * check never sees them; this is that check, for this route. An id outside

@@ -138,7 +138,7 @@ function sheetPose(offset: number, depth: number): React.CSSProperties {
   return { transform: `translate(calc(${percent.toFixed(2)}% + ${x.toFixed(2)}px), ${y.toFixed(2)}px) rotate(${rotation.toFixed(2)}deg)`, opacity, zIndex: Math.round(100 - offset * 10) }
 }
 
-function Fan({ items, total, position, open, owner }: { items: readonly ItemView[]; total: number; position: number; open: boolean; owner: string }): React.JSX.Element {
+function Fan({ items, total, position, owner }: { items: readonly ItemView[]; total: number; position: number; owner: string }): React.JSX.Element {
   if (total === 0 || items.length === 0) return <div className="dm-none">no artifacts</div>
   const depth = Math.max(1, deckDepth(total))
   const base = Math.floor(position)
@@ -146,7 +146,7 @@ function Fan({ items, total, position, open, owner }: { items: readonly ItemView
   return <div className="dm-bag">{items.slice(first, Math.min(items.length, base + depth + 1)).map((item, index) => {
     const offset = first + index - position
     const front = Math.abs(offset) < 0.5
-    return <div key={item.id} className={`dm-bag-sheet${front ? ' front' : ''}`} style={sheetPose(offset, depth)}>{front && open ? <Shot item={item} owner={owner} /> : <Thumb item={item} />}</div>
+    return <div key={item.id} className={`dm-bag-sheet${front ? ' front' : ''}`} style={sheetPose(offset, depth)}>{front ? <Shot item={item} owner={owner} /> : <Thumb item={item} />}</div>
   })}</div>
 }
 
@@ -220,7 +220,7 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
           onPointerCancel={(event) => { artifacts.handlers.onPointerCancel(); if (event.pointerType !== 'mouse') { touching.current = false; if (openFan) closeSoon() } }}
           onWheel={artifacts.handlers.onWheel} onClickCapture={artifacts.handlers.onClickCapture}
           onClick={() => { if (!openFan) showFan(pointer.current); else if (itemsDoor && front) onOpenItems?.(front.id) }}
-        ><Fan items={items} total={known ? total : items.length} position={artifacts.pos} open={openFan} owner={`tile:${mark.id}`} /><div className="dm-fan-tied">{tied.map((agent) => <button key={agent.id} type="button" tabIndex={openFan ? 0 : -1} aria-label={`${agent.name}, ${agent.word}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectAgent(agent) }}><InkAvatar id={agent.id} preset={agent.preset} status={agent.status} size={26} weight="mini" /></button>)}</div></div>
+        ><Fan items={items} total={known ? total : items.length} position={artifacts.pos} owner={`tile:${mark.id}`} /><div className="dm-fan-tied">{tied.map((agent) => <button key={agent.id} type="button" tabIndex={openFan ? 0 : -1} aria-label={`${agent.name}, ${agent.word}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectAgent(agent) }}><InkAvatar id={agent.id} preset={agent.preset} status={agent.status} size={26} weight="mini" /></button>)}</div></div>
       </section>
       <button type="button" className={`zv-door agents${itemsDoor ? '' : ' whole'}`} aria-current={open ? 'true' : undefined} aria-label={`Open ${mark.name} agents, ${plural(mark.presets.length, 'agent')}`} title={`${mark.name} · ${plural(mark.presets.length, 'agent')}`} onClick={() => onOpen()} />
       {itemsDoor && <button type="button" className="zv-door items" aria-label={`Open ${mark.name} artifacts, ${plural(mark.browsers ?? 0, 'browser')}, ${plural(mark.notes ?? 0, 'note')}`} title={`${mark.name} artifacts`} onClick={() => onOpenItems?.()} />}
