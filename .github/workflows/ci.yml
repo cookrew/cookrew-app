@@ -65,3 +65,22 @@ jobs:
             echo "::error::Found 'maestri' references — product copy must stand on its own (see above)"
             exit 1
           fi
+
+  # The native phone client's core (phone/core, pure Go). It reads the same
+  # contract fixtures `npm test` pins to the TypeScript (tests/fixtures/phone-contract),
+  # so a wire change on either side turns one of the two jobs red.
+  phone-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: phone/go.mod
+
+      - name: go vet and go test
+        working-directory: phone
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; echo "::error::gofmt"; exit 1; }
+          go vet ./...
+          go test -race ./...
