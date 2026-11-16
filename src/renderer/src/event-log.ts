@@ -112,6 +112,11 @@ const META: Record<string, EventMeta> = {
   'terminal.launch-failed': { label: 'Could not start', verb: 'could not start', noun: 'agent', icon: 'close', hatch: false, metric: null },
   'terminal.kill-failed': { label: 'Still running', verb: 'is still running', noun: 'agent', icon: 'close', hatch: false, metric: null },
   'note.created': { label: 'Note', verb: 'created', noun: 'note', icon: 'note', hatch: false, metric: 'cards' },
+  // What an agent changed or waits for (main: socket-server.ts · agentActorOf, waiting-latch.ts).
+  // No toast: the HITL bar and the notifications are where they are heard.
+  'note.updated': { label: 'Note', verb: 'changed', noun: 'note', icon: 'note', hatch: false, metric: null, toast: false },
+  'browser.navigated': { label: 'Browser', verb: 'moved', noun: 'browser', icon: 'browser', hatch: false, metric: null, toast: false },
+  'agent.waiting': { label: 'Waiting', verb: 'is waiting on you', noun: 'agent', icon: 'agent', hatch: false, metric: null, toast: false },
   'note.deleted': { label: 'Note', verb: 'deleted', noun: 'note', icon: 'close', hatch: false, metric: 'removed' },
   'browser.created': { label: 'Browser', verb: 'created', noun: 'browser', icon: 'browser', hatch: false, metric: 'cards' },
   'browser.closed': { label: 'Browser', verb: 'closed', noun: 'browser', icon: 'close', hatch: false, metric: 'removed' },

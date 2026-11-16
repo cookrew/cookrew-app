@@ -87,7 +87,7 @@ describe('cmdBrowser — workspace scope', () => {
     store.addNode(browser('b1', 'Docs'))
 
     await expect(cmdBrowser(request(['info', 'Docs'], me.id), deps)).resolves.toBe('delegated')
-    expect(browserCommand).toHaveBeenCalledWith(['info', 'Docs'], me.id)
+    expect(browserCommand).toHaveBeenCalledWith(['info', 'Docs'], me.id, 'orch')
   })
 
   it('prefers a local browser over a same-named one parked elsewhere', async () => {
@@ -164,9 +164,10 @@ describe('cmdBrowser — workspace scope', () => {
     // is created unconnected in the wrong caller's name.
     expect(browserCommand).toHaveBeenCalledWith(
       ['create', 'https://example.test', 'Report'],
-      mine.id
+      mine.id,
+      'orch'
     )
-    expect(browserCommand).not.toHaveBeenCalledWith(expect.anything(), 'host-pane')
+    expect(browserCommand).not.toHaveBeenCalledWith(expect.anything(), 'host-pane', expect.anything())
     expect(home).not.toBe(other)
   })
 
@@ -190,7 +191,7 @@ describe('cmdBrowser — workspace scope', () => {
       sessionId: 'sess-413c8c39'
     }
     await expect(cmdBrowser(req, deps)).resolves.toBe('delegated')
-    expect(browserCommand).toHaveBeenCalledWith(['info', 'Docs'], 'my-card')
+    expect(browserCommand).toHaveBeenCalledWith(['info', 'Docs'], 'my-card', 'orch')
   })
 
   // Also from the review, and a consequence my commit message did not name:
@@ -227,7 +228,8 @@ describe('cmdBrowser — workspace scope', () => {
     ).resolves.toBe('delegated')
     expect(browserCommand).toHaveBeenCalledWith(
       ['create', 'https://example.test', 'X'],
-      me.id
+      me.id,
+      'orch'
     )
   })
 })

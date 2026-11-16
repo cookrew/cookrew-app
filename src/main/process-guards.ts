@@ -97,6 +97,91 @@ export function faultEvent(
   }
 }
 
+/** How long one fault's window runs. */
+export const FAULT_WINDOW_MS = 60_000
+/** How many of one fault are recorded in a window; the rest are counted. */
+export const FAULTS_PER_WINDOW = 5
+/** How many fault rows of ANY kind a window records: a storm of ever-different faults is capped too. */
+export const FAULT_ROWS_PER_WINDOW = 50
+/** Past this many groups, the closed ones that held nothing back are forgotten. */
+const GROUPS_KEPT = 64
+
+/** The faults of one kind a window held back, for the row that says so. */
+export interface HeldFaults {
+  fault: FaultSummary
+  dropped: number
+}
+
+/**
+ * A FAULT STORM MUST NOT EAT THE LOG (owner, 2026-11-16). On 10-30 one
+ * exception in a loop wrote ~64k rows and rotated every other event out of the
+ * log the HITL bar and the notifications read. Each fault — its kind, name and
+ * the place it was thrown (origin), NOT its message, which often carries a
+ * port, an id or a count — is recorded at most `limit` times a window, and all
+ * faults together at most `total` times; the rest are counted and handed back
+ * once, as one row each, when the window closes. stderr is not throttled: it
+ * is not what the bar reads.
+ */
+export function createFaultThrottle(limit = FAULTS_PER_WINDOW, windowMs = FAULT_WINDOW_MS, total = FAULT_ROWS_PER_WINDOW): {
+  take: (fault: FaultSummary, atMs: number) => { record: boolean; suppressed: HeldFaults | null; firstDrop: boolean }
+  pending: () => HeldFaults[]
+} {
+  const groups = new Map<string, { start: number; count: number; dropped: number; fault: FaultSummary }>()
+  const keyOf = (fault: FaultSummary): string => `${fault.kind}\u0000${fault.name}\u0000${fault.origin ?? ''}`
+  let rows = { start: Number.NEGATIVE_INFINITY, count: 0 }
+  /** One more row for the window of every fault; false once that window is full. */
+  const roomFor = (atMs: number): boolean => {
+    if (atMs - rows.start >= windowMs) rows = { start: atMs, count: 0 }
+    if (rows.count >= total) return false
+    rows = { ...rows, count: rows.count + 1 }
+    return true
+  }
+  const prune = (atMs: number): void => {
+    if (groups.size <= GROUPS_KEPT) return
+    for (const [key, g] of [...groups]) if (g.dropped === 0 && atMs - g.start >= windowMs) groups.delete(key)
+  }
+  const hold = (key: string, group: { start: number; count: number; dropped: number; fault: FaultSummary }) => {
+    groups.set(key, { ...group, dropped: group.dropped + 1 })
+    return { record: false, suppressed: null, firstDrop: group.dropped === 0 }
+  }
+  return {
+    take(fault, atMs) {
+      prune(atMs)
+      const key = keyOf(fault)
+      const group = groups.get(key)
+      if (!group || atMs - group.start >= windowMs) {
+        const suppressed = group && group.dropped > 0 ? { fault: group.fault, dropped: group.dropped } : null
+        const fresh = { start: atMs, count: 1, dropped: 0, fault }
+        if (!roomFor(atMs)) return { ...hold(key, { ...fresh, count: 0 }), suppressed }
+        groups.set(key, fresh)
+        return { record: true, suppressed, firstDrop: false }
+      }
+      if (group.count < limit && roomFor(atMs)) {
+        groups.set(key, { ...group, count: group.count + 1 })
+        return { record: true, suppressed: null, firstDrop: false }
+      }
+      return hold(key, group)
+    },
+    /** What every open window holds back, handed over once: the windows are emptied of it. */
+    pending() {
+      const held = [...groups.entries()].filter(([, g]) => g.dropped > 0)
+      for (const [key, g] of held) groups.set(key, { ...g, dropped: 0 })
+      return held.map(([, g]) => ({ fault: g.fault, dropped: g.dropped }))
+    }
+  }
+}
+
+/** The one row that says how many of a fault a window held back. */
+export function heldFaultEvent(held: HeldFaults, workspace: { id: string; name: string }, at: Date): CookrewEvent {
+  const base = faultEvent(held.fault, workspace)
+  return {
+    ...base,
+    type: `${base.type}.suppressed`,
+    timestamp: at.getTime(),
+    details: `${held.dropped} more in ${Math.round(FAULT_WINDOW_MS / 1000)} s: ${base.details ?? held.fault.reason}`
+  }
+}
+
 export interface ProcessGuardDeps {
   /** Append the fault to the observability log. */
   append: (event: CookrewEvent) => void
@@ -110,6 +195,8 @@ export interface ProcessGuardDeps {
   target?: Pick<NodeJS.Process, 'on'>
   now?: () => Date
   log?: (message: string) => void
+  /** Run `fn` once a fault's window closes; defaults to an unref'd timer. */
+  schedule?: (fn: () => void, ms: number) => void
 }
 
 /**
@@ -119,10 +206,41 @@ export interface ProcessGuardDeps {
  * reinstate exactly the silent death it exists to prevent, so recording and
  * flushing are each isolated.
  */
-export function installProcessGuards(deps: ProcessGuardDeps): void {
+export function installProcessGuards(deps: ProcessGuardDeps): { releaseHeld: () => void } {
   const target = deps.target ?? process
   const now = deps.now ?? ((): Date => new Date())
   const log = deps.log ?? ((message: string): void => console.error(message))
+  const schedule =
+    deps.schedule ??
+    ((fn: () => void, ms: number): void => {
+      setTimeout(fn, ms).unref?.()
+    })
+  const throttle = createFaultThrottle()
+
+  /**
+   * The event is BUILT inside the try too: deps.workspace() can throw, and so
+   * can `log` (EPIPE once stderr is closed). Nothing here may reach the
+   * uncaughtException handler, which exits.
+   */
+  const appendSafely = (build: () => CookrewEvent): void => {
+    try {
+      deps.append(build())
+    } catch (error) {
+      try {
+        log(`[cookrew] recording the fault failed: ${String(error)}`)
+      } catch {
+        // stderr is what failed: nowhere left to say so.
+      }
+    }
+  }
+  /** Each window's held-back count, as one row each. Never throws. */
+  const releaseHeld = (): void => {
+    try {
+      for (const held of throttle.pending()) appendSafely(() => heldFaultEvent(held, deps.workspace(), now()))
+    } catch {
+      // See appendSafely.
+    }
+  }
 
   const report = (fault: FaultSummary, value: unknown): void => {
     log(
@@ -132,11 +250,12 @@ export function installProcessGuards(deps: ProcessGuardDeps): void {
     // The full stack goes to stderr only — it can quote source lines, and the
     // event log is metadata.
     if (value instanceof Error && value.stack) log(value.stack)
-    try {
-      deps.append(faultEvent(fault, deps.workspace()))
-    } catch (error) {
-      log(`[cookrew] recording the fault failed: ${String(error)}`)
-    }
+    const verdict = throttle.take(fault, Date.parse(fault.at))
+    const held = verdict.suppressed
+    if (held) appendSafely(() => heldFaultEvent(held, deps.workspace(), now()))
+    if (verdict.record) appendSafely(() => faultEvent(fault, deps.workspace()))
+    // The first one held back opens the timer that says how many were.
+    if (verdict.firstDrop) schedule(releaseHeld, FAULT_WINDOW_MS)
   }
 
   /**
@@ -170,6 +289,8 @@ export function installProcessGuards(deps: ProcessGuardDeps): void {
     exiting = true
     reportSafely(summarizeFault('uncaughtException', error, now()), error)
     if (reentered) return
+    // What the storm held back is said before the log is flushed for the last time.
+    releaseHeld()
     try {
       deps.flush()
     } catch (flushError) {
@@ -181,4 +302,6 @@ export function installProcessGuards(deps: ProcessGuardDeps): void {
     }
     deps.exit(1)
   })
+  // A normal quit says what is held back too (index.ts · before-quit).
+  return { releaseHeld }
 }
