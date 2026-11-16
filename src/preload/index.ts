@@ -584,6 +584,10 @@ const api = {
   routeState: () => ipcRenderer.invoke('route:state'),
   routeSetDefault: (model: string | null) => ipcRenderer.invoke('route:set-default', model),
   routeSetSharedMcp: (on: boolean) => ipcRenderer.invoke('route:set-shared-mcp', on),
+  // Sharing this computer's Magpie with the owner's other devices (owner-only in main).
+  routeShareList: () => ipcRenderer.invoke('route:share-list'),
+  routeShareIssue: (input: { device: string; dailyUsd: number }) => ipcRenderer.invoke('route:share-issue', input),
+  routeShareRevoke: (id: string) => ipcRenderer.invoke('route:share-revoke', id),
   terminalRoute: (terminalId: string) => ipcRenderer.invoke('terminal:route', terminalId),
   terminalRouteSet: (terminalId: string, route: string) => ipcRenderer.invoke('terminal:route-set', terminalId, route),
   onRoute: (cb: (state: unknown) => void) => {

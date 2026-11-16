@@ -1,3 +1,4 @@
+import type { SharedKey } from '../../shared/share-devices'
 import type { CardRouteState, RouteState } from '../../shared/route'
 import { cardRouteFixture, routeFixture } from '../../shared/route-fixture'
 import type {
@@ -106,6 +107,7 @@ let demoConnections = 0
 const demoSecrets = new Map<string, { name: string; served: boolean; updatedAt: number }>()
 
 export function createDemoApi(): CookrewApi {
+  let demoShared: SharedKey[] = [{ id: 'demo00000000000000000001', name: 'device-solis', device: 'solis', limit: '$1.25/$20.00 per day' }]
   // In-memory workspace registry so the demo can switch canvases too.
   const search = typeof location === 'undefined' ? '' : location.search
   const fresh = freshMode(search)
@@ -486,6 +488,18 @@ export function createDemoApi(): CookrewApi {
       route = { ...route, sharedMcp: on }
       routeChanged()
       return Promise.resolve(route)
+    },
+    // Share with my devices: a demo key list in memory, and a key that is plainly not one.
+    routeShareList: () => Promise.resolve({ ok: true as const, keys: demoShared, where: { onNetwork: false, urls: ['http://192.168.1.20:3425', 'http://100.101.102.103:3425'] } }),
+    routeShareIssue: ({ device }) => {
+      const slug = device.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'device'
+      const shared = { id: `demo${String(demoShared.length).padStart(20, '0')}`, name: `device-${slug}`, device: slug, limit: '$0.00/$20.00 per day' }
+      demoShared = [...demoShared, shared]
+      return Promise.resolve({ ok: true as const, key: 'sk-magpie-demo-not-a-real-key', shared })
+    },
+    routeShareRevoke: (id) => {
+      demoShared = demoShared.filter((k) => k.id !== id)
+      return Promise.resolve({ ok: true as const })
     },
     terminalRoute: (terminalId) =>
       Promise.resolve(

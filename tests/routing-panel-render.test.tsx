@@ -237,8 +237,10 @@ describe('the setup card and the entry', () => {
     expect(renderToStaticMarkup(<RoutingEntry status="online" onOpen={() => {}} />)).toContain('cr-routing-entry online')
     const app = readFileSync(path.join(__dirname, '../src/renderer/src/App.tsx'), 'utf8')
     const opens = [...app.matchAll(/setRoutingOpen\(true\)/g)]
-    expect(opens).toHaveLength(1)
+    // Two presses and nothing else: the header entry, and the no-account nudge's "Set one up" (AccountNudge.tsx).
+    expect(opens).toHaveLength(2)
     expect(app).toContain('onRouting={routeState.available ? () => setRoutingOpen(true) : undefined}')
+    expect(app).toMatch(/<AccountNudge\s[^>]*onOpen=\{\(\) => setRoutingOpen\(true\)\} \/>/)
   })
 
   // Box QA saw it open by itself on the phone and the relayed page too (round 3).

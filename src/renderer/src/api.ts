@@ -16,6 +16,7 @@ import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
 import type { CardRoute, CardRouteState, RouteState } from '../../shared/route';
+import type { ShareIssueAnswer, ShareListAnswer, ShareRevokeAnswer } from '../../shared/share-devices';
 import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
 import type { LaunchOffer, LaunchTune } from '../../shared/launch-tune'
 import type { TranslateResult } from '../../shared/translate'
@@ -570,6 +571,10 @@ export interface CookrewApi {
   routeState?: () => Promise<RouteState>;
   routeSetDefault?: (model: string | null) => Promise<RouteState>;
   routeSetSharedMcp?: (on: boolean) => Promise<RouteState>;
+  /** Owner-only: this computer's Magpie shared with the owner's other devices (main/route/share-keys.ts). */
+  routeShareList?: () => Promise<ShareListAnswer | { ok: false; reason: string }>;
+  routeShareIssue?: (input: { device: string; dailyUsd: number }) => Promise<ShareIssueAnswer | { ok: false; reason: string }>;
+  routeShareRevoke?: (id: string) => Promise<ShareRevokeAnswer | { ok: false; reason: string }>;
   terminalRoute?: (terminalId: string) => Promise<CardRouteState>;
   terminalRouteSet?: (terminalId: string, route: CardRoute) => Promise<CardRouteState | { error: string }>;
   onRoute?: (cb: (state: RouteState) => void) => () => void;

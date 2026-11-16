@@ -133,9 +133,12 @@ export function AccessRowsView({
   onOpen,
   onEdit,
   onRemove,
+  bare = false,
   children
 }: {
   state: AccessState
+  /** Inside the account section (AccountWays.tsx), which says the heading itself. */
+  bare?: boolean
   /** Draw only a source already on: the way to change it, and nothing new for anyone else. */
   whenActive?: boolean
   /** One thing to say under the row. */
@@ -150,7 +153,7 @@ export function AccessRowsView({
   if (whenActive && !active) return null
   return (
     <div className="fr-access">
-      <h2 className="fr-access-head">{ENDPOINT_COPY.HEAD}</h2>
+      {!bare && <h2 className="fr-access-head">{ENDPOINT_COPY.HEAD}</h2>}
       {active ? (
         <div className="fr-access-row">
           <span className="fr-tool">
@@ -190,7 +193,7 @@ export function AccessRowsView({
 }
 
 /** Absent where main has no such bridge: the phone adds no endpoint. */
-export function AccessRows({ onChange, whenActive = false }: { onChange?: () => void; whenActive?: boolean }): React.JSX.Element | null {
+export function AccessRows({ onChange, whenActive = false, bare = false }: { onChange?: () => void; whenActive?: boolean; bare?: boolean }): React.JSX.Element | null {
   const [state, setState] = useState<AccessState | null>(null)
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -248,6 +251,7 @@ export function AccessRows({ onChange, whenActive = false }: { onChange?: () => 
     <AccessRowsView
       state={state}
       whenActive={whenActive}
+      bare={bare}
       note={note}
       onOpen={() => setOpen(true)}
       onEdit={(active) => {

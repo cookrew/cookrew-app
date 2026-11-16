@@ -4,6 +4,7 @@ import { KEY_PRESETS, ROUTING_COPY, autoGroupItem, decisionFacts, harnessTicks, 
 import { mcpLibraryLine } from '../../../shared/quota-view'
 import { AccountCard } from './AccountCard'
 import { keyLineFor } from '../../../shared/route-lines'
+import { RemoteMagpieForm } from './RemoteMagpieForm'
 import { runningLabel, type SetupRunning } from './setup-line-state'
 import { cookrew } from '../api'
 
@@ -146,10 +147,12 @@ export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: {
   const busyFor = (line: string | null): string | null => (line === null ? null : runningLabel(running, line))
   const [open, setOpen] = useState(defaultOpen)
   const [keys, setKeys] = useState(false)
+  const [remote, setRemote] = useState(false)
   const [unexpected, setUnexpected] = useState(false)
   const toggle = (): void => {
     setOpen((o) => !o)
     setKeys(false)
+    setRemote(false)
     // The notice is about the last click on the open menu; a new opening starts clean.
     setUnexpected(false)
   }
@@ -198,6 +201,20 @@ export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: {
                 </button>
               ))}
             </div>
+          )}
+          <button type="button" role="menuitem" data-item="remote-magpie" aria-expanded={remote} onClick={() => setRemote((r) => !r)}>
+            <b>{ROUTING_COPY.addRemote}</b>
+            <span className="c">{ROUTING_COPY.addRemoteHint}</span>
+          </button>
+          {/* The menu stays open: the form says where to paste the key, and closing would unmount that. */}
+          {remote && (
+            <RemoteMagpieForm
+              onRun={(line, options) => {
+                setUnexpected(false)
+                onRun(line, { enter: options?.enter ?? true })
+              }}
+              onCancel={() => setRemote(false)}
+            />
           )}
           <button type="button" role="menuitem" disabled={busyFor(setup.addLocalLine) !== null} onClick={() => run(setup.addLocalLine)}>
             <b>{ROUTING_COPY.addLocal}</b>

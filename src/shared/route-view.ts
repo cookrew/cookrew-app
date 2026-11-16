@@ -33,6 +33,8 @@ export const ROUTING_COPY = {
   addSubscription: 'Subscription',
   addKey: 'API key',
   addLocal: 'Local',
+  addRemote: 'Another computer’s Magpie',
+  addRemoteHint: 'its accounts and routing groups, by address and key',
   addGroup: 'Routing group',
   groupNeedsTwo: 'needs two models in the catalog',
   addAutoGroup: 'Auto group (local tier)',

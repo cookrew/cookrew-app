@@ -322,6 +322,7 @@ import { forgetCardWindow } from './use-window-memory'
 import { addPaneDirs, installerDirs, panePath } from './pane-path'
 import { bootStep, paintFailure } from './boot-failure'
 import { registerAccessIpc } from './access-ipc'
+import { registerShareIpc } from './share-ipc'
 import { AccessStore, probeEndpoint } from './agent-access'
 import { macKeychain } from './pane-keychain'
 import { createSetupLines, registerSetupLineIpc, shellHoldsTerminal } from './setup-line'
@@ -9037,6 +9038,10 @@ function registerIpc(handlers: RestoreHandlers): void {
       }
       return op(...args)
     }
+
+  // Sharing this computer's Magpie with the owner's other devices (route/share-keys.ts):
+  // a key is minted on the owner's gateway, so only the owner's top frame may ask.
+  registerShareIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)))
 
   // ---- the owner's account (identity v2) ----
   //

@@ -48,6 +48,10 @@ export interface RoutingPanelProps {
   onZoom?: (terminalId: string) => void
   /** The person's own endpoint: where it is changed once the first run is over. */
   access?: React.ReactNode
+  /** Connect an AI account (first-run/AccountWays.tsx), drawn first while nothing is connected. */
+  guide?: React.ReactNode
+  /** Share this computer's Magpie with the owner's other devices (ShareDevices.tsx). */
+  share?: React.ReactNode
 }
 
 export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null {
@@ -99,8 +103,10 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
                 {error}
               </div>
             )}
+            {props.guide}
             <Harnesses rows={state.harnesses} onRun={onRun} onAddToDock={onAddToDock} running={running} />
             <Accounts state={state} onRun={onRun} onSetDefault={onSetDefault} onSetSharedMcp={onSetSharedMcp} running={running} />
+            {props.share}
             <LiveRoutes state={state} names={names} onZoom={onZoom} />
             <Rented state={state} />
           </>
