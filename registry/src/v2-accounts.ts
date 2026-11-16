@@ -1,5 +1,5 @@
 import { LAST_USED_GRAIN_MS, sessionEnded, type SessionAge, type VerifiedBy } from './v2-session-age'
-import { phoneMatchCode } from './v2-phone-match'
+import { matchSalt, phoneMatchCode } from './v2-phone-match'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -111,7 +111,7 @@ export interface V2Device {
    * `until`. Meanwhile the phone gets no pass; Remove, or no answer in time,
    * revokes it everywhere (keepPhone, removePendingPhone, sweepPendingPhones).
    */
-  phonePending?: { by: string; at: number; until: number }
+  phonePending?: { by: string; at: number; until: number; salt: string }
 }
 
 /** How long the Mac that showed a phone's code has to keep the phone: a few minutes (owner 2026-11-17). */
@@ -135,7 +135,7 @@ export const livesUntilRevoked = (device: V2Device | undefined): boolean =>
 function joinedPhone(device: V2Device, pending: { by: string; at: number } | null): V2Device {
   const { phonePassAt, phonePending: _earlier, ...plain } = device
   if (pending !== null && device.kind === 'phone') {
-    return { ...plain, phonePending: { by: pending.by, at: pending.at, until: pending.at + PHONE_KEEP_WINDOW_MS } }
+    return { ...plain, phonePending: { by: pending.by, at: pending.at, until: pending.at + PHONE_KEEP_WINDOW_MS, salt: matchSalt() } }
   }
   // Any other join was its own approval (a plain code, a sign-in): a question still open about this phone is moot.
   if (device.kind !== 'phone' || phonePassAt === undefined) return plain
@@ -1024,7 +1024,7 @@ export class V2Accounts {
     // The match number is the phone's key in six digits: the owner checks it against the phone, since the name is the joiner's to choose.
     return account.devices.flatMap((d) =>
       d.phonePending !== undefined && d.phonePending.by === byDeviceId
-        ? [{ deviceId: d.id, name: d.name, match: phoneMatchCode(d.jwk) ?? '', at: d.phonePending.at, until: d.phonePending.until }]
+        ? [{ deviceId: d.id, name: d.name, match: phoneMatchCode(d.jwk, d.phonePending.salt) ?? '', at: d.phonePending.at, until: d.phonePending.until }]
         : []
     )
   }

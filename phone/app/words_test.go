@@ -31,3 +31,12 @@ func TestAgentLineShowsTheReplyOnceThereIsOne(t *testing.T) {
 		}
 	}
 }
+
+func TestWaitingNamesTheNumberToCheck(t *testing.T) {
+	if got := waitingLine("119163"); got != "Waiting for your Mac: tap Keep on the one that showed the code, if it shows 119 163." {
+		t.Fatalf("waitingLine = %q", got)
+	}
+	if got := waitingLine(""); got != "Waiting for your Mac: tap Keep on the one that showed the code." {
+		t.Fatalf("no number: %q", got)
+	}
+}

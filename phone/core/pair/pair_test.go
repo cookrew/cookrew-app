@@ -121,7 +121,7 @@ func (w *world) serve(rw http.ResponseWriter, r *http.Request) {
 		w.joins++
 		w.session = fmt.Sprintf("session-%d", w.joins)
 		w.exp = time.Now().Add(30 * 24 * time.Hour).UnixMilli()
-		w.answer(rw, 201, map[string]any{"token": w.session, "exp": w.exp, "deviceId": w.device.id, "username": "anvztor"})
+		w.answer(rw, 201, map[string]any{"token": w.session, "exp": w.exp, "deviceId": w.device.id, "username": "anvztor", "matchSalt": "c2FsdC1vZi1zaXh0ZWVuLWI"})
 	case r.URL.Path == "/v2/me/device-grant/phone":
 		if w.bearer(r) != w.session || w.session == "" {
 			w.answer(rw, 401, map[string]string{"error": "unauthenticated"})
@@ -662,7 +662,7 @@ func TestAPhoneNotKeptYetIsToldToWaitForItsMac(t *testing.T) {
 func TestMatchCodeAndJoinProofAreTheRegistrysOwn(t *testing.T) {
 	// tests/fixtures/phone-contract/account-vectors.json, its first key; tests/phone-keep-registry.test.ts pins the same.
 	jwk := account.JWK{Kty: "OKP", Crv: "Ed25519", X: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg"}
-	if got, err := MatchCode(jwk); err != nil || got != "532815" {
+	if got, err := MatchCode(jwk, "c2FsdC1vZi1zaXh0ZWVuLWI"); err != nil || got != "119163" {
 		t.Fatalf("MatchCode = %q, %v", got, err)
 	}
 	if got := JoinProofMessage("K7QM-2XPD", "EAD074E4-96B9-8ED9-9E02-2CA7BBE51D5A"); got != "cookrew-join/1 K7QM-2XPD ead074e4-96b9-8ed9-9e02-2ca7bbe51d5a" {
@@ -670,19 +670,21 @@ func TestMatchCodeAndJoinProofAreTheRegistrysOwn(t *testing.T) {
 	}
 }
 
-func TestAPhoneShowsItsMatchBeforeItJoins(t *testing.T) {
+func TestAPhoneKnowsItsMatchFromTheSaltItWasGiven(t *testing.T) {
 	w := newWorld(t)
 	reg := w.registry()
-	key, _ := account.NewKey()
-	device, _ := NewDevice(key, "iPhone")
-	want, _ := device.Match()
-	state, err := JoinWithKey(context.Background(), reg, "K7QM-2XPD", device)
+	state, err := JoinAccount(context.Background(), reg, "K7QM-2XPD", "iPhone")
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, _ := state.Device()
-	if got, _ := again.Match(); got != want || again.ID != device.ID {
-		t.Fatalf("joined as %s (%s), showed %s", again.ID, got, want)
+	device, _ := state.Device()
+	jwk, _ := device.Key.JWK()
+	want, _ := MatchCode(jwk, "c2FsdC1vZi1zaXh0ZWVuLWI")
+	if got, err := state.Match(); err != nil || got != want {
+		t.Fatalf("Match = %q, %v; want %q", got, err, want)
+	}
+	if _, err := (State{}).Match(); err == nil {
+		t.Fatal("a state with no salt has no number")
 	}
 }
 

@@ -5,7 +5,7 @@ import { asking, cookie, refuse, signedIn, v2Json, type Signed, type V2Context }
 import { factorError } from './v2-factor-copy'
 import { stepUpHeld } from './v2-step-up'
 import { isJoinPurpose } from './v2-join-codes'
-import { phoneJoinMessage } from './v2-phone-match'
+import { phoneJoinMessage, phoneMatchCode } from './v2-phone-match'
 import { verifyDeviceSignature } from './v2-reach'
 
 /** The same ceiling the other /v2/me writes read a body under. */
@@ -158,7 +158,11 @@ async function redeemJoinCode(ctx: V2Context): Promise<void> {
       username,
       // A code-joined Mac asks for the password at its first lock. When there
       // is none to ask for, it has to know now and choose a passcode instead.
-      hasPassword: attached.account.passwordless !== true
+      hasPassword: attached.account.passwordless !== true,
+      // A phone waiting to be kept: the salt its match number is made with, and the number, which the Mac asking shows too.
+      ...(attached.device.phonePending === undefined
+        ? {}
+        : { matchSalt: attached.device.phonePending.salt, match: phoneMatchCode(attached.device.jwk, attached.device.phonePending.salt) })
     },
     { 'set-cookie': cookie(minted.token) }
   )

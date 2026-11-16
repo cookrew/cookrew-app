@@ -65,7 +65,7 @@ const joinedPhone = async () => {
   const phone = nativePhone()
   const joined = await call('POST', '/v2/join', { code, device: phone.device, proof: proofOf(phone, code) })
   expect(joined.status).toBe(201)
-  return { username, mac, phone, token: joined.body.token as string }
+  return { username, mac, phone, token: joined.body.token as string, salt: joined.body.matchSalt as string, match: joined.body.match as string }
 }
 
 const keep = (macToken: string, id: string) => call('POST', `/v2/me/phones/${id}/keep`, {}, macToken)
@@ -89,10 +89,13 @@ describe('a phone that joined waits for the Mac that showed the code', () => {
   })
 
   it('the minting Mac sees it, by name, with when the question ends', async () => {
-    const { mac, phone } = await joinedPhone()
+    const { mac, phone, salt, match } = await joinedPhone()
     const listed = await pending(mac.token)
     expect(listed.status).toBe(200)
-    expect(listed.body).toEqual([{ deviceId: phone.device.id, name: 'iPhone', match: phoneMatchCode(phone.device.jwk), at: clock, until: clock + PHONE_KEEP_WINDOW_MS }])
+    // The number the phone was told, from a salt drawn after its key was fixed: no key can be ground to match it.
+    expect(match).toBe(phoneMatchCode(phone.device.jwk, salt))
+    expect(salt).toMatch(/^[A-Za-z0-9_-]{22}$/)
+    expect(listed.body).toEqual([{ deviceId: phone.device.id, name: 'iPhone', match, at: clock, until: clock + PHONE_KEEP_WINDOW_MS }])
   })
 
   it('Keep makes it a trusted phone: its pass comes with no proof, the account opens, and Keep is not asked twice', async () => {
@@ -181,6 +184,13 @@ describe('a phone that joined waits for the Mac that showed the code', () => {
     expect(world.v2.accounts.revokedFor(username)).toContain(phone.device.id)
   })
 
+  it('each join draws its own salt: the same phone rejoining gets a new number', async () => {
+    const first = await joinedPhone()
+    const code = (await call('POST', '/v2/me/join-codes', { current: PASSWORD, purpose: 'phone' }, first.mac.token)).body.code as string
+    const again = await call('POST', '/v2/join', { code, device: first.phone.device, proof: proofOf(first.phone, code) })
+    expect(again.body.matchSalt).not.toBe(first.salt)
+  })
+
   it('a trusted phone that rejoins with a new code waits to be kept again', async () => {
     const { mac, phone, token } = await joinedPhone()
     await keep(mac.token, phone.device.id)
@@ -229,7 +239,7 @@ describe('a phone proves the key it names, and is named by it', () => {
 
   it('the match number is the key’s, the same six digits the Go phone shows (shared vector)', () => {
     // tests/fixtures/phone-contract/account-vectors.json, its first key; phone/core/pair pins the same.
-    expect(phoneMatchCode({ kty: 'OKP', crv: 'Ed25519', x: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg' })).toBe('532815')
+    expect(phoneMatchCode({ kty: 'OKP', crv: 'Ed25519', x: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg' }, 'c2FsdC1vZi1zaXh0ZWVuLWI')).toBe('119163')
     expect(phoneJoinMessage('K7QM-2XPD', 'EAD074E4-96B9-8ED9-9E02-2CA7BBE51D5A')).toBe('cookrew-join/1 K7QM-2XPD ead074e4-96b9-8ed9-9e02-2ca7bbe51d5a')
   })
 })

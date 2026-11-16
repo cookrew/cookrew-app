@@ -23,8 +23,6 @@ func JoinScreen(session *Session) ui.Node {
 	return ui.SafeArea(ui.Style{Grow: 1, Padding: ui.All(20), Gap: 14},
 		ui.StaticText("Add this phone", ui.Style{Font: fonts.Title2}),
 		ui.StaticText("On your Mac, open ⋯ → Phone app and scan the code it shows.", ui.Style{Font: fonts.Subheadline, Color: colors.SecondaryLabel}),
-		// The Mac asks to keep a phone by this number: the owner checks it is this one.
-		ui.Text(signal.Func(func() string { return "This iPhone’s number: " + spaced(session.Match.Get()) }), ui.Style{Font: fonts.Headline}),
 		ui.Show(signal.Func(func() bool { return cameraFailed.Get() == "" }), func() ui.Node {
 			return camera.View(camera.ViewProps{
 				Scan:    scan.Codes(found, scan.QR),

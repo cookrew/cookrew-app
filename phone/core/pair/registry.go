@@ -30,6 +30,8 @@ type Session struct {
 	Exp      int64  `json:"exp"`
 	DeviceID string `json:"deviceId"`
 	Username string `json:"username"`
+	// MatchSalt is what a phone's-code join was given for its match number (State.Match); "" otherwise.
+	MatchSalt string `json:"matchSalt,omitempty"`
 }
 
 // Pass is the account's phone pass: twelve hours, for this device's key, every machine.
