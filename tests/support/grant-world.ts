@@ -79,9 +79,10 @@ export const httpWithBearer = (origin: string, token: string): Http => {
   }
 }
 
-export async function grantWorld(): Promise<GrantWorld> {
+/** `now`: the registry's clock, for a test that travels in time. */
+export async function grantWorld(options: { now?: () => number } = {}): Promise<GrantWorld> {
   const dir = mkdtempSync(path.join(tmpdir(), 'grant-world-'))
-  const v2 = createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, lookupsPerMinute: 1000, joinPerMinute: 1000, joinCodesPerHour: 1000 } })
+  const v2 = createV2(dir, { now: options.now, limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, lookupsPerMinute: 1000, joinPerMinute: 1000, joinCodesPerHour: 1000, renewPerMinute: 1000 } })
   const server: Server = createRegistry({
     store: new RegistryStore(dir),
     log: new TransparencyLog(dir),

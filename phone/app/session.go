@@ -18,6 +18,15 @@ const Registry = "https://api.cookrew.dev"
 // netTimeout bounds one step the user is waiting on.
 const netTimeout = 45 * time.Second
 
+// keepPoll is how often a phone not kept yet asks again, and keepWait how
+// long it goes on: a little past the registry's five minutes, after which the
+// phone is removed anyway and the next ask says so. A deadline, not a count,
+// so pulling to refresh meanwhile never shortens the wait.
+const (
+	keepPoll = 3 * time.Second
+	keepWait = 6 * time.Minute
+)
+
 // Phase is where the app stands.
 type Phase int
 
@@ -51,6 +60,12 @@ type Session struct {
 	vault    Vault
 	// keeper renews the sign-in; nil until the phone has joined.
 	keeper *pair.Keeper
+	// waitUntil ends the asking while the Mac has not kept the phone, and asking
+	// says one ask is already scheduled (a pull to refresh must not start a second loop). Main thread.
+	waitUntil time.Time
+	asking    bool
+	// Match is the number this phone shows while its Mac is asked to keep it (the Mac shows the same), or "".
+	Match *signal.Signal[string]
 
 	Phase    *signal.Signal[Phase]
 	State    *signal.Signal[pair.State]
@@ -79,6 +94,7 @@ func NewSession(vault Vault) (*Session, error) {
 		Busy:     signal.New(false),
 		Problem:  signal.New(""),
 		Ending:   signal.New(""),
+		Match:    signal.New(""),
 	}
 	s.Unlock()
 	return s, nil
@@ -99,7 +115,11 @@ func (s *Session) Unlock() {
 			if !errors.Is(err, errNoState) {
 				s.Problem.Set(err.Error())
 			}
-			s.Phase.Set(afterLoad(err))
+			if phase := afterLoad(err); phase == Joining {
+				s.toJoining()
+			} else {
+				s.Phase.Set(phase)
+			}
 		})
 	}()
 }
@@ -135,13 +155,23 @@ func (s *Session) StartOver() {
 			s.State.Set(pair.State{})
 			s.Machines.Set(nil)
 			s.Problem.Set("")
-			s.Phase.Set(Joining)
+			s.toJoining()
 		})
 	}()
 }
 
+// toJoining shows the scanner. Main thread.
+func (s *Session) toJoining() {
+	s.Match.Set("")
+	s.Phase.Set(Joining)
+}
+
 // joined makes the phone's sign-in the one kept and renewed. Main thread.
 func (s *Session) joined(state pair.State) {
+	// A join that is waiting on its Mac carries the salt of its number; a kept or loaded phone has none to show.
+	if match, err := state.Match(); err == nil {
+		s.Match.Set(match)
+	}
 	device, err := state.Device()
 	if err != nil {
 		// A kept state that names no key: never the scanner on its own, only a confirmed start over.
@@ -197,15 +227,28 @@ func (s *Session) Join(scanned string) {
 // join is Rejoin for a phone that held a key, JoinAccount for a new one. Off the main thread.
 func (s *Session) join(ctx context.Context, held pair.State, scanned string) (pair.State, error) {
 	if held.Seed == "" {
-		return pair.JoinAccount(ctx, s.registry, scanned, deviceName())
+		state, err := pair.JoinAccount(ctx, s.registry, scanned, deviceName())
+		return state, spentElsewhere(err)
 	}
 	state, err := pair.Rejoin(ctx, s.registry, held, scanned)
+	err = spentElsewhere(err)
 	if errors.Is(err, pair.ErrNewDevice) {
 		// One answer is not enough to let a key go (it may be another account's code): the person decides, with Start over.
 		return held, errRemoved
 	}
 	return state, err
 }
+
+// spentElsewhere says what a wrong code may mean when the code was right: someone else spent it first.
+func spentElsewhere(err error) error {
+	if errors.Is(err, pair.ErrWrongCode) {
+		return errCodeGone
+	}
+	return err
+}
+
+// errCodeGone is a code that did not join this phone: mistyped, run out, or spent by another phone first.
+var errCodeGone = errors.New("that code did not work: it was mistyped, ran out, or another phone used it first; if your Mac now asks to keep a phone, tap Remove there, then get a new code")
 
 // errRemoved is a code the account would not join this phone's key with: removed in Devices, or another account's code.
 var errRemoved = errors.New("the account would not take this phone's key: it was removed in Devices, or the code is another account's; Start over to join as a new phone")
@@ -228,11 +271,28 @@ func (s *Session) Refresh() {
 			s.Busy.Set(false)
 			s.State.Set(next)
 			s.Ending.Set(ending)
+			if !errors.Is(err, pair.ErrAwaitingKeep) {
+				s.waitUntil = time.Time{}
+			} else if s.waitUntil.IsZero() {
+				s.waitUntil = time.Now().Add(keepWait)
+			}
 			switch {
-			case errors.Is(err, pair.ErrSignedOut), errors.Is(err, pair.ErrNotTrusted):
+			case errors.Is(err, pair.ErrAwaitingKeep) && time.Now().Before(s.waitUntil):
+				// Joined; the Mac that showed the code has not said Keep yet: ask again in a moment.
+				s.Problem.Set(waitingLine(s.Match.Peek()))
+				if !s.asking {
+					s.asking = true
+					time.AfterFunc(keepPoll, func() {
+						ui.Post(func() {
+							s.asking = false
+							s.Refresh()
+						})
+					})
+				}
+			case errors.Is(err, pair.ErrSignedOut), errors.Is(err, pair.ErrNotTrusted), errors.Is(err, pair.ErrAwaitingKeep):
 				// Over: the key stays, for the next code to bring this same phone back.
 				s.Problem.Set("This phone needs a new code: on a Mac, open ⋯ → Phone app.")
-				s.Phase.Set(Joining)
+				s.toJoining()
 			case err != nil:
 				s.Problem.Set(err.Error())
 			default:
@@ -296,6 +356,22 @@ func (s *Session) Road(machineID string) (plane.Plane, error) {
 		return nil, errors.New("this phone is not on that machine yet")
 	}
 	return plane.NewRelay(s.registry.Origin(), held.ID, plane.StaticCredentials(state.Session.Token, held.Token), nil)
+}
+
+// waitingLine is what the phone says while its Mac is asked: the number to check, when it has one.
+func waitingLine(match string) string {
+	if match == "" {
+		return "Waiting for your Mac: tap Keep on the one that showed the code."
+	}
+	return "Waiting for your Mac: tap Keep on the one that showed the code, if it shows " + spaced(match) + "."
+}
+
+// spaced is a match number as a person reads it: "532 815".
+func spaced(match string) string {
+	if len(match) != 6 {
+		return match
+	}
+	return match[:3] + " " + match[3:]
 }
 
 // never is the equality of a value that is only ever set when it changed.

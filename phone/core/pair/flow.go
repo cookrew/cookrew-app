@@ -80,8 +80,8 @@ func (s State) MachineIDs() []string {
 // now a trusted phone of the account, with a session and no machine yet. The
 // code is spent whatever happens next, so the caller stores the answer at once.
 func JoinAccount(ctx context.Context, registry Registry, scanned, name string) (State, error) {
-	code, err := JoinCode(scanned)
-	if err != nil {
+	// Read first: no key is made for something that is not a code.
+	if _, err := JoinCode(scanned); err != nil {
 		return State{}, err
 	}
 	key, err := account.NewKey()
@@ -92,11 +92,21 @@ func JoinAccount(ctx context.Context, registry Registry, scanned, name string) (
 	if err != nil {
 		return State{}, err
 	}
+	return JoinWithKey(ctx, registry, scanned, device)
+}
+
+// JoinWithKey is JoinAccount with a key made beforehand: the phone shows its
+// match number (Device.Match) while it scans, and joins as that key.
+func JoinWithKey(ctx context.Context, registry Registry, scanned string, device Device) (State, error) {
+	code, err := JoinCode(scanned)
+	if err != nil {
+		return State{}, err
+	}
 	session, err := registry.Join(ctx, code, device)
 	if err != nil {
 		return State{}, err
 	}
-	return State{Registry: registry.Origin(), Name: name, Seed: hex.EncodeToString(key.Seed()), Session: session, Machines: map[string]Machine{}}, nil
+	return State{Registry: registry.Origin(), Name: device.Name, Seed: hex.EncodeToString(device.Key.Seed()), Session: session, Machines: map[string]Machine{}}, nil
 }
 
 // Rejoin spends a new code with the key this phone already holds: after a

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { generateKeyPairSync, randomUUID } from 'node:crypto'
+import { generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
+import { phoneJoinMessage } from '../registry/src/v2-phone-match'
 import { forgetGrantRests } from '../registry/src/v2-device-grant'
 import { JoinCodes } from '../registry/src/v2-join-codes'
 import { GRANT_TTL_MS } from '../registry/src/v2-tokens'
@@ -26,11 +27,21 @@ beforeAll(async () => {
 afterAll(async () => world.close())
 beforeEach(() => forgetGrantRests())
 
+/** The private halves of the phones made here, by device id: a phone's code wants a proof by the key. */
+const keys = new Map<string, KeyObject>()
+
 /** A phone as the native app makes it: Ed25519, its own random id. */
 const nativePhone = (name = 'iPhone') => {
   const pair = generateKeyPairSync('ed25519')
   const jwk = pair.publicKey.export({ format: 'jwk' }) as Record<string, string>
-  return { id: randomUUID(), kind: 'phone', name, jwk: { kty: jwk.kty, crv: jwk.crv, x: jwk.x } }
+  const id = randomUUID()
+  keys.set(id, pair.privateKey)
+  return { id, kind: 'phone', name, jwk: { kty: jwk.kty, crv: jwk.crv, x: jwk.x } }
+}
+
+const proofOf = (device: { id: string }, code: string): string | undefined => {
+  const key = keys.get(device.id)
+  return key === undefined ? undefined : sign(null, Buffer.from(phoneJoinMessage(code, device.id), 'utf8'), key).toString('base64url')
 }
 
 const post = async (p: string, body: unknown, token?: string) => {
@@ -57,8 +68,16 @@ const codeFor = async (token: string, purpose?: string): Promise<string> => {
   return out.body.code as string
 }
 
-/** Join with a code: the phone's session token. */
-const join = async (code: string, device: ReturnType<typeof nativePhone>) => post('/v2/join', { code, device })
+/**
+ * Join with a code: the phone's session token. `keptBy`: the minting Mac's
+ * session, which then keeps the phone (owner 2026-11-17: a phone that joined
+ * waits for that Mac's Keep before it is trusted).
+ */
+const join = async (code: string, device: ReturnType<typeof nativePhone>, keptBy?: string) => {
+  const joined = await post('/v2/join', { code, device, proof: proofOf(device, code) })
+  if (keptBy !== undefined && joined.status === 201) expect((await post(`/v2/me/phones/${device.id}/keep`, {}, keptBy)).status).toBe(200)
+  return joined
+}
 
 describe('the join-code store keeps a phone’s purpose', () => {
   it('mints and spends a phone code as one', () => {
@@ -87,7 +106,7 @@ describe('a phone’s code makes a trusted phone (owner 2026-11-16: QR join, tru
   it('a phone joined with a phone’s code gets its pass with no proof, for its own key, in a scope no older machine reads', async () => {
     const { username, desk } = await owner()
     const phone = nativePhone()
-    const joined = await join(await codeFor(desk.token, 'phone'), phone)
+    const joined = await join(await codeFor(desk.token, 'phone'), phone, desk.token)
     expect(joined.status).toBe(201)
     const before = Date.now()
     const out = await post(GRANT_PATHS.phone, {}, joined.body.token as string)
@@ -132,7 +151,8 @@ describe('a phone’s code makes a trusted phone (owner 2026-11-16: QR join, tru
     const as = world.v2.accounts.get(username)?.devices.find((d) => d.id === other.device.id)
     expect(as).toBeDefined()
     const out = await post('/v2/join', { code: await codeFor(desk.token, 'phone'), device: { id: other.device.id, kind: 'phone', name: 'iPhone', jwk: as?.jwk } })
-    expect(out.status).toBe(400)
+    // Its public key is no proof: refused before the kind is even read.
+    expect(out.status).toBe(401)
   })
 
   it('a watch, a desktop or a browser is not a phone', async () => {
@@ -148,7 +168,7 @@ describe('a phone’s code makes a trusted phone (owner 2026-11-16: QR join, tru
 
   it('an account locked by Not me gives a phone nothing', async () => {
     const { username, desk } = await owner()
-    const joined = await join(await codeFor(desk.token, 'phone'), nativePhone())
+    const joined = await join(await codeFor(desk.token, 'phone'), nativePhone(), desk.token)
     world.v2.factors.store.setMustChangePassword(username, true)
     expect((await post(GRANT_PATHS.phone, {}, joined.body.token as string)).status).toBe(403)
     world.v2.factors.store.setMustChangePassword(username, false)
@@ -157,7 +177,7 @@ describe('a phone’s code makes a trusted phone (owner 2026-11-16: QR join, tru
   it('a revoked phone asks for nothing: its session is gone', async () => {
     const { username, desk } = await owner()
     const phone = nativePhone()
-    const joined = await join(await codeFor(desk.token, 'phone'), phone)
+    const joined = await join(await codeFor(desk.token, 'phone'), phone, desk.token)
     world.v2.accounts.revokeDevice(username, phone.id)
     expect((await post(GRANT_PATHS.phone, {}, joined.body.token as string)).status).toBe(401)
   })
@@ -165,10 +185,10 @@ describe('a phone’s code makes a trusted phone (owner 2026-11-16: QR join, tru
   it('joining again with a new phone code moves the moment it was trusted forward', async () => {
     const { desk } = await owner()
     const phone = nativePhone()
-    const first = await join(await codeFor(desk.token, 'phone'), phone)
+    const first = await join(await codeFor(desk.token, 'phone'), phone, desk.token)
     const one = v2PhoneGrantClaimsFor((await post(GRANT_PATHS.phone, {}, first.body.token as string)).body.grant as string, Date.now())
     await new Promise((resolve) => setTimeout(resolve, 5))
-    const again = await join(await codeFor(desk.token, 'phone'), phone)
+    const again = await join(await codeFor(desk.token, 'phone'), phone, desk.token)
     expect(again.status).toBe(201)
     const two = v2PhoneGrantClaimsFor((await post(GRANT_PATHS.phone, {}, again.body.token as string)).body.grant as string, Date.now())
     expect(two?.since).toBeGreaterThan(one?.since as number)
@@ -179,7 +199,7 @@ describe('a phone’s trust ends with the password it was joined under (as a mac
   it('a password change drops it, and only a new phone code brings it back', async () => {
     const { username, desk } = await owner()
     const phone = nativePhone()
-    expect((await join(await codeFor(desk.token, 'phone'), phone)).status).toBe(201)
+    expect((await join(await codeFor(desk.token, 'phone'), phone, desk.token)).status).toBe(201)
     expect(typeof world.v2.accounts.get(username)?.devices.find((d) => d.id === phone.id)?.phonePassAt).toBe('number')
     expect((await desk.registry.post('/v2/me/password', { current: PASSWORD, next: 'a brand new long password' })).status).toBe(204)
     expect(world.v2.accounts.get(username)?.devices.find((d) => d.id === phone.id)?.phonePassAt).toBeUndefined()
@@ -188,7 +208,7 @@ describe('a phone’s trust ends with the password it was joined under (as a mac
   it('“Not me” takes it from every phone', async () => {
     const { username, desk } = await owner()
     const phone = nativePhone()
-    await join(await codeFor(desk.token, 'phone'), phone)
+    await join(await codeFor(desk.token, 'phone'), phone, desk.token)
     expect(typeof world.v2.accounts.get(username)?.devices.find((d) => d.id === phone.id)?.phonePassAt).toBe('number')
     world.v2.accounts.untrustOtherMachines(username, desk.device.id)
     expect(world.v2.accounts.get(username)?.devices.find((d) => d.id === phone.id)?.phonePassAt).toBeUndefined()
@@ -197,7 +217,7 @@ describe('a phone’s trust ends with the password it was joined under (as a mac
   it('a phone that walks back in by a plain code or a sign-in is not trusted again by it', async () => {
     const { username, desk } = await owner()
     const phone = nativePhone()
-    await join(await codeFor(desk.token, 'phone'), phone)
+    await join(await codeFor(desk.token, 'phone'), phone, desk.token)
     world.v2.accounts.untrustOtherMachines(username, desk.device.id)
     const plain = await join(await codeFor(desk.token), phone)
     expect(plain.status).toBe(201)
@@ -216,7 +236,7 @@ describe('a trusted phone joining again', () => {
   it('by a plain code, as a phone, keeps its trust', async () => {
     const { username, desk } = await owner()
     const phone = nativePhone()
-    await join(await codeFor(desk.token, 'phone'), phone)
+    await join(await codeFor(desk.token, 'phone'), phone, desk.token)
     const at = world.v2.accounts.get(username)?.devices.find((d) => d.id === phone.id)?.phonePassAt
     expect(typeof at).toBe('number')
     const again = await join(await codeFor(desk.token), phone)
@@ -228,7 +248,7 @@ describe('a trusted phone joining again', () => {
   it('as something other than a phone, loses it', async () => {
     const { username, desk } = await owner()
     const phone = nativePhone()
-    await join(await codeFor(desk.token, 'phone'), phone)
+    await join(await codeFor(desk.token, 'phone'), phone, desk.token)
     expect(typeof world.v2.accounts.get(username)?.devices.find((d) => d.id === phone.id)?.phonePassAt).toBe('number')
     // Re-attached as a browser by a plain code, it is no longer a trusted phone.
     expect((await join(await codeFor(desk.token), { ...phone, kind: 'browser' })).status).toBe(201)
@@ -246,7 +266,7 @@ describe('what a code may be minted for', () => {
 
   it('a phone asking in a stream is told to rest', async () => {
     const { desk } = await owner()
-    const joined = await join(await codeFor(desk.token, 'phone'), nativePhone())
+    const joined = await join(await codeFor(desk.token, 'phone'), nativePhone(), desk.token)
     const statuses: number[] = []
     for (let i = 0; i < 40; i++) statuses.push((await post(GRANT_PATHS.phone, {}, joined.body.token as string)).status)
     expect(statuses).toContain(429)
@@ -256,7 +276,7 @@ describe('what a code may be minted for', () => {
 describe('a phone pass is a grant in its own scope', () => {
   it('is not a session either', async () => {
     const { desk } = await owner()
-    const joined = await join(await codeFor(desk.token, 'phone'), nativePhone())
+    const joined = await join(await codeFor(desk.token, 'phone'), nativePhone(), desk.token)
     const grant = (await post(GRANT_PATHS.phone, {}, joined.body.token as string)).body.grant as string
     expect((await httpWithBearer(world.origin, grant).get('/v2/me')).status).toBe(401)
   })

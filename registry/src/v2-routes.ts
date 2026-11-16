@@ -273,8 +273,8 @@ async function openSession(ctx: V2Context): Promise<void> {
 }
 
 function signOut(ctx: V2Context): void {
-  // A console session ends itself here too, as any session does.
-  const signed = signedIn(ctx.request, ctx.v2, 'any', { console: ctx.via !== 'auth' })
+  // A console session ends itself here too, as any session does, and so does a phone not kept yet.
+  const signed = signedIn(ctx.request, ctx.v2, 'any', { console: ctx.via !== 'auth', pending: true })
   if (signed !== null) ctx.v2.accounts.closeSession(signed.account.username, signed.claims.jti)
   // 204 either way: signing out of a session that has already ended is not an
   // error, and telling a caller which it was leaks whether a token was live.
@@ -534,7 +534,9 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
   // machines from outside, the device pass) and nothing else of it, and never
   // on the auth host. Asked for by kind here, and held to its allow-list here
   // as well as at the door (console-scope.ts): two locks, one list.
-  const signed = signedIn(ctx.request, v2, 'any', { console: ctx.via !== 'auth' })
+  // A phone not kept yet may ask for its pass, and only that: the answer tells it why it waits.
+  const askingPass = rest.length === 2 && rest[0] === 'device-grant' && rest[1] === 'phone'
+  const signed = signedIn(ctx.request, v2, 'any', { console: ctx.via !== 'auth', pending: askingPass })
   if (signed === null) {
     refuse(response, 401, 'unauthenticated')
     return
@@ -634,6 +636,32 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     // so the browser is handed an empty cookie rather than one that no longer
     // opens anything.
     noContent(response, id === claims.dev ? { 'set-cookie': clearedCookie() } : {})
+    return
+  }
+  /*
+   * A PHONE JOINED: KEEP IT? (owner 2026-11-17). Only the Mac that showed the
+   * phone's code is asked, and only it may answer: the code's minting device
+   * is on the pending mark, so no other device of the account (a browser, a
+   * phone, another Mac) can keep a phone or see one waiting. Keep makes it a
+   * trusted phone; Remove revokes it everywhere, as Devices does. No step-up:
+   * the code was minted under one, and Remove only ever takes trust away.
+   */
+  if (rest.length === 2 && rest[0] === 'phones' && rest[1] === 'pending' && method === 'GET') {
+    ctx.response.setHeader('cache-control', 'private, no-store')
+    v2Json(response, 200, v2.accounts.pendingPhones(account.username, claims.dev))
+    return
+  }
+  if (rest.length === 3 && rest[0] === 'phones' && (rest[2] === 'keep' || rest[2] === 'remove') && method === 'POST') {
+    const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
+    const name = account.devices.find((d) => d.id === id)?.name
+    const out = rest[2] === 'keep' ? v2.accounts.keepPhone(account.username, id, claims.dev) : v2.accounts.removePendingPhone(account.username, id, claims.dev)
+    if (!out.ok) {
+      refuse(response, 404, out.reason)
+      return
+    }
+    // §06: every device is told when one leaves.
+    if (rest[2] === 'remove') v2.events.append(account.username, { kind: 'revoked', ...(name === undefined ? {} : { device: name }) })
+    v2Json(response, 200, { ok: true })
     return
   }
   // Would this act pass on the last five minutes alone? Asked by /me before it

@@ -55,6 +55,7 @@ type world struct {
 	joins        int
 	refuseDevice bool
 	locked       bool
+	awaitingKeep bool
 	renewDelay   time.Duration
 	renewDrop    bool
 	held         map[string]account.PairChallenge
@@ -110,15 +111,24 @@ func (w *world) serve(rw http.ResponseWriter, r *http.Request) {
 		raw, _ := json.Marshal(dev["jwk"])
 		_ = json.Unmarshal(raw, &w.device.jwk)
 		w.device.id, _ = dev["id"].(string)
+		// The registry's rule: a phone's code wants the key's proof over the code.
+		if !w.verify(JoinProofMessage(body["code"].(string), w.device.id), body["proof"]) {
+			w.answer(rw, 401, map[string]string{"error": "bad_credentials"})
+			return
+		}
 		w.device.name, _ = dev["name"].(string)
 		w.trusted = true
 		w.joins++
 		w.session = fmt.Sprintf("session-%d", w.joins)
 		w.exp = time.Now().Add(30 * 24 * time.Hour).UnixMilli()
-		w.answer(rw, 201, map[string]any{"token": w.session, "exp": w.exp, "deviceId": w.device.id, "username": "anvztor"})
+		w.answer(rw, 201, map[string]any{"token": w.session, "exp": w.exp, "deviceId": w.device.id, "username": "anvztor", "matchSalt": "c2FsdC1vZi1zaXh0ZWVuLWI"})
 	case r.URL.Path == "/v2/me/device-grant/phone":
 		if w.bearer(r) != w.session || w.session == "" {
 			w.answer(rw, 401, map[string]string{"error": "unauthenticated"})
+			return
+		}
+		if w.awaitingKeep {
+			w.answer(rw, 403, map[string]string{"error": "not_confirmed", "message": "Waiting for the Mac that showed the code: tap Keep there."})
 			return
 		}
 		if !w.trusted {
@@ -127,7 +137,8 @@ func (w *world) serve(rw http.ResponseWriter, r *http.Request) {
 		}
 		w.answer(rw, 201, map[string]any{"grant": "pass-for-" + w.device.id, "exp": time.Now().Add(12 * time.Hour).UnixMilli(), "deviceId": w.device.id})
 	case r.URL.Path == "/v2/me/desktops":
-		if w.bearer(r) != w.session || w.session == "" {
+		// A phone not kept yet opens nothing: the account answers its session as unknown.
+		if w.bearer(r) != w.session || w.session == "" || w.awaitingKeep {
 			w.answer(rw, 401, map[string]string{"error": "unauthenticated"})
 			return
 		}
@@ -628,5 +639,62 @@ func TestTheRegistryClientNeverFollowsARedirectWithTheSession(t *testing.T) {
 	}
 	if len(heard) != 0 {
 		t.Fatalf("followed the redirect with %v", heard)
+	}
+}
+
+func TestAPhoneNotKeptYetIsToldToWaitForItsMac(t *testing.T) {
+	w := newWorld(t)
+	reg := w.registry()
+	state, _ := JoinAccount(context.Background(), reg, "K7QM-2XPD", "iPhone")
+	w.awaitingKeep = true
+	if _, _, err := EnterAll(context.Background(), reg, state, RelayRoad(reg)); !errors.Is(err, ErrAwaitingKeep) {
+		t.Fatalf("not kept yet: %v", err)
+	}
+	if len(w.entered) != 0 {
+		t.Fatal("knocked on a door before the phone was kept")
+	}
+	w.awaitingKeep = false
+	if next, _, err := EnterAll(context.Background(), reg, state, RelayRoad(reg)); err != nil || len(next.Machines) != 2 {
+		t.Fatalf("kept: %v, %d machines", err, len(next.Machines))
+	}
+}
+
+func TestMatchCodeAndJoinProofAreTheRegistrysOwn(t *testing.T) {
+	// tests/fixtures/phone-contract/account-vectors.json, its first key; tests/phone-keep-registry.test.ts pins the same.
+	jwk := account.JWK{Kty: "OKP", Crv: "Ed25519", X: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg"}
+	if got, err := MatchCode(jwk, "c2FsdC1vZi1zaXh0ZWVuLWI"); err != nil || got != "119163" {
+		t.Fatalf("MatchCode = %q, %v", got, err)
+	}
+	if got := JoinProofMessage("K7QM-2XPD", "EAD074E4-96B9-8ED9-9E02-2CA7BBE51D5A"); got != "cookrew-join/1 K7QM-2XPD ead074e4-96b9-8ed9-9e02-2ca7bbe51d5a" {
+		t.Fatalf("JoinProofMessage = %q", got)
+	}
+}
+
+func TestAPhoneKnowsItsMatchFromTheSaltItWasGiven(t *testing.T) {
+	w := newWorld(t)
+	reg := w.registry()
+	state, err := JoinAccount(context.Background(), reg, "K7QM-2XPD", "iPhone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, _ := state.Device()
+	jwk, _ := device.Key.JWK()
+	want, _ := MatchCode(jwk, "c2FsdC1vZi1zaXh0ZWVuLWI")
+	if got, err := state.Match(); err != nil || got != want {
+		t.Fatalf("Match = %q, %v; want %q", got, err, want)
+	}
+	if _, err := (State{}).Match(); err == nil {
+		t.Fatal("a state with no salt has no number")
+	}
+}
+
+func TestAPhoneWaitingForKeepIsNotTakenForSignedOut(t *testing.T) {
+	w := newWorld(t)
+	reg := w.registry()
+	state, _ := JoinAccount(context.Background(), reg, "K7QM-2XPD", "iPhone")
+	w.awaitingKeep = true
+	// The desktops answer 401 to a phone not kept yet; asking for the pass says why.
+	if _, _, err := EnterAll(context.Background(), reg, state, RelayRoad(reg)); !errors.Is(err, ErrAwaitingKeep) {
+		t.Fatalf("waiting: %v", err)
 	}
 }
