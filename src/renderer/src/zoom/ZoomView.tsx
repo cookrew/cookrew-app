@@ -553,6 +553,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     [list]
   )
   const { jumpToNode } = useCanvasUi()
+  // A notification clicked (main/notifier.ts): that agent, in its own workspace.
+  useEffect(() => cookrew().onHitlOpen?.(({ workspaceId: ws, id }) => void jumpToNode(ws, id)), [jumpToNode])
   const markOf = useMemo(() => new Map(model.marks.map((m) => [m.id, m])), [model.marks])
   // One names list per item, so a row scrolled into view does not draw every mounted thumbnail again (ItemNode is memo'd).
   const namesOf = useMemo(() => new Map(model.items.map((i) => [i.id, i.owners.map((id) => agentOf.get(id)?.name ?? id)])), [model.items, agentOf])

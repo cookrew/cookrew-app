@@ -933,8 +933,6 @@ function Canvas(): React.JSX.Element {
       }),
     [zoomToNode, fitAll, reactFlow]
   )
-  // A notification clicked (main/notifier.ts): that agent, in its own workspace.
-  useEffect(() => cookrew().onHitlOpen?.(({ workspaceId, id }) => void jump.to(workspaceId, id)), [jump])
   jumpRef.current = jump
 
   // The incoming canvas, offered to the jump. Declared after the fit above so
