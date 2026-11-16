@@ -55,6 +55,8 @@ export interface ServedSpawnContext {
   controlSocketPath?: string
   /** The gateway's port(s) the seat must not reach (session-sandbox.ts, sandbox-deny.ts). */
   gatewayPorts?: readonly number[]
+  /** Loopback ports the owner lent this service (service-grants.ts); every other one is denied. */
+  loopbackPorts?: readonly number[]
 }
 
 /** A confined spawn: the wrapped command, the scrubbed env, and the profile it uses. */
@@ -117,7 +119,8 @@ export function servedConfinement(
     secretPaths: ownerSecretPaths(ctx.base),
     // The owner's canvas control plane, denied from the other side of the env.
     ...(ctx.controlSocketPath ? { controlSocketPath: ctx.controlSocketPath } : {}),
-    ...(ctx.gatewayPorts ? { gatewayPorts: ctx.gatewayPorts } : {})
+    ...(ctx.gatewayPorts ? { gatewayPorts: ctx.gatewayPorts } : {}),
+    ...(ctx.loopbackPorts ? { loopbackAllow: ctx.loopbackPorts } : {})
   })
   // Inside the sandbox (so END's cleanup removes it); the per-session SANDBOX
   // dir is what keeps two sessions' profiles apart, not this constant filename.

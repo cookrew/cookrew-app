@@ -63,6 +63,8 @@ export interface ServiceGrants {
   ownerEnvFor(serviceId: string): Record<string, string | undefined>
   /** The names to forward — the grant's own, plus every key of its envFile. */
   envKeysFor(serviceId: string): readonly string[]
+  /** Loopback ports this service's seats may dial; none unless lent (session-sandbox.ts). */
+  loopbackPortsFor(serviceId: string): readonly number[]
   /** Declared files to stage for a compatibility probe. Read-only: spends nothing. */
   filesFor(serviceId: string): readonly GrantedFile[]
   /**
@@ -150,6 +152,10 @@ export function serviceGrants(base: string, log = console.error): ServiceGrants 
       // answer, and it is the only way an envFile can override an ambient
       // ANTHROPIC_BASE_URL that happens to be exported.
       return { ...process.env, ...envFileValues(grant) }
+    },
+
+    loopbackPortsFor(serviceId) {
+      return resolve(serviceId)?.loopbackPorts ?? []
     },
 
     envKeysFor(serviceId) {

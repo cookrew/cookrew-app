@@ -3910,7 +3910,9 @@ function spawnTracked(t: {
         // env keys that name this socket, and the profile denies the connect.
         controlSocketPath: ptys.socketPath,
         // The owner's gateway is denied to a seat outright (sandbox-deny.ts).
-        gatewayPorts: routeService.gatewayPorts()
+        gatewayPorts: routeService.gatewayPorts(),
+        // Every other loopback port is denied to a seat; only what this service was lent passes.
+        loopbackPorts: grants.loopbackPortsFor(servedCtx.serviceId)
       })
     : undefined
   // The card's route, as env and args the harness is spawned with. Decided

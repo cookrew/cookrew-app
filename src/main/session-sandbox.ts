@@ -1,3 +1,4 @@
+import { DEFAULT_PORT as DEFAULT_GATEWAY_PORT } from './route/discovery'
 import { createHash } from 'node:crypto'
 import { mkdirSync, realpathSync, utimesSync } from 'node:fs'
 import path from 'node:path'
@@ -225,6 +226,8 @@ export interface ProfileInput {
    * with one curl. See route/sandbox-deny.ts.
    */
   gatewayPorts?: readonly number[]
+  /** Loopback ports this seat may dial; every other loopback port is denied (owner ruling 2026-11-17). */
+  loopbackAllow?: readonly number[]
 }
 
 /**
@@ -305,6 +308,19 @@ export function seatbeltProfile(input: ProfileInput): string {
     '(deny mach-lookup (global-name "com.apple.lsd.modifydb"))',
     // The owner's gateway (route program): any port it listens on, any host.
     ...gatewayDenyClauses(input.gatewayPorts ?? []),
+    // NO LOOPBACK BY DEFAULT (owner ruling 2026-11-17). A seat's profile is fixed
+    // when it starts, so a port that only became dangerous later (a tunnel to
+    // another Magpie, which lands past that Magpie's key) would stay open to it. So
+    // every loopback port is denied, 127.0.0.1 and ::1 alike (`localhost`), and only
+    // what the owner lent this service is let through.
+    //
+    // ORDER, MEASURED (10 runs each): with the gateway's denies AFTER a lent allow,
+    // Seatbelt denied the lent port every time; with them BEFORE, it opened every time
+    // and every other loopback port stayed shut. So the gateway goes first, and a
+    // guarded port is never lent at all (loopbackAllowClauses filters it): the
+    // loopback deny is what keeps it shut, whatever order Seatbelt reads.
+    '(deny network-outbound (remote ip "localhost:*"))',
+    ...loopbackAllowClauses(input.loopbackAllow ?? [], input.gatewayPorts ?? []),
     // TRAVERSAL. Found by running it: denying the service root outright made a
     // session unable to reach its OWN sandbox — `cd` into it failed with "Not a
     // directory", because reaching a child means traversing the parent. The
@@ -315,6 +331,16 @@ export function seatbeltProfile(input: ProfileInput): string {
     `(allow file-read-metadata (literal ${siblings}))`,
     `(allow file-read* (subpath ${sandbox}))`
   ].join('\n')
+}
+
+/** The loopback ports a seat was lent, as allows; anything that is not a port is dropped. */
+export function loopbackAllowClauses(ports: readonly number[], guarded: readonly number[] = []): string[] {
+  // The gateway's default is guarded even when none was discovered (sandbox-deny.ts).
+  const never = new Set([...guarded, DEFAULT_GATEWAY_PORT])
+  return [...new Set(ports)]
+    .filter((p) => Number.isInteger(p) && p > 0 && p < 65536 && !never.has(p))
+    .sort((a, b) => a - b)
+    .map((port) => `(allow network-outbound (remote ip "localhost:${port}"))`)
 }
 
 /** Seatbelt string literals — a quote in a path would end the s-expression. */
