@@ -56,6 +56,7 @@ import { machineCopy } from "../shared/machine-words";
 import { SEAT_GONE, type WorkspaceCheck, type WorkspaceRemovePlan } from "../shared/workspace-door";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
 import { cardCheckpoint, handleWatchClaim, handleWatchHello, handleWatchRoutes, watchRouteAllowed, watchTokenAccepted, watchWriteRefusal } from "./watch-routes";
+import { handlePhoneInviteRoute } from "./phone-invite";
 import { bridgeablePath, SOCKET_BRIDGE_MESSAGE_MAX, SOCKET_BRIDGE_PATH, SOCKET_BRIDGE_POST_MESSAGES, type SocketBridge } from "./socket-bridge";
 import { dynamicCompressionStats } from "./http-compress";
 import type { SetupLines } from "./setup-line";
@@ -919,6 +920,19 @@ export async function handleMobileApi(
   }
   if (method === "GET" && p === "/api/activity") {
     respondJson(response, 200, turns.list());
+    return true;
+  }
+  // ⋯ → Phone app from the web companion: the owner, a sealed line, the step-up (phone-invite.ts).
+  if (
+    await handlePhoneInviteRoute({
+      request,
+      response,
+      method,
+      path: p,
+      owner: ownerPairing,
+      sealed: () => sealedTransport(request),
+    })
+  ) {
     return true;
   }
   if (

@@ -39,7 +39,7 @@ import { setupForNewAccount } from './v2-second-step'
 import { tokenExpiry } from './v2-session-age'
 import { SESSION_TTL_MS } from './v2-tokens'
 import { deviceFor } from './v2-factor-http'
-import { grantOptions, issueGrant, issueMachineGrant, issueWatchGrant, setFirstPassword } from './v2-device-grant'
+import { grantOptions, issueGrant, issueMachineGrant, issuePhoneGrant, issueWatchGrant, setFirstPassword } from './v2-device-grant'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -674,6 +674,10 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
   }
   if (rest.length === 2 && rest[0] === 'device-grant' && rest[1] === 'machine' && method === 'POST') {
     await issueMachineGrant(ctx, signed)
+    return
+  }
+  if (rest.length === 2 && rest[0] === 'device-grant' && rest[1] === 'phone' && method === 'POST') {
+    issuePhoneGrant(ctx, signed)
     return
   }
   if (rest.length === 2 && rest[0] === 'device-grant' && rest[1] === 'watch' && method === 'POST') {
