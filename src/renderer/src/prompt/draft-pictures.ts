@@ -5,8 +5,9 @@ import { imageMimeOf, imagePathTokens } from '../../../shared/prompt-images'
  * THE BOX SHOWS THE PICTURE, NOT ITS PATH (owner, 2026-11-02). A screenshot
  * in the prompt box is drawn as a thumbnail (pictures/PictureStrip.tsx); the
  * words in the box are only the words. The DRAFT still carries the path —
- * it is the agent's own input line (live-line.ts), and the path is how the
- * agent reads the file — at the end, after the words:
+ * the path is how the agent reads the file — at the end, after the words.
+ * The agent's own input line (live-line.ts) gets the words as they are
+ * written and the paths only with the send:
  *
  *   draft = words + ' ' + path path …     (no paths: just the words)
  *
