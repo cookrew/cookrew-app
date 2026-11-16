@@ -11,6 +11,10 @@
  * Enter. The key never passes through a Cookrew field, bridge or file, the same
  * rule as every other key line (route-lines.ts).
  *
+ * A loopback address is this computer's own Magpie on its port, and a tunnel on
+ * any other (an `ssh -L` to the other computer, or Cookrew's own tunnel): the
+ * key never leaves this computer in plain text there.
+ *
  * Plain http is allowed only where the key does not cross an open network: a
  * private address, a tailnet (WireGuard underneath) or a .local/.lan name. A bare
  * one-word name is not trusted: a search domain can resolve it to a public host,
@@ -94,14 +98,18 @@ function checkAddress(input: unknown): { ok: true; url: string } | { ok: false; 
   if (url.pathname !== '/' && url.pathname !== '') return { ok: false, why: 'Give the address alone, with no path after it.' }
   if (url.hostname.startsWith('[')) return { ok: false, why: 'Use the computer’s name or its IPv4 address.' }
   if (!HOST_RE.test(url.hostname)) return { ok: false, why: 'That is not an address.' }
-  if (loopback(url.hostname)) return { ok: false, why: 'That is this computer. Type the address of the other one.' }
-  const lan = privateHost(url.hostname)
-  const scheme = typedScheme ? url.protocol : lan ? 'http:' : 'https:'
-  if (scheme === 'http:' && !lan) return { ok: false, why: 'Use https here, or the private address or full .ts.net name of a computer on your own network: plain http would carry your key unprotected.' }
   // `new URL` drops a scheme's default port, so a typed :80 is read off what was typed.
   const typedPort = /:(\d{1,5})\/?$/.exec(raw)?.[1] ?? ''
+  const tunnel = loopback(url.hostname)
+  if (tunnel && (typedPort === '' || typedPort === String(MAGPIE_PORT))) {
+    return { ok: false, why: 'That is this computer’s own Magpie. Type the other computer’s address, or the local port of a tunnel to it.' }
+  }
+  const lan = tunnel || privateHost(url.hostname)
+  const scheme = typedScheme ? url.protocol : lan ? 'http:' : 'https:'
+  if (scheme === 'http:' && !lan) return { ok: false, why: 'Use https here, or the private address or full .ts.net name of a computer on your own network: plain http would carry your key unprotected.' }
   const port = typedScheme ? url.port : typedPort || String(MAGPIE_PORT)
-  return { ok: true, url: `${scheme}//${url.hostname.toLowerCase()}${port ? `:${port}` : ''}` }
+  const host = tunnel ? '127.0.0.1' : url.hostname.toLowerCase()
+  return { ok: true, url: `${scheme}//${host}${port ? `:${port}` : ''}` }
 }
 
 /** The form, checked: it arrives over a bridge, so every field is doubted. Nothing here touches the network. */

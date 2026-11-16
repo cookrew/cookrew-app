@@ -36,8 +36,14 @@ describe('checkRemoteMagpie', () => {
     expect(ok('10.0.0.5:80').url).toBe('http://10.0.0.5:80')
   })
 
-  it('reads every spelling of this computer as this computer', () => {
-    for (const address of ['2130706433', '0177.0.0.1', 'http://127.1:3425', '0.0.0.0']) {
+  it('takes a tunnel on this computer’s loopback, on any port but Magpie’s own', () => {
+    expect(ok('127.0.0.1:13425').url).toBe('http://127.0.0.1:13425')
+    expect(ok('localhost:13425').url).toBe('http://127.0.0.1:13425')
+    expect(setupLineAllowed(ok('127.0.0.1:13425', 'solis').line)).toBe(true)
+  })
+
+  it('reads every spelling of this computer’s own Magpie as this computer', () => {
+    for (const address of ['2130706433', '0177.0.0.1', 'http://127.1:3425', '0.0.0.0', '127.0.0.1', 'localhost:3425']) {
       expect(checkRemoteMagpie({ address, name: 'x' })).toMatchObject({ ok: false, field: 'address' })
     }
   })
@@ -47,7 +53,7 @@ describe('checkRemoteMagpie', () => {
   })
 
   it('refuses this computer, credentials, paths, queries and IPv6 literals', () => {
-    for (const address of ['127.0.0.1', 'localhost:3425', 'http://user:pw@10.0.0.2', 'http://10.0.0.2/v1', 'http://10.0.0.2?x=1', 'http://[fd00::1]:3425', '', 'ftp://10.0.0.2', '10.0.0.2;id', '10.0.0.2 $(id)']) {
+    for (const address of ['127.0.0.1:3425', 'localhost:3425', 'http://user:pw@10.0.0.2', 'http://10.0.0.2/v1', 'http://10.0.0.2?x=1', 'http://[fd00::1]:3425', '', 'ftp://10.0.0.2', '10.0.0.2;id', '10.0.0.2 $(id)']) {
       expect(checkRemoteMagpie({ address, name: 'x' })).toMatchObject({ ok: false, field: 'address' })
     }
   })
@@ -95,6 +101,7 @@ describe('the remote-magpie line in the Setup allowlist', () => {
   it('refuses a line of the right shape whose address the form would refuse', () => {
     expect(setupLineAllowed('magpie provider add remote-magpie url=http://attacker.example id=office key=')).toBe(false)
     expect(setupLineAllowed('magpie provider add remote-magpie url=http://127.0.0.1:3425 id=office key=')).toBe(false)
+    expect(setupLineAllowed('magpie provider add remote-magpie url=http://localhost:13425 id=office key=')).toBe(false)
     expect(setupLineAllowed('magpie provider add remote-magpie url=https://attacker.example id=office key=')).toBe(true)
   })
 
