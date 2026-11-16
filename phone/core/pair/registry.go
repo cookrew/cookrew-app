@@ -93,6 +93,9 @@ var (
 	ErrNewDevice = errors.New("pair: the account will not take this phone's key again; join as a new phone")
 	// ErrLocked: the account is locked down after "Not me" until its password changes.
 	ErrLocked = errors.New("pair: the account is locked until its password is changed")
+	// ErrAwaitingKeep: the phone joined and the Mac that showed the code has not kept it yet
+	// (owner 2026-11-17). Ask again in a moment; no answer within a few minutes removes the phone.
+	ErrAwaitingKeep = errors.New("pair: waiting for the Mac that showed the code: tap Keep there")
 )
 
 // Registry is cookrew.dev's API, as the phone uses it.
@@ -155,7 +158,12 @@ func (r Registry) Join(ctx context.Context, code string, device Device) (Session
 	if err != nil {
 		return Session{}, err
 	}
-	body := map[string]any{"code": code, "device": wireDevice{ID: device.ID, Kind: DeviceKind, Name: device.Name, JWK: jwk}}
+	// The key's proof over the code: a phone's code joins only a phone that holds the key it names.
+	proof, err := device.Key.Sign(JoinProofMessage(code, device.ID))
+	if err != nil {
+		return Session{}, err
+	}
+	body := map[string]any{"code": code, "device": wireDevice{ID: device.ID, Kind: DeviceKind, Name: device.Name, JWK: jwk}, "proof": proof}
 	var out Session
 	status, err := r.call(ctx, http.MethodPost, "/v2/join", "", body, &out)
 	if err != nil {
@@ -185,6 +193,8 @@ func (r Registry) PhonePass(ctx context.Context, session string) (Pass, error) {
 		switch {
 		case status == http.StatusUnauthorized:
 			return Pass{}, ErrSignedOut
+		case errors.As(err, &refused) && refused.Reason == "not_confirmed":
+			return Pass{}, ErrAwaitingKeep
 		case errors.As(err, &refused) && refused.Reason == "not_phone":
 			return Pass{}, ErrNotTrusted
 		case errors.As(err, &refused) && refused.Reason == "locked":
@@ -204,11 +214,20 @@ func (r Registry) Desktops(ctx context.Context, session string) ([]Desktop, erro
 	status, err := r.call(ctx, http.MethodGet, "/v2/me/desktops", session, nil, &out)
 	if err != nil {
 		if status == http.StatusUnauthorized {
-			return nil, ErrSignedOut
+			return nil, r.whyRefused(ctx, session)
 		}
 		return nil, err
 	}
 	return out, nil
+}
+
+// whyRefused tells a phone not kept yet (whose session opens nothing but its
+// pass question) from one signed out: the pass route answers the first.
+func (r Registry) whyRefused(ctx context.Context, session string) error {
+	if _, err := r.PhonePass(ctx, session); errors.Is(err, ErrAwaitingKeep) {
+		return ErrAwaitingKeep
+	}
+	return ErrSignedOut
 }
 
 // Renew trades the session for a new one, on the device key, before it ends (cookrew-renew/1).

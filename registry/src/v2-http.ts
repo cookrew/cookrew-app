@@ -372,7 +372,7 @@ export function signedIn(
   request: IncomingMessage,
   v2: V2Identity,
   mode: 'any' | 'bearer' = 'any',
-  allow: { console?: boolean } = {}
+  allow: { console?: boolean; pending?: boolean } = {}
 ): Signed | null {
   const token = sessionTokenOf(request, mode)
   if (token === null) return null
@@ -380,7 +380,12 @@ export function signedIn(
   if (claims === null) return null
   if (claims.via === 'console' && allow.console !== true) return null
   const found = v2.accounts.authenticate(claims)
-  return found === null ? null : { claims, account: found.account, device: found.device }
+  if (found === null) return null
+  // A PHONE NOT KEPT YET OPENS NOTHING (owner 2026-11-17): not the account,
+  // not the relay, not a Mac. Its session is good for one question, asked
+  // where a route says so (the phone pass, which answers "not kept yet").
+  if (found.device.phonePending !== undefined && allow.pending !== true) return null
+  return { claims, account: found.account, device: found.device }
 }
 
 /** For server.ts's `accountOf`: the username a v2 session names, or null. */

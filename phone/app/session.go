@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/cookrew/cookrew-app/phone/core/account"
 	"github.com/cookrew/cookrew-app/phone/core/pair"
 	"github.com/cookrew/cookrew-app/phone/core/plane"
 	"github.com/egoist/asuka/signal"
@@ -17,6 +18,15 @@ const Registry = "https://api.cookrew.dev"
 
 // netTimeout bounds one step the user is waiting on.
 const netTimeout = 45 * time.Second
+
+// keepPoll is how often a phone not kept yet asks again, and keepWait how
+// long it goes on: a little past the registry's five minutes, after which the
+// phone is removed anyway and the next ask says so. A deadline, not a count,
+// so pulling to refresh meanwhile never shortens the wait.
+const (
+	keepPoll = 3 * time.Second
+	keepWait = 6 * time.Minute
+)
 
 // Phase is where the app stands.
 type Phase int
@@ -51,6 +61,14 @@ type Session struct {
 	vault    Vault
 	// keeper renews the sign-in; nil until the phone has joined.
 	keeper *pair.Keeper
+	// waitUntil ends the asking while the Mac has not kept the phone, and asking
+	// says one ask is already scheduled (a pull to refresh must not start a second loop). Main thread.
+	waitUntil time.Time
+	asking    bool
+	// fresh is the key a phone with none joins with, made before the scan so its match number shows.
+	fresh *pair.Device
+	// Match is this phone's key in six digits: the Mac that showed the code shows the same when it asks to keep it.
+	Match *signal.Signal[string]
 
 	Phase    *signal.Signal[Phase]
 	State    *signal.Signal[pair.State]
@@ -79,6 +97,7 @@ func NewSession(vault Vault) (*Session, error) {
 		Busy:     signal.New(false),
 		Problem:  signal.New(""),
 		Ending:   signal.New(""),
+		Match:    signal.New(""),
 	}
 	s.Unlock()
 	return s, nil
@@ -99,7 +118,11 @@ func (s *Session) Unlock() {
 			if !errors.Is(err, errNoState) {
 				s.Problem.Set(err.Error())
 			}
-			s.Phase.Set(afterLoad(err))
+			if phase := afterLoad(err); phase == Joining {
+				s.toJoining()
+			} else {
+				s.Phase.Set(phase)
+			}
 		})
 	}()
 }
@@ -135,13 +158,48 @@ func (s *Session) StartOver() {
 			s.State.Set(pair.State{})
 			s.Machines.Set(nil)
 			s.Problem.Set("")
-			s.Phase.Set(Joining)
+			s.toJoining()
 		})
 	}()
 }
 
+// toJoining shows the scanner, with the number of the key the phone joins with. Main thread.
+func (s *Session) toJoining() {
+	s.showMatch()
+	s.Phase.Set(Joining)
+}
+
+// showMatch shows the number of the key this phone will join with: the held
+// one, or one made now for a phone that has none. Main thread.
+func (s *Session) showMatch() {
+	device, err := s.State.Peek().Device()
+	if s.State.Peek().Seed == "" {
+		if s.fresh == nil {
+			key, keyErr := account.NewKey()
+			if keyErr != nil {
+				s.Problem.Set(keyErr.Error())
+				return
+			}
+			made, madeErr := pair.NewDevice(key, deviceName())
+			if madeErr != nil {
+				s.Problem.Set(madeErr.Error())
+				return
+			}
+			s.fresh = &made
+		}
+		device, err = *s.fresh, nil
+	}
+	if err != nil {
+		return
+	}
+	if match, matchErr := device.Match(); matchErr == nil {
+		s.Match.Set(match)
+	}
+}
+
 // joined makes the phone's sign-in the one kept and renewed. Main thread.
 func (s *Session) joined(state pair.State) {
+	s.fresh = nil
 	device, err := state.Device()
 	if err != nil {
 		// A kept state that names no key: never the scanner on its own, only a confirmed start over.
@@ -170,10 +228,11 @@ func (s *Session) Join(scanned string) {
 	s.Busy.Set(true)
 	s.Problem.Set("")
 	held := s.State.Peek()
+	fresh := s.fresh
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), netTimeout)
 		defer cancel()
-		state, err := s.join(ctx, held, scanned)
+		state, err := s.join(ctx, held, fresh, scanned)
 		// The code is spent the moment the registry answers: keep the state before anything else.
 		var saveErr error
 		if err == nil {
@@ -194,10 +253,13 @@ func (s *Session) Join(scanned string) {
 	}()
 }
 
-// join is Rejoin for a phone that held a key, JoinAccount for a new one. Off the main thread.
-func (s *Session) join(ctx context.Context, held pair.State, scanned string) (pair.State, error) {
+// join is Rejoin for a phone that held a key, else a join with the key made for it (whose number it shows). Off the main thread.
+func (s *Session) join(ctx context.Context, held pair.State, fresh *pair.Device, scanned string) (pair.State, error) {
 	if held.Seed == "" {
-		return pair.JoinAccount(ctx, s.registry, scanned, deviceName())
+		if fresh == nil {
+			return pair.JoinAccount(ctx, s.registry, scanned, deviceName())
+		}
+		return pair.JoinWithKey(ctx, s.registry, scanned, *fresh)
 	}
 	state, err := pair.Rejoin(ctx, s.registry, held, scanned)
 	if errors.Is(err, pair.ErrNewDevice) {
@@ -228,11 +290,28 @@ func (s *Session) Refresh() {
 			s.Busy.Set(false)
 			s.State.Set(next)
 			s.Ending.Set(ending)
+			if !errors.Is(err, pair.ErrAwaitingKeep) {
+				s.waitUntil = time.Time{}
+			} else if s.waitUntil.IsZero() {
+				s.waitUntil = time.Now().Add(keepWait)
+			}
 			switch {
-			case errors.Is(err, pair.ErrSignedOut), errors.Is(err, pair.ErrNotTrusted):
+			case errors.Is(err, pair.ErrAwaitingKeep) && time.Now().Before(s.waitUntil):
+				// Joined; the Mac that showed the code has not said Keep yet: ask again in a moment.
+				s.Problem.Set("Waiting for your Mac: tap Keep on the one that showed the code, if it shows " + spaced(s.Match.Peek()) + ".")
+				if !s.asking {
+					s.asking = true
+					time.AfterFunc(keepPoll, func() {
+						ui.Post(func() {
+							s.asking = false
+							s.Refresh()
+						})
+					})
+				}
+			case errors.Is(err, pair.ErrSignedOut), errors.Is(err, pair.ErrNotTrusted), errors.Is(err, pair.ErrAwaitingKeep):
 				// Over: the key stays, for the next code to bring this same phone back.
 				s.Problem.Set("This phone needs a new code: on a Mac, open ⋯ → Phone app.")
-				s.Phase.Set(Joining)
+				s.toJoining()
 			case err != nil:
 				s.Problem.Set(err.Error())
 			default:
@@ -296,6 +375,14 @@ func (s *Session) Road(machineID string) (plane.Plane, error) {
 		return nil, errors.New("this phone is not on that machine yet")
 	}
 	return plane.NewRelay(s.registry.Origin(), held.ID, plane.StaticCredentials(state.Session.Token, held.Token), nil)
+}
+
+// spaced is a match number as a person reads it: "532 815".
+func spaced(match string) string {
+	if len(match) != 6 {
+		return match
+	}
+	return match[:3] + " " + match[3:]
 }
 
 // never is the equality of a value that is only ever set when it changed.

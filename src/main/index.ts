@@ -9699,6 +9699,16 @@ function registerIpc(handlers: RestoreHandlers): void {
     'phone:invite',
     ownerOnly((current: unknown) => invitePhone(typeof current === 'string' ? current : '', true))
   )
+  // A phone joined: keep it? (owner 2026-11-17). Asked of this Mac only, answered here only.
+  ipcMain.handle('phone:pending', ownerOnly(() => accounts.pendingPhones()))
+  ipcMain.handle(
+    'phone:answer',
+    ownerOnly((deviceId: unknown, answer: unknown) =>
+      typeof deviceId === 'string' && (answer === 'keep' || answer === 'remove')
+        ? accounts.answerPhone(deviceId, answer)
+        : { ok: false, reason: 'unknown' }
+    )
+  )
   ipcMain.handle(
     'watch:forget',
     ownerOnly(() => watchPairing.unpair())

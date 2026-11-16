@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 vi.mock('../src/renderer/src/api', () => ({ isRemoteMode: () => false, cookrew: () => ({}) }))
 
-const { PhoneAskView, PhoneCodeView } = await import('../src/renderer/src/PhoneAppSheet')
+const { PhoneAskView, PhoneCodeView, PhoneKeepView } = await import('../src/renderer/src/PhoneAppSheet')
 
 const URL_ = 'https://cookrew.dev/join#K7QM-2XPD'
 
@@ -18,6 +18,8 @@ describe('the code, as the phone scans it', () => {
     expect(html).toContain('9:41 left')
     // One phone, once: the code is spent at the join.
     expect(html).toContain('works once')
+    // The phone waits for this sheet's Keep: closing it is a no.
+    expect(html).toContain('Keep this open')
   })
 
   it('says it ran out and offers another, with no QR left on screen', () => {
@@ -69,5 +71,39 @@ describe('asking for one', () => {
 
   it('shows the refusal', () => {
     expect(ask({ error: 'That is not the account password.' })).toContain('role="alert"')
+  })
+})
+
+describe('a phone joined: keep it? (owner 2026-11-17)', () => {
+  const keep = (over: Partial<Parameters<typeof PhoneKeepView>[0]> = {}) =>
+    renderToStaticMarkup(
+      <PhoneKeepView name="Drej’s iPhone" match="532815" left="4:12" busy={false} error={null} onKeep={() => undefined} onRemove={() => undefined} {...over} />
+    )
+
+  it('names the phone and asks, with both answers', () => {
+    const html = keep()
+    expect(html).toContain('A phone joined: Drej’s iPhone. Keep it?')
+    expect(html).toContain('KEEP')
+    expect(html).toContain('REMOVE')
+    // What no answer means, said before it happens.
+    expect(html).toContain('4:12')
+    expect(html).toContain('removed everywhere')
+  })
+
+  it('asks the owner to check the phone in their hand shows the same number: the name is the joiner’s to choose', () => {
+    const html = keep()
+    expect(html).toContain('532 815')
+    expect(html).toContain('shows the same number')
+  })
+
+  it('once the time ran out, says so and takes no answer', () => {
+    const html = keep({ left: null })
+    expect(html).toContain('removed everywhere')
+    expect(html.match(/<button[^>]*disabled/g)).toHaveLength(2)
+  })
+
+  it('holds the buttons while an answer is on its way, and shows a refusal', () => {
+    expect(keep({ busy: true })).toMatch(/<button[^>]*disabled/)
+    expect(keep({ error: 'That phone is no longer waiting.' })).toContain('role="alert"')
   })
 })

@@ -290,6 +290,10 @@ function issuePairedPass(
  * untrustOtherMachines). Its own scope: a machine older than it reads no pass.
  */
 export function issuePhoneGrant(ctx: V2Context, signed: Signed): void {
+  // Joined, not kept yet: the Mac that showed the code has not said Keep (owner 2026-11-17).
+  if (signed.device.kind === 'phone' && signed.device.phonePending !== undefined) {
+    return said(ctx, 403, 'not_confirmed', 'Waiting for the Mac that showed the code: tap Keep there. A phone nobody keeps within a few minutes is removed.')
+  }
   const since = signed.device.phonePassAt
   if (signed.device.kind !== 'phone' || since === undefined) {
     return said(ctx, 403, 'not_phone', 'Only a phone joined with a code for a phone enters every machine on its pairing alone. Scan a new code from ⋯ → Phone app on a Mac.')

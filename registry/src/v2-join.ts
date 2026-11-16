@@ -5,6 +5,8 @@ import { asking, cookie, refuse, signedIn, v2Json, type Signed, type V2Context }
 import { factorError } from './v2-factor-copy'
 import { stepUpHeld } from './v2-step-up'
 import { isJoinPurpose } from './v2-join-codes'
+import { phoneJoinMessage } from './v2-phone-match'
+import { verifyDeviceSignature } from './v2-reach'
 
 /** The same ceiling the other /v2/me writes read a body under. */
 const SMALL_BODY = 16 * 1024
@@ -52,7 +54,9 @@ async function mintJoinCode(ctx: V2Context, signed: Signed): Promise<void> {
   }
   // A watch's code (⋯ → Apple Watch) is the only way a watch is made, and a phone's
   // (⋯ → Phone app) the only way a trusted phone is: each enters every machine on its pairing alone.
-  const minted = ctx.v2.joinCodes.mint(username, isJoinPurpose(body.value.purpose) ? body.value.purpose : undefined)
+  const purpose = isJoinPurpose(body.value.purpose) ? body.value.purpose : undefined
+  // A phone's code remembers the Mac that showed it: that Mac is the one asked to keep the phone.
+  const minted = ctx.v2.joinCodes.mint(username, purpose, purpose === 'phone' ? signed.device.id : undefined)
   /**
    * THE CODE, THE LINK AND THE PICTURE — one answer, because they are one
    * secret in three shapes and a screen that shows all three fits every way a
@@ -119,7 +123,21 @@ async function redeemJoinCode(ctx: V2Context): Promise<void> {
   }
   // A watch's code joins a watch and nothing else, a phone's code a trusted phone and nothing
   // else; any other code joins anything but a watch, and trusts no phone.
-  const attached = v2.accounts.attachDevice(username, body.value.device, { watch: spent?.purpose === 'watch', phone: spent?.purpose === 'phone' })
+  // A phone's code always names the Mac that showed it; one that does not is a bug, and makes no phone nobody can keep.
+  if (spent?.purpose === 'phone' && spent.by === undefined) {
+    refuse(response, 500, 'server_error')
+    return
+  }
+  // A phone's code joins only a phone that proves it holds the key it names: a public key read off
+  // a Mac must not put another's phone back into question (security review 2026-11-17). The code is spent either way.
+  if (spent?.purpose === 'phone' && !joinProved(body.value.device, spent.code, body.value.proof)) {
+    refuse(response, 401, 'bad_credentials')
+    return
+  }
+  const attached = v2.accounts.attachDevice(username, body.value.device, {
+    watch: spent?.purpose === 'watch',
+    ...(spent?.purpose === 'phone' && spent.by !== undefined ? { phoneKeptBy: spent.by } : {})
+  })
   if (!attached.ok) {
     refuse(response, attached.reason === 'bad_device' ? 400 : 401, attached.reason)
     return
@@ -144,6 +162,15 @@ async function redeemJoinCode(ctx: V2Context): Promise<void> {
     },
     { 'set-cookie': cookie(minted.token) }
   )
+}
+
+/** The device's key signed `cookrew-join/1 <code> <deviceId>` (v2-phone-match.ts · phoneJoinMessage). */
+function joinProved(device: unknown, code: string, proof: unknown): boolean {
+  if (typeof device !== 'object' || device === null) return false
+  const { id, jwk } = device as { id?: unknown; jwk?: unknown }
+  if (typeof id !== 'string' || typeof jwk !== 'object' || jwk === null) return false
+  const fields = Object.entries(jwk as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === 'string')
+  return verifyDeviceSignature(Object.fromEntries(fields), phoneJoinMessage(code, id), proof)
 }
 
 /**

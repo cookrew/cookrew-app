@@ -707,6 +707,8 @@ const api = {
   watchState: () => ipcRenderer.invoke('watch:state'),
   watchInvite: (current: string) => ipcRenderer.invoke('watch:invite', current),
   phoneInvite: (current: string) => ipcRenderer.invoke('phone:invite', current),
+  phonePending: () => ipcRenderer.invoke('phone:pending'),
+  phoneAnswer: (deviceId: string, answer: 'keep' | 'remove') => ipcRenderer.invoke('phone:answer', deviceId, answer),
   watchForget: () => ipcRenderer.invoke('watch:forget'),
   openBrowserStream,
   onCmdW: (cb: () => void) => {

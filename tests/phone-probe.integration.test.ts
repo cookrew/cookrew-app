@@ -106,6 +106,16 @@ run('the phone, away from home, on one QR', () => {
     return (await reply.json()) as { ok: boolean; code?: string; url?: string; reason?: string }
   }
 
+  /** The Mac's answer to "A phone joined: keep it?" (owner 2026-11-17), as its sheet sends it. */
+  const keepPhone = async (phoneId: string): Promise<void> => {
+    const reply = await fetch(`${site.origin}/v2/me/phones/${phoneId}/keep`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: '{}'
+    })
+    expect(reply.status).toBe(200)
+  }
+
   beforeAll(async () => {
     dir = mkdtempSync(path.join(tmpdir(), 'phone-probe-'))
     refusedFile = path.join(dir, 'mac', 'phone-refused.json')
@@ -223,6 +233,10 @@ run('the phone, away from home, on one QR', () => {
     const joined = await probe(site.origin, state, 'join', minted.url as string)
     expect(joined[0]).toMatch(/^joined owner [0-9a-f-]{36}$/)
     const phoneId = joined[0].split(' ')[2]
+    expect(v2.accounts.get(username)?.devices.find((d) => d.id === phoneId)).toMatchObject({ kind: 'phone', phonePending: expect.any(Object) })
+    // Joined, not kept: no pass, no door, and the phone is told why.
+    await expect(probe(site.origin, state, 'enter')).rejects.toThrow(/tap Keep there/)
+    await keepPhone(phoneId)
     expect(v2.accounts.get(username)?.devices.find((d) => d.id === phoneId)).toMatchObject({ kind: 'phone', phonePassAt: expect.any(Number) })
 
     expect(await probe(site.origin, state, 'enter')).toEqual([`entered ${macId} This Mac until 0`])
@@ -241,6 +255,7 @@ run('the phone, away from home, on one QR', () => {
     const state = path.join(dir, 'forgotten.json')
     const joined = await probe(site.origin, state, 'join', (await mintPhoneCode(PASSWORD)).url as string)
     const phoneId = joined[0].split(' ')[2]
+    await keepPhone(phoneId)
     expect(await probe(site.origin, state, 'enter')).toEqual([`entered ${macId} This Mac until 0`])
     ;(globalThis as unknown as { forgetPhone: (id: string) => void }).forgetPhone(phoneId)
     // Its token opens nothing now: the open status route says so rather than refusing.
@@ -251,6 +266,7 @@ run('the phone, away from home, on one QR', () => {
     expect((await probe(site.origin, state, 'enter'))[0]).toMatch(new RegExp(`^refused ${macId} This Mac: .*forget this phone`))
     // The same key on a new code: the trusted moment moves forward, and the Mac takes it back.
     expect(await probe(site.origin, state, 'rejoin', (await mintPhoneCode(PASSWORD)).url as string)).toEqual([`rejoined owner ${phoneId}`])
+    await keepPhone(phoneId)
     expect(await probe(site.origin, state, 'enter')).toEqual([`entered ${macId} This Mac until 0`])
     const back = await probe(site.origin, state, 'call', macId, 'api/auth/status')
     expect(JSON.parse(back[0].slice(4))).toMatchObject({ scope: 'pairing' })
@@ -260,6 +276,7 @@ run('the phone, away from home, on one QR', () => {
     const state = path.join(dir, 'revoked.json')
     const joined = await probe(site.origin, state, 'join', (await mintPhoneCode(PASSWORD)).url as string)
     const phoneId = joined[0].split(' ')[2]
+    await keepPhone(phoneId)
     await probe(site.origin, state, 'enter')
     expect(v2.accounts.revokeDevice(username, phoneId)).toEqual({ ok: true })
     expect(await (globalThis as unknown as { pruneNow: () => Promise<boolean> }).pruneNow()).toBe(true)

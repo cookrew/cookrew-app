@@ -54,6 +54,8 @@ export interface JoinCode {
   expiresAt: number
   /** Minted for a watch or a trusted phone: the only code either joins with, and it joins nothing else. */
   purpose?: JoinPurpose
+  /** The device that minted it: for a phone's code, the Mac that is asked to keep the phone (v2-accounts.ts · keepPhone). */
+  by?: string
 }
 
 /**
@@ -75,7 +77,7 @@ export class JoinCodes {
   }
 
   /** Mint one for this account, retiring whatever it had. */
-  mint(username: string, purpose?: JoinPurpose): JoinCode {
+  mint(username: string, purpose?: JoinPurpose, by?: string): JoinCode {
     const at = this.now()
     this.sweep(at)
     for (const [key, held] of this.codes) {
@@ -88,7 +90,7 @@ export class JoinCodes {
     const block = (): string =>
       Array.from({ length: 4 }, () => RECOVERY_ALPHABET[randomInt(RECOVERY_ALPHABET.length)]).join('')
     const code = `${block()}-${block()}`
-    const minted: JoinCode = { code, username, at, expiresAt: at + this.ttlMs, ...(purpose ? { purpose } : {}) }
+    const minted: JoinCode = { code, username, at, expiresAt: at + this.ttlMs, ...(purpose ? { purpose } : {}), ...(by ? { by } : {}) }
     this.codes.set(normaliseRecoveryCode(code), minted)
     return minted
   }
