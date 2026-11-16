@@ -159,6 +159,18 @@ describe('owner link', () => {
     expect(written).toContain('{"t":"result","id":1,"ok":true,"value":"answer"}')
   })
 
+  it('writes an essential event however far behind the owner is', () => {
+    const input = new PassThrough()
+    const output = new PassThrough({ highWaterMark: 1 })
+    const link = startOwnerLink(input, output, { invoke: () => Promise.resolve(null), send: vi.fn() }, vi.fn())
+    const chunk = 'x'.repeat(8 * 1024 * 1024)
+    while (link.emit('pty:data:t1', [chunk])) {
+      // fill the backlog past EVENT_BACKLOG
+    }
+    expect(link.emit('$port:message', [1, 'frame'])).toBe(false)
+    expect(link.emit('$port:open', [1, 'browser-stream:port', {}], true)).toBe(true)
+  })
+
   it('reads lines byte by byte, multi-byte characters split across chunks included', async () => {
     const send = vi.fn()
     const { input } = harness({ invoke: () => Promise.resolve(null), send })

@@ -47,9 +47,7 @@ if (Number.isInteger(ownerFd) && ownerFd > 2) {
   const pipe = new Socket({ fd: ownerFd, readable: true, writable: true })
   const link = startOwnerLink(pipe, pipe, shim.ownerDispatch)
   // Events the window sent before this line are held by the shim and handed over now.
-  shim.connectOwner((channel, args) => {
-    link.emit(channel, args)
-  })
+  shim.connectOwner((channel, args, essential) => link.emit(channel, args, essential === true))
   // The owner's app launched this daemon; when it lets go, the daemon goes,
   // as the app's main process did when its window closed for good.
   void link.closed.then(() => {

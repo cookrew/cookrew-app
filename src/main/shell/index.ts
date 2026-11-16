@@ -19,11 +19,13 @@
  * folder and file pickers, quitting, ⌘W/⌘Q (in browser cards too), and a
  * browser card's popups becoming tabs.
  *
- * KNOWN GAPS (D0 step 4): browser-card streaming (a MessagePort cannot cross
- * the pipe; the shell will bridge the daemon's WebSocket), window captures
- * (workspace:snap), desktop notifications, deep links, the tray, the updater.
+ * A browser card's MessagePort is relayed: the daemon's cast keeps its end,
+ * this shell opens a real channel and gives the window the other (PortRelay).
+ *
+ * KNOWN GAPS (D0 step 4, continued): window captures (workspace:snap),
+ * desktop notifications, deep links, the tray, the updater.
  */
-import { app, BrowserWindow, dialog, ipcMain, shell, type Input, type WebContents } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, shell, type Input, type MessagePortMain, type WebContents } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
@@ -33,7 +35,7 @@ import { createOwnerClient, type OwnerClient } from '../daemon/owner-client'
 import { isOwnerPage } from '../owner-grant'
 import { registryArgument } from '../../shared/machine-words'
 import { registryOrigin } from '../registry-origin'
-import { FORWARDED_CONTENTS_EVENTS, FORWARDED_WINDOW_EVENTS, HeldEvents, isOwnerCall, registerBridge, type CallerEvent } from './bridge'
+import { FORWARDED_CONTENTS_EVENTS, FORWARDED_WINDOW_EVENTS, HeldEvents, isOwnerCall, PortRelay, registerBridge, type CallerEvent } from './bridge'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const DAEMON_ENTRY = path.join(dirname, '../daemon/index.js')
@@ -63,10 +65,9 @@ const LOCAL_HANDLERS: Record<string, (...args: unknown[]) => unknown> = {
   }
 }
 
-/** Sends handled here; `browser-stream:open` is a known gap (logged). */
+/** Sends handled here. (browser-stream:open goes to the daemon; its port comes back relayed: PortRelay.) */
 const LOCAL_SENDS: Record<string, (...args: unknown[]) => void> = {
-  'app:quit': () => app.quit(),
-  'browser-stream:open': () => console.error('[cookrew shell] browser-card streaming is not bridged yet (D0 step 4)')
+  'app:quit': () => app.quit()
 }
 
 /** Let the daemon finish its own shutdown drain (within a limit), then run `then`. */
@@ -226,7 +227,21 @@ if (!app.requestSingleInstanceLock()) {
     const client = createOwnerClient(pipe, pipe)
     // Subscribed before anything is asked: the daemon hands over its early events as soon as it connects.
     const events = new HeldEvents()
-    client.onEvent((channel, args) => events.push(channel, args))
+    // A browser card's MessagePort, relayed (daemon/owner-ports.ts): a real channel here, port2 to the window.
+    const ports = new PortRelay({
+      channel: () => new MessageChannelMain(),
+      toWindow: (channel, message, transfer) => {
+        if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return false
+        if (!isOwnerPage(mainWindow.webContents.getURL(), ownerPageUrl())) return false
+        mainWindow.webContents.postMessage(channel, message, transfer as MessagePortMain[])
+        return true
+      },
+      toDaemon: (channel, args) => client.send(channel, args)
+    })
+    client.onEvent((channel, args) => {
+      if (!ports.fromDaemon(channel, args)) events.push(channel, args)
+    })
+    void client.closed.then(() => ports.closeAll())
     void client.closed.then(() => daemonGone('closed its line to the app'))
     let channels: { handle: string[]; on: string[] }
     try {

@@ -115,3 +115,81 @@ export class HeldEvents {
  */
 export const FORWARDED_WINDOW_EVENTS = ['focus', 'blur', 'show', 'hide', 'minimize', 'restore', 'closed'] as const
 export const FORWARDED_CONTENTS_EVENTS = ['did-finish-load', 'dom-ready', 'did-start-navigation', 'render-process-gone', 'destroyed'] as const
+
+/** The real MessagePortMain slice the relay uses (injected for tests). */
+export interface ShellPort {
+  postMessage(data: unknown): void
+  on(event: 'message', listener: (event: { data: unknown }) => void): unknown
+  on(event: 'close', listener: () => void): unknown
+  start(): void
+  close(): void
+}
+
+/**
+ * The shell's half of the port relay (daemon/owner-ports.ts has the other):
+ * for each port the daemon hands the owner window, a real channel here, its
+ * second port given to the window exactly as the old main gave it, and the
+ * two ends relayed across the owner link.
+ */
+export class PortRelay {
+  private readonly ports = new Map<number, ShellPort>()
+
+  constructor(
+    private readonly deps: {
+      readonly channel: () => { port1: ShellPort; port2: unknown }
+      /** webContents.postMessage on the owner window; false when there is none. */
+      readonly toWindow: (channel: string, message: unknown, ports: readonly unknown[]) => boolean
+      readonly toDaemon: (channel: string, args: readonly unknown[]) => void
+    }
+  ) {}
+
+  /** A daemon event; answers false when it is not a port's. */
+  fromDaemon(channel: string, args: readonly unknown[]): boolean {
+    if (channel === '$port:open') {
+      this.open(args[0], args[1], args[2])
+      return true
+    }
+    const id = args[0]
+    if (channel === '$port:message') {
+      if (typeof id === 'number') this.ports.get(id)?.postMessage(args[1])
+      return true
+    }
+    if (channel === '$port:close') {
+      if (typeof id === 'number') {
+        const port = this.ports.get(id)
+        this.ports.delete(id)
+        port?.close()
+      }
+      return true
+    }
+    return false
+  }
+
+  private open(id: unknown, channel: unknown, message: unknown): void {
+    if (typeof id !== 'number' || typeof channel !== 'string' || this.ports.has(id)) return
+    const { port1, port2 } = this.deps.channel()
+    this.ports.set(id, port1)
+    port1.on('message', (event) => this.deps.toDaemon('$port:message', [id, event.data]))
+    port1.on('close', () => {
+      if (this.ports.delete(id)) this.deps.toDaemon('$port:close', [id])
+    })
+    port1.start()
+    if (!this.deps.toWindow(channel, message, [port2])) {
+      this.ports.delete(id)
+      port1.close()
+      this.deps.toDaemon('$port:close', [id])
+    }
+  }
+
+  /** The window or the link went: every relayed port ends. */
+  closeAll(): void {
+    for (const [id, port] of this.ports) {
+      this.ports.delete(id)
+      port.close()
+    }
+  }
+
+  get size(): number {
+    return this.ports.size
+  }
+}
