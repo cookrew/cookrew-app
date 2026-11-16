@@ -156,6 +156,8 @@ export interface RouteState {
   gateway: RouteGateway | null
   /** Why the status is what it is when that needs saying — a rejected plugin file, a refused host. */
   why: string | null
+  /** The owner switched Magpie off (launch settings): installed or not, nothing routes and no Magpie way is offered. */
+  switchedOff?: boolean
   /** null = new cards stay direct even when online: the owner picks once, never inferred. */
   defaultModel: string | null
   providers: number

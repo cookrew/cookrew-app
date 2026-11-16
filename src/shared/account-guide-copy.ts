@@ -65,3 +65,19 @@ export const SHARE_COPY = {
   NONE: 'No device has a key yet.',
   UNAVAILABLE: 'Sharing needs Magpie on this computer.'
 } as const
+
+/** The two Magpie switches: Launch settings and the first-run guide alike (routing/MagpieSwitches.tsx). */
+export const MAGPIE_SWITCH_COPY = {
+  HEAD: 'Magpie',
+  USE: 'Use Magpie',
+  USE_NOTE: 'Route agents’ models through Magpie: one place for every subscription, API key and routing group. Off: every agent runs on its own sign-in, and Cookrew shows no Magpie way in.',
+  REMOTE: 'Use another computer’s Magpie (Magpie remote)',
+  REMOTE_NOTE: 'Connect a Magpie running on another computer you own and use its accounts, or share this one with your devices, each with its own key and daily cap.',
+  REMOTE_NEEDS: 'Turn on Magpie first.',
+  PINNED: (name: string): string => `Set by ${name} when Cookrew started.`,
+  CONFIGURE: 'Open Magpie settings',
+  CONFIGURING: 'Opening…',
+  CONFIGURE_NOTE: 'Magpie’s own settings page opens in a browser card here: accounts, keys, routing groups and Remote magpie.',
+  NOT_INSTALLED: 'Magpie is not installed yet.',
+  LIVE: 'Applies at once: the next agent and this screen follow it.'
+} as const

@@ -650,6 +650,14 @@ const api = {
   },
   launchSettings: () => ipcRenderer.invoke('launch-settings:status'),
   saveLaunchSettings: (choices: unknown) => ipcRenderer.invoke('launch-settings:save', choices),
+  launchLive: () => ipcRenderer.invoke('launch-settings:live'),
+  setLaunchLive: (values: unknown) => ipcRenderer.invoke('launch-settings:set-live', values),
+  onLaunchLive: (cb: (values: unknown) => void) => {
+    const listener = (_e: unknown, values: unknown): void => cb(values)
+    ipcRenderer.on('launch-live', listener)
+    return () => ipcRenderer.removeListener('launch-live', listener)
+  },
+  magpieWebOpen: () => ipcRenderer.invoke('magpie-web:open'),
   updateStatus: () => ipcRenderer.invoke('update:status'),
   setUpdateCheck: (on: boolean) => ipcRenderer.invoke('update:set', on),
   restartToUpdate: () => ipcRenderer.invoke('update:restart'),

@@ -81,7 +81,9 @@ export function launchValues(env: Env): LaunchValues {
     registry: relayOrigin(env),
     interactiveBrowser: readSwitch(env.COOKREW_INTERACTIVE_BROWSER) !== false,
     multiInstance: multiInstanceDefault(env),
-    multiplexer: multiplexerPreference(env)
+    multiplexer: multiplexerPreference(env),
+    magpie: readSwitch(env.COOKREW_MAGPIE) !== false,
+    magpieRemote: readSwitch(env.COOKREW_MAGPIE_REMOTE) === true
   }
 }
 

@@ -5,6 +5,7 @@ import { mcpLibraryLine } from '../../../shared/quota-view'
 import { AccountCard } from './AccountCard'
 import { keyLineFor } from '../../../shared/route-lines'
 import { RemoteMagpieForm } from './RemoteMagpieForm'
+import { useMagpieSwitches } from './MagpieSwitches'
 import { runningLabel, type SetupRunning } from './setup-line-state'
 import { cookrew } from '../api'
 
@@ -148,6 +149,8 @@ export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: {
   const [open, setOpen] = useState(defaultOpen)
   const [keys, setKeys] = useState(false)
   const [remote, setRemote] = useState(false)
+  // Another computer's Magpie is offered only with its switch on (a bridge without switches offers it).
+  const remoteOn = useMagpieSwitches().values?.magpieRemote ?? true
   const [unexpected, setUnexpected] = useState(false)
   const toggle = (): void => {
     setOpen((o) => !o)
@@ -202,12 +205,14 @@ export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: {
               ))}
             </div>
           )}
+          {remoteOn && (
           <button type="button" role="menuitem" data-item="remote-magpie" aria-expanded={remote} onClick={() => setRemote((r) => !r)}>
             <b>{ROUTING_COPY.addRemote}</b>
             <span className="c">{ROUTING_COPY.addRemoteHint}</span>
           </button>
+          )}
           {/* The menu stays open: the form says where to paste the key, and closing would unmount that. */}
-          {remote && (
+          {remoteOn && remote && (
             <RemoteMagpieForm
               onRun={(line, options) => {
                 setUnexpected(false)

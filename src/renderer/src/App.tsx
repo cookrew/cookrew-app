@@ -136,6 +136,7 @@ import { AccountNudge, useEndpointActive } from './first-run/AccountNudge'
 import { AccountWays } from './first-run/AccountWays'
 import { useFirstRunStage } from './first-run/first-run-state'
 import { ShareDevices } from './routing/ShareDevices'
+import { useMagpieSwitches } from './routing/MagpieSwitches'
 import { accountStarting, accountVia } from '../../shared/ai-account'
 import { FirstRunHints } from './first-run/FirstRunHints'
 import { FirstRunScreens } from './first-run/FirstRunScreens'
@@ -362,6 +363,8 @@ function Canvas(): React.JSX.Element {
   }, [setupBusy, rereadRoute])
   // Is there any AI account to run on (shared/ai-account.ts)? Read again as the panel closes or a line ends.
   const firstRunStage = useFirstRunStage()
+  // The Magpie switches (launch settings, live): remote decides whether this Mac offers sharing.
+  const magpieSwitches = useMagpieSwitches()
   // Bumped when the guide's endpoint rows save or remove one.
   const [endpointTick, setEndpointTick] = useState(0)
   const endpointActive = useEndpointActive(`${routingOpen}:${setupBusy}:${firstRunStage}:${endpointTick}`)
@@ -1701,7 +1704,7 @@ function Canvas(): React.JSX.Element {
               />
             ) : null
           }
-          share={routeState.state !== null && routeState.state.status !== 'absent' ? <ShareDevices /> : null}
+          share={routeState.state !== null && routeState.state.status !== 'absent' && magpieSwitches.values?.magpieRemote === true ? <ShareDevices /> : null}
           open={routingOpen}
           onClose={() => setRoutingOpen(false)}
           state={routeState.state}

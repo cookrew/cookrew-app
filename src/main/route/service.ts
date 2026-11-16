@@ -1,3 +1,4 @@
+import { MAGPIE_WEB_PORTS } from './magpie-web'
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -57,6 +58,9 @@ import { readLibraryServers } from './library'
  * reattach ignores the boot command, so nothing it was handed applies).
  */
 
+/** Why the panel says no Magpie while it is installed and running: the owner turned it off. */
+export const MAGPIE_SWITCHED_OFF = 'switched off in Launch settings · cards run direct'
+
 export interface RouteServiceDeps {
   monitor: GatewayMonitor
   fetch: CatalogFetch
@@ -97,6 +101,8 @@ export interface RouteServiceDeps {
   /** The harness scan (installed, signed in, in dock), cached; injected for tests. */
   scan?: HarnessScan
   now?: () => number
+  /** The owner's Magpie switch (launch settings, live): off, every card is direct and no Magpie is shown. Absent = on. */
+  enabled?: () => boolean
   schedule?: (fn: () => void, ms: number) => () => void
   writeFile?: (file: string, content: string) => void
 }
@@ -174,9 +180,34 @@ export class RouteService extends EventEmitter {
     return typeof key === 'string' && key.length > 0 ? key : null
   }
 
+  /** The owner's switch, read each time: a change applies to the next card and the next screen. */
+  enabled(): boolean {
+    return this.deps.enabled?.() ?? true
+  }
+
   state(): RouteState {
     const probe = this.deps.monitor.probe
     const lines = setupLines(this.deps.pluginDir)
+    if (!this.enabled()) {
+      // Switched off by the owner: no gateway, nothing routed, the tools' own rows still shown.
+      return {
+        status: 'absent',
+        gateway: null,
+        why: MAGPIE_SWITCHED_OFF,
+        switchedOff: true,
+        defaultModel: null,
+        providers: 0,
+        models: [],
+        quotas: [],
+        live: [],
+        harnesses: this.scan.rows(),
+        checkedAt: probe.checkedAt,
+        autoGroup: false,
+        sharedMcp: false,
+        mcpServers: null,
+        setup: { ...lines, installAsksAdmin: process.platform === 'linux', addKeyLine: ADD_KEY_STEM, addGroupLine: null }
+      }
+    }
     return {
       status: probe.status,
       gateway: probe.gateway,
@@ -197,13 +228,15 @@ export class RouteService extends EventEmitter {
 
   health(): { status: RouteState['status']; source: 'plugin' | 'probe' | null; providers: number; live: number } {
     const probe = this.deps.monitor.probe
+    if (!this.enabled()) return { status: 'absent', source: null, providers: 0, live: 0 }
     return { status: probe.status, source: probe.gateway?.source ?? null, providers: providersOf(this.models), live: this.decisions.following.length }
   }
 
   /** The port(s) a served sandbox must not reach: the one found, and the default. */
   gatewayPorts(): number[] {
     const found = this.deps.monitor.probe.gateway?.port
-    return found ? [found, DEFAULT_PORT] : [DEFAULT_PORT]
+    // Magpie's settings page too: its key could be read from a same-user environment, its port cannot be reached.
+    return [...(found ? [found, DEFAULT_PORT] : [DEFAULT_PORT]), ...MAGPIE_WEB_PORTS]
   }
 
   /** The plugin's pick wins; else the owner's own; else nothing. */
@@ -233,7 +266,7 @@ export class RouteService extends EventEmitter {
    * card whose harness takes no per-process MCP entry.
    */
   sharedMcpFor(node: TerminalNodeData): string[] {
-    if (!this.sharedMcp || this.isServedNode(node)) return []
+    if (!this.sharedMcp || !this.enabled() || this.isServedNode(node)) return []
     const probe = this.deps.monitor.probe
     if (probe.status !== 'online' || !probe.gateway) return []
     const harness = this.deps.harnessOf(node.command)
@@ -334,7 +367,7 @@ export class RouteService extends EventEmitter {
   /** The card's route as it stands: its own, else the fleet default, else direct. A served card is direct, always. */
   routeOf(node: TerminalNodeData | null): CardRoute {
     if (node === null) return DIRECT
-    if (this.isServedNode(node)) return DIRECT
+    if (this.isServedNode(node) || !this.enabled()) return DIRECT
     if (node.route) return node.route
     const d = this.defaultModel()
     return this.deps.monitor.probe.status === 'online' && d ? d : DIRECT

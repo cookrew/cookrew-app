@@ -1,4 +1,4 @@
-import type { LaunchSaveResult, LaunchStatus, LaunchValues } from '../../shared/launch-settings'
+import type { LaunchSaveResult, LaunchStatus, LaunchValues, LiveValues } from '../../shared/launch-settings'
 import type { MenuAct } from '../../shared/wait-choice'
 import type { FirstRunStage, FirstTask } from '../../shared/first-run'
 import type { AccessSimpleAnswer, AccessState, EndpointField, EndpointInput } from '../../shared/agent-access'
@@ -649,6 +649,12 @@ export interface CookrewApi {
   /** Launch settings (LaunchSettingsSheet.tsx). Optional: they belong to this machine. */
   launchSettings?: () => Promise<LaunchStatus | null>;
   saveLaunchSettings?: (choices: Partial<LaunchValues>) => Promise<LaunchSaveResult>;
+  /** The Magpie switches, live: read and set without a restart (main/launch-settings.ts · live). */
+  launchLive?: () => Promise<LiveValues | null>;
+  setLaunchLive?: (values: Partial<LiveValues>) => Promise<LaunchSaveResult>;
+  onLaunchLive?: (cb: (values: LiveValues) => void) => () => void;
+  /** Owner-only: start Magpie's own settings page on loopback; the sign-in link to open in a card. */
+  magpieWebOpen?: () => Promise<{ ok: true; url: string; port: number } | { ok: false; why: string }>;
   updateStatus?: () => Promise<unknown>;
   setUpdateCheck?: (on: boolean) => Promise<unknown>;
   restartToUpdate?: () => Promise<unknown>;

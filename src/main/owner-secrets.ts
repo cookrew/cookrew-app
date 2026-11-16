@@ -213,6 +213,9 @@ export function ownerSecretPaths(
     // The per-harness gateway key names (route program, E2E round).
     path.join(base, 'route-keys.json'),
     // The plugin file Magpie writes for this app carries `route.key`.
-    path.join(base, 'magpie.json')
+    path.join(base, 'magpie.json'),
+    // The key that signs in to Magpie's own settings page (route/magpie-web.ts).
+    path.join(base, 'magpie-web.json'),
+    path.join(base, 'magpie-web.json.tmp')
   ]
 }

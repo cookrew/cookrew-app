@@ -631,3 +631,46 @@ body.cr-first-task .cr-prompt .cr-prompt-tools {
     max-width: none;
   }
 }
+
+/* The two Magpie switches (routing/MagpieSwitches.tsx): Launch settings and the account guide */
+
+.mg-head {
+  margin: 18px 0 4px;
+  font: 600 13px/1.4 var(--zv-mono, ui-monospace, Menlo, monospace);
+}
+
+.mg-switches {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0 14px;
+}
+
+.mg-check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.mg-check input {
+  margin-top: 3px;
+}
+
+.mg-check small {
+  display: block;
+  color: var(--zv-dim, #8d8577);
+}
+
+.mg-configure {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.mg-switches .ls-field {
+  margin: 0;
+}
+
+.mg-switches .gs-ghost {
+  justify-self: start;
+}

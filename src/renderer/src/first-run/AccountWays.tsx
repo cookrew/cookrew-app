@@ -5,6 +5,8 @@ import type { RouteState } from '../../../shared/route'
 import { keyLineFor } from '../../../shared/route-lines'
 import { KEY_PRESETS } from '../../../shared/route-view'
 import { RemoteMagpieForm } from '../routing/RemoteMagpieForm'
+import { MagpieSwitches, useMagpieSwitches } from '../routing/MagpieSwitches'
+import type { LiveValues } from '../../../shared/launch-settings'
 import { runningLabel, type SetupRunning } from '../routing/setup-line-state'
 import type { RunOptions } from '../routing/use-setup-terminal'
 
@@ -24,6 +26,10 @@ export interface AccountWaysProps {
   onRun: (line: string, options?: RunOptions) => void
   running: SetupRunning | null
   onSetDefault?: (model: string) => void
+  /** The Magpie switches; absent = read them live (MagpieSwitches.tsx). */
+  switches?: LiveValues
+  /** Draw the two switches above the ways (off where a page already shows them). */
+  showSwitches?: boolean
 }
 
 function Way({ title, does, stack = false, children }: { title: string; does?: string; stack?: boolean; children?: React.ReactNode }): React.JSX.Element {
@@ -38,8 +44,14 @@ function Way({ title, does, stack = false, children }: { title: string; does?: s
   )
 }
 
-export function AccountWays({ route, endpointActive, endpoint, onRun, running, onSetDefault }: AccountWaysProps): React.JSX.Element {
+/** A bridge without the switches (the phone, a demo) shows every way, as before them. */
+const SHOW_ALL: LiveValues = { magpie: true, magpieRemote: true }
+
+export function AccountWays({ route, endpointActive, endpoint, onRun, running, onSetDefault, switches, showSwitches = true }: AccountWaysProps): React.JSX.Element {
   const [remoteOpen, setRemoteOpen] = useState(false)
+  const read = useMagpieSwitches().values
+  const on = switches ?? read ?? SHOW_ALL
+  const installed = route !== null && (route.status !== 'absent' || route.switchedOff === true)
   const via = accountVia({ route, endpoint: endpointActive })
   const held = running !== null
   const press = (line: string, label: string, options?: RunOptions): React.JSX.Element => (
@@ -62,12 +74,14 @@ export function AccountWays({ route, endpointActive, endpoint, onRun, running, o
     <div className="fr-access fr-accounts" data-ready={via !== null}>
       <h2 className="fr-access-head">{ACCOUNT_COPY.HEAD}</h2>
       <p className="fr-why">{via === null ? ACCOUNT_COPY.LEDE : ACCOUNT_COPY.READY(via)}</p>
+      {showSwitches && <MagpieSwitches installed={installed} />}
       {magpie === 'offline' && route && (
         <Way title={ACCOUNT_COPY.MAGPIE_STOPPED}>{press(route.setup.serveLine, ACCOUNT_COPY.START_MAGPIE)}</Way>
       )}
       <Way title={ACCOUNT_COPY.SUBSCRIPTION} does={subscriptions.length > 0 ? ACCOUNT_COPY.SUBSCRIPTION_DOES : ACCOUNT_COPY.SUBSCRIPTION_NONE}>
         {subscriptions.map((s) => press(s.line, s.label))}
       </Way>
+      {on.magpie && (
       <Way title={ACCOUNT_COPY.API_KEY} does={ACCOUNT_COPY.API_KEY_DOES} stack={magpie !== 'absent'}>
         {magpie === 'absent' || !route
           ? needsMagpie()
@@ -76,6 +90,8 @@ export function AccountWays({ route, endpointActive, endpoint, onRun, running, o
               return line === null ? null : press(line, preset, { enter: false })
             })}
       </Way>
+      )}
+      {on.magpie && on.magpieRemote && (
       <Way title={ACCOUNT_COPY.REMOTE} does={ACCOUNT_COPY.REMOTE_DOES}>
         {magpie === 'absent' || !route ? (
           needsMagpie()
@@ -85,7 +101,8 @@ export function AccountWays({ route, endpointActive, endpoint, onRun, running, o
           </button>
         )}
       </Way>
-      {remoteOpen && magpie !== 'absent' && <RemoteMagpieForm onRun={onRun} onCancel={() => setRemoteOpen(false)} />}
+      )}
+      {on.magpie && on.magpieRemote && remoteOpen && magpie !== 'absent' && <RemoteMagpieForm onRun={onRun} onCancel={() => setRemoteOpen(false)} />}
       {endpoint !== undefined && (
         <div className="fr-way-endpoint">
           {endpoint}

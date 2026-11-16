@@ -1,3 +1,4 @@
+import { LAUNCH_DEFAULTS, type LiveValues } from '../../shared/launch-settings'
 import type { SharedKey } from '../../shared/share-devices'
 import type { CardRouteState, RouteState } from '../../shared/route'
 import { cardRouteFixture, routeFixture } from '../../shared/route-fixture'
@@ -107,6 +108,8 @@ let demoConnections = 0
 const demoSecrets = new Map<string, { name: string; served: boolean; updatedAt: number }>()
 
 export function createDemoApi(): CookrewApi {
+  let demoLive: LiveValues = { magpie: true, magpieRemote: false }
+  const demoLiveListeners = new Set<(values: LiveValues) => void>()
   let demoShared: SharedKey[] = [{ id: 'demo00000000000000000001', name: 'device-solis', device: 'solis', limit: '$1.25/$20.00 per day' }]
   // In-memory workspace registry so the demo can switch canvases too.
   const search = typeof location === 'undefined' ? '' : location.search
@@ -489,6 +492,23 @@ export function createDemoApi(): CookrewApi {
       routeChanged()
       return Promise.resolve(route)
     },
+    // The Magpie switches, live and in memory; the settings page link is plainly not a key.
+    launchSettings: () => Promise.resolve({ values: { ...LAUNCH_DEFAULTS, ...demoLive }, running: { ...LAUNCH_DEFAULTS, ...demoLive }, pinned: [], restart: false, signedIn: false }),
+    saveLaunchSettings: (choices) => {
+      demoLive = { magpie: choices.magpie ?? demoLive.magpie, magpieRemote: choices.magpieRemote ?? demoLive.magpieRemote }
+      return Promise.resolve({ ok: true as const, status: { values: { ...LAUNCH_DEFAULTS, ...choices, ...demoLive }, running: { ...LAUNCH_DEFAULTS, ...demoLive }, pinned: [], restart: false, signedIn: false } })
+    },
+    launchLive: () => Promise.resolve(demoLive),
+    setLaunchLive: (values) => {
+      demoLive = { ...demoLive, ...values }
+      for (const listener of demoLiveListeners) listener(demoLive)
+      return Promise.resolve({ ok: true as const, status: { values: { ...LAUNCH_DEFAULTS, ...demoLive }, running: { ...LAUNCH_DEFAULTS, ...demoLive }, pinned: [], restart: false, signedIn: false } })
+    },
+    onLaunchLive: (cb) => {
+      demoLiveListeners.add(cb)
+      return () => void demoLiveListeners.delete(cb)
+    },
+    magpieWebOpen: () => Promise.resolve({ ok: true as const, url: 'about:blank#magpie-settings-demo', port: 3431 }),
     // Share with my devices: a demo key list in memory, and a key that is plainly not one.
     routeShareList: () => Promise.resolve({ ok: true as const, keys: demoShared, where: { onNetwork: false, urls: ['http://192.168.1.20:3425', 'http://100.101.102.103:3425'] } }),
     routeShareIssue: ({ device }) => {

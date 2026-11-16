@@ -153,7 +153,7 @@ import { launchCommand, withoutRoutedPick } from '../shared/launch-tune'
 import { launchOfferFor, withLaunchOffers } from './launch-offers'
 import { GatewayMonitor } from './route/gateway'
 import { RouteService } from './route/service'
-import { magpieInstalled } from './route/discovery'
+import { magpieInstalled, defaultDiscoveryEnv } from './route/discovery'
 import { FIRST_TASK_WAIT_MS, claudeComposerDrawn, forkContextReady, forkTerminal as forkTerminalOp, harnessReadyForInput, injectWhenReady } from './fork'
 import { AgentRegistry, type AgentRegistryUpsert } from './agent-registry'
 import { HARNESS_FACTS } from './route/setup'
@@ -323,6 +323,9 @@ import { addPaneDirs, installerDirs, panePath } from './pane-path'
 import { bootStep, paintFailure } from './boot-failure'
 import { registerAccessIpc } from './access-ipc'
 import { registerShareIpc } from './share-ipc'
+import { MagpieWeb, MAGPIE_WEB_FILE } from './route/magpie-web'
+import type { LiveValues } from '../shared/launch-settings'
+import { magpieBinary } from './route/share-keys'
 import { AccessStore, probeEndpoint } from './agent-access'
 import { macKeychain } from './pane-keychain'
 import { createSetupLines, registerSetupLineIpc, shellHoldsTerminal } from './setup-line'
@@ -1009,7 +1012,12 @@ const grants = serviceGrants(sessionsBase)
 // phone and every spawn read it. Its emitter fans out to the renderer and
 // the phone stream (routeBus) exactly like the dials' tuningBus.
 const routeBus = new EventEmitter()
+/** The owner's live Magpie switches (launch settings), set once the store exists; until then Magpie is on. */
+let launchLive: (() => LiveValues) | null = null
+/** Magpie's own settings page, opened in a browser card (route/magpie-web.ts). */
+const magpieWeb = new MagpieWeb({ bin: () => magpieBinary(defaultDiscoveryEnv()), file: path.join(homedir(), '.cookrew', MAGPIE_WEB_FILE) })
 const routeService = new RouteService({
+  enabled: () => launchLive?.().magpie ?? true,
   // PATH, ~/.local/bin (the installer's symlink, off a GUI app's PATH) and the app bundle.
   monitor: new GatewayMonitor({ hasBinary: () => magpieInstalled({ home: homedir(), env: process.env }, existsSync) }),
   fetch: (input, init) => fetch(input, init),
@@ -8869,6 +8877,7 @@ app.on('window-all-closed', () => {
 let appShutdownStarted = false
 let appShutdownComplete = false
 
+app.on('will-quit', () => magpieWeb.stop())
 app.on('before-quit', (event) => {
   // The sizes panes last had, so their mirrors start at them next launch (pane-sizes.ts).
   paneSizes().flush()
@@ -9756,6 +9765,21 @@ function registerIpc(handlers: RestoreHandlers): void {
       })
     : null
   const launchSettings = createLaunchSettings({ file: launchSettingsPath(homedir()), boot: launchBoot, signedIn: () => accounts.account() !== null })
+  launchLive = launchSettings.live
+  // A Magpie switch moved: the route state says so at once, and the screens that draw Magpie follow.
+  launchSettings.onLive((values) => {
+    routeService.emit('route', routeService.state())
+    if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('launch-live', values)
+    if (!values.magpie) magpieWeb.stop()
+  })
+  ipcMain.handle('launch-settings:live', (event) => (ownerFrame(event) ? launchSettings.live() : null))
+  ipcMain.handle('launch-settings:set-live', (event, input: unknown) => (ownerFrame(event) ? launchSettings.setLive(input) : { ok: false, reason: 'not-owner' }))
+  // Magpie's settings page: the link carries its key, so only the owner's window may ask for it.
+  ipcMain.handle('magpie-web:open', (event) => {
+    if (!ownerFrame(event)) return { ok: false, why: 'not_owner' }
+    if (!launchSettings.live().magpie) return { ok: false, why: 'Magpie is switched off in Launch settings.' }
+    return magpieWeb.open()
+  })
   ipcMain.handle('launch-settings:status', (event) => (ownerFrame(event) ? launchSettings.status() : null))
   ipcMain.handle('launch-settings:save', (event, input: unknown) => (ownerFrame(event) ? launchSettings.save(input) : { ok: false, reason: 'not-owner' }))
   // The account's skin: any window reads it, the app's own page picks it.
