@@ -2090,13 +2090,6 @@
     transform: translateX(-50%);
     white-space: nowrap;
   }
-  /* A feed has no title over its pages: the door goes back to the top corner, in the view tools' row (their top has no safe-area inset on a phone; with one, Android's edge-to-edge Chrome pushed the door onto the page, 2026-11-17). */
-  .zv-new-workspace[data-view="feed"] {
-    top: 12px;
-    left: 12px;
-    bottom: auto;
-    transform: none;
-  }
 }
 
 /* ── this machine's one proof to the account's others (MachineTrustRow) ──

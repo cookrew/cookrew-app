@@ -18,10 +18,10 @@ import { hostPlatform } from '../../../shared/machine-words'
 import { MachineTrustRow, useMachineTrust } from './MachineTrustRow'
 import { ShelfCard } from './ShelfCard'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
-import { DEFAULT_TILE_SIZE, defaultCrewCols, defaultDeviceView, machineFrameOf, machinesAt, shelfPage, TILE_SIZES } from './zoom-layout'
-import { useCrewCols, useDeviceView, useTileSize } from './crew-cols'
-import { ViewTools, type DeviceViewPick, type PerRow, type TileSizePick } from './ViewTools'
-import { deviceOfModel, deviceWords, feedPageOf, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from './zoom-frame'
+import { DEFAULT_TILE_SIZE, defaultCrewCols, machineFrameOf, machinesAt, shelfPage, TILE_SIZES } from './zoom-layout'
+import { useCrewCols, useTileSize } from './crew-cols'
+import { ViewTools, type PerRow, type TileSizePick } from './ViewTools'
+import { deviceOfModel, deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
 import { BAR_NAMES, BAR_STOPS, barSide, barStop, stepOut } from './zoom-path'
@@ -46,13 +46,6 @@ const CHIP_HIDDEN: React.CSSProperties = { opacity: 0 }
 
 /** Rows of thumbnails mounted past each edge of the view, so a scroll shows them already drawn. */
 const ROW_BUFFER = 2
-/** A feed's turn (snapFeed): past this much of a page a gesture lands on the next; the glide home; a wheel's run ends after this quiet; a trackpad's coast after a turn is ignored this long. */
-const FEED_TURN = 0.12
-/** A wheel's notch is a page whatever its size (macOS sends a few px a notch): past this a wheel's run turns. */
-const FEED_WHEEL_TURN_PX = 24
-const FEED_SNAP_MS = 280
-const FEED_WHEEL_IDLE_MS = 140
-const FEED_GLIDE_MS = 450
 /**
  * PAST THE EDGE, THE OTHER SIDE (owner, 2026-11-17: "agents视图上滑直接进入artifacts视图，再下滑返回agents视图").
  * A swipe up begun at the crew's foot (or anywhere, when the crew fits) goes on to the artifacts;
@@ -60,6 +53,8 @@ const FEED_GLIDE_MS = 450
  */
 const SIDE_SWIPE_PX = 64
 const SIDE_WHEEL_PX = 40
+/** A wheel's gesture ends after this quiet: what comes later is the next one. */
+const WHEEL_IDLE_MS = 140
 /** A failure as a person reads it: its message, without the class name String() puts in front. */
 const failureWords = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
@@ -251,20 +246,15 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // Agents and workspaces per row, as the owner picked them on this device (crew-cols.ts).
   const narrow = size.w < 760
   const [crewCols, setCrewCols] = useCrewCols(narrow)
-  const [pickedView, setDeviceView] = useDeviceView(narrow)
-  const deviceView = pickedView ?? defaultDeviceView(narrow)
   const [tileSize, setTileSize] = useTileSize()
   // THE DEVICES STOP PICTURES EVERY MACHINE AS ITS DESKTOP SHOWS IT (owner, 2026-11-16): two to a row,
-  // whatever this screen is and whichever view the workspaces stop is in. Read off the stop aimed at.
+  // whatever this screen is. Read off the stop aimed at. At the workspaces stop the grid takes as many as the screen holds.
   const deviceDesk = zoom.v < -1.5
-  const feedPage = useMemo(() => feedPageOf(size.w, size.h, narrow), [size, narrow])
   const frame = useMemo(
-    () => ({ ...model.frame, crewCols: crewCols ?? undefined, tileSize: tileSize ?? undefined, deviceView, feedPage, deviceDesk }),
-    [model.frame, crewCols, tileSize, deviceView, feedPage, deviceDesk]
+    () => ({ ...model.frame, crewCols: crewCols ?? undefined, tileSize: tileSize ?? undefined, fitW: size.w, deviceDesk }),
+    [model.frame, crewCols, tileSize, size.w, deviceDesk]
   )
   const device = useMemo(() => deviceOfModel(frame, narrow), [frame, narrow])
-  const deviceRef = useRef(device)
-  deviceRef.current = device
   const motion = useZoomMotion(frame, collect, root, pan)
   const layout = useMemo(() => layoutOf(frame, narrow), [frame, narrow])
   // THE PHONE'S WORDS (scene-words.ts): each stop's scale at rest, for the words seen at
@@ -344,7 +334,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const panNow = (): number => (atTiles() ? tilesAt.current : panAt.current)
   const scrollBy = (dy: number): void => {
     if (atTiles()) {
-      stopSnap()
       tilesAt.current = Math.min(tilesMax.current, Math.max(0, tilesAt.current + dy))
       motion.wake()
       return
@@ -355,42 +344,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     if (zoomStore.get().dir === 'items') setFirstRow(firstRowAt(panAt.current))
     motion.wake()
   }
-  // A FEED TURNS A PAGE A GESTURE (owner, 2026-11-16: "per row 1 类似抖音视频流"): a drag or a
-  // wheel's run that went past a little of a page lands on the next one; less, back on its own.
-  const snapRaf = useRef(0)
-  const stopSnap = (): void => {
-    cancelAnimationFrame(snapRaf.current)
-    snapRaf.current = 0
-  }
-  const feedStep = (): number | null => (atTiles() ? deviceRef.current.feed?.step ?? null : null)
-  const snapFeed = (from: number, turnPx = Infinity): void => {
-    const step = feedStep()
-    if (!step) return
-    const start = Math.round(from / step)
-    const moved = tilesAt.current - from
-    const page = Math.abs(moved) > Math.min(step * FEED_TURN, turnPx) ? start + Math.sign(moved) : start
-    const target = Math.min(tilesMax.current, Math.max(0, page * step))
-    const a = tilesAt.current
-    const t0 = performance.now()
-    stopSnap()
-    const tick = (now: number): void => {
-      const k = Math.min(1, (now - t0) / FEED_SNAP_MS)
-      tilesAt.current = a + (target - a) * (1 - (1 - k) ** 3)
-      motion.wake()
-      snapRaf.current = k < 1 ? requestAnimationFrame(tick) : 0
-    }
-    snapRaf.current = requestAnimationFrame(tick)
-  }
-  useEffect(() => () => cancelAnimationFrame(snapRaf.current), [])
-  // A feed opens on the open workspace's page: zoomed out of it, the view lands where it was.
-  useEffect(() => {
-    const step = device.feed?.step
-    const at = model.frame.workspaces.indexOf(model.frame.active)
-    stopSnap()
-    tilesAt.current = step && at > 0 ? at * step : 0
-    motion.wake()
-  }, [deviceView, device.feed?.step, model.frame.active, zoom.v]) // eslint-disable-line react-hooks/exhaustive-deps
-  const wheelRun = useRef<{ from: number; timer: number; locked: number }>({ from: 0, timer: 0, locked: 0 })
   /** The agents stop or the artifacts stop, at rest and not in a full view: where a swipe past the edge crosses over. */
   const sideAt = (): 'agents' | 'items' | null => {
     const z = zoomStore.get()
@@ -469,7 +422,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     window.clearTimeout(run.timer)
     run.timer = window.setTimeout(() => {
       run.timer = 0
-    }, FEED_WHEEL_IDLE_MS)
+    }, WHEEL_IDLE_MS)
     if (run.swallow) {
       e.preventDefault()
       return
@@ -484,23 +437,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       return
     }
     if (canPan()) {
-      const step = feedStep()
-      if (step) {
-        const run = wheelRun.current
-        e.preventDefault()
-        // A trackpad's glide after a turn is the same gesture, not the next one.
-        if (performance.now() < run.locked) return
-        if (run.timer === 0) run.from = tilesAt.current
-        window.clearTimeout(run.timer)
-        const next = Math.min(run.from + step, Math.max(run.from - step, tilesAt.current + dy))
-        scrollBy(next - tilesAt.current)
-        run.timer = window.setTimeout(() => {
-          run.timer = 0
-          run.locked = performance.now() + FEED_GLIDE_MS
-          snapFeed(run.from, FEED_WHEEL_TURN_PX)
-        }, FEED_WHEEL_IDLE_MS)
-        return
-      }
       scrollBy(dy)
       e.preventDefault()
     }
@@ -737,12 +673,9 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     zoom.dir === 'agents' && Math.abs(zoom.v - 1) < 0.25 && model.agents.length > 0
       ? { what: 'agents', narrow, cols: crewCols ?? defaultCrewCols(narrow), onPick: setCrewCols }
       : null
-  // The workspaces stop's view: a feed or a grid, where the tiles are seen (owner, 2026-11-16).
-  const deviceViewAt: DeviceViewPick | null =
-    Math.abs(zoom.v + 1) < 0.25 && model.frame.workspaces.length > 0 ? { view: deviceView, onPick: setDeviceView } : null
-  // A tile's type, in a desk's grid: a feed sizes its tile to the page, and a phone's grid to half its width.
+  // A tile's least type on a desk: the grid takes as many to a row as hold it (zoom-layout.ts · gridColsFor). A phone's one a row fills its width.
   const tileSizeAt: TileSizePick | null =
-    !narrow && deviceView === 'grid' && Math.abs(zoom.v + 1) < 0.25 && model.frame.workspaces.length > 0
+    !narrow && Math.abs(zoom.v + 1) < 0.25 && model.frame.workspaces.length > 0
       ? { sizes: TILE_SIZES, size: tileSize ?? DEFAULT_TILE_SIZE, onPick: setTileSize }
       : null
   const side = barSide(zoom.dir, zoom.v)
@@ -770,7 +703,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           drag.current = pointers.current.size === 1 && (canPan() || edgeSide)
             ? { x: e.clientX, y: e.clientY, pan: panNow(), scrolling: false, side: edgeSide }
             : null
-          if (drag.current && feedStep()) stopSnap()
           if (pointers.current.size === 2) {
             pinch.current = { distance: distance(), v: zoomStore.get().v }
             moved.current = true
@@ -805,7 +737,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           pointers.current.delete(e.pointerId)
           if (pointers.current.size < 2) pinch.current = null
           const d = drag.current
-          if (d?.scrolling && feedStep()) snapFeed(d.pan)
           // How far the finger went beyond what the scroll could take: a long enough swipe off the edge crosses over.
           if (d?.scrolling && d.side && pointers.current.size === 0) {
             const wanted = d.pan + (d.y - e.clientY)
@@ -820,7 +751,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           e.stopPropagation()
           e.preventDefault()
         }}
-        onPointerCancel={(e) => { pointers.current.delete(e.pointerId); pinch.current = null; moved.current = true; if (drag.current?.scrolling && feedStep()) snapFeed(drag.current.pan); drag.current = null }}
+        onPointerCancel={(e) => { pointers.current.delete(e.pointerId); pinch.current = null; moved.current = true; drag.current = null }}
         onClick={(e) => {
           // Nothing was pressed, or the press was a pinch or a drag: not a step out.
           if (swallowClick.current) { swallowClick.current = false; return }
@@ -868,7 +799,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           })}
           <LocalMachine name={machine} detail={`${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}`} gauge={<MachineGaugeLine machineId="local" local />} bind={bind} onOpen={() => motion.go(-1)} />
         </div>
-        <div className="zv-device" ref={bind('device')} data-density={words.density} data-view={device.feed ? 'feed' : 'grid'} style={{ '--zv-k': words.markK.toFixed(3), '--zv-tile-top': `${Math.round(device.tile.top)}px`, '--zv-tile-h': `${Math.round(device.tile.h)}px` } as React.CSSProperties}>
+        <div className="zv-device" ref={bind('device')} data-density={words.density} style={{ '--zv-k': words.markK.toFixed(3), '--zv-tile-top': `${Math.round(device.tile.top)}px`, '--zv-tile-h': `${Math.round(device.tile.h)}px` } as React.CSSProperties}>
           {/* Placed and sized by the painter (zoom-frame.ts · paintDeviceWords): on a phone it keeps one size as the device zooms. */}
           <div className="zv-device-label" ref={bind('deviceLabel')} style={{ maxWidth: Math.round(words.titleMax) }}>
             <b>{machine}</b><span>{countOf(model.frame.workspaces.length, 'workspace')}</span>
@@ -933,9 +864,9 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       {/* THE VIEW'S TOOLBAR (ViewTools.tsx; owner 2026-11-12): top right at every stop of this machine,
           per row where a row is seen (the crew's agents, the device's workspaces; owner 2026-11-01)
           beside this machine's remote desktop. Inside another machine its stops are that machine's. */}
-      {!zoom.full && inside === null && <ViewTools perRow={perRowAt} tileSize={tileSizeAt} deviceView={deviceViewAt} />}
+      {!zoom.full && inside === null && <ViewTools perRow={perRowAt} tileSize={tileSizeAt} />}
       {!zoom.full && Math.abs(zoom.v + 1) < 0.25 && onNewWorkspace && (
-        <button type="button" className="zv-new-workspace" data-view={deviceView} onClick={onNewWorkspace}>
+        <button type="button" className="zv-new-workspace" onClick={onNewWorkspace}>
           <span aria-hidden="true">＋</span> New workspace
         </button>
       )}

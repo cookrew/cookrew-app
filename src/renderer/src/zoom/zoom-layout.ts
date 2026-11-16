@@ -379,28 +379,6 @@ export function screenOf(box: Box, aspect: number): Box {
 export const DEVICE_COLS = { wide: [1, 2], narrow: [1, 2] } as const
 export const defaultDeviceCols = (narrow: boolean): number => (narrow ? 1 : 2)
 
-/**
- * THE WORKSPACES STOP'S TWO VIEWS (owner, 2026-11-16: "不选per row了，直接两种视图"):
- * a feed, one workspace to a page and a swipe a page, as a short-video feed;
- * and a grid, two to a row, as a photo-note wall. A phone opens on the feed,
- * a desk on the grid.
- */
-export type DeviceView = 'feed' | 'grid'
-export const DEVICE_VIEWS: readonly DeviceView[] = ['feed', 'grid']
-export const defaultDeviceView = (narrow: boolean): DeviceView => (narrow ? 'feed' : 'grid')
-export const colsOfView = (view: DeviceView): number => (view === 'feed' ? 1 : 2)
-/** The page a feed turns, in screen px: the window, less the header over it and the bar under it. */
-export interface FeedPage {
-  readonly w: number
-  readonly h: number
-  readonly top: number
-  readonly bottom: number
-}
-/** Room between a feed's tile and its page's edges, screen px. */
-const FEED_MARGIN = 16
-/** The most a feed draws a tile's px on screen: past it a desk's tall window would set the card's words at 30px. */
-const FEED_MAX_TYPE = 1.6
-
 /** workspace-tile.css draws a tile this many px across, then scales it to TILE.w. */
 export const TILE_DRAWN_W = 260
 /**
@@ -422,6 +400,26 @@ const FOOT = { wide: 12, narrow: 0 }
 const SIDE = { wide: 60, narrow: 0 }
 
 /**
+ * THE WORKSPACES GRID BY THE SCREEN (owner, 2026-11-17: "取消feed，仅保留grid，按照屏幕大小平铺"):
+ * the most to a row whose tiles, the row filling the screen's width, still stand at `size`
+ * (an agent card's own type at 1). A phone holds one, a desk four or five, a wide screen more.
+ * The camera fits a full row to the width (zoom-camera.ts · deviceCam), less 16px a side.
+ */
+export function gridColsFor(w: number, narrow: boolean, size: number = DEFAULT_TILE_SIZE): number {
+  const form = narrow ? 'narrow' : 'wide'
+  let best = 1
+  for (let c = 2; c <= GRID_MAX_COLS; c++) {
+    const boxW = c * SWS * TILE.w + (c - 1) * TILE_GAP[form] + SIDE[form]
+    if (((w - 32) / boxW) * SWS * TILE.w / TILE_DRAWN_W < size) break
+    best = c
+  }
+  return best
+}
+const GRID_MAX_COLS = 8
+/** A full row is drawn this much past its type at most: the width a column short of the next leaves. */
+const FILL_MAX = 2
+
+/**
  * The device: a tile per workspace, `cols` to a row (the pick, else the
  * default) in columns from the left, the open one where its slot is. `at` is
  * each ring's place (the mark's origin); `gridTop` and `left` are the tiles'
@@ -434,26 +432,22 @@ export function deviceOf(
   aspect = DEFAULT_SCREEN_ASPECT,
   picked?: number,
   size: number = DEFAULT_TILE_SIZE,
-  feedPage?: FeedPage
-): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number; gridTop: number; gridH: number; rowH: number; left: number; tile: { top: number; h: number }; face: number; feed: { S: number; step: number; top: number } | null } {
-  const pick = feedPage ? 1 : (picked ?? defaultDeviceCols(narrow))
+  fitW?: number
+): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number; gridTop: number; gridH: number; rowH: number; left: number; tile: { top: number; h: number }; face: number } {
+  // Laid by the screen (fitW, unpicked): as many to a row as the screen holds at the tile's type.
+  const fits = picked === undefined && fitW !== undefined ? gridColsFor(fitW, narrow, size) : null
+  const pick = picked ?? fits ?? defaultDeviceCols(narrow)
   const cols = Math.max(1, Math.min(pick, ids.length))
   const form = narrow ? 'narrow' : 'wide'
-  // A feed's page: the tile as wide as the window allows, and as tall as the page, its fan taking the room.
-  const pageH = feedPage ? feedPage.h - feedPage.top - feedPage.bottom : 0
-  const feedS = feedPage
-    ? Math.max(0.05, Math.min(tileFaceS(FEED_MAX_TYPE), (feedPage.w - 2 * FEED_MARGIN) / (SWS * TILE.w), (pageH - 2 * FEED_MARGIN) / (SWS * TILE.h)))
-    : 0
-  const tile = feedPage ? { top: TILE.top, h: Math.max(TILE.h, (pageH - 2 * FEED_MARGIN) / (feedS * SWS)) } : tileOf(narrow, cols)
+  const tile = tileOf(narrow, cols)
   const tw = SWS * TILE.w
   const th = SWS * tile.h
   const gap = TILE_GAP[form]
   const dx = tw + gap
-  const dy = feedPage ? pageH / feedS : th + gap
-  const gapY = dy - th
+  const dy = th + gap
   const rows = Math.max(1, Math.ceil(ids.length / cols))
   const gridW = cols * dx - gap
-  const gridH = rows * dy - gapY
+  const gridH = rows * dy - gap
   const left = -gridW / 2
   const gridTop = -gridH / 2
   const at: Record<string, Pos> = {}
@@ -464,8 +458,9 @@ export function deviceOf(
   const top = titleBottom - TITLE_ROOM[form]
   const bottom = -gridTop + FOOT[form]
   const box = { w: gridW + SIDE[form], h: bottom - top, cy: (top + bottom) / 2 }
-  const feed = feedPage ? { S: feedS, step: pageH, top: feedPage.top } : null
-  return { at, box, screen: screenOf(box, aspect), titleBottom, dx, gridTop, gridH, rowH: dy, left, tile, face: tileFaceS(size), feed }
+  // A full row fills the screen's width (each tile at least its type); fewer stand at their type.
+  const fill = fits !== null && ids.length >= fits
+  return { at, box, screen: screenOf(box, aspect), titleBottom, dx, gridTop, gridH, rowH: dy, left, tile, face: fill ? tileFaceS(size * FILL_MAX) : tileFaceS(size) }
 }
 
 /**
