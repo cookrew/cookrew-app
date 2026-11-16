@@ -151,16 +151,25 @@ describe('ci-deps-key', () => {
 
 describe('perf.yml on pull requests', () => {
   type PerfOn = { schedule?: unknown; workflow_dispatch?: unknown; pull_request?: { paths?: string[] } }
-  const perf = (yaml.load(readFileSync('.github/workflows/perf.yml', 'utf8')) as { on: PerfOn }).on
+  const workflow = yaml.load(readFileSync('.github/workflows/perf.yml', 'utf8')) as {
+    on: PerfOn
+    jobs: { gates: { strategy: { matrix: { os: string } } } }
+  }
+  const perf = workflow.on
 
-  // Owner ruling 2026-11-15: app changes are measured nightly, not per PR.
-  it('runs on a PR only when the gates, their budgets or the workflow change', () => {
-    expect(perf.pull_request?.paths).toEqual([
-      'tests/perf/**',
-      'vitest.perf.config.ts',
-      'scripts/perf-*.mjs',
-      '.github/workflows/perf.yml'
-    ])
+  // Owner ruling 2026-11-16: a PR that changes the app runs the gates again.
+  it('runs on a PR that changes the gates or the app they measure', () => {
+    expect(perf.pull_request?.paths).toEqual(
+      expect.arrayContaining(['tests/perf/**', 'vitest.perf.config.ts', 'src/renderer/**', 'src/main/**', 'registry/**'])
+    )
+  })
+
+  // ...on Linux only, so it takes no macOS slot from CI; macOS runs nightly.
+  it('runs Linux alone on a PR, both OSes otherwise', () => {
+    const os = workflow.jobs.gates.strategy.matrix.os
+    expect(os).toContain("github.event_name == 'pull_request'")
+    expect(os).toContain(`fromJSON('["ubuntu-latest"]')`)
+    expect(os).toContain(`fromJSON('["ubuntu-latest", "macos-latest"]')`)
   })
 
   it('keeps the nightly and the manual run', () => {
