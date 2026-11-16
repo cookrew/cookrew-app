@@ -64,7 +64,7 @@ describe('cookrew browser create — a name that exists is the same card', () =>
     const { deps, browserCommand } = setup()
     const answer = await cmdBrowser(request('browser', ['create', 'file:///docs/ui/p1-v2.html', 'ui · p1 setup'], 'atlas'), deps)
     expect(browserCommand).toHaveBeenCalledTimes(1)
-    expect(browserCommand).toHaveBeenCalledWith(['navigate', 'UI · P1 Setup', 'file:///docs/ui/p1-v2.html'], 'atlas')
+    expect(browserCommand).toHaveBeenCalledWith(['navigate', 'UI · P1 Setup', 'file:///docs/ui/p1-v2.html'], 'atlas', 'agent')
     expect(answer).toContain('navigated')
   })
 
@@ -80,13 +80,13 @@ describe('cookrew browser create — a name that exists is the same card', () =>
   it('--new still creates a second card, through the engine, as before', async () => {
     const { deps, browserCommand } = setup()
     await cmdBrowser(request('browser', ['create', 'file:///docs/ui/p1.html', 'UI · P1 Setup'], 'atlas', { new: true }), deps)
-    expect(browserCommand).toHaveBeenCalledWith(['create', 'file:///docs/ui/p1.html', 'UI · P1 Setup'], 'atlas')
+    expect(browserCommand).toHaveBeenCalledWith(['create', 'file:///docs/ui/p1.html', 'UI · P1 Setup'], 'atlas', 'agent')
   })
 
   it('a name nobody holds is created as before', async () => {
     const { deps, browserCommand } = setup()
     await cmdBrowser(request('browser', ['create', 'file:///docs/ui/p2.html', 'UI · P2 Catalogue'], 'atlas'), deps)
-    expect(browserCommand).toHaveBeenCalledWith(['create', 'file:///docs/ui/p2.html', 'UI · P2 Catalogue'], 'atlas')
+    expect(browserCommand).toHaveBeenCalledWith(['create', 'file:///docs/ui/p2.html', 'UI · P2 Catalogue'], 'atlas', 'agent')
   })
 })
 

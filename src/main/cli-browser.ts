@@ -33,6 +33,8 @@ export interface ScopedBrowserContext {
   /** Lay the cable an inquiry made, attributed to the caller and the verb. */
   wire: (otherId: string, via: string) => void
   signal?: (moment: { from: string; to: string; kind: 'write' | 'read' }) => void
+  /** A card adopted by name was navigated to the address asked for (socket-server.ts · logNavigated). */
+  navigated?: (card: BrowserNodeData, workspaceId: string) => void
 }
 
 export async function cmdBrowserScoped(ctx: ScopedBrowserContext): Promise<string> {
@@ -101,7 +103,10 @@ async function create(ctx: ScopedBrowserContext): Promise<string> {
       // A caller held by no workspace owns no edge (it is a node nowhere).
       if (!wired && !homeless) ctx.wire(existing.id, 'browser create')
       const navigated = url !== existing.url
-      if (navigated) await ctx.browserCommand(['navigate', existing.name, url], ctx.me.id)
+      if (navigated) {
+        await ctx.browserCommand(['navigate', existing.name, url], ctx.me.id)
+        ctx.navigated?.(existing, scope.id)
+      }
       return (
         `Browser "${existing.name}" already exists in "${scope.name}"` +
         ` — ${wired ? 'already wired to you' : homeless ? 'not wired: your terminal is not a card' : 'now wired to you'}` +

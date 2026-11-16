@@ -3,6 +3,7 @@ import {
   CENSUS,
   FIBER_CENSUS,
   PANE_POINT,
+  chromeCommand,
   measureCompanion,
   recordFrames,
   renderReport,
@@ -136,5 +137,20 @@ describe('perf-dom-probe: the measurement body runs against a fake page', () => 
     const { page } = fakePage()
     const frames = await recordFrames(page, () => Promise.resolve(4))
     expect(frames).toEqual({ frames: 4, commits: 0, commitsPerFrame: 0, renders: {}, cards: [] })
+  })
+})
+
+// A test's Chrome started from an agent pane is charged to Cookrew, and macOS
+// pops "Cookrew was prevented from modifying apps" (2026-11-16).
+describe('the probe Chrome answers to macOS for itself', () => {
+  it('goes through the launcher, Chrome first', () => {
+    expect(chromeCommand('/c/Chrome', ['--headless=new'], '/r/cr-disclaim')).toEqual({
+      command: '/r/cr-disclaim',
+      args: ['/c/Chrome', '--headless=new']
+    })
+  })
+
+  it('spawns Chrome itself without one', () => {
+    expect(chromeCommand('/c/Chrome', ['about:blank'], null)).toEqual({ command: '/c/Chrome', args: ['about:blank'] })
   })
 })

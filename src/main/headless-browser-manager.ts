@@ -30,6 +30,8 @@ export interface HeadlessBrowserManagerDeps {
    */
   enabled: () => boolean
   chromePath: () => string | null
+  /** Starts Chrome as its own responsible app (headless-chrome.ts · chromeSpawnCommand); null: directly. */
+  chromeLauncher?: () => string | null
   profileRoot: () => string
   /** One store for installation-scope Chrome data shared by every profile. */
   sharedInstallationRoot?: () => string
@@ -229,8 +231,10 @@ export class HeadlessBrowserManager {
     if (use) return this.deps.uses?.makeInstance(use, node) ?? null
     const executablePath = this.deps.chromePath()
     if (!executablePath) return null
+    const launcher = this.deps.chromeLauncher?.() ?? null
     const options: HeadlessOptions = {
       executablePath,
+      ...(launcher ? { launcher } : {}),
       profileDir: path.join(this.deps.profileRoot(), browserId),
       downloadDir: browserDownloadsDir(browserId, this.deps.downloadsRoot?.()),
       ...(this.deps.sharedInstallationRoot

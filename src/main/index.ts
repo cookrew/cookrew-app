@@ -220,6 +220,7 @@ import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
 import { createSessionDrain, SESSION_DRAIN_TICK_MS } from './session-drain'
+import { createWaitingLatch } from './waiting-latch'
 import { LazyTerminalAttachments } from './lazy-terminal'
 import { planWorkspaceSwitch } from './workspace-switch'
 import { SwitchRunner } from './switch-runner'
@@ -816,11 +817,15 @@ const auditSecret = (event: SecretAudit): void => {
   // refuses the note still gets its audit line.
   if (event.type === 'secret.requested') {
     try {
+      // The slot is the asking agent's doing: it lands in the HITL bar as theirs.
+      const asking = hit?.node.kind === 'terminal' && isAgentTerminal(hit.node.id)
+      const askingActor = (hit?.node as TerminalNodeData | undefined)?.orch ? 'orch' : 'agent'
+      const asAsker = <T,>(fn: () => T): T => (asking ? store.withOpContext({ actor: askingActor }, fn) : fn())
       ensureSecretSlotNote(
         {
           nodesOf: (id) => store.workspaceState(id).nodes,
-          createNote: (partial, id) => store.createNote(partial, id),
-          writeNote: (id, content) => store.writeNote(id, content),
+          createNote: (partial, id) => asAsker(() => store.createNote(partial, id)),
+          writeNote: (id, content) => asAsker(() => store.writeNote(id, content)),
           connect: (from, to) => void store.connectAcross(from, to)
         },
         {
@@ -887,6 +892,20 @@ const servedSpawnContexts = new Map<
   string,
   { serviceId: string; sessionId: string; sandbox: string }
 >()
+
+/**
+ * IS THIS A CUSTOMER'S WORKSPACE: its served context, or the mark it keeps on
+ * disk (store.ts · markServed). The context lives in memory and a restart
+ * empties it while the workspace stays; every yes/no served check reads this
+ * one, so none of them forgets after a restart. The confinement that needs
+ * the context itself (sandbox, session) still reads the map.
+ */
+function isServedWorkspace(workspaceId: string | undefined): boolean {
+  if (workspaceId === undefined || workspaceId === '') return false
+  if (servedSpawnContexts.has(workspaceId)) return true
+  return store.list().workspaces.some((w) => w.id === workspaceId && w.served === true)
+}
+
 /**
  * THE LEND (R30 G2). The owner's per-service grant file, read per call.
  *
@@ -916,7 +935,7 @@ const routeService = new RouteService({
   updateNode: (id, patch) => void store.updateNodeUnsafe(id, patch),
   isServed: (id) => {
     const owner = store.ownerOf(id)
-    return owner !== undefined && servedSpawnContexts.has(owner)
+    return owner !== undefined && isServedWorkspace(owner)
   },
   harnessOf: (command) => harnessFor(command)?.id ?? null,
   phaseOf: (id) => turns.phaseOf(id),
@@ -983,6 +1002,8 @@ const serving: Serving = wireServing({
           // FIRST so each terminal's spawn (spawnTracked) confines and scrubs.
           bootTerminals: (id) => {
             servedSpawnContexts.set(id, { serviceId, sessionId, sandbox: dir })
+            // Marked on disk too: after a restart the context is gone, the customer's workspace is not.
+            store.markServed(id)
             remoteDesk.workspaceServed(id)
             const booted = bootWorkspaceInPlace(
               {
@@ -3002,6 +3023,25 @@ function syncBackendPhases(): void {
   }
 }
 
+/**
+ * "An agent waits on you", once per wait, in the agent's own workspace
+ * (waiting-latch.ts). The HITL bar reads its agents from the crew, not from
+ * this row: it is for the Activity log and the notifications.
+ */
+const waits = createWaitingLatch()
+function noteWaiting(terminalId: string, phase: TurnPhase, waitSeq?: number): void {
+  if (!waits.observe(terminalId, phase, waitSeq)) return
+  const hit = store.nodeAcrossWorkspaces(terminalId)
+  if (!hit || hit.node.kind !== 'terminal' || !isAgentTerminal(terminalId)) return
+  try {
+    store.withOpContext({ actor: (hit.node as TerminalNodeData).orch ? 'orch' : 'agent' }, () =>
+      store.recordEventIn(hit.workspaceId, 'agent.waiting', terminalId, hit.node.name)
+    )
+  } catch (error) {
+    console.error('agent.waiting could not be recorded:', error)
+  }
+}
+
 /** Does this terminal run an agent, or is it a bare shell? */
 function isAgentTerminal(terminalId: string): boolean {
   const hit = store.nodeAcrossWorkspaces(terminalId)
@@ -3088,7 +3128,7 @@ function registerDeepLinkScheme(): void {
 // silently mid-instantiate in August (post-mortem, archive/wave-c-20260816).
 // Rejections are logged and SURVIVED; a genuine uncaught exception still
 // exits, but flushes the durable witnesses on the way out.
-installProcessGuards({
+const faultGuards = installProcessGuards({
   append: (event) => events.append(event),
   workspace: () => {
     const meta = store.activeMeta()
@@ -3207,7 +3247,7 @@ const harnessInstallLine = (word: string): string | null => HARNESS_FACTS.find((
 /** What would stop this card booting, whatever runs now. Never a served one: its sandbox is its own. */
 function bootBlockOf(t: LaunchSubject): LaunchFailure | null {
   const home = store.ownerOf(t.id)
-  if (home !== undefined && servedSpawnContexts.has(home)) return null
+  if (home !== undefined && isServedWorkspace(home)) return null
   // spawnTracked moves a card to where its claude session lives first, so the check looks there too.
   return launchBlock({
     cwd: bootCwdOf(t),
@@ -3245,7 +3285,7 @@ function claudePrep(): ClaudeCardPrep {
 function ownerWorkspaceDirs(): string[] {
   return store
     .list()
-    .workspaces.filter((w) => !servedSpawnContexts.has(w.id))
+    .workspaces.filter((w) => !isServedWorkspace(w.id))
     .flatMap((w) => w.dirs)
 }
 
@@ -3253,7 +3293,7 @@ function ownerWorkspaceDirs(): string[] {
 function claudeFolderBlock(t: LaunchSubject, cwd: string): LaunchFailure | null {
   if (!isClaudeCommand(t.command)) return null
   const home = store.ownerOf(t.id)
-  if (home !== undefined && servedSpawnContexts.has(home)) return null
+  if (home !== undefined && isServedWorkspace(home)) return null
   const name = store.nodeAcrossWorkspaces(t.id)?.node.name
   return claudePrep().folderBlock(cwd, ownerWorkspaceDirs(), name)
 }
@@ -3282,7 +3322,7 @@ function prepareClaudeCard(command: string, cwd: string): void {
 function trustCardFolder(id: string): { dir: string; outcome: TrustOutcome; failure: LaunchFailure | null } {
   const hit = store.nodeAcrossWorkspaces(id)
   if (!hit || hit.node.kind !== 'terminal') throw new Error('No such agent')
-  if (servedSpawnContexts.has(hit.workspaceId)) throw new Error("A served card's folder is its own sandbox")
+  if (isServedWorkspace(hit.workspaceId)) throw new Error("A served card's folder is its own sandbox")
   // The folder the block was about: where the card will boot, after any session repair.
   const cwd = bootCwdOf(hit.node as TerminalNodeData)
   const outcome = claudePrep().trustChosen(cwd)
@@ -3585,7 +3625,7 @@ function spawnTracked(t: {
   // A served card is never moved: its sandbox is its boundary.
   const home = store.ownerOf(t.id)
   const repairedCwd =
-    isClaudeCommand(t.command) && t.claudeSessionId && !(home !== undefined && servedSpawnContexts.has(home))
+    isClaudeCommand(t.command) && t.claudeSessionId && !(home !== undefined && isServedWorkspace(home))
       ? claudeCwdRepair({ cwd: t.cwd, sessionId: t.claudeSessionId })
       : null
   if (repairedCwd !== null) {
@@ -4068,7 +4108,7 @@ function reconcileAgentLiveness(): void {
         .filter((e) => ptys.get(e.id) !== undefined || sessions.has(sessionNameFor(e.id)))
         .map((e) => e.id)
     )
-    const exempt = new Set(entries.filter((e) => servedSpawnContexts.has(e.workspaceId)).map((e) => e.id))
+    const exempt = new Set(entries.filter((e) => isServedWorkspace(e.workspaceId)).map((e) => e.id))
     const stale = staleAgentIds({ entries, observable: true, live, exempt })
     for (const id of stale) noteDetachedDeath(id)
     if (stale.length > 0) {
@@ -4162,7 +4202,7 @@ function sleepSweep(): void {
         isClaudeCommand(n.command) &&
         !!n.claudeSessionId &&
         (canRestoreExact(n) || claudeCwdRepair({ cwd: n.cwd, sessionId: n.claudeSessionId }) !== null),
-      served: n.servedSession != null || ptys.isServed(n.id) || servedSpawnContexts.has(store.ownerOf(n.id) ?? ''),
+      served: n.servedSession != null || ptys.isServed(n.id) || isServedWorkspace(store.ownerOf(n.id)),
       busy: agentBusy(n.id) || focused.has(sessionNameFor(n.id))
     }))
     const due = idleSleep.due(facts, Date.now(), windowMs)
@@ -5017,7 +5057,7 @@ async function endWorkspace(meta: WorkspaceMeta): Promise<ReturnType<WorkspaceSt
 
 function addWorkspaceDir(id: string, dir: string): ReturnType<WorkspaceStore['list']> {
   const list = store.addWorkspaceDir(id, dir)
-  if (!servedSpawnContexts.has(id)) trustChosenWorkspaceFolder(dir)
+  if (!isServedWorkspace(id)) trustChosenWorkspaceFolder(dir)
   return list
 }
 
@@ -7060,9 +7100,23 @@ useSignals.on((signal) => {
   if (signal.use === 'computer') remoteDesk.noteAgent(signal.card, store.nodeAcrossWorkspaces(signal.agent)?.node.name ?? 'An agent', signal.verb)
 })
 
+/**
+ * resources/cr-disclaim: starts a card's Chrome as its own responsible app, so
+ * macOS never blames Cookrew for Chrome's launch-time write into its own
+ * bundle. Mac only; null (Chrome spawned directly) where it was not built.
+ */
+function chromeLauncher(): string | null {
+  if (process.platform !== 'darwin') return null
+  const binary = app.isPackaged
+    ? path.join(process.resourcesPath, 'cr-disclaim')
+    : path.join(dirname, '../../resources/cr-disclaim/cr-disclaim')
+  return existsSync(binary) ? binary : null
+}
+
 const browserManager = new HeadlessBrowserManager({
   enabled: interactiveBrowserEnabled,
   chromePath: findChrome,
+  chromeLauncher,
   profileRoot: browserProfileRoot,
   // Chromium's own layout keeps downloaded components at INSTALLATION scope,
   // beside the profiles rather than inside each one. Cookrew gives every card a
@@ -7129,12 +7183,13 @@ const browserCast = createBrowserCast({
 const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
   store,
   manager: browserManager,
-  addNode: (node, workspaceId) => addNode(node, workspaceId),
+  // A card an agent asked for is its own in the activity log (socket-server.ts · agentActorOf).
+  addNode: (node, workspaceId, actor) => (actor ? store.withOpContext({ actor }, () => addNode(node, workspaceId)) : addNode(node, workspaceId)),
   updateNode,
   connectNodes: (aId, bId) => void store.connectAcross(aId, bId),
   // The caller's own workspace, whatever the window shows (browser-reach.ts).
   resolveBrowser: (name, terminalId) =>
-    browserForCaller(store, terminalId, name, ptys.isServed(terminalId) || servedSpawnContexts.has(store.ownerOf(terminalId) ?? ''))?.node,
+    browserForCaller(store, terminalId, name, ptys.isServed(terminalId) || isServedWorkspace(store.ownerOf(terminalId)))?.node,
   homeOf: (terminalId) => store.ownerOf(terminalId),
   onUse: (signal) => void useSignals.emit(signal),
   shotsDir: path.join(app.getPath('userData'), 'use-shots')
@@ -7142,7 +7197,7 @@ const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
 
 /** A caller's session runs here: the use surfaces are refused (use-source-service.ts). */
 function servedWorkspace(workspaceId: string): boolean {
-  if (servedSpawnContexts.has(workspaceId)) return true
+  if (isServedWorkspace(workspaceId)) return true
   return store.workspaceState(workspaceId).nodes.some((node) => node.kind === 'terminal' && ptys.isServed(node.id))
 }
 
@@ -7222,13 +7277,14 @@ function createBrowserInWorkspace(card: { url: string; name: string; terminalId:
 
 /** This command's card lives in main, wherever the caller stands (browser-owner.ts). */
 function browserCommandInMain(args: string[], terminalId: string): boolean {
-  const served = ptys.isServed(terminalId) || servedSpawnContexts.has(store.ownerOf(terminalId) ?? '')
+  const served = ptys.isServed(terminalId) || isServedWorkspace(store.ownerOf(terminalId))
   return commandRunsInMain(args, interactiveBrowserEnabled(), (name) => browserForCaller(store, terminalId, name, served)?.node)
 }
 
-function browserCommand(args: string[], terminalId: string): Promise<string> {
+function browserCommand(args: string[], terminalId: string, actor?: EventActor): Promise<string> {
+  // The renderer engine (no Chrome here) makes its cards over node:add: they stay the owner's.
   return browserCommandInMain(args, terminalId)
-    ? headlessBrowserCommands.run(args, terminalId)
+    ? headlessBrowserCommands.run(args, terminalId, actor)
     : rendererBrowserCommand(args, terminalId)
 }
 
@@ -7922,7 +7978,7 @@ app.whenReady().then(() => {
     // the owner's receipt of a session served elsewhere — and must not be
     // read for this.
     isServed: (terminalId) =>
-      ptys.isServed(terminalId) || servedSpawnContexts.has(store.ownerOf(terminalId) ?? ''),
+      ptys.isServed(terminalId) || isServedWorkspace(store.ownerOf(terminalId)),
     // `ask --no-wait` and `cookrew dispatch <id>`: the SAME engine the HTTP
     // route uses, so a CLI-minted dispatch and an API-minted one are one
     // record with one lifecycle.
@@ -8464,6 +8520,8 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   if (appShutdownStarted) return
   appShutdownStarted = true
+  // A fault storm's held-back count is said before the log closes (process-guards.ts).
+  faultGuards.releaseHeld()
   // Before anything is torn down: an open dispatch is commissioned work whose
   // outcome this process was the only witness to. Stamping it interrupted is
   // what separates "we lost sight of it" from "it never happened" for whoever
@@ -9146,6 +9204,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   // Turn/summary activity for the canvas cards.
   turns.on('activity', (activity) => {
     lazyTerminals.reconsider(activity.terminalId)
+    noteWaiting(activity.terminalId, activity.phase, activity.waitSeq)
     // A routed card in flight is followed at the gateway; at rest, it is not.
     routeService.onActivity(activity.terminalId, activity.phase)
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
@@ -9168,13 +9227,18 @@ function registerIpc(handlers: RestoreHandlers): void {
       // observed by the scrape first (no dispatchId) and closed by the file
       // path second — the second event carries latencyReported and must not
       // land a duplicate row in the event log.
+      // A finished turn ends its wait: the next one is said again (waiting-latch.ts).
+      waits.clear(terminalId)
       if (latencyReported !== true) {
-        const node = store.node(terminalId)
+        // In the AGENT'S workspace, not the one on screen: a background agent's
+        // turn was logged where the owner happened to be looking.
+        const hit = store.nodeAcrossWorkspaces(terminalId)
         store.withOpContext({ actor: 'agent' }, () =>
-          store.recordEvent(
+          store.recordEventIn(
+            hit?.workspaceId ?? store.focusedId,
             'turn.completed',
             terminalId,
-            node?.name ?? terminalId,
+            hit?.node.name ?? terminalId,
             turnDetails(dispatchId),
             durationMs
           )

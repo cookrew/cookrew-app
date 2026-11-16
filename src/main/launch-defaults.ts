@@ -103,11 +103,19 @@ export function appendedPath(current: string | undefined, dirs: readonly string[
  * PACKAGED APPS ONLY, by the caller. A launch from a terminal has the PATH its
  * person chose, and a QA instance's safety rests on that: a PATH without herdr
  * is what keeps a second Electron off the fleet's host.
+ *
+ * The system's own dirs are appended too. A relaunch can hand the app just
+ * /usr/bin:/bin, and main calls lsof, sysctl and scutil by name, all of which
+ * live in /usr/sbin. On 2026-11-16 lsof exited 127 there, so no Codex card
+ * could bind its rollout and each one opened on "No conversation yet".
  */
 export function widenedPath(env: Env, home: string, platform: string = process.platform): string {
   if (platform === 'win32') return env.PATH ?? ''
-  return appendedPath(env.PATH, installerDirs(home, platform))
+  return appendedPath(env.PATH, [...installerDirs(home, platform), ...SYSTEM_DIRS])
 }
+
+/** Where the OS keeps its own tools, lsof and sysctl among them. */
+const SYSTEM_DIRS = ['/usr/bin', '/bin', '/usr/sbin', '/sbin']
 
 /** Where installers put a tool, whether or not any shell has been told. */
 export function installerDirs(home: string, platform: string = process.platform): string[] {

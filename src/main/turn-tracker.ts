@@ -474,6 +474,8 @@ interface TrackedTerminal {
   boxRetry: ReturnType<typeof setTimeout> | null
   /** Running while a menu is missing from the screen: see menuMissing. */
   menuLeaving: ReturnType<typeof setTimeout> | null
+  /** Waits entered so far (TerminalActivity.waitSeq). */
+  waitSeq: number
   /** Epoch ms of the last Enter that did NOT start or answer a turn; 0 when consumed. */
   lastSubmitAt: number
   /**
@@ -2088,6 +2090,7 @@ export class TurnTracker extends EventEmitter {
       boxReadRev: 0,
       boxRetry: null,
       menuLeaving: null,
+      waitSeq: 0,
       lastSubmitAt: 0,
       sawInputThisTurn: false,
       healedOver: null,
@@ -3120,6 +3123,8 @@ export class TurnTracker extends EventEmitter {
 
   /** A wait raised, its mark read off the screen: a menu's going ends it, nothing else's does. */
   private raiseWait(t: TrackedTerminal): void {
+    // Entering a wait, not re-raising one already up: the count says "a new wait".
+    if (t.phase !== 'waiting') t.waitSeq += 1
     t.phase = 'waiting'
     this.forgetBox(t)
     t.menuShown = menuHeldOnScreen(t.session.viewportText())
@@ -3713,6 +3718,7 @@ export class TurnTracker extends EventEmitter {
       terminalId,
       agent: t.agent,
       phase: t.phase,
+      waitSeq: t.waitSeq,
       asked: t.sawInputThisTurn,
       prompt: t.prompt,
       pendingInput: pending.length > 0 ? pending : null,

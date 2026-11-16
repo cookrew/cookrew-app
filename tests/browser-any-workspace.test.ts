@@ -57,7 +57,7 @@ describe('cmdBrowser on the headless engine — the window shows another workspa
     store.switchWorkspace(cookrew)
 
     await expect(cmdBrowser(request(['fill', 'Solis-Shots', '#email', 'a@b.c'], me.id), deps)).resolves.toBe('delegated')
-    expect(browserCommand).toHaveBeenCalledWith(['fill', 'Solis-Shots', '#email', 'a@b.c'], me.id)
+    expect(browserCommand).toHaveBeenCalledWith(['fill', 'Solis-Shots', '#email', 'a@b.c'], me.id, 'agent')
   })
 
   it('wires and signals an unwired card of the caller\'s own canvas', async () => {
@@ -124,7 +124,7 @@ describe('cmdBrowser on the headless engine — the window shows another workspa
     store.switchWorkspace(cookrew)
 
     await expect(cmdBrowser(request(['create', 'https://example.test', 'Fresh'], me.id), deps)).resolves.toBe('delegated')
-    expect(browserCommand).toHaveBeenCalledWith(['create', 'https://example.test', 'Fresh'], me.id)
+    expect(browserCommand).toHaveBeenCalledWith(['create', 'https://example.test', 'Fresh'], me.id, 'agent')
     expect(createBrowserInWorkspace).not.toHaveBeenCalled()
   })
 
@@ -136,7 +136,7 @@ describe('cmdBrowser on the headless engine — the window shows another workspa
     await expect(
       cmdBrowser(request(['create', 'https://new.test', 'Solis-Shots'], me.id), deps)
     ).resolves.toMatch(/already exists in "GOAT".*now wired to you, navigated/)
-    expect(browserCommand).toHaveBeenCalledWith(['navigate', 'Solis-Shots', 'https://new.test'], me.id)
+    expect(browserCommand).toHaveBeenCalledWith(['navigate', 'Solis-Shots', 'https://new.test'], me.id, 'agent')
     expect(store.workspaceState(goat).connections).toEqual(
       expect.arrayContaining([expect.objectContaining({ a: me.id, b: shots.id })])
     )

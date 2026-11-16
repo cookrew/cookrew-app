@@ -58,6 +58,33 @@ describe('HeadlessBrowserManager node ownership', () => {
     expect(makeInstance.mock.calls[0][0].downloadDir).toBe(browserDownloadsDir('browser-1'))
   })
 
+  it('hands each Chrome the launcher that makes it its own responsible app', async () => {
+    const makeInstance = vi.fn((_options: HeadlessOptions) => fakeInstance())
+    const nodes = new Map([[browser().id, browser()]])
+    const manager = new HeadlessBrowserManager({
+      enabled: () => true,
+      chromePath: () => '/fake/chrome',
+      chromeLauncher: () => '/res/cr-disclaim',
+      profileRoot: () => '/profiles',
+      resolveNode: (id) => nodes.get(id) ?? null,
+      onPageState: vi.fn(),
+      onTabOpened: vi.fn(),
+      onTabClosed: vi.fn(),
+      makeInstance
+    })
+    await manager.replaceNodes([browser()])
+    await manager.syncNode(browser())
+    expect(makeInstance.mock.calls[0][0].launcher).toBe('/res/cr-disclaim')
+  })
+
+  it('launches Chrome directly when no launcher is wired', async () => {
+    const makeInstance = vi.fn((_options: HeadlessOptions) => fakeInstance())
+    const manager = managerWith(makeInstance)
+    await manager.replaceNodes([browser()])
+    await manager.syncNode(browser())
+    expect(makeInstance.mock.calls[0][0]).not.toHaveProperty('launcher')
+  })
+
   it('restores cold browser cards without launching Chromium', async () => {
     const makeInstance = vi.fn(() => fakeInstance())
     const manager = managerWith(makeInstance)

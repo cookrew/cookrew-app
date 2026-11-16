@@ -1,10 +1,29 @@
 import { describe, expect, it } from 'vitest'
 import {
   STATIC_FRAME_HEARTBEAT_MS,
+  chromeSpawnCommand,
   headlessLaunchArgs,
   internalPageKind,
   shouldEmitFrame
 } from '../src/main/headless-chrome'
+
+// macOS 2026-11-16: Chrome hard-links its own executable into a code-sign
+// clone at launch. Spawned by Cookrew, Cookrew is the responsible app, so App
+// Management blocks it and names Cookrew ("was prevented from modifying apps").
+describe('who Chrome answers to', () => {
+  const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+
+  it('goes through the launcher, Chrome first, so Chrome is its own responsible app', () => {
+    expect(chromeSpawnCommand(chrome, ['--headless=new', 'about:blank'], '/res/cr-disclaim')).toEqual({
+      command: '/res/cr-disclaim',
+      args: [chrome, '--headless=new', 'about:blank']
+    })
+  })
+
+  it('spawns Chrome directly when there is no launcher', () => {
+    expect(chromeSpawnCommand(chrome, ['about:blank'], undefined)).toEqual({ command: chrome, args: ['about:blank'] })
+  })
+})
 
 describe('headless profile storage flags', () => {
   it('disables background components and on-device model downloads per profile', () => {
