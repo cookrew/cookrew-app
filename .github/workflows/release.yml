@@ -70,11 +70,29 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - run: node scripts/release-gate.mjs tag "$GITHUB_REF_NAME"
 
-      - run: npm ci
+      # The tree main's CI installed and saved for exactly these inputs
+      # (scripts/ci-deps-key.mjs: lockfile minus the version, install scripts,
+      # cr-listen's source, platform, Node ABI). Owner ruling 2026-11-16: the
+      # release reads it too, the builds included. Read only: a tag's own
+      # cache would be visible to nothing after it.
+      - name: Dependency key
+        id: deps
+        run: node scripts/ci-deps-key.mjs
+
+      - name: Restore node_modules
+        id: nm-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            resources/cr-listen/cr-listen
+          key: node-modules-${{ runner.os }}-${{ steps.deps.outputs.key }}
+
+      - if: steps.nm-cache.outputs.cache-hit != 'true'
+        run: npm ci
 
       - if: matrix.shard == 1
         run: npm run typecheck
@@ -105,11 +123,31 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+
+      # The tree main's CI installed and saved for exactly these inputs
+      # (scripts/ci-deps-key.mjs: lockfile minus the version, install scripts,
+      # cr-listen's source, platform, Node ABI). Owner ruling 2026-11-16: the
+      # release reads it too, the builds included. Read only: a tag's own
+      # cache would be visible to nothing after it.
+      - name: Dependency key
+        id: deps
+        run: node scripts/ci-deps-key.mjs
+
+      - name: Restore node_modules
+        id: nm-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            resources/cr-listen/cr-listen
+          key: node-modules-${{ runner.os }}-${{ steps.deps.outputs.key }}
 
       # postinstall rebuilds node-pty against Electron's ABI. This is the step
       # that cannot be done cross-platform, and the reason this job exists.
-      - run: npm ci
+      # Also when the restored macOS tree has no cr-listen: its clang may have
+      # failed where the tree was saved, and a release must carry it.
+      - if: steps.nm-cache.outputs.cache-hit != 'true' || (runner.os == 'macOS' && hashFiles('resources/cr-listen/cr-listen') == '')
+        run: npm ci
 
       # build-cr-listen.mjs exits 0 when clang fails, so the app still runs on a
       # broken dev machine, and a missing extraResource is only a warning. A
@@ -172,7 +210,8 @@ jobs:
           fi
           unset APPLE_API_KEY_P8
           # Forced here and only here: with a bad certificate this run goes red
-          # instead of quietly shipping unsigned. npm ci already rebuilt node-pty,
+          # instead of quietly shipping unsigned. The install (npm ci, or the tree
+          # main's CI cached from one) already rebuilt node-pty,
           # so no native build runs beside the certificate.
           npx electron-builder --mac --publish onTag -c.forceCodeSigning=true -c.npmRebuild=false
         env:

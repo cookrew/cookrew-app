@@ -135,6 +135,26 @@ describe('release.yml verify', () => {
     expect(release.jobs.build.needs).toBe('verify')
   })
 
+  // Owner ruling 2026-11-16: verify and the builds read the tree main's CI saved.
+  it('reads the tree CI saved, under the same key, and never writes one', () => {
+    const ciRestore = ci.jobs.check.steps.find((s) => s.uses?.startsWith('actions/cache/restore')) as Step
+    for (const name of ['verify', 'build']) {
+      const steps = release.jobs[name].steps
+      const restore = steps.find((s) => s.uses?.startsWith('actions/cache/restore')) as Step
+      expect(restore.with).toEqual(ciRestore.with)
+      expect(steps.some((s) => s.uses?.startsWith('actions/cache/save') || s.uses?.startsWith('actions/cache@'))).toBe(false)
+      const install = steps.find((s) => s.run === 'npm ci') as Step
+      expect(install.if).toContain(`steps.${restore.id}.outputs.cache-hit != 'true'`)
+      expect(steps.indexOf(install)).toBeGreaterThan(steps.indexOf(restore))
+    }
+  })
+
+  // A tree saved where clang failed has no cr-listen; a release must carry it.
+  it('installs on macOS when the restored tree lacks cr-listen', () => {
+    const install = release.jobs.build.steps.find((s) => s.run === 'npm ci') as Step
+    expect(install.if).toContain("runner.os == 'macOS' && hashFiles('resources/cr-listen/cr-listen') == ''")
+  })
+
   it('never cancels or queues a tag run behind another', () => {
     expect(release.concurrency?.group).toContain('github.run_id')
     expect(release.concurrency?.['cancel-in-progress']).toBe("${{ github.event_name == 'pull_request' }}")
