@@ -9,7 +9,7 @@
  * device IS its group, and the device view IS the machine's screen.
  */
 import { clamp01, derive, ease, lerp, ramp, type ZoomDir } from './zoom-path'
-import { crewOf, deviceOf, fitScale, machineFrameOf, machinesAt, screenFit, shelfPage, stackOf, thumbsOf, DECK_POSE, SHELF_FACE, type Box, type Pos, NEW_POSE } from './zoom-layout'
+import { colsOfView, crewOf, defaultDeviceView, deviceOf, fitScale, machineFrameOf, machinesAt, screenFit, shelfPage, stackOf, thumbsOf, DECK_POSE, SHELF_FACE, type Box, type DeviceView, type FeedPage, type Pos, NEW_POSE } from './zoom-layout'
 import { near, pinned, SCENE_CSS, SCENE_TYPE, sceneWords, SHELF_NAME_S, UNDER_FACE, type RestScales, type SceneWords } from './scene-words'
 import { fullPoses } from './full-poses'
 /* The cameras, the card stop's label and the words' scales: zoom-camera.ts. */
@@ -60,6 +60,20 @@ export interface FrameModel {
   deviceCols?: number
   /** A workspace tile's type, as the owner picked it (crew-cols.ts · useTileSize); absent, an agent card's own. */
   tileSize?: number
+  /** The workspaces stop's view, as the owner picked it (crew-cols.ts · useDeviceView); absent, the form factor's. */
+  deviceView?: DeviceView
+  /** The window a feed pages through (zoom-camera.ts · feedPageOf); absent, no feed can be laid. */
+  feedPage?: FeedPage
+  /** Laid out as a desk's, whatever the screen: the devices stop pictures every machine as its desktop shows it (owner, 2026-11-16). */
+  deviceDesk?: boolean
+}
+
+/** The device as this model lays it: one place for the painter and the view's own placement, so the two never differ. */
+export function deviceOfModel(model: FrameModel, narrow: boolean): ReturnType<typeof deviceOf> {
+  if (model.deviceDesk) return deviceOf(model.workspaces, false, model.screenAspect, colsOfView('grid'), model.tileSize)
+  const view = model.deviceView ?? defaultDeviceView(narrow)
+  const feed = view === 'feed' && model.deviceCols === undefined ? model.feedPage : undefined
+  return deviceOf(model.workspaces, narrow, model.screenAspect, model.deviceCols ?? colsOfView(view), model.tileSize, feed)
 }
 
 type Put = HTMLElement & { _t?: string; _o?: number; _l?: number; _h?: string; _d?: number }
@@ -426,7 +440,7 @@ const WASH = { w: 1200, h: 540 }
 export function layoutOf(model: FrameModel, narrow: boolean): Layout {
   // A tree under the leads, by the cables between agents (zoom-layout.ts · crewRows).
   const crew = crewOf(model.agents, narrow, model.crewCols, model.ties)
-  const device = deviceOf(model.workspaces, narrow, model.screenAspect, model.deviceCols, model.tileSize)
+  const device = deviceOfModel(model, narrow)
   // Every machine of the account in one row, this one first, each the one frame: the devices stop frames them all (zoom-layout.ts · machinesAt).
   const machines = machinesAt(model.otherMachines, machineFrameOf(device, narrow), narrow)
   return {

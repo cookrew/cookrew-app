@@ -379,6 +379,28 @@ export function screenOf(box: Box, aspect: number): Box {
 export const DEVICE_COLS = { wide: [1, 2], narrow: [1, 2] } as const
 export const defaultDeviceCols = (narrow: boolean): number => (narrow ? 1 : 2)
 
+/**
+ * THE WORKSPACES STOP'S TWO VIEWS (owner, 2026-11-16: "不选per row了，直接两种视图"):
+ * a feed, one workspace to a page and a swipe a page, as a short-video feed;
+ * and a grid, two to a row, as a photo-note wall. A phone opens on the feed,
+ * a desk on the grid.
+ */
+export type DeviceView = 'feed' | 'grid'
+export const DEVICE_VIEWS: readonly DeviceView[] = ['feed', 'grid']
+export const defaultDeviceView = (narrow: boolean): DeviceView => (narrow ? 'feed' : 'grid')
+export const colsOfView = (view: DeviceView): number => (view === 'feed' ? 1 : 2)
+/** The page a feed turns, in screen px: the window, less the header over it and the bar under it. */
+export interface FeedPage {
+  readonly w: number
+  readonly h: number
+  readonly top: number
+  readonly bottom: number
+}
+/** Room between a feed's tile and its page's edges, screen px. */
+const FEED_MARGIN = 16
+/** The most a feed draws a tile's px on screen: past it a desk's tall window would set the card's words at 30px. */
+const FEED_MAX_TYPE = 1.6
+
 /** workspace-tile.css draws a tile this many px across, then scales it to TILE.w. */
 export const TILE_DRAWN_W = 260
 /**
@@ -411,20 +433,27 @@ export function deviceOf(
   narrow: boolean,
   aspect = DEFAULT_SCREEN_ASPECT,
   picked?: number,
-  size: number = DEFAULT_TILE_SIZE
-): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number; gridTop: number; gridH: number; rowH: number; left: number; tile: { top: number; h: number }; face: number } {
-  const pick = picked ?? defaultDeviceCols(narrow)
+  size: number = DEFAULT_TILE_SIZE,
+  feedPage?: FeedPage
+): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number; gridTop: number; gridH: number; rowH: number; left: number; tile: { top: number; h: number }; face: number; feed: { S: number; step: number; top: number } | null } {
+  const pick = feedPage ? 1 : (picked ?? defaultDeviceCols(narrow))
   const cols = Math.max(1, Math.min(pick, ids.length))
   const form = narrow ? 'narrow' : 'wide'
-  const tile = tileOf(narrow, cols)
+  // A feed's page: the tile as wide as the window allows, and as tall as the page, its fan taking the room.
+  const pageH = feedPage ? feedPage.h - feedPage.top - feedPage.bottom : 0
+  const feedS = feedPage
+    ? Math.max(0.05, Math.min(tileFaceS(FEED_MAX_TYPE), (feedPage.w - 2 * FEED_MARGIN) / (SWS * TILE.w), (pageH - 2 * FEED_MARGIN) / (SWS * TILE.h)))
+    : 0
+  const tile = feedPage ? { top: TILE.top, h: Math.max(TILE.h, (pageH - 2 * FEED_MARGIN) / (feedS * SWS)) } : tileOf(narrow, cols)
   const tw = SWS * TILE.w
   const th = SWS * tile.h
   const gap = TILE_GAP[form]
   const dx = tw + gap
-  const dy = th + gap
+  const dy = feedPage ? pageH / feedS : th + gap
+  const gapY = dy - th
   const rows = Math.max(1, Math.ceil(ids.length / cols))
   const gridW = cols * dx - gap
-  const gridH = rows * dy - gap
+  const gridH = rows * dy - gapY
   const left = -gridW / 2
   const gridTop = -gridH / 2
   const at: Record<string, Pos> = {}
@@ -435,7 +464,8 @@ export function deviceOf(
   const top = titleBottom - TITLE_ROOM[form]
   const bottom = -gridTop + FOOT[form]
   const box = { w: gridW + SIDE[form], h: bottom - top, cy: (top + bottom) / 2 }
-  return { at, box, screen: screenOf(box, aspect), titleBottom, dx, gridTop, gridH, rowH: dy, left, tile, face: tileFaceS(size) }
+  const feed = feedPage ? { S: feedS, step: pageH, top: feedPage.top } : null
+  return { at, box, screen: screenOf(box, aspect), titleBottom, dx, gridTop, gridH, rowH: dy, left, tile, face: tileFaceS(size), feed }
 }
 
 /**

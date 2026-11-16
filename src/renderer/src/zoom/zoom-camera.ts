@@ -6,7 +6,7 @@
  * zoom-frame.ts paints with these, tests pin them.
  */
 import { clamp01, ease, lerp } from './zoom-path'
-import { fitScale, SWS, TILE, type Box, type crewOf, type deviceOf, type Pos, type stackOf, type thumbsOf } from './zoom-layout'
+import { fitScale, SWS, TILE, type Box, type crewOf, type deviceOf, type FeedPage, type Pos, type stackOf, type thumbsOf } from './zoom-layout'
 import { PHONE_TYPE, sceneWords, type RestScales, type SceneWords } from './scene-words'
 
 export const GROUP_BOX: Box = { w: 430, h: 320, cy: 0 }
@@ -146,8 +146,20 @@ export const PHONE_HEAD = 56
 const PHONE_SIDE = 16
 /** The rows a desk frames before the grid scrolls instead of shrinking: one, as a tile is drawn at an agent card's type. */
 const DESK_DEVICE_ROWS = 1
+/** The view tools and "New workspace" over a desk's tiles (zoom.css · .zv-view-tools, .zv-new-workspace). */
+const DESK_HEAD = 56
+/** A feed's page: the window between the tools over it and the stop bar under it (zoom-layout.ts · deviceOf). */
+export const feedPageOf = (w: number, h: number, narrow: boolean): FeedPage =>
+  narrow ? { w, h, top: PHONE_HEAD, bottom: PHONE_BAR } : { w, h, top: DESK_HEAD, bottom: DESK_BAR }
 export function deviceCam(device: Device, w: number, h: number, narrow: boolean, pan = 0): { S: number; Oy: number; panMax: number } {
   const { box } = device
+  // A feed: each tile centred in its page, a page apart, so a scroll of k pages stands tile k where the first stood.
+  if (device.feed) {
+    const { S, step, top } = device.feed
+    const th = SWS * device.tile.h
+    const panMax = Math.max(0, (device.gridH - th) * S)
+    return { S, Oy: top + step / 2 - (device.gridTop + th / 2) * S - Math.min(Math.max(pan, 0), panMax), panMax }
+  }
   if (narrow) {
     const S = Math.min(device.face, (w - PHONE_SIDE * 2) / box.w)
     const panMax = Math.max(0, PHONE_HEAD + device.gridH * S + PHONE_MARGIN - (h - PHONE_BAR))

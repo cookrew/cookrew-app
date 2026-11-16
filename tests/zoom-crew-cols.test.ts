@@ -4,9 +4,9 @@
 // the form factor's own default (2 on a phone, 5 on a desk).
 import { describe, expect, it } from 'vitest'
 import { crewOf, CREW_COLS, defaultCrewCols, defaultDeviceCols, deviceOf, DEVICE_COLS, SWS, TILE, TILE_DRAWN_W, TILE_SIZES } from '../src/renderer/src/zoom/zoom-layout'
-import { crewColsOf, crewColsKey, perRowChoices, perRowKey, tileSizeOf } from '../src/renderer/src/zoom/crew-cols'
-import { layoutOf, type FrameModel } from '../src/renderer/src/zoom/zoom-frame'
-import { deviceCam } from '../src/renderer/src/zoom/zoom-camera'
+import { crewColsOf, crewColsKey, deviceViewOf, perRowChoices, perRowKey, tileSizeOf } from '../src/renderer/src/zoom/crew-cols'
+import { deviceOfModel, layoutOf, type FrameModel } from '../src/renderer/src/zoom/zoom-frame'
+import { deviceCam, feedPageOf } from '../src/renderer/src/zoom/zoom-camera'
 
 const agents = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `a${i}`, orch: false }))
 const rowsOf = (at: Record<string, { y: number }>): number[] => {
@@ -156,5 +156,57 @@ describe('a workspace tile’s type', () => {
     expect(tileSizeOf('1.15')).toBe(1.15)
     expect(tileSizeOf('2')).toBeNull()
     expect(tileSizeOf(null)).toBeNull()
+  })
+})
+
+// THE WORKSPACES STOP'S TWO VIEWS (owner, 2026-11-16: "不选per row了，直接两种视图，per row 1
+// 类似抖音视频流，per row 2类似小红书平铺"), and the devices stop pictured as a desktop shows it.
+describe('the workspaces stop’s feed and grid', () => {
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`)
+  const model = (over: Partial<FrameModel>): FrameModel => ({ agents: [], items: [], links: [], ties: [], workspaces: ids(5), otherMachines: 0, active: 'w0', newest: null, ...over })
+
+  it('a feed lays one workspace a page: a scroll of one page stands the next tile where the first stood', () => {
+    for (const [w, h, narrow] of [[390, 795, true], [1440, 851, false]] as const) {
+      const page = feedPageOf(w, h, narrow)
+      const d = deviceOfModel(model({ deviceView: 'feed', feedPage: page }), narrow)
+      expect(d.feed).not.toBeNull()
+      const step = h - page.top - page.bottom
+      expect(d.feed?.step).toBeCloseTo(step, 6)
+      const cam = deviceCam(d, w, h, narrow)
+      expect(cam.panMax).toBeCloseTo(4 * step, 6)
+      const ys = ids(5).map((id) => d.at[id].y * cam.S)
+      expect(ys[1] - ys[0]).toBeCloseTo(step, 6)
+      // Each tile inside its page, across no more than the window.
+      expect(SWS * d.tile.h * cam.S).toBeLessThanOrEqual(step - 32 + 1e-6)
+      expect(SWS * TILE.w * cam.S).toBeLessThanOrEqual(w - 32 + 1e-6)
+    }
+  })
+
+  it('a phone’s feed fills its width, its tile as tall as the page', () => {
+    const page = feedPageOf(390, 795, true)
+    const d = deviceOfModel(model({ deviceView: 'feed', feedPage: page }), true)
+    const S = deviceCam(d, 390, 795, true).S
+    expect(SWS * TILE.w * S).toBeCloseTo(390 - 32, 6)
+    expect(SWS * d.tile.h * S).toBeCloseTo(795 - page.top - page.bottom - 32, 6)
+  })
+
+  it('a grid is two to a row; unpicked, a phone opens on the feed and a desk on the grid', () => {
+    expect(rowsOf(deviceOfModel(model({ deviceView: 'grid' }), true).at)).toEqual([2, 2, 1])
+    expect(deviceOfModel(model({ feedPage: feedPageOf(390, 795, true) }), true).feed).not.toBeNull()
+    expect(deviceOfModel(model({ feedPage: feedPageOf(1440, 851, false) }), false).feed).toBeNull()
+  })
+
+  it('the devices stop lays the machine as its desktop does, whatever the view', () => {
+    const d = deviceOfModel(model({ deviceView: 'feed', feedPage: feedPageOf(390, 795, true), deviceDesk: true }), true)
+    expect(d.feed).toBeNull()
+    expect(rowsOf(d.at)).toEqual([2, 2, 1])
+    expect(d.box).toEqual(deviceOf(ids(5), false, undefined, 2).box)
+  })
+
+  it('a stored view, else the per-row pick it replaced, else none', () => {
+    expect(deviceViewOf('grid', '1')).toBe('grid')
+    expect(deviceViewOf(null, '1')).toBe('feed')
+    expect(deviceViewOf(null, '2')).toBe('grid')
+    expect(deviceViewOf('junk', null)).toBeNull()
   })
 })

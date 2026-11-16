@@ -1,7 +1,7 @@
 .zv-mark { --zv-tile-r: calc(12px * var(--zv-k, 1)); position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
 .zv-mark > * { pointer-events: none; }
-.zv-tile { position: absolute; left: -112px; top: -174px; width: 430px; height: 486px; border-radius: var(--zv-tile-r); background: var(--zv-card); opacity: 0; }
-.dm-tile { position: absolute; left: -112px; top: -174px; width: 260px; height: 294px; transform: scale(calc(430 / 260)); transform-origin: 0 0; overflow: hidden; isolation: isolate; border-radius: calc(var(--zv-tile-r) * 260 / 430); background: var(--zv-card); box-shadow: inset 0 0 0 1px var(--zv-hair-2), 0 1px 3px var(--zv-shadow-sm); color: var(--zv-ink); font-family: var(--zv-mono); pointer-events: none; z-index: 5; }
+.zv-tile { position: absolute; left: -112px; top: -174px; width: 430px; height: var(--zv-tile-h, 486px); border-radius: var(--zv-tile-r); background: var(--zv-card); opacity: 0; }
+.dm-tile { position: absolute; left: -112px; top: -174px; width: 260px; height: calc(var(--zv-tile-h, 486px) * 260 / 430); transform: scale(calc(430 / 260)); transform-origin: 0 0; overflow: hidden; isolation: isolate; border-radius: calc(var(--zv-tile-r) * 260 / 430); background: var(--zv-card); box-shadow: inset 0 0 0 1px var(--zv-hair-2), 0 1px 3px var(--zv-shadow-sm); color: var(--zv-ink); font-family: var(--zv-mono); pointer-events: none; z-index: 5; }
 .dm-tile header,.dm-row,.dm-folder,.dm-fan,.dm-fan-tied,.dm-fan-tied button,.dm-ov-layer,.dm-agent-card,.dm-head { pointer-events: auto; }
 .dm-tile header { position: relative; z-index: 4; display: flex; align-items: center; gap: 6px; height: 30px; padding: 9px 10px 0; box-sizing: border-box; }
 .dm-tile h3 { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 17px/1.3 var(--zv-serif); }
@@ -28,8 +28,8 @@
 .dm-card-head .zv-cnt svg { width: 10px; height: 10px; }
 .dm-count.agents { position: absolute; right: 0; top: 0; bottom: 0; z-index: 2; display: flex; align-items: center; padding: 0 9px 0 22px; pointer-events: none; background: linear-gradient(to right, transparent, var(--zv-card) 60%); }
 .dm-seal { min-width: 18px; height: 18px; padding: 0 3px; box-sizing: border-box; border-radius: 2px; background: var(--zv-seal-fill); color: var(--zv-on-seal); font: 600 11px/18px var(--zv-mono); font-style: normal; text-align: center; }
-.dm-folder { position: relative; height: 218px; overflow: hidden; border-top: 1px solid var(--zv-rule); }
-.dm-folder-view { position: relative; height: 188px; overflow: hidden; background: var(--zv-paper-2); }
+.dm-folder { position: relative; height: calc(100% - 76px); overflow: hidden; border-top: 1px solid var(--zv-rule); }
+.dm-folder-view { position: relative; height: calc(100% - 30px); overflow: hidden; background: var(--zv-paper-2); }
 .dm-ov-layer { position: absolute; inset: 0 0 30px; z-index: 5; overflow: hidden; background: var(--zv-card); box-shadow: 0 2px 6px var(--zv-shadow); translate: 0 -104%; transition: translate 320ms cubic-bezier(.2,.8,.2,1); touch-action: pan-y; user-select: none; -webkit-user-select: none; }
 .dm-ov-layer:not(.on) { pointer-events: none; }
 .dm-ov-layer.on { translate: 0 0; cursor: pointer; }
@@ -75,10 +75,12 @@
 .dm-agent-card { position: absolute; left: 16px; top: 10px; width: 228px; height: 168px; }
 .dm-agent-card-box { position: absolute; left: -16px; top: -66px; width: 260px; height: 244px; }
 .dm-agent-card .ag-plate > :is(.zv-av, .zv-nm, .ag-meta, .zv-del) { display: none; }
-.zv-door { appearance: none; position: absolute; z-index: 1; top: -174px; height: 486px; margin: 0; padding: 0; border: 0; background: none; cursor: pointer; pointer-events: auto !important; }
+.zv-door { appearance: none; position: absolute; z-index: 1; top: -174px; height: var(--zv-tile-h, 486px); margin: 0; padding: 0; border: 0; background: none; cursor: pointer; pointer-events: auto !important; }
 .zv-tile-name { max-width: calc(430px / var(--zv-k, 1)); overflow: hidden; text-overflow: ellipsis; }
 .zv-mark > .zv-door { pointer-events: inherit; }
 .zv-door.agents { left: -112px; width: 210px; border-radius: var(--zv-tile-r) 0 0 var(--zv-tile-r); }
 .zv-door.items { left: 98px; width: 220px; border-radius: 0 var(--zv-tile-r) var(--zv-tile-r) 0; }
 .zv-door.agents.whole { width: 430px; border-radius: var(--zv-tile-r); }
 .dm-tile ~ .zv-door { opacity: 0; }
+/* A feed (owner 2026-11-16): one workspace a page, its tile as tall as the page (zoom-layout.ts · deviceOf); no title over the pages. */
+.zv-device[data-view='feed'] .zv-device-label { visibility: hidden; }

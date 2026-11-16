@@ -6,7 +6,7 @@
  * its form factor's default (zoom-layout.ts · defaultCrewCols, defaultDeviceCols).
  */
 import { useCallback, useSyncExternalStore } from 'react'
-import { CREW_COLS, DEVICE_COLS, TILE_SIZES } from './zoom-layout'
+import { CREW_COLS, DEVICE_COLS, DEVICE_VIEWS, TILE_SIZES, type DeviceView } from './zoom-layout'
 
 /** The views that lay their things in rows the owner can pick. */
 export type PerRowView = 'crew' | 'device'
@@ -87,4 +87,39 @@ export function useTileSize(): [number | null, (size: number) => void] {
     for (const fn of listeners) fn()
   }, [])
   return [size, set]
+}
+
+/** The workspaces stop's view (zoom-layout.ts · DeviceView), remembered on this device and per form factor. */
+export const deviceViewKey = (narrow: boolean): string => `cookrew.zoom.deviceView.${narrow ? 'phone' : 'desk'}`
+
+/** A stored view, or the per-row pick it replaced (1 a feed, 2 a grid), or null. */
+export function deviceViewOf(stored: string | null, legacyCols: string | null): DeviceView | null {
+  if (stored !== null && (DEVICE_VIEWS as readonly string[]).includes(stored)) return stored as DeviceView
+  if (legacyCols === '1') return 'feed'
+  if (legacyCols === '2') return 'grid'
+  return null
+}
+
+function readDeviceView(narrow: boolean): DeviceView | null {
+  try {
+    return deviceViewOf(window.localStorage.getItem(deviceViewKey(narrow)), window.localStorage.getItem(perRowKey('device', narrow)))
+  } catch {
+    return null
+  }
+}
+
+export function useDeviceView(narrow: boolean): [DeviceView | null, (view: DeviceView) => void] {
+  const view = useSyncExternalStore(subscribe, () => readDeviceView(narrow), () => null)
+  const set = useCallback(
+    (next: DeviceView) => {
+      try {
+        window.localStorage.setItem(deviceViewKey(narrow), next)
+      } catch {
+        // Storage refused (private mode): the pick lasts as long as nothing re-reads it.
+      }
+      for (const fn of listeners) fn()
+    },
+    [narrow]
+  )
+  return [view, set]
 }

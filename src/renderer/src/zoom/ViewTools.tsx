@@ -2,6 +2,7 @@ import { cookrew } from '../api'
 import { CrIcon } from '../icons'
 import { openSourcePicker } from '../use/source-picker-store'
 import { perRowChoices } from './crew-cols'
+import type { DeviceView } from './zoom-layout'
 
 /**
  * THE VIEW'S TOOLBAR (owner 2026-11-12: "remote desktop takes too much room:
@@ -47,6 +48,32 @@ export interface TileSizePick {
   readonly onPick: (size: number) => void
 }
 
+/** The workspaces stop's two views (zoom-layout.ts · DeviceView): the one shown and its setter. */
+export interface DeviceViewPick {
+  readonly view: DeviceView
+  readonly onPick: (view: DeviceView) => void
+}
+
+const FEED = (
+  <svg className="zv-cols-glyph" viewBox="0 0 12 12" aria-hidden="true">
+    <rect x="3" y="0.5" width="6" height="11" rx="1.2" />
+  </svg>
+)
+
+const WALL = (
+  <svg className="zv-cols-glyph" viewBox="0 0 12 12" aria-hidden="true">
+    <rect x="1" y="1" width="4" height="6" rx="1" />
+    <rect x="7" y="1" width="4" height="4" rx="1" />
+    <rect x="1" y="8" width="4" height="3" rx="1" />
+    <rect x="7" y="6" width="4" height="5" rx="1" />
+  </svg>
+)
+
+const VIEW_BUTTONS: ReadonlyArray<{ view: DeviceView; glyph: React.JSX.Element; label: string }> = [
+  { view: 'feed', glyph: FEED, label: 'Feed: one workspace a page' },
+  { view: 'grid', glyph: WALL, label: 'Grid: two workspaces a row' }
+]
+
 const GRID = (
   <svg className="zv-cols-glyph" viewBox="0 0 12 12" aria-hidden="true">
     <rect x="1" y="1" width="4" height="4" rx="1" />
@@ -57,11 +84,21 @@ const GRID = (
 )
 
 /** The bar itself; nothing at all when it would hold nothing. */
-export function ViewTools({ perRow = null, tileSize = null }: { perRow?: PerRow | null; tileSize?: TileSizePick | null }): React.JSX.Element | null {
+export function ViewTools({ perRow = null, tileSize = null, deviceView = null }: { perRow?: PerRow | null; tileSize?: TileSizePick | null; deviceView?: DeviceViewPick | null }): React.JSX.Element | null {
   const desk = canShareScreen()
-  if (!perRow && !tileSize && !desk) return null
+  if (!perRow && !tileSize && !deviceView && !desk) return null
   return (
     <div className="zv-view-tools" role="toolbar" aria-label="View tools">
+      {deviceView && (
+        <span className="zv-view-cols zv-view-mode" role="group" aria-label="Workspaces view">
+          {VIEW_BUTTONS.map((one) => (
+            <button key={one.view} type="button" className="zv-fv-arts-btn" aria-pressed={deviceView.view === one.view} onClick={() => deviceView.onPick(one.view)} aria-label={one.label} title={one.label}>
+              {one.glyph}
+            </button>
+          ))}
+        </span>
+      )}
+      {deviceView && (perRow || tileSize) && <i className="zv-view-sep" aria-hidden="true" />}
       {perRow && (
         <span className="zv-view-cols" role="group" aria-label={`${perRow.what === 'agents' ? 'Agents' : 'Workspaces'} per row`} title="Per row">
           {GRID}
@@ -82,7 +119,7 @@ export function ViewTools({ perRow = null, tileSize = null }: { perRow?: PerRow 
           ))}
         </span>
       )}
-      {(perRow || tileSize) && desk && <i className="zv-view-sep" aria-hidden="true" />}
+      {(perRow || tileSize || deviceView) && desk && <i className="zv-view-sep" aria-hidden="true" />}
       <RemoteDeskButton />
     </div>
   )
