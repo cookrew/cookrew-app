@@ -2,8 +2,6 @@ import { useState } from 'react'
 import { ACCOUNT_COPY } from '../../../shared/account-guide-copy'
 import { accountVia, defaultChoices, needsDefault, subscriptionLines } from '../../../shared/ai-account'
 import type { RouteState } from '../../../shared/route'
-import { keyLineFor } from '../../../shared/route-lines'
-import { KEY_PRESETS } from '../../../shared/route-view'
 import { openMagpieSettings } from '../routing/magpie-card'
 import { MagpieSwitches, useMagpieSwitches } from '../routing/MagpieSwitches'
 import type { LiveValues } from '../../../shared/launch-settings'
@@ -82,13 +80,14 @@ export function AccountWays({ route, endpointActive, endpoint, onRun, running, o
         {subscriptions.map((s) => press(s.line, s.label))}
       </Way>
       {on.magpie && (
-      <Way title={ACCOUNT_COPY.API_KEY} does={ACCOUNT_COPY.API_KEY_DOES} stack={magpie !== 'absent'}>
-        {magpie === 'absent' || !route
-          ? needsMagpie()
-          : KEY_PRESETS.map((preset) => {
-              const line = keyLineFor(route.setup.addKeyLine, preset)
-              return line === null ? null : press(line, preset, { enter: false })
-            })}
+      <Way title={ACCOUNT_COPY.API_KEY} does={ACCOUNT_COPY.API_KEY_DOES}>
+        {magpie === 'absent' || !route ? (
+          needsMagpie()
+        ) : (
+          <button type="button" className="fr-fix" data-way="api-key" onClick={() => void openMagpieSettings().then(setRemoteProblem)}>
+            {ACCOUNT_COPY.REMOTE_OPEN}
+          </button>
+        )}
       </Way>
       )}
       {on.magpie && on.magpieRemote && (
@@ -102,7 +101,7 @@ export function AccountWays({ route, endpointActive, endpoint, onRun, running, o
         )}
       </Way>
       )}
-      {on.magpie && on.magpieRemote && remoteProblem && (
+      {on.magpie && remoteProblem && (
         <p className="fr-error" role="alert">
           {remoteProblem}
         </p>

@@ -40,7 +40,7 @@ export const ROUTING_COPY = {
   addAutoGroup: 'Auto group (local tier)',
   autoGroupNeedsScript: 'run the auto-group script once',
   noRoutable: 'no routable models',
-  keyHint: 'the line is typed; paste the key and press Enter — it never touches Cookrew'
+  keyHint: 'opens Magpie’s settings: Providers › Add, the key typed there, never in a terminal'
 } as const
 
 /** Key presets the Add menu offers; each is one `magpie provider add <preset> <key>` line. */

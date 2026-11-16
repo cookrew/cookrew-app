@@ -1,10 +1,9 @@
 import { SHARE_COPY } from '../../../shared/account-guide-copy'
 import { useState } from 'react'
 import type { HarnessRow, RouteDecision, RouteModel, RouteState } from '../../../shared/route'
-import { KEY_PRESETS, ROUTING_COPY, autoGroupItem, decisionFacts, harnessTicks, routeChoices, statusLine, routeHead, ruleTitle } from '../../../shared/route-view'
+import { ROUTING_COPY, autoGroupItem, decisionFacts, harnessTicks, routeChoices, statusLine, routeHead, ruleTitle } from '../../../shared/route-view'
 import { mcpLibraryLine } from '../../../shared/quota-view'
 import { AccountCard } from './AccountCard'
-import { keyLineFor } from '../../../shared/route-lines'
 import { openMagpieSettings } from './magpie-card'
 import { useMagpieSwitches } from './MagpieSwitches'
 import { runningLabel, type SetupRunning } from './setup-line-state'
@@ -148,40 +147,29 @@ export function Harnesses({
 export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: { setup: RouteState['setup']; onRun: RunLine; defaultOpen?: boolean; running?: SetupRunning | null }): React.JSX.Element {
   const busyFor = (line: string | null): string | null => (line === null ? null : runningLabel(running, line))
   const [open, setOpen] = useState(defaultOpen)
-  const [keys, setKeys] = useState(false)
-  const [remoteProblem, setRemoteProblem] = useState<string | null>(null)
+  // Keys are typed into Magpie's own page, never a terminal (routing/magpie-card.ts): what went wrong opening it.
+  const [settingsProblem, setSettingsProblem] = useState<string | null>(null)
   // Another computer's Magpie is offered only with its switch on (a bridge without switches offers it).
   const remoteOn = useMagpieSwitches().values?.magpieRemote ?? true
   const [unexpected, setUnexpected] = useState(false)
   const toggle = (): void => {
     setOpen((o) => !o)
-    setKeys(false)
-    setRemoteProblem(null)
+    setSettingsProblem(null)
     // The notice is about the last click on the open menu; a new opening starts clean.
     setUnexpected(false)
   }
   const run = (line: string, enter = true): void => {
     setOpen(false)
-    setKeys(false)
     onRun(line, { enter })
   }
-  // Only `magpie provider add ` + preset is ever typed; a stem of another
-  // shape means main changed the line and the renderer refuses to guess.
-  const runKey = (preset: string): void => {
-    const line = keyLineFor(setup.addKeyLine, preset)
-    if (line === null) {
-      setUnexpected(true)
-      setOpen(false)
-      setKeys(false)
-      return
-    }
-    setUnexpected(false)
-    run(line, false)
+  const openSettings = (): void => {
+    setOpen(false)
+    void openMagpieSettings().then(setSettingsProblem)
   }
   return (
     <span className="cr-routing-add">
       {unexpected && <span className="cr-routing-bad">setup line unexpected — nothing typed</span>}{' '}
-      {remoteProblem && <span className="cr-routing-bad">{remoteProblem}</span>}{' '}
+      {settingsProblem && <span className="cr-routing-bad">{settingsProblem}</span>}{' '}
 
       <button type="button" className="cr-routing-btn primary" aria-expanded={open} onClick={toggle}>
         {ROUTING_COPY.add} ▾
@@ -192,30 +180,16 @@ export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: {
             <b>{ROUTING_COPY.addSubscription}</b>
             <span className="c">{busyFor(setup.addSubscriptionLine) ?? `${setup.addSubscriptionLine} · claude login · gemini auth`}</span>
           </button>
-          <button type="button" role="menuitem" aria-expanded={keys} onClick={() => setKeys((k) => !k)}>
+          <button type="button" role="menuitem" data-item="api-key" onClick={openSettings}>
             <b>{ROUTING_COPY.addKey}</b>
-            <span className="c">
-              {setup.addKeyLine}‹key› — {ROUTING_COPY.keyHint}
-            </span>
+            <span className="c">{ROUTING_COPY.keyHint}</span>
           </button>
-          {keys && (
-            <div className="cr-routing-presets">
-              {KEY_PRESETS.map((preset) => (
-                <button key={preset} type="button" className="cr-routing-pick" data-preset={preset} onClick={() => runKey(preset)}>
-                  {preset}
-                </button>
-              ))}
-            </div>
-          )}
           {remoteOn && (
           <button
             type="button"
             role="menuitem"
             data-item="remote-magpie"
-            onClick={() => {
-              setOpen(false)
-              void openMagpieSettings().then(setRemoteProblem)
-            }}
+            onClick={openSettings}
           >
             <b>{ROUTING_COPY.addRemote}</b>
             <span className="c">{ROUTING_COPY.addRemoteHint}</span>

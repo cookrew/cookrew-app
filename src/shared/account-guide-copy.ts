@@ -15,7 +15,7 @@ export const ACCOUNT_COPY = {
   SUBSCRIPTION_DOES: 'Sign in with the plan you already pay for. A browser page opens; come back here when it says you are signed in.',
   SUBSCRIPTION_NONE: 'Install Claude Code or Codex above first, or install Magpie.',
   API_KEY: 'API key',
-  API_KEY_DOES: 'Pick the vendor, then paste the key into the Setup terminal below and press Enter. Magpie keeps it; Cookrew never sees it.',
+  API_KEY_DOES: 'In Magpie’s settings choose Providers › Add, pick the vendor and paste its key there. Magpie keeps it; it never passes through a terminal or Cookrew.',
   ENDPOINT: 'Your own endpoint',
   REMOTE: 'Another computer’s Magpie',
   REMOTE_DOES: 'Use the accounts, quota and routing groups of a Magpie on another computer you own. In Magpie’s settings choose Providers › Add › Remote magpie and type its address and key there: the key never passes through a terminal.',
