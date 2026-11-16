@@ -105,6 +105,8 @@ export interface RouteServiceDeps {
   enabled?: () => boolean
   /** Loopback ports of Remote magpie tunnels made by hand (route/remote-ports.ts): denied to the sandbox too. */
   remotePorts?: () => number[]
+  /** The same, by provider id, for the panel's warning. */
+  remoteLoopback?: () => { id: string; port: number }[]
   schedule?: (fn: () => void, ms: number) => () => void
   writeFile?: (file: string, content: string) => void
 }
@@ -211,6 +213,7 @@ export class RouteService extends EventEmitter {
       }
     }
     return {
+      loopbackRemotes: this.deps.remoteLoopback?.() ?? [],
       status: probe.status,
       gateway: probe.gateway,
       why: probe.why,

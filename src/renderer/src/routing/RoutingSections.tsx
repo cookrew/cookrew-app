@@ -1,10 +1,11 @@
+import { SHARE_COPY } from '../../../shared/account-guide-copy'
 import { useState } from 'react'
 import type { HarnessRow, RouteDecision, RouteModel, RouteState } from '../../../shared/route'
 import { KEY_PRESETS, ROUTING_COPY, autoGroupItem, decisionFacts, harnessTicks, routeChoices, statusLine, routeHead, ruleTitle } from '../../../shared/route-view'
 import { mcpLibraryLine } from '../../../shared/quota-view'
 import { AccountCard } from './AccountCard'
 import { keyLineFor } from '../../../shared/route-lines'
-import { RemoteMagpieForm } from './RemoteMagpieForm'
+import { openMagpieSettings } from './magpie-card'
 import { useMagpieSwitches } from './MagpieSwitches'
 import { runningLabel, type SetupRunning } from './setup-line-state'
 import { cookrew } from '../api'
@@ -148,14 +149,14 @@ export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: {
   const busyFor = (line: string | null): string | null => (line === null ? null : runningLabel(running, line))
   const [open, setOpen] = useState(defaultOpen)
   const [keys, setKeys] = useState(false)
-  const [remote, setRemote] = useState(false)
+  const [remoteProblem, setRemoteProblem] = useState<string | null>(null)
   // Another computer's Magpie is offered only with its switch on (a bridge without switches offers it).
   const remoteOn = useMagpieSwitches().values?.magpieRemote ?? true
   const [unexpected, setUnexpected] = useState(false)
   const toggle = (): void => {
     setOpen((o) => !o)
     setKeys(false)
-    setRemote(false)
+    setRemoteProblem(null)
     // The notice is about the last click on the open menu; a new opening starts clean.
     setUnexpected(false)
   }
@@ -180,6 +181,7 @@ export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: {
   return (
     <span className="cr-routing-add">
       {unexpected && <span className="cr-routing-bad">setup line unexpected — nothing typed</span>}{' '}
+      {remoteProblem && <span className="cr-routing-bad">{remoteProblem}</span>}{' '}
 
       <button type="button" className="cr-routing-btn primary" aria-expanded={open} onClick={toggle}>
         {ROUTING_COPY.add} ▾
@@ -206,20 +208,18 @@ export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: {
             </div>
           )}
           {remoteOn && (
-          <button type="button" role="menuitem" data-item="remote-magpie" aria-expanded={remote} onClick={() => setRemote((r) => !r)}>
+          <button
+            type="button"
+            role="menuitem"
+            data-item="remote-magpie"
+            onClick={() => {
+              setOpen(false)
+              void openMagpieSettings().then(setRemoteProblem)
+            }}
+          >
             <b>{ROUTING_COPY.addRemote}</b>
             <span className="c">{ROUTING_COPY.addRemoteHint}</span>
           </button>
-          )}
-          {/* The menu stays open: the form says where to paste the key, and closing would unmount that. */}
-          {remoteOn && remote && (
-            <RemoteMagpieForm
-              onRun={(line, options) => {
-                setUnexpected(false)
-                onRun(line, { enter: options?.enter ?? true })
-              }}
-              onCancel={() => setRemote(false)}
-            />
           )}
           <button type="button" role="menuitem" disabled={busyFor(setup.addLocalLine) !== null} onClick={() => run(setup.addLocalLine)}>
             <b>{ROUTING_COPY.addLocal}</b>
@@ -423,3 +423,30 @@ export function Rented({ state }: { state: RouteState }): React.JSX.Element | nu
     </>
   )
 }
+
+/**
+ * A Remote magpie on this computer's loopback is a tunnel, and while it is down any
+ * program that takes its port is handed the key and every request (route/remote-ports.ts).
+ * Each one is named, with the press that takes it out: an allowlisted line the owner runs.
+ */
+export function LoopbackRemotes({ rows, onRun }: { rows: readonly { id: string; port: number }[] | undefined; onRun: RunLine }): React.JSX.Element | null {
+  if (!rows || rows.length === 0) return null
+  const ids = [...new Set(rows.map((row) => row.id))]
+  return (
+    <div className="cr-routing-bad" role="alert" data-section="loopback-remotes">
+      <b>{SHARE_COPY.LOOPBACK_HEAD}</b>
+      {ids.map((id) => {
+        const port = rows.find((row) => row.id === id)?.port ?? 0
+        return (
+          <p key={id}>
+            {SHARE_COPY.LOOPBACK(id, port)}{' '}
+            <button type="button" className="cr-routing-btn" onClick={() => onRun(`magpie provider rm ${id}`, { enter: true })}>
+              {SHARE_COPY.LOOPBACK_REMOVE(id)}
+            </button>
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+

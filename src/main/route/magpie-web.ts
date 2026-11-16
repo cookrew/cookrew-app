@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync } from 'node:fs'
 import net from 'node:net'
@@ -20,6 +20,15 @@ import { writeFileAtomic } from '../atomic-file'
  * environment, never on a command line. A seat that could read that environment
  * still cannot use it: every port in MAGPIE_WEB_PORTS is denied to the sandbox
  * (route/service.ts · gatewayPorts).
+ *
+ * THE PAGE MUST BE OURS. The link carries the key, so before it is handed over the
+ * process listening on the port is checked to be the one this module started
+ * (lsof; magpie web listens in the process it was started as, 0.1.3935). Another
+ * program answering there, a squatter, gets nothing. Where the listener cannot be
+ * read (no lsof) the check is skipped, and a same-user program that takes the port
+ * in the moment between the check and the card's first load is not ruled out: the
+ * window is made short, not closed. A served seat cannot take these ports at all
+ * (sandbox-deny.ts · network-bind).
  */
 
 export const MAGPIE_WEB_PORTS: readonly number[] = [3431, 3432, 3433, 3434, 3435, 3436, 3437, 3438, 3439, 3440]
@@ -44,6 +53,8 @@ export interface MagpieWebDeps {
   readonly answers?: (port: number) => Promise<boolean>
   readonly start?: (bin: string, port: number, key: string) => ChildProcess
   readonly wait?: (ms: number) => Promise<void>
+  /** The PIDs listening on a loopback port, or null when that cannot be read. */
+  readonly listeners?: (port: number) => Promise<number[] | null>
 }
 
 export function readHeld(file: string, read: (f: string) => string = (f) => readFileSync(f, 'utf8')): Held | null {
@@ -79,6 +90,17 @@ async function answersOnLoopback(port: number): Promise<boolean> {
   }
 }
 
+function loopbackListeners(port: number): Promise<number[] | null> {
+  return new Promise((resolve) => {
+    execFile('lsof', ['-nP', `-iTCP@127.0.0.1:${port}`, '-sTCP:LISTEN', '-t'], { timeout: 3_000 }, (error, stdout) => {
+      const pids = String(stdout).split('\n').map((line) => Number(line.trim())).filter((pid) => Number.isInteger(pid) && pid > 0)
+      // lsof exits 1 with nothing to list; anything else without output is "cannot tell".
+      if (pids.length > 0) return resolve(pids)
+      resolve(error && (error as { code?: unknown }).code === 1 ? [] : null)
+    })
+  })
+}
+
 function startMagpieWeb(bin: string, port: number, key: string): ChildProcess {
   return spawn(bin, ['web', '--no-open', '--addr', `127.0.0.1:${port}`], {
     env: { ...process.env, MAGPIE_WEB_KEY: key },
@@ -108,6 +130,7 @@ export class MagpieWeb {
     if (bin === null) return { ok: false, why: 'Magpie is not installed on this computer.' }
     const answers = this.deps.answers ?? answersOnLoopback
     if (this.child !== null && this.child.exitCode === null && this.held !== null && (await answers(this.held.port))) {
+      if (!(await this.ours(this.child, this.held.port))) return this.squatted(this.held.port)
       return { ok: true, url: linkOf(this.held.port, this.held.key), port: this.held.port }
     }
     const saved = readHeld(this.deps.file)
@@ -131,11 +154,26 @@ export class MagpieWeb {
     const wait = this.deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
     for (let waited = 0; waited < READY_MS; waited += STEP_MS) {
       if (child.exitCode !== null) return { ok: false, why: 'Magpie’s page stopped as it started. Run `magpie web` in a terminal to see why.' }
-      if (await answers(port)) return { ok: true, url: linkOf(port, held.key), port }
+      if (await answers(port)) {
+        if (!(await this.ours(child, port))) return this.squatted(port)
+        return { ok: true, url: linkOf(port, held.key), port }
+      }
       await wait(STEP_MS)
     }
     this.stop()
     return { ok: false, why: 'Magpie’s page did not answer in time.' }
+  }
+
+  /** Is the process listening on the port the one we started? Unknowable counts as yes (see the header). */
+  private async ours(child: ChildProcess, port: number): Promise<boolean> {
+    const pids = await (this.deps.listeners ?? loopbackListeners)(port)
+    if (pids === null) return true
+    return child.pid !== undefined && pids.includes(child.pid)
+  }
+
+  private squatted(port: number): MagpieWebOpen {
+    this.stop()
+    return { ok: false, why: `Another program is answering on port ${port}, so Magpie’s settings were not opened. Quit it and try again.` }
   }
 
   private async firstFree(free: (port: number) => Promise<boolean>): Promise<number | null> {

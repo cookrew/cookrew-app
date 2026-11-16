@@ -2,7 +2,7 @@
 // own provider list and denied to a served sandbox. Only addresses are read.
 import { describe, expect, it } from 'vitest'
 import path from 'node:path'
-import { providersFile, remoteLoopbackPorts } from '../src/main/route/remote-ports'
+import { providersFile, remoteLoopbackPorts, remoteLoopbackProviders } from '../src/main/route/remote-ports'
 
 const env = { home: '/Users/x', env: {} }
 const list = (providers: unknown[]): string => JSON.stringify({ providers, groups: [], order: [] })
@@ -28,3 +28,15 @@ describe('remoteLoopbackPorts', () => {
     expect(providersFile({ home: '/h', env: { XDG_CONFIG_HOME: '/xdg' } })).toBe(path.join('/xdg', 'magpie', 'providers.json'))
   })
 })
+
+describe('remoteLoopbackProviders', () => {
+  it('names each loopback Remote magpie once per port, for the panel’s warning', () => {
+    const json = list([
+      { id: 'solis', preset: 'remote-magpie', anthropic: 'http://127.0.0.1:13425', chat: 'http://127.0.0.1:13425/v1' },
+      { id: 'office', preset: 'remote-magpie', chat: 'http://192.168.1.20:3425/v1' },
+      { id: 'Bad Id', preset: 'remote-magpie', chat: 'http://127.0.0.1:1/v1' }
+    ])
+    expect(remoteLoopbackProviders(env, () => json)).toEqual([{ id: 'solis', port: 13425 }])
+  })
+})
+

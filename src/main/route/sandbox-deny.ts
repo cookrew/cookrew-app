@@ -17,5 +17,7 @@ import { DEFAULT_PORT } from './discovery'
  */
 export function gatewayDenyClauses(ports: readonly number[]): string[] {
   const distinct = [...new Set([...ports, DEFAULT_PORT])].filter((p) => Number.isInteger(p) && p > 0 && p < 65536).sort((a, b) => a - b)
-  return distinct.map((port) => `(deny network-outbound (remote ip "*:${port}"))`)
+  // Neither reached nor taken: a seat that bound one of these first would be the gateway,
+  // Magpie's page or a tunnel's end to everything that dials it.
+  return distinct.flatMap((port) => [`(deny network-outbound (remote ip "*:${port}"))`, `(deny network-bind (local ip "*:${port}"))`])
 }

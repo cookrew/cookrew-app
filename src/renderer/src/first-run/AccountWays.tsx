@@ -4,7 +4,7 @@ import { accountVia, defaultChoices, needsDefault, subscriptionLines } from '../
 import type { RouteState } from '../../../shared/route'
 import { keyLineFor } from '../../../shared/route-lines'
 import { KEY_PRESETS } from '../../../shared/route-view'
-import { RemoteMagpieForm } from '../routing/RemoteMagpieForm'
+import { openMagpieSettings } from '../routing/magpie-card'
 import { MagpieSwitches, useMagpieSwitches } from '../routing/MagpieSwitches'
 import type { LiveValues } from '../../../shared/launch-settings'
 import { runningLabel, type SetupRunning } from '../routing/setup-line-state'
@@ -48,7 +48,7 @@ function Way({ title, does, stack = false, children }: { title: string; does?: s
 const SHOW_ALL: LiveValues = { magpie: true, magpieRemote: true }
 
 export function AccountWays({ route, endpointActive, endpoint, onRun, running, onSetDefault, switches, showSwitches = true }: AccountWaysProps): React.JSX.Element {
-  const [remoteOpen, setRemoteOpen] = useState(false)
+  const [remoteProblem, setRemoteProblem] = useState<string | null>(null)
   const read = useMagpieSwitches().values
   const on = switches ?? read ?? SHOW_ALL
   const installed = route !== null && (route.status !== 'absent' || route.switchedOff === true)
@@ -96,13 +96,17 @@ export function AccountWays({ route, endpointActive, endpoint, onRun, running, o
         {magpie === 'absent' || !route ? (
           needsMagpie()
         ) : (
-          <button type="button" className="fr-fix" aria-expanded={remoteOpen} onClick={() => setRemoteOpen((o) => !o)}>
-            {ACCOUNT_COPY.OPEN}
+          <button type="button" className="fr-fix" data-way="remote-magpie" onClick={() => void openMagpieSettings().then(setRemoteProblem)}>
+            {ACCOUNT_COPY.REMOTE_OPEN}
           </button>
         )}
       </Way>
       )}
-      {on.magpie && on.magpieRemote && remoteOpen && magpie !== 'absent' && <RemoteMagpieForm onRun={onRun} onCancel={() => setRemoteOpen(false)} />}
+      {on.magpie && on.magpieRemote && remoteProblem && (
+        <p className="fr-error" role="alert">
+          {remoteProblem}
+        </p>
+      )}
       {endpoint !== undefined && (
         <div className="fr-way-endpoint">
           {endpoint}

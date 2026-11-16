@@ -60,6 +60,7 @@ export function ShareDevicesView({
           {SHARE_COPY.ADDRESSES}: {where.urls.length > 0 ? where.urls.map((url) => <code key={url}>{url} </code>) : SHARE_COPY.NO_ADDRESS}
         </p>
       )}
+      {where && where.urls.length > 0 && <p className="small" data-note="plain-http">{SHARE_COPY.PLAIN}</p>}
       {problem && (
         <p className="cr-routing-bad" role="alert">
           {problem}

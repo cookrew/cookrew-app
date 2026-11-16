@@ -3,13 +3,11 @@
 // made, both caps by id, the list, a revoke; and the remote-magpie line exactly
 // as the form builds it, with a key pasted after `key=`.
 
-import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { magpieBinary, magpieRunner, ShareKeys } from '../src/main/route/share-keys'
-import { checkRemoteMagpie } from '../src/shared/remote-magpie'
 
 const live = process.env.COOKREW_MAGPIE_LIVE === '1'
 const bin = magpieBinary({ home: os.homedir(), env: process.env })
@@ -44,19 +42,5 @@ describe.runIf(live && bin !== null)('share keys on the real magpie', () => {
     expect(await keys.issue({ device: 'live probe', dailyUsd: 7 })).toMatchObject({ ok: false })
     expect(await keys.revoke(listed[0].id)).toEqual({ ok: true })
     expect(await keys.list()).toEqual([])
-  })
-
-  it('adds another computer’s Magpie from the exact line, the key pasted after key=', () => {
-    const checked = checkRemoteMagpie({ address: '192.168.77.77', name: 'Office Mac' })
-    if (!checked.ok) throw new Error(checked.why)
-    const words = `${checked.line}magpie-pasted-probe`.split(' ')
-    // The remote is not there: the provider is still written, with the address and key it was given.
-    try {
-      execFileSync(bin as string, words.slice(1), { timeout: 30_000, stdio: 'pipe' })
-    } catch {
-      // a model fetch that cannot connect may set a non-zero exit; the providers list is the proof
-    }
-    const providers = execFileSync(bin as string, ['providers'], { timeout: 30_000 }).toString()
-    expect(providers).toMatch(/office-mac\s+192\.168\.77\.77:3425/)
   })
 })

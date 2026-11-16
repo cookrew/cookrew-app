@@ -35,8 +35,22 @@ const portOf = (raw: unknown): number | null => {
   }
 }
 
+export interface LoopbackRemote {
+  readonly id: string
+  readonly port: number
+}
+
 /** The loopback ports of every Remote magpie provider; empty when the list cannot be read. */
 export function remoteLoopbackPorts(d: DiscoveryEnv, read: (file: string) => string = (file) => readFileSync(file, 'utf8')): number[] {
+  return [...new Set(remoteLoopbackProviders(d, read).map((row) => row.port))].sort((a, b) => a - b)
+}
+
+/**
+ * Each Remote magpie provider on this computer's loopback, by id: the panel warns of
+ * every one, since a program that takes the port while the tunnel is down is handed
+ * the key and every request Magpie sends there.
+ */
+export function remoteLoopbackProviders(d: DiscoveryEnv, read: (file: string) => string = (file) => readFileSync(file, 'utf8')): LoopbackRemote[] {
   let parsed: unknown
   try {
     parsed = JSON.parse(read(providersFile(d)))
@@ -45,15 +59,19 @@ export function remoteLoopbackPorts(d: DiscoveryEnv, read: (file: string) => str
   }
   const list = (parsed as { providers?: unknown })?.providers
   if (!Array.isArray(list)) return []
-  const ports = new Set<number>()
+  const rows: LoopbackRemote[] = []
   for (const entry of list) {
     if (typeof entry !== 'object' || entry === null) continue
     const provider = entry as Record<string, unknown>
-    if (provider.preset !== 'remote-magpie') continue
+    if (provider.preset !== 'remote-magpie' || typeof provider.id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(provider.id)) continue
+    const seen = new Set<number>()
     for (const field of ENDPOINT_FIELDS) {
       const port = portOf(provider[field])
-      if (port !== null) ports.add(port)
+      if (port !== null && !seen.has(port)) {
+        seen.add(port)
+        rows.push({ id: provider.id, port })
+      }
     }
   }
-  return [...ports].sort((a, b) => a - b)
+  return rows.sort((a, b) => a.id.localeCompare(b.id) || a.port - b.port)
 }

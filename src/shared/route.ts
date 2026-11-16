@@ -158,6 +158,8 @@ export interface RouteState {
   why: string | null
   /** The owner switched Magpie off (launch settings): installed or not, nothing routes and no Magpie way is offered. */
   switchedOff?: boolean
+  /** Remote magpie providers on this computer's loopback (tunnels): whoever takes the port gets their key. */
+  loopbackRemotes?: { id: string; port: number }[]
   /** null = new cards stay direct even when online: the owner picks once, never inferred. */
   defaultModel: string | null
   providers: number

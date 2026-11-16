@@ -1,5 +1,4 @@
 import { XDOTOOL_INSTALL } from './remote-access'
-import { checkRemoteMagpie, REMOTE_MAGPIE_PRESET } from './remote-magpie'
 /**
  * THE LINES THE SETUP CARD MAY BE ASKED TO TYPE.
  *
@@ -39,8 +38,8 @@ export const ROUTE_LINE_PATTERNS: readonly RegExp[] = [
   new RegExp(`^magpie plugin add (${PLUGIN_PATH_QUOTED}|${PLUGIN_PATH_BARE})$`),
   /^magpie provider add [a-z0-9-]+ ?$/,
   /^magpie accounts add (claude|codex)$/,
-  // Another computer's Magpie (shared/remote-magpie.ts): typed without Enter, the person pastes the key after `key=`.
-  /^magpie provider add remote-magpie url=https?:\/\/[A-Za-z0-9.-]+(:[0-9]{1,5})? id=[a-z0-9][a-z0-9-]{0,23} key=$/,
+  // Taking out a Remote magpie on this computer's loopback (route/remote-ports.ts): the owner's own press.
+  /^magpie provider rm [a-z0-9][a-z0-9-]{0,63}$/,
   /^magpie group add smart models=[A-Za-z0-9./:,_-]+ routing=smart$/,
   // The local tier, exactly as scripts/route-auto-group.mjs prints it (stays=turn is required: Magpie facts §4).
   /^magpie group add auto models=[A-Za-z0-9./:,_-]+ routing=smart stays=turn$/,
@@ -87,19 +86,10 @@ export const FIRST_RUN_LINES: ReadonlySet<string> = new Set([
   'open https://ollama.com/download'
 ])
 
-const REMOTE_LINE_RE = new RegExp(`^magpie provider add ${REMOTE_MAGPIE_PRESET} url=(\\S+) id=(\\S+) key=$`)
-
 export function setupLineAllowed(line: string): boolean {
   if (FIRST_RUN_LINES.has(line)) return true
   if (line.length > 400 || /[\r\n\x00]/.test(line)) return false
-  if (!ROUTE_LINE_PATTERNS.some((pattern) => pattern.test(line))) return false
-  // The shape is not enough for another computer's Magpie: the address must pass the same
-  // rule the form applies (no plain http off the person's own network, never this computer),
-  // so a RouteState sent over the relay cannot point the gateway anywhere else.
-  const remote = REMOTE_LINE_RE.exec(line)
-  if (remote === null) return true
-  const checked = checkRemoteMagpie({ address: remote[1], name: remote[2] })
-  return checked.ok && checked.line === line
+  return ROUTE_LINE_PATTERNS.some((pattern) => pattern.test(line))
 }
 
 /** A line the person finishes by pasting a key: `magpie provider add <preset> ` or one ending at `key=`. */

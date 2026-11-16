@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { AccountWays } from '../src/renderer/src/first-run/AccountWays'
 import { AccountNudgeView } from '../src/renderer/src/first-run/AccountNudge'
-import { RemoteMagpieForm } from '../src/renderer/src/routing/RemoteMagpieForm'
 import { ShareDevicesView } from '../src/renderer/src/routing/ShareDevices'
 import { RoutingPanel } from '../src/renderer/src/routing/RoutingPanel'
 import { routeFixture } from '../src/shared/route-fixture'
@@ -66,7 +65,6 @@ describe('AccountWays', () => {
 
   it('has no field for a key', () => {
     expect(paint(routeFixture('online', { defaultModel: null }))).not.toMatch(/type="password"/)
-    expect(renderToStaticMarkup(<RemoteMagpieForm onRun={() => {}} />)).not.toMatch(/type="password"|name="key"/)
   })
 })
 
@@ -113,3 +111,34 @@ describe('ShareDevicesView', () => {
     expect(html).not.toContain('name="device"')
   })
 })
+
+describe('another computer’s Magpie', () => {
+  it('opens Magpie’s own settings instead of typing a key line into a terminal', () => {
+    const html = renderToStaticMarkup(<AccountWays route={routeFixture('online', { defaultModel: null, harnesses: [] })} endpointActive={false} onRun={() => {}} running={null} switches={{ magpie: true, magpieRemote: true }} showSwitches={false} />)
+    expect(html).toMatch(/data-way="remote-magpie"[^>]*>Open Magpie settings/)
+    expect(html).toContain('Providers › Add › Remote magpie')
+    expect(html).not.toContain('remote-magpie url=')
+  })
+})
+
+describe('a Remote magpie on loopback, in the Routing panel', () => {
+  it('is named with what it risks, and the press that takes it out is an allowed line', () => {
+    const html = renderToStaticMarkup(
+      <RoutingPanel open onClose={() => {}} state={routeFixture('online', { loopbackRemotes: [{ id: 'solis', port: 13425 }] })} available onRun={() => {}} setupTerminalId={null} focusTick={0} onSetDefault={() => {}} names={new Map()} />
+    )
+    expect(html).toContain('data-section="loopback-remotes"')
+    expect(html).toContain('127.0.0.1:13425')
+    expect(html).toContain('Take out solis')
+    expect(setupLineAllowed('magpie provider rm solis')).toBe(true)
+    expect(renderToStaticMarkup(<RoutingPanel open onClose={() => {}} state={routeFixture('online')} available onRun={() => {}} setupTerminalId={null} focusTick={0} onSetDefault={() => {}} names={new Map()} />)).not.toContain('loopback-remotes')
+  })
+})
+
+describe('Share with my devices on plain http', () => {
+  it('says what plain http risks beside the addresses', () => {
+    const html = renderToStaticMarkup(<ShareDevicesView keys={[]} where={{ onNetwork: true, urls: ['http://192.168.1.20:3425'] }} problem={null} issued={null} busy={false} onIssue={() => {}} onRevoke={() => {}} onCheck={() => {}} onDone={() => {}} />)
+    expect(html).toContain('data-note="plain-http"')
+    expect(html).toContain('never a café’s or a hotel’s')
+  })
+})
+

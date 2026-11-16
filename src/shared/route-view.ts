@@ -34,7 +34,7 @@ export const ROUTING_COPY = {
   addKey: 'API key',
   addLocal: 'Local',
   addRemote: 'Another computer’s Magpie',
-  addRemoteHint: 'its accounts and routing groups, by address and key',
+  addRemoteHint: 'opens Magpie’s settings: Providers › Add › Remote magpie, address and key typed there',
   addGroup: 'Routing group',
   groupNeedsTwo: 'needs two models in the catalog',
   addAutoGroup: 'Auto group (local tier)',

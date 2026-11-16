@@ -46,7 +46,9 @@ describe('MagpieWeb', () => {
         up.add(port)
         return fakeChild()
       },
-      wait: async () => undefined
+      wait: async () => undefined,
+      // A fake child listens nowhere: who listens cannot be read here.
+      listeners: async () => null
     })
     const opened = await web.open()
     expect(opened).toMatchObject({ ok: true, port: MAGPIE_WEB_PORTS[1] })
@@ -71,7 +73,9 @@ describe('MagpieWeb', () => {
         up.add(port)
         return fakeChild()
       },
-      wait: async () => undefined
+      wait: async () => undefined,
+      // A fake child listens nowhere: who listens cannot be read here.
+      listeners: async () => null
     })
     const first = await web.open()
     const second = await web.open()
@@ -85,6 +89,25 @@ describe('MagpieWeb', () => {
     const web = new MagpieWeb({ bin: () => '/bin/magpie', file, portFree: async () => true, answers: async () => false, start: () => child, wait: async () => undefined })
     expect(await web.open()).toEqual({ ok: false, why: 'Magpie’s page did not answer in time.' })
     expect(child.killed).toBe(true)
+  })
+
+  it('hands the link to no page but its own: a squatter on the port gets nothing', async () => {
+    const child = fakeChild()
+    ;(child as unknown as { pid: number }).pid = 4242
+    const web = new MagpieWeb({ bin: () => '/bin/magpie', file, portFree: async () => true, answers: async () => true, start: () => child, wait: async () => undefined, listeners: async () => [9999] })
+    const opened = await web.open()
+    expect(opened).toMatchObject({ ok: false, why: expect.stringContaining('Another program is answering') })
+    expect(JSON.stringify(opened)).not.toContain('?k=')
+    expect(child.killed).toBe(true)
+  })
+
+  it('opens when the listener is the page it started, and when the listener cannot be read', async () => {
+    for (const listeners of [async () => [4242, 7], async () => null]) {
+      const child = fakeChild()
+      ;(child as unknown as { pid: number }).pid = 4242
+      const web = new MagpieWeb({ bin: () => '/bin/magpie', file, portFree: async () => true, answers: async () => true, start: () => child, wait: async () => undefined, listeners })
+      expect(await web.open()).toMatchObject({ ok: true })
+    }
   })
 
   it('ignores a held file that is not ours', () => {
