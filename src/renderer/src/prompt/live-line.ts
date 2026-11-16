@@ -6,7 +6,7 @@ import { inputRefused } from './input-refused'
 import { cookrew } from '../api'
 import { agentRefs, artifactRefs, expandRefs, pendingName, type NamedAgent, type PromptArtifact } from './artifact-refs'
 import { draftKey, getDraft, setDraft } from './prompt-draft'
-import { shownWords, withShownWords } from './draft-pictures'
+import { draftOf, pictureTokens, shownWords, withShownWords } from './draft-pictures'
 
 /**
  * THE DRAFT IS THE AGENT'S OWN INPUT LINE (owner, 2026-11-01: the prompt box
@@ -23,6 +23,14 @@ import { shownWords, withShownWords } from './draft-pictures'
  *
  * Best effort, like the tracker's own reading: the line is assumed to end at
  * the cursor. An edit made in LIVE with the arrow keys is not seen.
+ *
+ * A picture's path waits for Enter (owner, 2026-11-16: a Chinese message with a
+ * screenshot reached Codex as "5 /Users/…/Screenshot_….jpg"). An agent folds a
+ * path that arrives as one burst into ONE element (Codex: [Image #1]), and one
+ * Backspace takes the element: every later edit's Backspaces over the path, 71
+ * by this count, took it with the first and the owner's words with the rest.
+ * So the line carries the words, and the paths go last, with the send from the
+ * box. Enter pressed in LIVE itself sends the words only, and the draft empties.
  */
 
 const BACKSPACE = '\x7f'
@@ -151,19 +159,22 @@ function lineOf(agentId: string): Line {
 }
 
 /**
- * Bring the agent's input line to `text`. Withheld while it asks a question, or
- * while the text is past LINE_MAX, unless `force` (an explicit send); the draft
- * keeps the words either way.
+ * Bring the agent's input line to `text`: its words only, unless `force` (an
+ * explicit send), which types its picture paths too, last. Withheld while it
+ * asks a question, or while the words are past LINE_MAX, unless `force`; the
+ * draft keeps the words either way.
  */
 export function typeLine(agentId: string, text: string, force = false): void {
   const line = lineOf(agentId)
   const now = Date.now()
-  if (!force && (held.has(agentId) || overLine(text) || activityStore.get(agentId)?.phase === 'waiting')) {
+  // The send (force) takes the pictures too, after every word; an edit only the words.
+  const want = force ? text : shownWords(text)
+  if (!force && (held.has(agentId) || overLine(want) || activityStore.get(agentId)?.phase === 'waiting')) {
     withLine(agentId, { ...line, editedAt: now })
     return
   }
-  const keys = lineKeys(line.typed, text)
-  withLine(agentId, { ...line, typed: text, editedAt: now })
+  const keys = lineKeys(line.typed, want)
+  withLine(agentId, { ...line, typed: want, editedAt: now })
   if (keys) cookrew().ptyInput(agentId, keys)
 }
 
@@ -204,8 +215,12 @@ export function observeLine(agentId: string, activity: TerminalActivity | undefi
   withLine(agentId, { ...read, typed: pending })
   // A draft waiting in the box is not on the line: the line has no say over it.
   const draft = getDraft(draftKey(agentId))
-  if (overLine(draft) && draft.trim() !== known.typed.trim()) return
-  setDraft(draftKey(agentId), pending)
+  const words = shownWords(draft)
+  if (overLine(words) && words.trim() !== known.typed.trim()) return
+  // The line has the words; the draft's pictures were never on it, so they stay —
+  // unless the line was emptied there (Enter or a clear in LIVE): they go with the words.
+  const pictures = pending === '' ? [] : pictureTokens(draft).filter((token) => !pending.includes(token))
+  setDraft(draftKey(agentId), draftOf(pending, pictures))
 }
 
 /** Keep the agent's draft in step with its line while a box for it is on screen. */
