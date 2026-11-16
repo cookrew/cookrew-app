@@ -1,6 +1,6 @@
 import { FRAMES, frameImg, type Frame } from './site-frames'
 import { esc, page, type Page } from './site-shell'
-import { COMPARE, DEFINITION, FEATURES, GITHUB_REPO, type FeatureSpec } from './site-content'
+import { COMPARE, DEFINITION, FEATURES, GITHUB_REPO, LISTED_FEATURES, type FeatureSpec } from './site-content'
 import type { Commit } from './github-commits'
 import { SEQUENCES, type Step } from './site-sequences'
 import { breadcrumbs, faqPage, organization, webPage } from './site-seo'
@@ -34,7 +34,7 @@ export function featurePage(slug: string): Page | null {
   const f = FEATURES.find((x) => x.slug === slug)
   if (!f) return null
   const steps = SEQUENCES[slug] ?? []
-  const related = f.related.map((r) => FEATURES.find((x) => x.slug === r)).filter((x): x is FeatureSpec => x !== undefined)
+  const related = f.related.map((r) => LISTED_FEATURES.find((x) => x.slug === r)).filter((x): x is FeatureSpec => x !== undefined)
   const path = `/features/${f.slug}`
   const visual =
     steps.length > 0
@@ -79,7 +79,7 @@ export function featurePage(slug: string): Page | null {
 }
 
 export function compareTable(): string {
-  return `<table class="cmp"><caption>Chat tab, single agent CLI, or Cookrew — what each can do (2026-09)</caption><thead><tr><th></th><th>A chat tab</th><th>One CLI agent</th><th>Cookrew</th></tr></thead><tbody>${COMPARE.map(
+  return `<table class="cmp"><caption>Chat tab, single agent CLI, or Cookrew — what each can do (2026-11)</caption><thead><tr><th></th><th>A chat tab</th><th>One CLI agent</th><th>Cookrew</th></tr></thead><tbody>${COMPARE.map(
     (r) => `<tr><th scope="row">${esc(r.question)}</th><td>${esc(r.chat)}</td><td>${esc(r.singleAgent)}</td><td><b>${esc(r.cookrew)}</b></td></tr>`
   ).join('')}</tbody></table>`
 }
@@ -100,8 +100,7 @@ export function commitsSection(commits: readonly Commit[] | null): string {
  * recording, .card-shot), never the image at its own pixel size.
  */
 export function featuresGrid(): string {
-  // The marketplace keeps its own page; the front page does not point at serving while sharing waits on security work.
-  return `<div class="grid shots">${FEATURES.filter((f) => f.slug !== 'marketplace').map((f) => {
+  return `<div class="grid shots">${LISTED_FEATURES.map((f) => {
     const steps = SEQUENCES[f.slug] ?? []
     const frame = steps[0] ? { file: steps[0].file, alt: steps[0].title, caption: steps[0].caption, width: steps[0].width, height: steps[0].height } : (FRAMES as Record<string, Frame>)[f.frames[0] ?? '']
     return `<div class="card" style="padding:0;overflow:hidden">${frame ? `<a class="card-shot" href="/features/${f.slug}">${frameImg(frame, { sizes: '(max-width: 860px) 100vw, 33vw' })}</a>` : ''}<div style="padding:14px 16px"><h3><a href="/features/${f.slug}">${esc(f.title)}</a></h3><p>${esc(f.short)}</p></div></div>`

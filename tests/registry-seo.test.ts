@@ -48,7 +48,9 @@ describe('the crawl files', () => {
     // not a sitemap URL, and the old addresses redirect.
     expect(xml).not.toContain('<loc>https://cookrew.dev/start</loc>')
     expect(xml).not.toContain('<loc>https://cookrew.dev/features</loc>')
-    for (const f of FEATURES) expect(xml).toContain(`<loc>https://cookrew.dev/features/${f.slug}</loc><priority>0.7</priority>`)
+    for (const f of FEATURES.filter((f) => f.slug !== 'marketplace')) expect(xml).toContain(`<loc>https://cookrew.dev/features/${f.slug}</loc><priority>0.7</priority>`)
+    // Still built for old links, never listed while sharing waits on security work.
+    expect(xml).not.toContain('/features/marketplace')
     expect(xml).not.toContain('lastmod')
     // No person and no team: those pages are gone, so no address but the site's own is named.
     const listed = [...xml.matchAll(/<loc>https:\/\/cookrew\.dev(\/[^<]*)<\/loc>/g)].map(([, at]) => at)
@@ -59,7 +61,9 @@ describe('the crawl files', () => {
     const text = llmsText()
     expect(text.startsWith('# Cookrew\n\n> Cookrew is an open-source desktop workspace')).toBe(true)
     for (const f of FAQ) expect(text).toContain(`### ${f.q}`)
-    expect(text).toContain('https://cookrew.dev/features/marketplace')
+    // The marketplace page is still built for old links, and listed nowhere (LISTED_FEATURES).
+    expect(text).not.toContain('https://cookrew.dev/features/marketplace')
+    expect(text).toContain('https://cookrew.dev/features/harnesses')
   })
 })
 

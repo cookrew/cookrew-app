@@ -1,6 +1,6 @@
 import type { Release } from './releases'
 import { LEGAL_PUBLISHED } from './site-legal-entity'
-import { DEFINITION, FACTS, FEATURES, GITHUB_REPO, SITE_NAME, SITE_ORIGIN, type Faq } from './site-content'
+import { DEFINITION, FACTS, GITHUB_REPO, LISTED_FEATURES, SITE_NAME, SITE_ORIGIN, type Faq } from './site-content'
 
 /**
  * WHAT A MACHINE READS — structured data and the crawl files.
@@ -104,7 +104,7 @@ export function sitemapXml(): string {
     { path: '/', priority: 1 },
     // /start and /features are anchors on the homepage; a fragment is not a
     // sitemap URL, and the redirects cover old links.
-    ...FEATURES.map((f) => ({ path: `/features/${f.slug}`, priority: 0.7 })),
+    ...LISTED_FEATURES.map((f) => ({ path: `/features/${f.slug}`, priority: 0.7 })),
     ...(LEGAL_PUBLISHED
       ? [
           { path: '/privacy', priority: 0.3 },

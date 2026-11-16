@@ -11,15 +11,17 @@ import { FRAMES } from '../registry/src/site-frames'
  * drawing on the page says it is a diagram.
  */
 
-const home = (): string => {
-  const files = buildStaticSite({
+const site = (): ReadonlyMap<string, string | Uint8Array> =>
+  buildStaticSite({
     release: null,
     commits: null,
     console: 'https://console.cookrew.dev',
     auth: 'https://auth.cookrew.dev',
     fonts: { 'inter.woff2': new Uint8Array([1]), 'jetbrains-mono.woff2': new Uint8Array([2]) }
   })
-  const body = files.get('index.html')
+
+const home = (): string => {
+  const body = site().get('index.html')
   if (typeof body !== 'string') throw new Error('no index.html')
   return body
 }
@@ -83,6 +85,27 @@ describe('the pillars say where every claim stands', () => {
   it('the front page does not point at serving or selling seats while sharing waits on security work', () => {
     const body = home()
     expect(body).not.toMatch(/press SERVE|a seat cost|x402|Stripe|href="\/features\/marketplace"/)
+  })
+
+  it('nothing a reader or a crawler is pointed at describes serving, seats or the marketplace as current', () => {
+    const files = site()
+    const banned = /\bserv(e|ed|es|ing)\b|marketplace|\bseats?\b|\bpriced\b|minted for callers|import a team/i
+    const read = (name: string): string => {
+      const body = files.get(name)
+      if (typeof body !== 'string') throw new Error(`no ${name}`)
+      return body
+    }
+    expect(read('llms.txt')).not.toMatch(banned)
+    expect(read('sitemap.xml')).not.toMatch(banned)
+    const jsonLd = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(read('index.html'))?.[1] ?? ''
+    expect(jsonLd).not.toMatch(banned)
+    // The pages' words, not their markup or the pictures' recorded captions of the 1 Nov interface.
+    const words = (html: string): string =>
+      html.replace(/<figcaption>[\s\S]*?<\/figcaption>/g, '').replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/g, '').replace(/<[^>]+>/g, ' ')
+    for (const name of [...files.keys()].filter((n) => /^features\/.+\.html$/.test(n) && n !== 'features/marketplace.html')) {
+      expect(words(read(name)), name).not.toMatch(banned)
+    }
+    expect(words(read('index.html'))).not.toMatch(banned)
   })
 })
 

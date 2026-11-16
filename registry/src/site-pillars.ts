@@ -34,7 +34,8 @@ function still(p: Pillar): string {
   if (p.frame === null) return ''
   const frame: Frame = FRAMES[p.frame]
   const portrait = frame.height > frame.width
-  return `<figure class="shot${portrait ? ' portrait' : ''}">${frameImg(frame, { sizes: portrait ? '300px' : '(max-width: 860px) 100vw, 40vw' })}<figcaption><span class="rec">● REC</span><span>Recorded from the running app, ${RECORDED}; the interface has moved on since. ${esc(frame.caption)}</span></figcaption></figure>`
+  const note = p.frameNote ? ` ${esc(p.frameNote)}` : ''
+  return `<figure class="shot${portrait ? ' portrait' : ''}">${frameImg(frame, { sizes: portrait ? '300px' : '(max-width: 860px) 100vw, 40vw' })}<figcaption><span class="rec">● REC</span><span>Recorded from the running app, ${RECORDED}; the interface has moved on since.${note} ${esc(frame.caption)}</span></figcaption></figure>`
 }
 
 /** The route as it is today, and the one hand-made experiment, as text in boxes: a diagram, never a screen. */
