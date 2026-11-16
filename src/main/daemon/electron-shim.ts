@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkS
 import { homedir, hostname, tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { PendingPort, PortHub, RelayedPort } from './owner-ports'
 
 /** What the daemon's launcher said, read once; the variables then leave process.env. */
 const launch = {
@@ -256,13 +257,17 @@ if (launch.isDaemon) {
  * the page it loads is the owner page. Any other window (a capture host, a boot
  * failure screen) is inert, as before.
  */
-type OwnerSink = (channel: string, args: readonly unknown[]) => void
+/** Hands the owner one event; false when it was not sent. Essential events are never dropped for backlog. */
+type OwnerSink = (channel: string, args: readonly unknown[], essential?: boolean) => boolean | void
 let ownerSink: OwnerSink | null = null
 let ownerContents: object | null = null
 /** The owner window and its webContents as emitters, for the real window's lifecycle events. */
 let ownerWindowEmitter: EventEmitter | null = null
 let ownerContentsEmitter: EventEmitter | null = null
 let ownerPage: string | null = null
+
+/** MessagePorts handed to the owner window, relayed across the owner link (owner-ports.ts). */
+const portHub = new PortHub(() => (ownerSink === null ? null : (channel, args, essential) => ownerSink?.(channel, args, essential) !== false))
 
 /** Window events sent before the owner connected, handed over when it does (bounded). */
 const EARLY_EVENTS_MAX = 1000
@@ -319,7 +324,11 @@ export class BrowserWindow extends EventEmitter {
         if (this.owner) toOwner(channel, args)
       },
       isDestroyed: (): boolean => !this.owner,
-      postMessage: (channel: string): void => missing(`webContents.postMessage(${channel}) (a MessagePort cannot cross the owner link)`),
+      /** Ports handed to the owner window cross as relayed ports (owner-ports.ts). */
+      postMessage: (channel: string, message: unknown, transfer?: readonly unknown[]): void => {
+        if (!this.owner) return missing(`webContents.postMessage(${channel}) on a window that is not the owner's`)
+        portHub.handOver(channel, message, transfer ?? [])
+      },
       capturePage: (): Promise<never> => Promise.reject(new Error('cookrewd cannot see the owner window; the app captures it'))
     })
     this.webContents = loud('webContents', contents)
@@ -416,6 +425,8 @@ export const ownerDispatch = {
   },
   /** As ipcRenderer.send: fire and forget, delivered once boot is done. */
   send(channel: string, args: readonly unknown[]): void {
+    // The owner's end of a relayed port talking back (owner-ports.ts), not an IPC channel.
+    if (portHub.fromOwner(channel, args)) return
     const deliver = (): void => {
       ipcMain.emit(channel, ownerEvent(), ...args)
     }
@@ -447,7 +458,10 @@ function ownerWindowEvent(target: 'window' | 'contents', name: string, args: rea
 /** The owner's app connected (a sink for its window's events) or left (null). */
 export function connectOwner(sink: OwnerSink | null): void {
   ownerSink = sink
-  if (sink === null) return
+  if (sink === null) {
+    portHub.closeAll()
+    return
+  }
   ownerHasConnected = true
   const held = earlyEvents
   earlyEvents = []
@@ -587,10 +601,14 @@ export const nativeImage = loud('nativeImage', { createEmpty: emptyImage, create
 
 export const net = loud('net', { fetch: (input: string | URL | Request, init?: RequestInit): Promise<Response> => fetch(input, init) })
 
+/** A pair whose second port, handed to the owner window, is relayed across the owner link. */
 export class MessageChannelMain {
+  readonly port1: RelayedPort
+  readonly port2: PendingPort
   constructor() {
-    missing('MessageChannelMain')
-    return loud('MessageChannelMain', this)
+    const { port1, port2 } = portHub.channel()
+    this.port1 = port1
+    this.port2 = port2
   }
 }
 

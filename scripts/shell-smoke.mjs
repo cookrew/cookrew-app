@@ -122,6 +122,29 @@ async function drive(page) {
     const still = await r.evaluate('window.cookrew.listWorkspaces().then(() => "ok")')
     if (still !== 'ok') return fail('the bridge stopped after a refused navigation')
     console.log('shell smoke: a navigation away was refused; the window stayed the owner page')
+    // A browser card: headless Chrome -> the daemon's cast -> a MessagePort relayed by the shell -> the renderer.
+    const frame = await r.evaluate(`(async () => {
+      const id = crypto.randomUUID()
+      await window.cookrew.addNode({ kind: 'browser', id, name: 'shell-smoke-browser', url: 'about:blank', position: { x: 900, y: 200 }, size: { width: 640, height: 420 } })
+      let got = 0
+      let first = ''
+      const stream = window.cookrew.openBrowserStream(id, {
+        onOpen() {},
+        onMessage(m) {
+          if (!first && m && m.t) first = m.t
+          if (m && m.t === 'frame' && !got) {
+            got = (m.jpeg && (m.jpeg.byteLength || m.jpeg.length)) || -1
+            stream.post({ t: 'painted', seq: m.seq })
+          }
+        },
+        onClose() {}
+      })
+      for (let i = 0; i < 160 && !got; i++) await new Promise((r) => setTimeout(r, 250))
+      stream.close()
+      return got > 0 ? 'frame:' + got : 'none (first message: ' + (first || 'nothing') + ')'
+    })()`)
+    if (!String(frame).startsWith('frame:')) return fail(`a browser card through the relayed port: ${frame}`)
+    console.log(`shell smoke: a browser card streamed through the relayed MessagePort (${String(frame).slice(6)}-byte JPEG)`)
   } finally {
     r.close()
   }
@@ -145,7 +168,8 @@ async function main() {
     COOKREW_SHELL_HIDDEN: '1',
     COOKREW_MULTIPLEXER: 'direct',
     COOKREW_REGISTRY: 'http://127.0.0.1:9',
-    COOKREW_INTERACTIVE_BROWSER: '0',
+    // On: browser cards are drawn by headless Chrome and stream over the relayed MessagePort.
+    COOKREW_INTERACTIVE_BROWSER: '1',
     COOKREW_MOBILE_PORT: String(PHONE_PORT),
     COOKREW_MOBILE_HTTPS_PORT: String(PHONE_PORT + 4)
   }

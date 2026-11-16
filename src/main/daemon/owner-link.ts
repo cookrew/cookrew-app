@@ -118,8 +118,13 @@ export function readOwnerFrame(line: string): OwnerFrame | null {
 }
 
 export interface OwnerLink {
-  /** Hand the owner one of its window's events. False when it was not sent (closed, or the owner is behind). */
-  emit(channel: string, args: readonly unknown[]): boolean
+  /**
+   * Hand the owner one of its window's events. False when it was not sent:
+   * the link is closed, or the owner is behind and the event is droppable.
+   * An ESSENTIAL event (a relayed port opening or closing) is written however
+   * far behind the owner is; it is small, and losing one leaks a stream.
+   */
+  emit(channel: string, args: readonly unknown[], essential?: boolean): boolean
   close(): void
   readonly closed: Promise<void>
 }
@@ -208,9 +213,9 @@ export function startOwnerLink(input: Readable, output: Writable, dispatch: Owne
     writeLine(line)
   }
 
-  const emit = (channel: string, args: readonly unknown[]): boolean => {
+  const emit = (channel: string, args: readonly unknown[], essential = false): boolean => {
     if (!open) return false
-    if (output.writableLength > EVENT_BACKLOG) {
+    if (!essential && output.writableLength > EVENT_BACKLOG) {
       droppedEvents += 1
       if (droppedEvents === 1 || droppedEvents % 1000 === 0) log(`[cookrewd] the owner is behind: ${droppedEvents} window event(s) dropped`)
       return false
