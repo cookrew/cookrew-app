@@ -21,6 +21,8 @@
     "start": "electron-vite preview",
     "daemon:build": "node scripts/daemon-build.mjs",
     "daemon:smoke": "node scripts/daemon-build.mjs && node scripts/daemon-smoke.mjs",
+    "shell:build": "node scripts/shell-build.mjs",
+    "shell:smoke": "node scripts/shell-build.mjs && node scripts/shell-smoke.mjs",
     "postinstall": "electron-rebuild -f -w node-pty; node scripts/ensure-node-pty.mjs; node scripts/build-cr-listen.mjs; node scripts/build-cr-disclaim.mjs",
     "test": "vitest run",
     "test:perf": "vitest run -c vitest.perf.config.ts",

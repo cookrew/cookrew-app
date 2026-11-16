@@ -310,6 +310,8 @@ export class BrowserWindow extends EventEmitter {
     super()
     this.owner = isOwnerWindowOptions(options) && ownerContents === null
     const contents = Object.assign(new EventEmitter(), {
+      /** Electron numbers webContents from 1; the owner window is the daemon's only one. */
+      id: this.owner ? 1 : 0,
       send: (channel: string, ...args: unknown[]): void => {
         if (this.owner) toOwner(channel, args)
       },
@@ -370,6 +372,15 @@ function ownerEvent(): { sender: object; senderFrame: { parent: null; url: strin
 
 const BOOT_WAIT_MS = 30_000
 
+/** The meta request for the channel list; `$` keeps it apart from every IPC channel (they are `area:verb`). */
+export const OWNER_CHANNELS = '$channels'
+
+/** Channels main answers (ipcMain.handle) and listens on (ipcMain.on), once boot is done. */
+function ownerChannels(): { handle: string[]; on: string[] } {
+  const on = ipcMain.eventNames().filter((name): name is string => typeof name === 'string' && ipcMain.listenerCount(name) > 0)
+  return { handle: [...handlers.keys()].sort(), on: on.sort() }
+}
+
 /** Boot done, or a refusal after BOOT_WAIT_MS. One promise for every waiter: no polling. */
 function booted(): Promise<void> {
   if (ownerIsReady) return Promise.resolve()
@@ -386,6 +397,9 @@ function booted(): Promise<void> {
 export const ownerDispatch = {
   async invoke(channel: string, args: readonly unknown[]): Promise<unknown> {
     await booted()
+    // The one request that is not main's own: which channels main serves, so
+    // the owner's app can register a forwarder for each (shell/index.ts).
+    if (channel === OWNER_CHANNELS) return ownerChannels()
     const handler = handlers.get(channel)
     if (handler === undefined) throw new Error(`no handler for ${channel}`)
     return handler(ownerEvent(), ...args)
