@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
 import { ownerSecretPaths, browserStatePaths, defaultSessionStatePaths } from '../src/main/owner-secrets'
 
 const HOME = '/Users/owner'
@@ -19,7 +20,7 @@ describe('browserStatePaths — where a card keeps its logged-in identity', () =
   it('is absolute and rooted under the owner home', () => {
     for (const p of browserStatePaths(HOME, 'Cookrew')) {
       expect(path.isAbsolute(p)).toBe(true)
-      expect(p.startsWith(HOME)).toBe(true)
+      expect(p.startsWith(native(HOME))).toBe(true)
     }
   })
 })

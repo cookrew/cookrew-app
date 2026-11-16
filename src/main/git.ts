@@ -146,15 +146,26 @@ export async function addWorktree(
  */
 export const GATE_TIMEOUT_MS = 10 * 60_000
 
+/**
+ * How a gate command starts. On Windows npm is npm.cmd: execFile cannot find it
+ * by its bare name, and Node starts a .cmd only through cmd.exe
+ * (CVE-2024-27980), so every repo gate (`npm run <script>`) failed there and
+ * no lane could land. Every other command starts as given, with no shell.
+ */
+export function gateLaunch(command: string, platform: NodeJS.Platform = process.platform): { file: string; shell: boolean } {
+  return platform === 'win32' && command === 'npm' ? { file: 'npm.cmd', shell: true } : { file: command, shell: false }
+}
+
 export function laneGit(): import('./lanes').LaneGit {
   return {
     run: git,
     exec: (cwd, command, args) =>
       new Promise((resolve) => {
+        const launch = gateLaunch(command)
         execFile(
-          command,
+          launch.file,
           args,
-          { cwd, timeout: GATE_TIMEOUT_MS, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
+          { cwd, timeout: GATE_TIMEOUT_MS, windowsHide: true, maxBuffer: 8 * 1024 * 1024, shell: launch.shell },
           (error, stdout, stderr) => resolve({ code: error ? 1 : 0, output: `${stdout}${stderr}` })
         )
       })

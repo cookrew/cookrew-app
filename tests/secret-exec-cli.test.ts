@@ -7,6 +7,7 @@ import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { testSocketPath } from './support/ipc-path'
 import { secretEnvName } from '../src/main/secret-cli'
 
 const VALUE = 'sk_live_51Hx9QxEXECONLY0000'
@@ -31,7 +32,7 @@ describe('cookrew secret exec', () => {
   })
 
   const fakeApp = async (answer: (request: { cmd: string; args: string[]; flags: Record<string, unknown> }) => unknown) => {
-    const socketPath = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-exec-')), 'app.sock')
+    const socketPath = testSocketPath(mkdtempSync(path.join(tmpdir(), 'cookrew-exec-')), 'app.sock')
     const seen: unknown[] = []
     const server = net.createServer((socket) => {
       let buffer = ''

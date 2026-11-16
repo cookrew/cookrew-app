@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { native } from './support/native-path'
+import { expectMode } from './support/file-mode'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
@@ -54,7 +56,7 @@ describe('PendingCheckouts', () => {
     const dir = base()
     new PendingCheckouts({ base: dir }).put(entry())
     const file = pendingCheckoutsPath(dir)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
     const text = readFileSync(file, 'utf8')
     expect(Object.keys(JSON.parse(text)[0]).sort()).toEqual(['account', 'door', 'link', 'price', 'session', 'startedAt', 'url'])
     expect(text).not.toMatch(/token|bearer|secret|key/i)
@@ -63,9 +65,9 @@ describe('PendingCheckouts', () => {
   it('a served seat cannot read whose payments are in flight', () => {
     const denied = ownerSecretPaths('/Users/owner/.cookrew', '/Users/owner')
     expect(denied).toEqual(
-      expect.arrayContaining(['/Users/owner/.cookrew/checkout-pending.json', '/Users/owner/.cookrew/checkout-pending.json.tmp'])
+      expect.arrayContaining([native('/Users/owner/.cookrew/checkout-pending.json'), native('/Users/owner/.cookrew/checkout-pending.json.tmp')])
     )
-    expect(pendingCheckoutsPath('/Users/owner/.cookrew')).toBe('/Users/owner/.cookrew/checkout-pending.json')
+    expect(pendingCheckoutsPath('/Users/owner/.cookrew')).toBe(native('/Users/owner/.cookrew/checkout-pending.json'))
   })
 
   it('drops only the session it was told about: a newer one for the same door is not lost to a late answer', () => {

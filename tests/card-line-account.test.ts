@@ -269,7 +269,7 @@ function startPlane(): Promise<void> {
 /**
  * RUN THE REAL CARD, with its own HOME — `os.homedir()` reads $HOME, which is
  * how this test reaches the same file the app writes without touching the
- * developer's own.
+ * developer's own. On Windows it reads USERPROFILE instead, so both are set.
  */
 interface CardRun {
   out: string
@@ -280,7 +280,7 @@ function runCard(args: string[], home: string, until: RegExp, ms = 20_000): Prom
     const child = spawn(
       process.execPath,
       [path.join(__dirname, '..', 'resources', 'orch-line.mjs'), ...args],
-      { env: { ...process.env, HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] }
+      { env: { ...process.env, HOME: home, USERPROFILE: home }, stdio: ['ignore', 'pipe', 'pipe'] }
     )
     let out = ''
     const done = (code: number | null): void => {

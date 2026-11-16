@@ -1,7 +1,8 @@
-import { mkdtempSync, readFileSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { createMachineKeyStore, createRefusedMachines, enterMachines, type MachineKeysDeps } from '../src/main/machine-keys'
 import { pairTranscript } from '../src/shared/account-pair'
 
@@ -46,7 +47,7 @@ describe('a machine collecting keys for the account’s others', () => {
       challengeId: 'c1',
       sig: `sig(${pairTranscript({ desktopId: 'solis-id', challengeId: 'c1', nonce: 'n1', deviceId: 'self-id' })})`
     })
-    expect(statSync(d.store.file).mode & 0o777).toBe(0o600)
+    expectMode(d.store.file, 0o600)
     expect(readFileSync(d.store.file, 'utf8')).toContain('Solis-Core')
   })
 
@@ -95,6 +96,6 @@ describe('machines forgotten on this one', () => {
     refused.add('Solis-ID')
     expect(createRefusedMachines(file).has('solis-id')).toBe(true)
     expect(refused.has('other')).toBe(false)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
   })
 })

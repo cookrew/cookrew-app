@@ -87,6 +87,18 @@ describe('open — the whole first paint, in one answer', () => {
     expect(state.index).toHaveLength(3)
   })
 
+  it('keeps history visible when the index has rows but the tail is temporarily empty', () => {
+    const state = streamReducer(initialStreamState('t1'), {
+      kind: 'open',
+      open: openPayload({
+        index: [row(98), row(99), row(100)],
+        tail: { block: null, final: false, ordinal: null, total: 0 }
+      })
+    })
+    expect(state.total).toBe(100)
+    expect(state.opened).toBe(true)
+  })
+
   it('carries the anomaly counts and the rollback notes rather than dropping them', () => {
     const state = opened({ anomalies: { UnknownLine: 2, Gap: 1 }, rolledBack: [] })
     expect(anomalyCount(state.anomalies)).toBe(3)
@@ -141,6 +153,15 @@ describe('the live tail patches the last row, or appends a new one', () => {
     })
     expect(state.index).toEqual([])
     expect(state.total).toBe(0)
+  })
+
+  it('does not let an empty tail erase already loaded history', () => {
+    const state = streamReducer(opened(), {
+      kind: 'tail',
+      tail: { block: null, final: false, ordinal: null, total: 0 }
+    })
+    expect(state.index).toHaveLength(3)
+    expect(state.total).toBe(3)
   })
 })
 

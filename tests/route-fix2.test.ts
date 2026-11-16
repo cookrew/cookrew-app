@@ -8,6 +8,7 @@ import http from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
 import { toQuotas, withLocalRows } from '../src/main/route/catalog'
 import { magpieInstalled } from '../src/main/route/discovery'
 import { GatewayMonitor } from '../src/main/route/gateway'
@@ -27,7 +28,7 @@ describe('3 · installed', () => {
   it('looks on PATH, then at ~/.local/bin/magpie, then at /Applications/magpie.app', () => {
     const present = new Set<string>()
     const exists = (p: string): boolean => present.has(p)
-    const d = { home, env: { PATH: '/usr/bin:/opt/x/bin' } }
+    const d = { home, env: { PATH: ['/usr/bin', '/opt/x/bin'].join(path.delimiter) } }
     expect(magpieInstalled(d, exists)).toBe(false)
     present.add(path.join(home, '.local', 'bin', 'magpie'))
     expect(magpieInstalled(d, exists)).toBe(true)
@@ -35,7 +36,7 @@ describe('3 · installed', () => {
     present.add('/Applications/magpie.app')
     expect(magpieInstalled(d, exists)).toBe(true)
     present.clear()
-    present.add('/opt/x/bin/magpie')
+    present.add(native('/opt/x/bin/magpie'))
     expect(magpieInstalled(d, exists)).toBe(true)
   })
 

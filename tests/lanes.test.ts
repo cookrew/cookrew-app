@@ -17,6 +17,7 @@ import {
   statusFiles,
   type LaneGit,
 } from '../src/main/lanes'
+import { gateLaunch } from '../src/main/git'
 
 /**
  * LANES, against real repositories in a temp dir.
@@ -36,12 +37,14 @@ const git: LaneGit = {
         error ? reject(error) : resolve(stdout.toString().trim())
       )
     ),
+  // Started the way the app's laneGit starts a gate (npm is npm.cmd on Windows).
   exec: (cwd, command, args) =>
-    new Promise((resolve) =>
-      execFile(command, args, { cwd, timeout: 10_000 }, (error, stdout, stderr) =>
+    new Promise((resolve) => {
+      const launch = gateLaunch(command)
+      execFile(launch.file, args, { cwd, timeout: 10_000, shell: launch.shell }, (error, stdout, stderr) =>
         resolve({ code: error ? 1 : 0, output: `${stdout}${stderr}` })
       )
-    ),
+    }),
 }
 
 function sh(cwd: string, args: string[]): string {
@@ -49,8 +52,9 @@ function sh(cwd: string, args: string[]): string {
 }
 
 function initRepo(): string {
-  // git answers real paths; on macOS the temp dir is a symlink.
-  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'cookrew-lanes-')))
+  // git answers real paths; on macOS the temp dir is a symlink, and on Windows
+  // it is an 8.3 name (RUNNER~1) that only the native realpath expands.
+  const dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'cookrew-lanes-')))
   sh(dir, ['init', '-b', 'dev'])
   sh(dir, ['config', 'user.email', 'test@cookrew.dev'])
   sh(dir, ['config', 'user.name', 'Test'])
@@ -244,7 +248,8 @@ describe('landing', () => {
   it('runs the repo’s typecheck by default, and says so — a commit that does not typecheck never lands', async () => {
     const repo = initRepo()
     const lane = await cut(repo)
-    scripts(lane, { typecheck: 'echo tsc: 2 errors; exit 1' })
+    // node, not `echo …; exit 1`: npm runs scripts under cmd.exe on Windows, where ';' separates nothing.
+    scripts(lane, { typecheck: `node -e "console.log('tsc: 2 errors'); process.exit(1)"` })
     const failed = await landLane(git, { lanePath: lane })
     expect(failed).toMatchObject({ ok: false, reason: 'gate', gate: 'npm run typecheck' })
     expect(failed.ok === false && failed.detail).toContain('tsc: 2 errors')
@@ -320,5 +325,13 @@ describe('closing a lane', () => {
     expect((await landLane(git, { lanePath: lane })).ok).toBe(true)
     expect((await closeLane(git, lane)).ok).toBe(true)
     expect(sh(repo, ['branch', '--list', 'cookrew/feature'])).toBe('')
+  })
+})
+
+describe('how a gate starts', () => {
+  it('starts npm through cmd.exe on Windows, where it is npm.cmd, and everything else as given', () => {
+    expect(gateLaunch('npm', 'win32')).toEqual({ file: 'npm.cmd', shell: true })
+    expect(gateLaunch('npm', 'darwin')).toEqual({ file: 'npm', shell: false })
+    expect(gateLaunch('sh', 'win32')).toEqual({ file: 'sh', shell: false })
   })
 })

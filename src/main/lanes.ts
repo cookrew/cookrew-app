@@ -101,14 +101,22 @@ export function parseWorktreeList(porcelain: string): { path: string; head: stri
         return line === undefined ? null : line.slice(key.length).trim()
       }
       const branch = field('branch')
+      const at = field('worktree')
       return {
-        path: field('worktree') ?? '',
+        path: at === null ? '' : gitPath(at),
         head: field('HEAD') ?? '',
         branch: branch ? branch.replace(/^refs\/heads\//, '') : null,
       }
     })
     .filter((w) => w.path.length > 0)
 }
+
+/**
+ * A path as git prints it, in this OS's own form. Git for Windows prints
+ * C:/Users/…, while every path this module builds is path.join's C:\Users\…,
+ * so a lane was never equal to itself there. Identity on POSIX.
+ */
+const gitPath = (printed: string): string => path.normalize(printed)
 
 /** `git rev-list --left-right --count base...branch` → how far apart they are. Pure. */
 export function parseLeftRight(out: string): { behind: number; ahead: number } {
@@ -128,9 +136,9 @@ export async function repoOf(git: LaneGit, dir: string): Promise<{ root: string;
   } catch {
     return null
   }
-  const main = path.dirname(common)
+  const main = path.dirname(gitPath(common))
   const base = await git.run(main, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => 'HEAD')
-  return { root, main, base }
+  return { root: gitPath(root), main, base }
 }
 
 async function laneState(git: LaneGit, lane: { path: string; head: string; branch: string | null }, main: string, base: string): Promise<LaneInfo> {

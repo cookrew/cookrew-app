@@ -234,7 +234,9 @@ function patchMark(
 function withTail(state: StreamState, tail: StreamTail): StreamState {
   const block = tail.block
   if (block === null) {
-    return { ...state, tail, total: tail.total }
+    // A null tail is also used while the reader is between files. It must not
+    // erase an index that already proves this card has history.
+    return { ...state, tail, total: Math.max(state.total, tail.total) }
   }
   const prior = state.index.find((row) => row.identity === block.id)
   const row = rowOfBlock(block, prior)
@@ -259,12 +261,18 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
 
     case 'open': {
       const { open } = action
+      // The tail is allowed to be empty while the index still carries the
+      // card's history (for example during a file rotation). Using its zero
+      // total made TerminalOverlay show "No conversation yet" and prevented
+      // TranscriptView from fetching the visible window.
+      const indexedTotal = open.index[open.index.length - 1]?.ordinal ?? 0
+      const tailTotal = open.tail?.total ?? 0
       const seeded: StreamState = {
         ...state,
         index: ordered(open.index),
         blocks: cached({}, open.tail?.block ? [open.tail.block] : []),
         tail: open.tail,
-        total: open.tail?.total ?? open.index[open.index.length - 1]?.ordinal ?? 0,
+        total: Math.max(tailTotal, indexedTotal),
         backwardsCursor: open.backwardsCursor,
         anomalies: { ...open.anomalies },
         rolledBack: [...open.rolledBack],

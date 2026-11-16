@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { CHMOD_CANNOT_LOCK } from './support/file-mode'
 import { seedConductor } from '../src/main/seed-conductor'
 import { WorkspaceStore } from '../src/main/store'
 import { openWorkspace } from '../src/main/workspace-door'
@@ -69,7 +70,7 @@ describe('seeding a Conductor', () => {
 
   it('finds the tool in a later dir of the path', () => {
     const r = room()
-    const seed = seedWith(r, `${r.empty}:${claudeIn(r.folder('bin'))}`)
+    const seed = seedWith(r, [r.empty, claudeIn(r.folder('bin'))].join(path.delimiter))
     expect(terminals(r, open(r, 'one', seed).id)).toHaveLength(1)
   })
 
@@ -81,7 +82,8 @@ describe('seeding a Conductor', () => {
   })
 
   // The second Linux user's case: another person's home sits on an inherited PATH.
-  it('does not take a dir it may not read as proof of the tool', () => {
+  // Skipped on Windows: chmod cannot lock a path there; see CHMOD_CANNOT_LOCK.
+  it.skipIf(CHMOD_CANNOT_LOCK)('does not take a dir it may not read as proof of the tool', () => {
     const r = room()
     const locked = r.folder('someone-elses-home')
     const bin = path.join(locked, 'bin')
@@ -92,7 +94,8 @@ describe('seeding a Conductor', () => {
     expect(terminals(r, open(r, 'one', seedWith(r, bin)).id)).toEqual([])
   })
 
-  it('does not take a file it cannot run for the tool', () => {
+  // Skipped on Windows: chmod cannot lock a path there; see CHMOD_CANNOT_LOCK.
+  it.skipIf(CHMOD_CANNOT_LOCK)('does not take a file it cannot run for the tool', () => {
     const r = room()
     const seed = seedWith(r, claudeIn(r.folder('bin'), 0o644))
     expect(terminals(r, open(r, 'one', seed).id)).toEqual([])

@@ -1,4 +1,6 @@
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
 import { paneEnv } from '../src/main/pane-env'
 
 /**
@@ -37,8 +39,8 @@ describe('pane env — the CLI control plane', () => {
   it("the owner's own pane keeps the CLI, exactly as before", () => {
     const env = owner()
     expect(env.COOKREW_SOCKET).toBe('/tmp/cookrew-runtime/cookrew.sock')
-    expect(env.COOKREW_CLI).toBe('/app/cli/cookrew')
-    expect(env.PATH).toBe('/app/cli:/usr/bin:/bin')
+    expect(env.COOKREW_CLI).toBe(native('/app/cli/cookrew'))
+    expect(env.PATH).toBe(`/app/cli${path.delimiter}/usr/bin:/bin`)
     expect(env.COOKREW_TERMINAL_ID).toBe('t-1')
     expect(env.TERM_PROGRAM).toBe('Cookrew')
   })

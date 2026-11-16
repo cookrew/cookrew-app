@@ -95,9 +95,19 @@ function mtimeOf(file: string): number {
  * name read back into a real, existing path. Null only when no directory
  * matches — never a guess.
  */
-export function claudeLaunchDir(file: string, root: string = path.sep): string | null {
+export function claudeLaunchDir(file: string, root?: string): string | null {
   const projectDir = path.basename(path.dirname(file))
   return cwdFromHead(file, projectDir) ?? dirForSlug(projectDir, root)
+}
+
+/**
+ * Where a slug's walk starts. A POSIX path's slug opens with its root, '/' as
+ * '-'. A Windows path's opens with its drive, 'C:\' as 'C--', so the walk
+ * starts at that drive's root rather than at a '\' no slug begins with.
+ */
+function slugRoot(slug: string, platform: NodeJS.Platform = process.platform): string {
+  const drive = platform === 'win32' ? /^([A-Za-z])--/.exec(slug) : null
+  return drive ? `${drive[1]}:\\` : path.sep
 }
 
 /**
@@ -105,7 +115,7 @@ export function claudeLaunchDir(file: string, root: string = path.sep): string |
  * whose own slug continues it. Depth-first, so a dir named `a-b` and a path
  * `a/b` are both tried; the first full match that exists wins.
  */
-export function dirForSlug(slug: string, root: string = path.sep): string | null {
+export function dirForSlug(slug: string, root: string = slugRoot(slug)): string | null {
   const walk = (dir: string, rest: string): string | null => {
     if (rest === '') return dir
     if (!rest.startsWith('-')) return null

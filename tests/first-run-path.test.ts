@@ -43,7 +43,9 @@ describe('the PATH panes get', () => {
     expect(installerDirs('C:\\Users\\new', 'win32')).toEqual([])
   })
 
-  it('is what a pane’s environment carries', () => {
+  // Skipped on Windows: a learned dir is a POSIX dir from a POSIX login shell,
+  // joined onto PATH with ':'; Windows learns none (addPaneDirs, pane-path.ts).
+  it.skipIf(process.platform === 'win32')('is what a pane’s environment carries', () => {
     addPaneDirs(['/home/new/.local/bin'])
     const env = paneEnv({ terminalId: 't', socketPath: '/s', cliDir: '/cli', ownerEnv: { PATH: panePath('/usr/bin') } })
     expect(env.PATH).toBe('/cli:/usr/bin:/home/new/.local/bin')
@@ -65,7 +67,9 @@ describe('what the check reads', () => {
     ...over
   })
 
-  it('finds a tool only where a pane would: what the login shell knows is adopted first', async () => {
+  // Skipped on Windows: pane dirs are learned from a POSIX login shell and
+  // joined onto PATH as POSIX dirs; Windows has no login shell to learn from.
+  it.skipIf(process.platform === 'win32')('finds a tool only where a pane would: what the login shell knows is adopted first', async () => {
     const facts = await probeTools(deps({ shellDirs: async () => ['/home/new/.nvm/bin'], exists: (p) => p === '/home/new/.nvm/bin/npm' }))
     expect(facts.npm).toBe('found')
     expect(panePath('/usr/bin')).toContain('/home/new/.nvm/bin')

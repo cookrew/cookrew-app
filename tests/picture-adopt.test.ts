@@ -20,8 +20,16 @@ const setup = (): { root: string; store: string; out: string } => {
   return { root, store, out }
 }
 
+/**
+ * Why some cases do not run on Windows: a prompt names a picture by an absolute
+ * POSIX path, backslash-escaped the way a terminal drop is (prompt-images.ts).
+ * A Windows path's backslashes are separators, so that scheme finds no picture
+ * there to adopt.
+ */
+const NO_PROMPT_PICTURE_PATHS = process.platform === 'win32'
+
 describe('adoptPictures', () => {
-  it('copies an image outside the store into it and names the copy instead', async () => {
+  it.skipIf(NO_PROMPT_PICTURE_PATHS)('copies an image outside the store into it and names the copy instead', async () => {
     const { store, out } = setup()
     const shot = path.join(out, 'app-full.png')
     writeFileSync(shot, PNG)
@@ -34,7 +42,7 @@ describe('adoptPictures', () => {
     expect(next).toBe(text.replace(shot, copy))
   })
 
-  it('reuses the copy when the same picture is sent again', async () => {
+  it.skipIf(NO_PROMPT_PICTURE_PATHS)('reuses the copy when the same picture is sent again', async () => {
     const { store, out } = setup()
     const shot = path.join(out, 'a.png')
     writeFileSync(shot, PNG)
@@ -65,7 +73,7 @@ describe('adoptPictures', () => {
     expect(await adoptPictures(text, store)).toBe(text)
   })
 
-  it('escapes a copy whose name needs it, as a dropped file is', async () => {
+  it.skipIf(NO_PROMPT_PICTURE_PATHS)('escapes a copy whose name needs it, as a dropped file is', async () => {
     const { store, out } = setup()
     const shot = path.join(out, 'my shot.png')
     writeFileSync(shot, PNG)
