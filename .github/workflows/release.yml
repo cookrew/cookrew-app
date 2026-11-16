@@ -97,6 +97,12 @@ jobs:
         if: runner.os == 'macOS'
         run: test -x resources/cr-listen/cr-listen
 
+      # Same for the browser cards' Chrome launcher: without it every user is
+      # told Cookrew "was prevented from modifying apps" when a card starts.
+      - name: Require cr-disclaim
+        if: runner.os == 'macOS'
+        run: test -x resources/cr-disclaim/cr-disclaim
+
       # Which of the three macOS builds this is. Sees only whether each secret
       # exists; the Windows leg never runs it. Half a set fails the job here.
       - name: Plan macOS signing

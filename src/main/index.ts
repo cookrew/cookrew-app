@@ -7045,9 +7045,23 @@ useSignals.on((signal) => {
   if (signal.use === 'computer') remoteDesk.noteAgent(signal.card, store.nodeAcrossWorkspaces(signal.agent)?.node.name ?? 'An agent', signal.verb)
 })
 
+/**
+ * resources/cr-disclaim: starts a card's Chrome as its own responsible app, so
+ * macOS never blames Cookrew for Chrome's launch-time write into its own
+ * bundle. Mac only; null (Chrome spawned directly) where it was not built.
+ */
+function chromeLauncher(): string | null {
+  if (process.platform !== 'darwin') return null
+  const binary = app.isPackaged
+    ? path.join(process.resourcesPath, 'cr-disclaim')
+    : path.join(dirname, '../../resources/cr-disclaim/cr-disclaim')
+  return existsSync(binary) ? binary : null
+}
+
 const browserManager = new HeadlessBrowserManager({
   enabled: interactiveBrowserEnabled,
   chromePath: findChrome,
+  chromeLauncher,
   profileRoot: browserProfileRoot,
   // Chromium's own layout keeps downloaded components at INSTALLATION scope,
   // beside the profiles rather than inside each one. Cookrew gives every card a

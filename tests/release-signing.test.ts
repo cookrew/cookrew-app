@@ -146,10 +146,11 @@ describe('the bundle', () => {
     expect(read_.filter((name) => !shipped.has(name))).toEqual([])
   })
 
-  it('takes every resource from a path that exists, bar the binary postinstall builds', () => {
+  it('takes every resource from a path that exists, bar the binaries postinstall builds', () => {
+    const built = new Set(['resources/cr-listen/cr-listen', 'resources/cr-disclaim/cr-disclaim'])
     const missing = builder.extraResources
       .map((resource) => resource.from)
-      .filter((from) => from !== 'resources/cr-listen/cr-listen')
+      .filter((from) => !built.has(from))
       .filter((from) => !existsSync(path.join(ROOT, from)))
     expect(missing).toEqual([])
   })
@@ -252,6 +253,15 @@ describe('release.yml', () => {
   // only a warning, so without this a release ships with a dead hold-to-talk.
   it('refuses to build for macOS without cr-listen', () => {
     const check = steps.findIndex((step) => step.run?.includes('test -x resources/cr-listen/cr-listen'))
+    expect(check).toBeGreaterThan(-1)
+    expect(steps[check].if).toContain("runner.os == 'macOS'")
+    expect(check).toBeLessThan(steps.indexOf(signedStep))
+  })
+
+  // The same quiet fallback: without the launcher a card's Chrome is spawned
+  // directly and macOS names Cookrew in an App Management notice.
+  it('refuses to build for macOS without cr-disclaim', () => {
+    const check = steps.findIndex((step) => step.run?.includes('test -x resources/cr-disclaim/cr-disclaim'))
     expect(check).toBeGreaterThan(-1)
     expect(steps[check].if).toContain("runner.os == 'macOS'")
     expect(check).toBeLessThan(steps.indexOf(signedStep))

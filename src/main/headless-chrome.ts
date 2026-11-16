@@ -153,8 +153,27 @@ export function headlessLaunchArgs(
   ]
 }
 
+/**
+ * What to run so Chrome starts. With a launcher (resources/cr-disclaim) Chrome
+ * becomes its own responsible app on macOS: started straight from Cookrew, its
+ * launch-time write into its own bundle is refused by App Management and macOS
+ * tells the person Cookrew "was prevented from modifying apps". The launcher
+ * execs Chrome in place, so the pid stop() signals is still Chrome's.
+ */
+export function chromeSpawnCommand(
+  executablePath: string,
+  args: readonly string[],
+  launcher: string | undefined
+): { command: string; args: string[] } {
+  return launcher
+    ? { command: launcher, args: [executablePath, ...args] }
+    : { command: executablePath, args: [...args] }
+}
+
 export interface HeadlessOptions {
   executablePath: string
+  /** Runs Chrome as its own responsible app (chromeSpawnCommand). Absent: spawned directly. */
+  launcher?: string
   profileDir: string
   /**
    * One store for the installation-scope directories every profile would
@@ -302,9 +321,21 @@ export class HeadlessInstance {
       }
     }
 
-    const args = headlessLaunchArgs(this.opts.profileDir, this.width, this.height, active.url)
-    this.proc = spawn(this.opts.executablePath, args, { stdio: 'ignore' })
-    this.proc.on('exit', () => {
+    const launch = chromeSpawnCommand(
+      this.opts.executablePath,
+      headlessLaunchArgs(this.opts.profileDir, this.width, this.height, active.url),
+      this.opts.launcher
+    )
+    this.proc = spawn(launch.command, launch.args, { stdio: 'ignore' })
+    // A spawn that cannot even start (a launcher of the wrong architecture)
+    // emits 'error', which would throw in main with no listener.
+    this.proc.on('error', (error) => {
+      console.error(`Browser card could not start ${launch.command}:`, error)
+    })
+    this.proc.on('exit', (code, signal) => {
+      // 127 is cr-disclaim's own "could not start Chrome".
+      if (code !== 0 && code !== null) console.error(`Browser card Chrome exited with code ${code}`)
+      else if (signal && !this.closed) console.error(`Browser card Chrome died of ${signal}`)
       if (!this.closed) this.onExit()
     })
 
