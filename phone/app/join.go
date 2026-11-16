@@ -47,5 +47,7 @@ func JoinScreen(session *Session) ui.Node {
 			OnPress:  func() { session.Join(typed.Peek()) },
 		}),
 		problem(session),
+		// A key is still kept (the sign-in ended, or the account would not take it): the way to let it go.
+		ui.Show(signal.Func(func() bool { return session.State.Get().Seed != "" }), func() ui.Node { return startOver(session) }),
 	)
 }

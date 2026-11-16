@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/cookrew/cookrew-app/phone/core/pair"
@@ -25,6 +24,9 @@ type Phase int
 const (
 	// Opening: the keychain has not answered yet.
 	Opening Phase = iota
+	// Locked: the key is kept, and Face ID has not opened it (canceled): never the scanner,
+	// which would join a new key over the kept one.
+	Locked
 	// Joining: no account yet, or the sign-in ended: the scanner shows.
 	Joining
 	// Joined: the phone is on the account.
@@ -78,29 +80,73 @@ func NewSession(vault Vault) (*Session, error) {
 		Problem:  signal.New(""),
 		Ending:   signal.New(""),
 	}
+	s.Unlock()
+	return s, nil
+}
+
+// Unlock reads the kept state, behind Face ID. Main thread; the prompt waits aside.
+func (s *Session) Unlock() {
+	s.Phase.Set(Opening)
+	s.Problem.Set("")
+	vault := s.vault
 	go func() {
 		state, err := vault.Load()
 		ui.Post(func() {
-			switch {
-			case errors.Is(err, errNoState):
-				s.Phase.Set(Joining)
-			case err != nil:
-				s.Problem.Set(err.Error())
-				s.Phase.Set(Joining)
-			default:
+			if err == nil {
 				s.joined(state)
+				return
 			}
+			if !errors.Is(err, errNoState) {
+				s.Problem.Set(err.Error())
+			}
+			s.Phase.Set(afterLoad(err))
 		})
 	}()
-	return s, nil
+}
+
+// afterLoad is where the app stands after the keychain answered. The scanner
+// shows only when nothing is kept, or the kept key is gone for good (Face ID
+// changed, and it was cleared): anything else may still be a good key, and a
+// join from the scanner would put a new one over it. Locked keeps it, and
+// offers Face ID again, or a start over the person confirms.
+func afterLoad(err error) Phase {
+	switch {
+	case err == nil:
+		return Joined
+	case errors.Is(err, errNoState), errors.Is(err, errFaceIDChanged):
+		return Joining
+	}
+	return Locked
+}
+
+// StartOver forgets this phone's key and tokens, after the person confirmed:
+// the next code joins it as a new phone. The account keeps the old one listed
+// until it is removed in Devices. Main thread.
+func (s *Session) StartOver() {
+	vault := s.vault
+	go func() {
+		err := vault.Clear()
+		ui.Post(func() {
+			if err != nil {
+				s.Problem.Set(err.Error())
+				return
+			}
+			s.keeper = nil
+			s.State.Set(pair.State{})
+			s.Machines.Set(nil)
+			s.Problem.Set("")
+			s.Phase.Set(Joining)
+		})
+	}()
 }
 
 // joined makes the phone's sign-in the one kept and renewed. Main thread.
 func (s *Session) joined(state pair.State) {
 	device, err := state.Device()
 	if err != nil {
+		// A kept state that names no key: never the scanner on its own, only a confirmed start over.
 		s.Problem.Set(err.Error())
-		s.Phase.Set(Joining)
+		s.Phase.Set(Locked)
 		return
 	}
 	// Nothing stored by the keeper itself: enter keeps the whole state, renewed session and all, after each run.
@@ -129,20 +175,21 @@ func (s *Session) Join(scanned string) {
 		defer cancel()
 		state, err := s.join(ctx, held, scanned)
 		// The code is spent the moment the registry answers: keep the state before anything else.
+		var saveErr error
 		if err == nil {
-			err = s.vault.Save(state)
+			saveErr = s.vault.Save(state)
 		}
 		ui.Post(func() {
 			s.Busy.Set(false)
-			if errors.Is(err, errRemoved) {
-				// Let the old key go: the next code joins this phone under a new one.
-				s.State.Set(pair.State{})
-			}
 			if err != nil {
 				s.Problem.Set(err.Error())
 				return
 			}
+			// Joined either way: the code is spent, and a key not yet kept is tried again after the next refresh.
 			s.joined(state)
+			if saveErr != nil {
+				s.Problem.Set("Joined, but the key is not kept yet: " + saveErr.Error())
+			}
 		})
 	}()
 }
@@ -154,17 +201,14 @@ func (s *Session) join(ctx context.Context, held pair.State, scanned string) (pa
 	}
 	state, err := pair.Rejoin(ctx, s.registry, held, scanned)
 	if errors.Is(err, pair.ErrNewDevice) {
-		// The account will not take this key again (removed in Devices): the code is spent, and the next joins a new key.
-		if clearErr := s.vault.Clear(); clearErr != nil {
-			return pair.State{}, fmt.Errorf("%w (and the old key could not be cleared: %v)", errRemoved, clearErr)
-		}
-		return pair.State{}, errRemoved
+		// One answer is not enough to let a key go (it may be another account's code): the person decides, with Start over.
+		return held, errRemoved
 	}
 	return state, err
 }
 
-// errRemoved is a phone the account removed: its key is let go, and the next code joins a new one.
-var errRemoved = errors.New("this phone was removed from the account; scan a new code to add it again")
+// errRemoved is a code the account would not join this phone's key with: removed in Devices, or another account's code.
+var errRemoved = errors.New("the account would not take this phone's key: it was removed in Devices, or the code is another account's; Start over to join as a new phone")
 
 // Refresh renews the sign-in if due, lists the account's machines and enters
 // those the phone holds no token for. Main thread.
