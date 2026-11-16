@@ -14,6 +14,11 @@ export interface Viewport {
 export const VIEWPORTS: Record<'phone' | 'desktop', Viewport>
 
 export function findChrome(): string | null
+export function chromeCommand(
+  chrome: string,
+  args: readonly string[],
+  launcher?: string | null
+): { command: string; args: string[] }
 
 export interface Chrome {
   port: number
