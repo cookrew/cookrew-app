@@ -175,3 +175,36 @@ export function BarItemCard({ item, crew, since, anchor, onOpen, onAgent, onOuts
     </BarCardFrame>
   )
 }
+
+/**
+ * A CARD OF ANOTHER WORKSPACE, READ-ONLY (plan docs/hitl-cross-workspace-2026-11-15
+ * · v6.2): who or what it is, where, and why it is here. No reply box: the box
+ * speaks only to the open workspace. Open (or the face tapped again) jumps there.
+ */
+export function BarAwayCard({ face, title, where, line, since, anchor, onOpen, onOutside, onClose }: {
+  face: React.ReactNode
+  title: string
+  where: string
+  /** What it waits for, its reply's first line, or what changed. */
+  line: string | null
+  since?: string
+  anchor: HTMLElement | null
+  onOpen: () => void
+  onOutside: (target: EventTarget | null) => boolean
+  onClose: () => void
+}): React.JSX.Element {
+  return (
+    <BarCardFrame anchor={anchor} className="zv-away-card" label={`${title}, in ${where}`} keep={NEVER} onOutside={onOutside} onClose={onClose}>
+      <div className="zv-away-head">
+        <span className="zv-away-face" aria-hidden="true">{face}</span>
+        <div className="zv-away-names">
+          <b>{title}</b>
+          <p className="zv-bar-where">in {where}</p>
+        </div>
+      </div>
+      {line && <p className="zv-away-line">{line}</p>}
+      {since && <p className="cr-pet-since">{since}</p>}
+      <button type="button" className="zv-away-open" onClick={onOpen}>Open in {where}</button>
+    </BarCardFrame>
+  )
+}

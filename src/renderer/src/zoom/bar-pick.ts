@@ -13,6 +13,12 @@ import { useSyncExternalStore } from 'react'
 export interface BarCard {
   readonly kind: 'agent' | 'item'
   readonly id: string
+  /**
+   * Of another workspace (bar-reach.ts): a read-only card. It never selects
+   * the agent for the box, which only ever speaks to the open workspace; the
+   * second tap jumps there instead.
+   */
+  readonly away?: true
 }
 
 export interface FaceBox {
@@ -39,14 +45,14 @@ registerScopeState('bar card', () => barCard.close())
 export const barCard = {
   get: (): BarCard | null => card,
   /** The agent the bar's card selected, if it is an agent's. */
-  agent: (): string | null => (card?.kind === 'agent' ? card.id : null),
+  agent: (): string | null => (card?.kind === 'agent' && card.away !== true ? card.id : null),
   subscribe(listener: () => void): () => void {
     listeners.add(listener)
     return () => listeners.delete(listener)
   },
   open(next: BarCard, face?: FaceBox, now = Date.now()): void {
     from = face ? { box: face, at: now } : null
-    if (card?.kind === next.kind && card.id === next.id) return
+    if (card?.kind === next.kind && card.id === next.id && card.away === next.away) return
     card = next
     emit()
   },

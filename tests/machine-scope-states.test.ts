@@ -51,6 +51,8 @@ const REGISTERED: Record<string, readonly string[]> = {
   'use/unlock-sheet-store.ts': ['unlock sheet'],
   'workspace-arrival.ts': ['workspace arrival'],
   'zoom/bar-pick.ts': ['bar card'],
+  'zoom/bar-seen.ts': ['bar seen'],
+  'zoom/hitl-artifacts.ts': ['hitl artifacts'],
   'zoom/gauge-store.ts': ['machine gauges'],
   'zoom/remote-machine-store.ts': ['inside another machine'],
   'zoom/simple-fix.ts': ['simple fixes'],
@@ -65,7 +67,7 @@ const REGISTERED: Record<string, readonly string[]> = {
  * stand, it gets the ones it always had, not ones made anew for a machine
  * that is being left.
  */
-const STOPPED_FIRST = ['data plane', 'machine api', 'machine gauges', 'machine session', 'reply voice', 'rtc link', 'zoom fleet']
+const STOPPED_FIRST = ['data plane', 'hitl artifacts', 'machine api', 'machine gauges', 'machine session', 'reply voice', 'rtc link', 'zoom fleet']
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {

@@ -2,25 +2,19 @@
 // docs/avatar-send-tasks/e-groups): the zoom bar's AGENTS | ARTIFACTS pair
 // becomes two groups in the troop's own form, ARTIFACTS first, AGENTS next to
 // the prompt's face. Each holds what needs you: agents waiting on you, then
-// replies not read; browsers and notes made or changed since you last looked.
+// replies not read; browsers and notes an agent made or changed since you last
+// looked (the seen book and the log: tests/hitl-bar.test.ts).
 // Pure rules here; the source contract below.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { BAR_SIDES } from '../src/renderer/src/zoom/zoom-path'
-import { EMPTY_PAGE, itemSig, markSeen, observe, pageOf, readBook, isUnseen } from '../src/renderer/src/zoom/bar-seen'
-import { agentInbox, groupSize, itemInbox, sinceWord, withHeld } from '../src/renderer/src/zoom/bar-inbox'
+import { agentInbox, groupSize, sinceWord, withHeld } from '../src/renderer/src/zoom/bar-inbox'
 import { barCardSpot } from '../src/renderer/src/zoom/BarCards'
 import { barCard, FROM_FRESH_MS } from '../src/renderer/src/zoom/bar-pick'
 import { pageInView } from '../src/renderer/src/page-in-view'
-import type { CanvasNode } from '../src/shared/model'
 
 const read = (...p: string[]): string => readFileSync(join(__dirname, '../src/renderer/src', ...p), 'utf8')
-
-const browser = (id: string, url: string): CanvasNode =>
-  ({ kind: 'browser', id, name: id, url, position: { x: 0, y: 0 }, size: { width: 1, height: 1 } }) as unknown as CanvasNode
-const note = (id: string, content: string): CanvasNode =>
-  ({ kind: 'note', id, name: id, content, customName: id, locked: false, position: { x: 0, y: 0 }, size: { width: 1, height: 1 } }) as unknown as CanvasNode
 
 type Row = Parameters<typeof agentInbox>[0][number]
 const row = (id: string, phase: Row['phase'], at: number, unread = false): Row => ({ id, phase, unread, lastActivityAt: at })
@@ -29,77 +23,6 @@ describe('the order: ARTIFACTS first, AGENTS next to the face', () => {
   it('swaps the pair, each still its stop', () => {
     expect(BAR_SIDES.map((s) => s.name)).toEqual(['artifacts', 'agents'])
     expect(BAR_SIDES.map((s) => [s.dir, s.v])).toEqual([['items', 0], ['agents', 1]])
-  })
-})
-
-describe("an item's change: what it is now", () => {
-  it('a browser is its address, a note its words; anything else none', () => {
-    expect(itemSig(browser('b', 'https://a.dev/1'))).toBe(itemSig(browser('b', 'https://a.dev/1')))
-    expect(itemSig(browser('b', 'https://a.dev/1'))).not.toBe(itemSig(browser('b', 'https://a.dev/2')))
-    expect(itemSig(note('n', 'one'))).not.toBe(itemSig(note('n', 'two')))
-    expect(itemSig({ kind: 'terminal', id: 't' } as unknown as CanvasNode)).toBeNull()
-  })
-})
-
-describe('the seen book (since you last looked)', () => {
-  const ws = 'w1'
-  it('the first look at a workspace is the baseline: nothing in it is new', () => {
-    const book = observe({}, ws, [{ id: 'a', sig: 'x' }, { id: 'b', sig: 'y' }], 100)
-    expect(pageOf(book, ws).based).toBe(true)
-    expect(isUnseen(pageOf(book, ws), 'a', 'x')).toBe(false)
-    expect(isUnseen(pageOf(book, ws), 'b', 'y')).toBe(false)
-  })
-  it('an empty look sets no baseline (the board still loading)', () => {
-    expect(observe({}, ws, [], 100)).toEqual({})
-  })
-  it('made or changed after it is new, noticed at the moment it was first seen so', () => {
-    let book = observe({}, ws, [{ id: 'a', sig: 'x' }], 100)
-    book = observe(book, ws, [{ id: 'a', sig: 'x2' }, { id: 'c', sig: 'z' }], 200)
-    const page = pageOf(book, ws)
-    expect(isUnseen(page, 'a', 'x2')).toBe(true)
-    expect(isUnseen(page, 'c', 'z')).toBe(true)
-    expect(page.noticed.c).toEqual(['z', 200])
-    // Looked at again later, unchanged: still noticed when it first was.
-    expect(pageOf(observe(book, ws, [{ id: 'c', sig: 'z' }], 900), ws).noticed.c).toEqual(['z', 200])
-  })
-  it('nothing new is no new book (no write)', () => {
-    const book = observe({}, ws, [{ id: 'a', sig: 'x' }], 100)
-    expect(observe(book, ws, [{ id: 'a', sig: 'x' }], 300)).toBe(book)
-  })
-  it('seen (its card or full view opened) leaves it; a later change brings it back', () => {
-    let book = observe({}, ws, [{ id: 'a', sig: 'x' }], 100)
-    book = observe(book, ws, [{ id: 'a', sig: 'x2' }], 200)
-    book = markSeen(book, ws, 'a', 'x2')
-    expect(isUnseen(pageOf(book, ws), 'a', 'x2')).toBe(false)
-    expect(pageOf(book, ws).noticed.a).toBeUndefined()
-    book = observe(book, ws, [{ id: 'a', sig: 'x3' }], 300)
-    expect(isUnseen(pageOf(book, ws), 'a', 'x3')).toBe(true)
-  })
-  it('an item deleted before it was seen leaves the noticed list', () => {
-    let book = observe({}, ws, [{ id: 'a', sig: 'x' }], 100)
-    book = observe(book, ws, [{ id: 'a', sig: 'x' }, { id: 'tmp', sig: 't' }], 200)
-    expect(pageOf(book, ws).noticed.tmp).toEqual(['t', 200])
-    book = observe(book, ws, [{ id: 'a', sig: 'x' }], 300)
-    expect(pageOf(book, ws).noticed.tmp).toBeUndefined()
-  })
-  it('pruning a big page drops what the board no longer has', () => {
-    const many = Array.from({ length: 4001 }, (_, k) => ({ id: `i${k}`, sig: 'b1' }))
-    let book = observe({}, ws, many, 1)
-    book = observe(book, ws, [{ id: 'i0', sig: 'b1' }], 2)
-    expect(pageOf(book, ws).seen).toEqual({ i0: 'b1' })
-  })
-  it('never mutates the book it was given', () => {
-    const book = Object.freeze(observe({}, ws, [{ id: 'a', sig: 'x' }], 100))
-    expect(() => markSeen(book, ws, 'a', 'y')).not.toThrow()
-    expect(pageOf(book, ws).seen.a).toBe('x')
-  })
-  it('reads back what it wrote, and a broken store as empty', () => {
-    const book = observe({}, ws, [{ id: 'a', sig: 'x' }], 100)
-    expect(readBook(JSON.stringify(book))).toEqual(book)
-    expect(readBook('{nope')).toEqual({})
-    expect(readBook(null)).toEqual({})
-    expect(readBook('[1,2]')).toEqual({})
-    expect(pageOf({}, 'other')).toBe(EMPTY_PAGE)
   })
 })
 
@@ -136,25 +59,7 @@ describe('a look needs the window in view', () => {
   it('a reply that lands behind another app is not read by the view left open', () => {
     expect(read('TerminalOverlay.tsx')).toContain("if (phase === 'replied' && pageInView()) cookrew().turnSeen(node.id)")
     const groups = read('zoom', 'BarGroups.tsx')
-    expect(groups).toContain('fullItem && fullItemSig && pageInView()')
-  })
-})
-
-describe('what the ARTIFACTS group holds', () => {
-  it('browsers and notes made or changed since you last looked, newest first', () => {
-    let book = observe({}, 'w', [{ id: 'old', sig: 'o' }], 1)
-    // Newest made first, as the board's nodes reversed give them.
-    const now = [{ id: 'c', sig: 'c1' }, { id: 'b', sig: 'b1' }, { id: 'old', sig: 'o2' }]
-    book = observe(book, 'w', now, 10)
-    // c and b noticed at 10 together, old changed and noticed at 10 too: the made order breaks the tie.
-    expect(itemInbox(now, pageOf(book, 'w')).map((e) => e.id)).toEqual(['c', 'b', 'old'])
-    // Changed again later: it rises to the front.
-    const later = [{ id: 'c', sig: 'c1' }, { id: 'b', sig: 'b2' }, { id: 'old', sig: 'o2' }]
-    book = observe(book, 'w', later, 20)
-    expect(itemInbox(later, pageOf(book, 'w')).map((e) => [e.id, e.at])).toEqual([['b', 20], ['c', 10], ['old', 10]])
-  })
-  it('nothing new before the baseline is set: the first look holds nothing', () => {
-    expect(itemInbox([{ id: 'a', sig: 'x' }], EMPTY_PAGE)).toEqual([])
+    expect(groups).toContain('fullItem && fullAt !== null && pageInView()')
   })
 })
 
