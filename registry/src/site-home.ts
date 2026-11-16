@@ -2,20 +2,22 @@ import type { Commit } from './github-commits'
 import { SITE_FRAMES } from './site-shell'
 import { esc, icon, page, type Page } from './site-shell'
 import { RELEASES_PAGE, pickAsset, type Release } from './releases'
-import { DEFINITION, FACTS, FAQ, HEADLINE, START_FAQ, START_HOWTO as HOWTO } from './site-content'
+import { DEFINITION, FACTS, FAQ, HEADLINE, HEADLINE_SUB, PILLARS, START_FAQ, START_HOWTO as HOWTO } from './site-content'
 import { commitsSection, compareTable, featuresGrid } from './site-features'
 import { faqPage, organization, softwareApplication, webPage } from './site-seo'
 import { BRAND_LOCKUP_CSS, BRAND_LOCKUP_HTML } from './site-brand'
 import { MOTION, PROMO, type Motion } from './site-motion'
+import { pillarsSection, roadmapSection } from './site-pillars'
 
 /**
  * THE FRONT PAGE OF THE STATIC SITE (0.6.0, site-static.ts) — one page, top to
  * bottom: the hero (the claim, the download, the way to the console and the
- * recorded promo), the dock, GET STARTED (the two steps and the commands the
- * orch runs) and the FEATURES (every one with its recorded frame, the
- * comparison, the questions, the commits). The page's sections are its
- * catalog, on the right rail. A feature's own page (/features/<slug>) is the
- * long tail, and the cards lead there.
+ * recorded promo), the three pillars (site-pillars.ts: every claim with its
+ * status, a recorded still where one shows the claim), the roadmap, GET STARTED (the two steps and
+ * the commands the orch runs) and the FEATURES (every one with its recorded
+ * frame, the comparison, the questions, the commits). The page's sections are
+ * its catalog, on the right rail. A feature's own page (/features/<slug>) is
+ * the long tail, and the cards lead there.
  *
  * NO MARKETPLACE: nothing here is served by a registry, so nothing here lists
  * what one is serving. The way to "your machines" is the console.
@@ -103,18 +105,21 @@ function staticHeroButtons(release: Release | null, console: string): string {
 <p class="meta">${release ? `v${esc(release.version)}${date ? ` · ${esc(date)}` : ''}` : `<a href="${RELEASES_PAGE}">latest release</a>`} · ${FACTS.license} · Apple Silicon${win ? ` · <a href="${esc(win.url)}">Windows preview</a>` : ', Windows preview'}</p>`
 }
 
-function staticDock(console: string): string {
-  return `<nav class="dock compact" aria-label="Where to go first">
-<a href="/features/canvas"><span class="ico">${icon('canvas')}</span><span><span class="t">See the canvas</span><span class="d">Terminals, notes and browsers on one board, wired together.</span></span></a>
-<a href="${esc(console)}/"><span class="ico">${icon('mac')}</span><span><span class="t">Your machines</span><span class="d">Every machine of your account and its agents, from any browser.</span></span></a>
-<a href="#start"><span class="ico">${icon('play')}</span><span><span class="t">Get started</span><span class="d">Place an agent and let it run your team.</span></span></a>
+/** The three pillars, one link each: the page's argument in one row. */
+function staticDock(): string {
+  const icons = ['canvas', 'mac', 'play'] as const
+  return `<nav class="dock compact" aria-label="The three parts of Cookrew">
+${PILLARS.map((p, i) => `<a href="#${p.id}"><span class="ico">${icon(icons[i])}</span><span><span class="t">${esc(p.title)}</span></span></a>`).join('\n')}
 </nav>`
 }
 
 function staticCatalog(console: string, built: boolean): string {
   const listed: [string, string, boolean][] = [
+    ['#status', 'What is shipped', false],
+    ...PILLARS.map((p): [string, string, boolean] => [`#${p.id}`, p.title, true]),
+    ['#roadmap', 'Roadmap', true],
     ['#start', 'Get started', false],
-    ['#serve', 'Save and serve a team', true],
+    ['#serve', 'Save the team', true],
     ['#build', 'What your orch runs', true],
     ['#features', 'Features', false],
     ['#zoom', 'The zoom, recorded', true],
@@ -134,7 +139,7 @@ function staticCatalog(console: string, built: boolean): string {
 export function staticHomePage(input: StaticHomeInput): Page {
   return page(
     {
-      title: 'Cookrew — run a team of AI coding agents on one canvas',
+      title: 'Cookrew — AI coding agents on every machine, one account',
       kind: 'document',
       active: 'home',
       description: DESCRIPTION,
@@ -147,7 +152,7 @@ export function staticHomePage(input: StaticHomeInput): Page {
         {
           '@type': 'HowTo',
           name: 'Get started with Cookrew',
-          description: 'Place an agent and let it orchestrate your workflow; save the team as a preset and choose to publish it.',
+          description: 'Place an agent and let it orchestrate your workflow; save the team and start your next project with it.',
           step: HOWTO.map((s, i) => ({ '@type': 'HowToStep', position: i + 1, name: s.name, text: s.text }))
         },
         faqPage([...START_FAQ, ...FAQ])
@@ -157,14 +162,19 @@ export function staticHomePage(input: StaticHomeInput): Page {
 <div class="home-body">
 <style>${BRAND_LOCKUP_CSS}</style>
 <div class="hero"><div class="wrap">
-<div>${BRAND_LOCKUP_HTML}<span class="tagline">OPEN SOURCE · ${FACTS.harnesses.slice(0, 4).join(' · ').toUpperCase()}</span>
+<div>${BRAND_LOCKUP_HTML}<span class="tagline">OPEN SOURCE · ${FACTS.license} · ${FACTS.harnesses.slice(0, 4).join(' · ').toUpperCase()}</span>
 <h1>${esc(HEADLINE)}</h1>
-<p class="lede">${esc(ONE_LINE)} Every turn is a checkpoint.</p>
+<p class="hero-sub">${esc(HEADLINE_SUB)}</p>
+<p class="lede">${esc(ONE_LINE)} Follow and answer them from the desktop or any browser.</p>
 ${staticHeroButtons(input.release, input.console)}</div>
 <div>${promo()}</div>
 </div></div>
 
-<div class="wrap" style="padding:0">${staticDock(input.console)}</div>
+<div class="wrap" style="padding:0">${staticDock()}</div>
+
+${pillarsSection()}
+
+${roadmapSection()}
 
 ${startSection()}
 

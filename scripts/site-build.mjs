@@ -14,6 +14,9 @@
 //   COOKREW_SITE_REQUIRE_RELEASE=1    stop unless a release and its Mac build can be read (CI)
 //   COOKREW_SITE_OFFLINE=1            ask GitHub nothing: no release named, no commit list
 //   COOKREW_SITE_REF=<commit>         the commit the pictures are read at (default: HEAD)
+//   COOKREW_SITE_ASSETS=http://127.0.0.1:<port>/
+//                                     LOCAL PREVIEW ONLY: read the pictures from a static server over
+//                                     registry/assets instead of GitHub (site-shell.ts accepts only a loopback address)
 //   GITHUB_TOKEN                      sent to api.github.com, and nowhere else, when set
 //
 // THE PICTURES ARE NOT IN THE OUTPUT. The pages name them on
@@ -72,7 +75,10 @@ async function generator(ref) {
     platform: 'node',
     write: false,
     logLevel: 'silent',
-    define: { __SITE_REF__: JSON.stringify(ref) }
+    define: {
+      __SITE_REF__: JSON.stringify(ref),
+      ...(env.COOKREW_SITE_ASSETS ? { __SITE_ASSETS__: JSON.stringify(env.COOKREW_SITE_ASSETS) } : {})
+    }
   })
   const dir = mkdtempSync(path.join(os.tmpdir(), 'cookrew-site-generator-'))
   try {

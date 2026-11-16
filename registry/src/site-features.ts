@@ -100,7 +100,8 @@ export function commitsSection(commits: readonly Commit[] | null): string {
  * recording, .card-shot), never the image at its own pixel size.
  */
 export function featuresGrid(): string {
-  return `<div class="grid shots">${FEATURES.map((f) => {
+  // The marketplace keeps its own page; the front page does not point at serving while sharing waits on security work.
+  return `<div class="grid shots">${FEATURES.filter((f) => f.slug !== 'marketplace').map((f) => {
     const steps = SEQUENCES[f.slug] ?? []
     const frame = steps[0] ? { file: steps[0].file, alt: steps[0].title, caption: steps[0].caption, width: steps[0].width, height: steps[0].height } : (FRAMES as Record<string, Frame>)[f.frames[0] ?? '']
     return `<div class="card" style="padding:0;overflow:hidden">${frame ? `<a class="card-shot" href="/features/${f.slug}">${frameImg(frame, { sizes: '(max-width: 860px) 100vw, 33vw' })}</a>` : ''}<div style="padding:14px 16px"><h3><a href="/features/${f.slug}">${esc(f.title)}</a></h3><p>${esc(f.short)}</p></div></div>`
