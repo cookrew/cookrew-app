@@ -1,7 +1,7 @@
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createOwnerClient } from '../src/main/daemon/owner-client'
-import { startOwnerLink, type OwnerDispatch } from '../src/main/daemon/owner-link'
+import { MAX_LINE, startOwnerLink, type OwnerDispatch } from '../src/main/daemon/owner-link'
 
 /**
  * The owner's side of the owner link (src/main/daemon/owner-client.ts), wired
@@ -57,12 +57,41 @@ describe('owner client', () => {
     await expect(client.invoke('later')).rejects.toThrow(/closed/)
   })
 
-  it('gives up on a request the daemon never answers', async () => {
+  it('has no timeout of its own: a slow answer (a sign-in waiting on a person) still arrives', async () => {
     vi.useFakeTimers()
-    const { client } = pair({ invoke: () => new Promise(() => undefined), send: vi.fn() })
-    const waiting = client.invoke('hang')
-    vi.advanceTimersByTime(121_000)
-    await expect(waiting).rejects.toThrow(/no answer/)
+    let answer: (v: unknown) => void = () => undefined
+    const { client } = pair({ invoke: () => new Promise((resolve) => (answer = resolve)), send: vi.fn() })
+    const waiting = client.invoke('account:oauthStart')
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    answer('signed in')
+    await expect(waiting).resolves.toBe('signed in')
+  })
+
+  it('refuses a request too big for the link instead of sending it', async () => {
+    const invoke = vi.fn(() => Promise.resolve(null))
+    const { client } = pair({ invoke, send: vi.fn() })
+    await expect(client.invoke('attach:save', [new Uint8Array(MAX_LINE)])).rejects.toThrow(/over/)
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('tells the daemon the window\'s lifecycle', async () => {
+    const window = vi.fn()
+    const { client } = pair({ invoke: () => Promise.resolve(null), send: vi.fn(), window })
+    client.windowEvent('contents', 'did-start-navigation', [{ isMainFrame: true }])
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(window).toHaveBeenCalledWith('contents', 'did-start-navigation', [{ isMainFrame: true }])
+  })
+
+  it('reads frames split across chunks and several in one chunk', async () => {
+    const { client, toOwner } = pair({ invoke: () => Promise.resolve(null), send: vi.fn() })
+    const heard: string[] = []
+    client.onEvent((channel) => heard.push(channel))
+    const a = JSON.stringify({ t: 'event', channel: 'a', args: [] })
+    const b = JSON.stringify({ t: 'event', channel: 'b', args: [] })
+    toOwner.write(a.slice(0, 5))
+    toOwner.write(`${a.slice(5)}\n${b}\n`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(heard).toEqual(['a', 'b'])
   })
 })
 

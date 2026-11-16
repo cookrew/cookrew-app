@@ -7,20 +7,20 @@
  * decodeLine), so byte arrays and escaped objects cross both ways.
  */
 import type { Readable, Writable } from 'node:stream'
-import { decodeLine, encodeFrame, MAX_LINE } from './owner-link'
+import { decodeLine, encodeFrame, MAX_LINE, type WindowTarget } from './owner-link'
 
 export interface OwnerClient {
+  /** No timeout of its own: a sign-in may wait minutes for a person. It fails when the link closes. */
   invoke(channel: string, args?: readonly unknown[]): Promise<unknown>
   send(channel: string, args?: readonly unknown[]): void
+  /** Tell the daemon one of the real window's lifecycle events. */
+  windowEvent(target: WindowTarget, name: string, args?: readonly unknown[]): void
   /** Every window event the daemon sends; returns the unsubscribe. */
   onEvent(listener: (channel: string, args: readonly unknown[]) => void): () => void
   readonly closed: Promise<void>
 }
 
-/** How long one request may take before the client gives up on it. */
-export const INVOKE_TIMEOUT_MS = 120_000
-
-type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
+type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void }
 
 export function createOwnerClient(input: Readable, output: Writable, log: (line: string) => void = console.error): OwnerClient {
   let nextId = 1
@@ -35,10 +35,8 @@ export function createOwnerClient(input: Readable, output: Writable, log: (line:
   const close = (why: string): void => {
     if (!open) return
     open = false
-    for (const [, waiting] of pending) {
-      clearTimeout(waiting.timer)
-      waiting.reject(new Error(`the daemon link closed: ${why}`))
-    }
+    input.removeAllListeners('data')
+    for (const [, waiting] of pending) waiting.reject(new Error(`the daemon link closed: ${why}`))
     pending.clear()
     resolveClosed()
   }
@@ -56,7 +54,6 @@ export function createOwnerClient(input: Readable, output: Writable, log: (line:
       const waiting = pending.get(f.id)
       if (waiting === undefined) return
       pending.delete(f.id)
-      clearTimeout(waiting.timer)
       if (f.ok === true) waiting.resolve(f.value)
       else waiting.reject(new Error(typeof f.error === 'string' ? f.error : 'the daemon refused'))
       return
@@ -78,8 +75,12 @@ export function createOwnerClient(input: Readable, output: Writable, log: (line:
     const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
     let start = 0
     let newline = bytes.indexOf(0x0a, start)
-    while (newline !== -1) {
+    while (newline !== -1 && open) {
       const piece = bytes.subarray(start, newline)
+      if (size + piece.length > MAX_LINE) {
+        close('a line from the daemon is over the limit')
+        return
+      }
       const line = Buffer.concat([...parts, piece]).toString('utf8')
       parts = []
       size = 0
@@ -88,19 +89,24 @@ export function createOwnerClient(input: Readable, output: Writable, log: (line:
       newline = bytes.indexOf(0x0a, start)
     }
     const rest = bytes.subarray(start)
-    size += rest.length
-    if (size > MAX_LINE) {
+    if (size + rest.length > MAX_LINE) {
       close('a line from the daemon is over the limit')
       return
     }
-    if (rest.length > 0) parts.push(Buffer.from(rest))
+    if (rest.length > 0) {
+      parts.push(Buffer.from(rest))
+      size += rest.length
+    }
   })
   input.on('end', () => close('the daemon ended it'))
   input.on('error', (error) => close(String(error)))
   output.on('error', (error) => close(String(error)))
 
+  /** One frame out; refused here when the daemon would have to skip it (over MAX_LINE). */
   const write = (frame: Parameters<typeof encodeFrame>[0]): void => {
-    output.write(`${encodeFrame(frame)}\n`)
+    const line = encodeFrame(frame)
+    if (Buffer.byteLength(line) > MAX_LINE) throw new Error(`the request is over ${MAX_LINE} bytes`)
+    output.write(`${line}\n`)
   }
 
   return {
@@ -108,16 +114,11 @@ export function createOwnerClient(input: Readable, output: Writable, log: (line:
       if (!open) return Promise.reject(new Error('the daemon link is closed'))
       const id = nextId++
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          pending.delete(id)
-          reject(new Error(`${channel}: no answer from the daemon in ${INVOKE_TIMEOUT_MS} ms`))
-        }, INVOKE_TIMEOUT_MS)
-        pending.set(id, { resolve, reject, timer })
+        pending.set(id, { resolve, reject })
         try {
           write({ t: 'invoke', id, channel, args })
         } catch (error) {
           pending.delete(id)
-          clearTimeout(timer)
           reject(error instanceof Error ? error : new Error(String(error)))
         }
       })
@@ -128,6 +129,14 @@ export function createOwnerClient(input: Readable, output: Writable, log: (line:
         write({ t: 'send', channel, args })
       } catch (error) {
         log(`[cookrew shell] ${channel} cannot cross the daemon link: ${String(error)}`)
+      }
+    },
+    windowEvent(target, name, args = []) {
+      if (!open) return
+      try {
+        write({ t: 'window', target, name, args })
+      } catch (error) {
+        log(`[cookrew shell] the window's ${name} cannot cross the daemon link: ${String(error)}`)
       }
     },
     onEvent(listener) {

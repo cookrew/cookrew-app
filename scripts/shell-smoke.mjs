@@ -113,6 +113,15 @@ async function drive(page) {
     })()`)
     if (typed !== 'typed') return fail(`a terminal through the shell: ${typed}`)
     console.log('shell smoke: a terminal round trip through the renderer bridge OK')
+    // The window never follows a page elsewhere (it would inherit the preload).
+    // A file: URL on purpose: an http one would be handed to the owner's real browser.
+    await r.evaluate('location.href = "file:///etc/hosts"; true').catch(() => undefined)
+    await sleep(1500)
+    const where = await r.evaluate('location.href')
+    if (!/renderer\/index\.html/.test(String(where))) return fail(`the window followed a page elsewhere: ${where}`)
+    const still = await r.evaluate('window.cookrew.listWorkspaces().then(() => "ok")')
+    if (still !== 'ok') return fail('the bridge stopped after a refused navigation')
+    console.log('shell smoke: a navigation away was refused; the window stayed the owner page')
   } finally {
     r.close()
   }
