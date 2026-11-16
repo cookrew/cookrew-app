@@ -159,12 +159,15 @@ async function pasteOnce(n: number) {
   }
 }
 
-describe('team paste — batched, two reads, one write', () => {
+// One read of the target: since d48edbb9 (2026-09-06) the store keeps parsed
+// parked states keyed by the file's stat, so copyTeam's second look at the
+// unchanged target is a cache hit. It was two reads before; one is the floor.
+describe('team paste — batched, one read, one write', () => {
   for (const n of [10, 30] as const) {
     it(`n=${n} holds its tail and its shape`, async () => {
       const measured = await measure(`team paste n=${n}`, () => pasteOnce(n))
       expectTail(measured, n === 10 ? LATENCY.teamPaste10 : LATENCY.teamPaste30)
-      expectEvery(measured, 'reads', 2)
+      expectEvery(measured, 'reads', 1)
       expectEvery(measured, 'writes', 1)
       expectEvery(measured, 'events', 1)
       expectEvery(measured, 'nodes', n)

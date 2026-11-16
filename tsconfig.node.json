@@ -19,7 +19,7 @@
   // The same automatic JSX runtime the app build and vitest use, so a component
   // is typechecked exactly as it is compiled.
   "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "electron.vite.config.ts", "vite.console.config.ts", "tests/**/*", "registry/**/*"],
-  // The render-census fixture is BROWSER code (it mounts the renderer's App);
-  // it is typechecked by tsconfig.web.json, where <webview> is declared.
+  // The perf fixtures are BROWSER code (they mount renderer components);
+  // they are typechecked by tsconfig.web.json, where <webview> is declared.
   "exclude": ["tests/perf/fixtures/**"]
 }

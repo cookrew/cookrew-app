@@ -20,11 +20,15 @@ import { builtRendererPresent, rendererDir, startFixtureCompanion, type FixtureC
  * Skips, loudly, without Chrome or without out/renderer (CI builds first).
  */
 
+// The first card is the zoom view's (.zv-card). It was a canvas card
+// (.react-flow__node) until the canvas was retired (29765969, 2026-10-30);
+// from then on this marker never fired, firstCard stayed 0, and every count
+// below read an empty boot window.
 const OBSERVER = `(() => {
   const marks = { firstCard: null }
   window.__courier = marks
   const seen = () => {
-    if (marks.firstCard === null && document.querySelector('.react-flow__node')) {
+    if (marks.firstCard === null && document.querySelector('.zv-card')) {
       marks.firstCard = Date.now()
       observer.disconnect()
     }
@@ -35,8 +39,16 @@ const OBSERVER = `(() => {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
-const isStream = (p: string): boolean => /^\/api\/events(\?|$)|\/api\/terminal\/[^/]+\/stream(\?|$)/.test(p)
+// Every EventSource the renderer opens. /api/fleet/stream joined them with the
+// device fleet (remote-api.ts); the fixture has no fleet, so it reconnects.
+const isStream = (p: string): boolean =>
+  /^\/api\/events(\?|$)|\/api\/terminal\/[^/]+\/stream(\?|$)|^\/api\/fleet\/stream(\?|$)/.test(p)
 const isThumb = (p: string): boolean => /\/api\/browser\/[^/]+\/thumb|\/api\/browser\/thumbs/.test(p)
+// The phone's black box posts its vitals on a 3 s clock (phone-beacon.ts), so
+// how many land in the window is the runner's speed, not the boot's cost: a
+// macOS runner drawing its first card at 2.0 s counted one more than Linux at
+// 0.8 s, with every other request the same.
+const isHeartbeat = (p: string): boolean => p === '/api/beacon'
 
 const chrome = chromeBinary()
 const built = builtRendererPresent()
@@ -97,7 +109,10 @@ describe.skipIf(!ready)('the remote canvas boot asks for each thing once', () =>
   afterAll(async () => {
     cdp?.close()
     browser?.child.kill('SIGKILL')
-    if (profile) rmSync(profile, { recursive: true, force: true })
+    // A killed Chrome can still be flushing its profile for a moment, and a
+    // bare rmSync then fails the whole file with ENOTEMPTY (seen on CI
+    // 2026-11-15): node retries those errors when asked to.
+    if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     await companion?.close()
   })
 
@@ -112,7 +127,7 @@ describe.skipIf(!ready)('the remote canvas boot asks for each thing once', () =>
   })
 
   it(`performs at most ${REMOTE_OPEN.maxBootRequests} requests before and around first card`, () => {
-    const requests = boot().filter((p) => !isStream(p) && !isThumb(p))
+    const requests = boot().filter((p) => !isStream(p) && !isThumb(p) && !isHeartbeat(p))
     process.stdout.write(`perf: remote-open boot requests ${requests.length}: ${requests.join(' ')}\n`)
     expect(requests.length).toBeLessThanOrEqual(REMOTE_OPEN.maxBootRequests)
   })
