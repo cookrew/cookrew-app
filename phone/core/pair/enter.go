@@ -26,8 +26,11 @@ type Machine struct {
 var (
 	// ErrNoDoor: the machine has no account door (signed out, or older than account pairing).
 	ErrNoDoor = errors.New("pair: that machine has no door for the account")
-	// ErrDoorRefused: the machine turned this phone away (forgotten there, an old machine that does not read a phone pass, a revoked pass).
+	// ErrDoorRefused: the machine turned this phone away (forgotten there, another account's machine, a full device list).
 	ErrDoorRefused = errors.New("pair: that machine turned this phone away")
+	// ErrRegrant: the machine did not take this pass (expired, revoked, or a machine older than the phone pass,
+	// or one that could not read cookrew.dev's keys just now): a fresh pass may do, later.
+	ErrRegrant = errors.New("pair: that machine did not take this pass")
 	// ErrWrongMachine: a machine answered in another machine's name; nothing was signed or kept.
 	ErrWrongMachine = errors.New("pair: a machine answered for a different machine")
 )
@@ -118,12 +121,17 @@ func post(ctx context.Context, road plane.Plane, route string, body any, out any
 	return nil
 }
 
-// doorError names a plane's refusal as the door's: a 404 is no door at all.
+// doorError names a plane's refusal as the door's: a 404 is no door at all, a
+// 401 the door's "regrant" (src/main/account-pair.ts), a 403 its "refused".
+// plane.Check keeps the status only in its words ("(401 …)"), which is what is
+// read here; the relay's own 401 is plane.ErrSessionEnded, and passes through.
 func doorError(err error) error {
 	var status *plane.StatusError
 	switch {
 	case errors.As(err, &status) && status.Status == http.StatusNotFound:
 		return ErrNoDoor
+	case errors.Is(err, plane.ErrRefused) && strings.Contains(err.Error(), "(401 "):
+		return fmt.Errorf("%w: %v", ErrRegrant, err)
 	case errors.Is(err, plane.ErrRefused):
 		return fmt.Errorf("%w: %v", ErrDoorRefused, err)
 	}

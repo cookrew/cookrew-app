@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/cookrew/cookrew-app/phone/core/account"
 	"github.com/cookrew/cookrew-app/phone/core/plane"
@@ -39,28 +40,30 @@ func (s State) Device() (Device, error) {
 
 // WithSession is the state holding a renewed session.
 func (s State) WithSession(next Session) State {
-	return State{Registry: s.Registry, Name: s.Name, Seed: s.Seed, Session: next, Machines: s.Machines}
+	return State{Registry: s.Registry, Name: s.Name, Seed: s.Seed, Session: next, Machines: s.machines("")}
 }
 
 // WithMachine is the state holding one more (or a replaced) machine token.
 func (s State) WithMachine(m Machine) State {
-	machines := make(map[string]Machine, len(s.Machines)+1)
-	for id, held := range s.Machines {
-		machines[id] = held
-	}
-	machines[m.ID] = m
+	machines := s.machines("")
+	machines[strings.ToLower(m.ID)] = m
 	return State{Registry: s.Registry, Name: s.Name, Seed: s.Seed, Session: s.Session, Machines: machines}
 }
 
 // WithoutMachine is the state that no longer holds a machine's token (it refused it).
 func (s State) WithoutMachine(id string) State {
-	machines := make(map[string]Machine, len(s.Machines))
-	for held, m := range s.Machines {
-		if held != id {
-			machines[held] = m
+	return State{Registry: s.Registry, Name: s.Name, Seed: s.Seed, Session: s.Session, Machines: s.machines(strings.ToLower(id))}
+}
+
+// machines is a copy of the machine map, leaving out `without`: no two states share one.
+func (s State) machines(without string) map[string]Machine {
+	out := make(map[string]Machine, len(s.Machines)+1)
+	for id, m := range s.Machines {
+		if id != without {
+			out[id] = m
 		}
 	}
-	return State{Registry: s.Registry, Name: s.Name, Seed: s.Seed, Session: s.Session, Machines: machines}
+	return out
 }
 
 // MachineIDs are the machines the state holds tokens for, in a stable order.
@@ -94,6 +97,26 @@ func JoinAccount(ctx context.Context, registry Registry, scanned, name string) (
 		return State{}, err
 	}
 	return State{Registry: registry.Origin(), Name: name, Seed: hex.EncodeToString(key.Seed()), Session: session, Machines: map[string]Machine{}}, nil
+}
+
+// Rejoin spends a new code with the key this phone already holds: after a
+// password change or "Not me" ended its trust, or a machine forgot it. The
+// account keeps one row for it (same id, same key), the trusted moment moves
+// forward, and the machine tokens it still holds are kept.
+func Rejoin(ctx context.Context, registry Registry, state State, scanned string) (State, error) {
+	code, err := JoinCode(scanned)
+	if err != nil {
+		return state, err
+	}
+	device, err := state.Device()
+	if err != nil {
+		return state, err
+	}
+	session, err := registry.Join(ctx, code, device)
+	if err != nil {
+		return state, err
+	}
+	return state.WithSession(session), nil
 }
 
 // Road is the plane to one machine for a session, with no machine token yet:
@@ -133,7 +156,7 @@ func EnterAll(ctx context.Context, registry Registry, state State, road Road) (S
 	missing := make([]Desktop, 0, len(desktops))
 	outcomes := make([]Outcome, 0, len(desktops))
 	for _, d := range desktops {
-		if _, held := state.Machines[d.DeviceID]; held {
+		if _, held := state.Machines[strings.ToLower(d.DeviceID)]; held {
 			outcomes = append(outcomes, Outcome{Machine: d, Entered: true})
 			continue
 		}
@@ -154,6 +177,10 @@ func EnterAll(ctx context.Context, registry Registry, state State, road Road) (S
 			continue
 		}
 		machine, err := enterOne(ctx, road, device, pass, d, state.Session.Token)
+		// The relay's own 401: the sign-in is over for every machine, not this one.
+		if errors.Is(err, plane.ErrSessionEnded) {
+			return next, append(outcomes, Outcome{Machine: d, Err: err}), ErrSignedOut
+		}
 		if err != nil {
 			outcomes = append(outcomes, Outcome{Machine: d, Err: err})
 			continue
@@ -173,7 +200,8 @@ func enterOne(ctx context.Context, road Road, device Device, pass Pass, d Deskto
 }
 
 // Refused reports whether an outcome means the machine will not take this
-// phone on this pass (as opposed to being away): the app says so and stops asking.
+// phone (as opposed to being away, or not taking this pass just now): the app
+// says so and stops asking. A regrant is not one: the next run asks again.
 func Refused(o Outcome) bool {
 	return o.Err != nil && (errors.Is(o.Err, ErrDoorRefused) || errors.Is(o.Err, ErrWrongMachine) || errors.Is(o.Err, ErrNoDoor))
 }

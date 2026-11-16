@@ -88,6 +88,11 @@ var (
 	ErrSignedOut = errors.New("pair: this phone's sign-in is over; scan a new code")
 	// ErrNotTrusted: the account does not know this device as a trusted phone (a password change or "Not me" ended it).
 	ErrNotTrusted = errors.New("pair: this phone is not trusted on the account any more; scan a new code")
+	// ErrNewDevice: the account refuses this device as it is (removed in Devices, or its id is another's):
+	// the next code goes in under a new key. The code this answer spent is gone.
+	ErrNewDevice = errors.New("pair: the account will not take this phone's key again; join as a new phone")
+	// ErrLocked: the account is locked down after "Not me" until its password changes.
+	ErrLocked = errors.New("pair: the account is locked until its password is changed")
 )
 
 // Registry is cookrew.dev's API, as the phone uses it.
@@ -154,8 +159,14 @@ func (r Registry) Join(ctx context.Context, code string, device Device) (Session
 	var out Session
 	status, err := r.call(ctx, http.MethodPost, "/v2/join", "", body, &out)
 	if err != nil {
-		if status == http.StatusUnauthorized {
+		var refused *Refusal
+		switch {
+		case status == http.StatusUnauthorized:
 			return Session{}, ErrWrongCode
+		case status == http.StatusBadRequest && errors.As(err, &refused) && refused.Reason == "bad_device":
+			return Session{}, ErrNewDevice
+		case status == http.StatusForbidden && errors.As(err, &refused) && refused.Reason == "password_change_required":
+			return Session{}, ErrLocked
 		}
 		return Session{}, err
 	}
@@ -176,6 +187,8 @@ func (r Registry) PhonePass(ctx context.Context, session string) (Pass, error) {
 			return Pass{}, ErrSignedOut
 		case errors.As(err, &refused) && refused.Reason == "not_phone":
 			return Pass{}, ErrNotTrusted
+		case errors.As(err, &refused) && refused.Reason == "locked":
+			return Pass{}, ErrLocked
 		}
 		return Pass{}, err
 	}

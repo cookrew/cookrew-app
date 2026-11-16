@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -39,14 +40,29 @@ type world struct {
 	online  map[string]bool
 	// forgotten machines turn the phone away.
 	forgotten map[string]bool
-	// liar answers every begin in macA's name.
-	liar     bool
-	held     map[string]account.PairChallenge
-	renewals int
-	nonces   int
-	nonce    string
-	entered  []string
-	srv      *httptest.Server
+	// liar answers every begin in macA's name; liarFinish only the finish.
+	liar       bool
+	liarFinish bool
+	// watchScope answers a finish with a watch's token; door404 has no door; regrant refuses the pass with 401.
+	watchScope bool
+	door404    bool
+	regrant    bool
+	// relayEnds answers the relay's own 401 for this machine.
+	relayEnds string
+	// extend makes a renewal add time; the real registry caps it at the sign-in's thirtieth day.
+	extend bool
+	// joins numbers the sessions; refuseDevice answers a join with 400 bad_device, locked with 403.
+	joins        int
+	refuseDevice bool
+	locked       bool
+	renewDelay   time.Duration
+	renewDrop    bool
+	held         map[string]account.PairChallenge
+	renewals     int
+	nonces       int
+	nonce        string
+	entered      []string
+	srv          *httptest.Server
 }
 
 func newWorld(t *testing.T) *world {
@@ -79,6 +95,14 @@ func (w *world) serve(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.code = "" // spent
+		if w.refuseDevice {
+			w.answer(rw, 400, map[string]string{"error": "bad_device"})
+			return
+		}
+		if w.locked {
+			w.answer(rw, 403, map[string]string{"error": "password_change_required"})
+			return
+		}
 		if dev["kind"] != "phone" {
 			w.answer(rw, 400, map[string]string{"error": "bad_device"})
 			return
@@ -88,7 +112,8 @@ func (w *world) serve(rw http.ResponseWriter, r *http.Request) {
 		w.device.id, _ = dev["id"].(string)
 		w.device.name, _ = dev["name"].(string)
 		w.trusted = true
-		w.session = "session-1"
+		w.joins++
+		w.session = fmt.Sprintf("session-%d", w.joins)
 		w.exp = time.Now().Add(30 * 24 * time.Hour).UnixMilli()
 		w.answer(rw, 201, map[string]any{"token": w.session, "exp": w.exp, "deviceId": w.device.id, "username": "anvztor"})
 	case r.URL.Path == "/v2/me/device-grant/phone":
@@ -112,6 +137,21 @@ func (w *world) serve(rw http.ResponseWriter, r *http.Request) {
 		w.nonce = "bm9uY2Utb2YtcmVuZXdhbC0xMjM"
 		w.answer(rw, 200, map[string]any{"nonce": w.nonce, "expiresAt": 0})
 	case r.URL.Path == "/v2/sessions/renew":
+		if w.renewDelay > 0 {
+			w.mu.Unlock()
+			time.Sleep(w.renewDelay)
+			w.mu.Lock()
+		}
+		if w.renewDrop {
+			// The renewal happens, and the answer is lost on the way back.
+			w.renewDrop = false
+			w.renewals++
+			w.session = "session-renewed-unseen"
+			hj, _ := rw.(http.Hijacker)
+			conn, _, _ := hj.Hijack()
+			_ = conn.Close()
+			return
+		}
 		msg, _ := account.RenewMessage("anvztor", w.device.id, w.nonce)
 		if body["nonce"] != w.nonce || !w.verify(msg, body["sig"]) {
 			w.answer(rw, 401, map[string]string{"error": "bad_credentials"})
@@ -119,8 +159,11 @@ func (w *world) serve(rw http.ResponseWriter, r *http.Request) {
 		}
 		w.nonce = ""
 		w.renewals++
-		w.session = "session-renewed"
-		w.exp = time.Now().Add(30 * 24 * time.Hour).UnixMilli()
+		w.session = fmt.Sprintf("session-renewed-%d", w.renewals)
+		if w.extend {
+			// Always later than before, even within the same millisecond as the join.
+			w.exp = max(time.Now().Add(30*24*time.Hour).UnixMilli(), w.exp+time.Hour.Milliseconds())
+		}
 		w.answer(rw, 201, map[string]any{"token": w.session, "exp": w.exp, "deviceId": w.device.id, "username": "anvztor"})
 	case strings.HasPrefix(r.URL.Path, "/api/m/"):
 		w.door(rw, r, body)
@@ -150,11 +193,19 @@ func (w *world) door(rw http.ResponseWriter, r *http.Request, body map[string]an
 	}
 	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/api/m/"), "/", 2)
 	machine, route := parts[0], parts[1]
+	if machine == w.relayEnds {
+		w.answer(rw, 401, map[string]string{"error": "unauthenticated"})
+		return
+	}
 	if !w.online[machine] {
 		w.answer(rw, 503, map[string]string{"error": "no_link"})
 		return
 	}
-	if body["grant"] != "pass-for-"+w.device.id {
+	if w.door404 {
+		w.answer(rw, 404, map[string]string{"error": "This machine does not take the account at the door."})
+		return
+	}
+	if w.regrant || body["grant"] != "pass-for-"+w.device.id {
 		w.answer(rw, 401, map[string]any{"ok": false, "outcome": "regrant", "error": "That pass is no longer good."})
 		return
 	}
@@ -180,7 +231,14 @@ func (w *world) door(rw http.ResponseWriter, r *http.Request, body map[string]an
 			return
 		}
 		w.entered = append(w.entered, machine)
-		w.answer(rw, 200, map[string]any{"ok": true, "outcome": "admitted", "deviceId": w.device.id, "desktopId": named, "token": "token-on-" + machine, "until": 0})
+		answer := map[string]any{"ok": true, "outcome": "admitted", "deviceId": w.device.id, "desktopId": named, "token": "token-on-" + machine, "until": 0}
+		if w.liarFinish {
+			answer["desktopId"] = macA
+		}
+		if w.watchScope {
+			answer["scope"] = "watch"
+		}
+		w.answer(rw, 200, answer)
 	}
 }
 
@@ -345,6 +403,7 @@ func TestKeeperRenewsAWeekAheadAndNeverAfter(t *testing.T) {
 	reg := w.registry()
 	state, _ := JoinAccount(context.Background(), reg, "K7QM-2XPD", "iPhone")
 	device, _ := state.Device()
+	w.extend = true
 	clock := time.Now()
 	var kept []Session
 	k := NewKeeper(reg, device.Key, state.Session, func() time.Time { return clock }, func(s Session) error {
@@ -356,7 +415,7 @@ func TestKeeperRenewsAWeekAheadAndNeverAfter(t *testing.T) {
 	}
 	clock = time.UnixMilli(state.Session.Exp).Add(-RenewAhead + time.Hour)
 	s, err := k.Fresh(context.Background())
-	if err != nil || s.Token != "session-renewed" || w.renewals != 1 || len(kept) != 1 {
+	if err != nil || s.Token != "session-renewed-1" || w.renewals != 1 || len(kept) != 1 || k.Capped() {
 		t.Fatalf("due: %+v %v renewals=%d kept=%d", s, err, w.renewals, len(kept))
 	}
 	clock = time.UnixMilli(s.Exp).Add(time.Second)
@@ -396,5 +455,178 @@ func TestStateIsAValue(t *testing.T) {
 	t2 := s.WithMachine(Machine{ID: macB}).WithoutMachine(macA)
 	if len(s.Machines) != 1 || len(t2.Machines) != 1 || t2.Machines[macB].ID != macB {
 		t.Fatalf("s=%v t2=%v", s.Machines, t2.Machines)
+	}
+}
+
+func TestRejoinKeepsThePhonesKeyAndItsMachines(t *testing.T) {
+	w := newWorld(t)
+	reg := w.registry()
+	ctx := context.Background()
+	state, _ := JoinAccount(ctx, reg, "K7QM-2XPD", "iPhone")
+	entered, _, _ := EnterAll(ctx, reg, state, RelayRoad(reg))
+	before, _ := entered.Device()
+	w.code = "M2XB-7KQ4"
+	w.trusted = false
+	again, err := Rejoin(ctx, reg, entered, "https://cookrew.dev/join#m2xb-7kq4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := again.Device()
+	if after.ID != before.ID || again.Seed != entered.Seed || !w.trusted {
+		t.Fatalf("rejoined as another phone: %s → %s", before.ID, after.ID)
+	}
+	if len(again.Machines) != 2 || again.Session.Token != "session-2" {
+		t.Fatalf("rejoin lost the machines or the session: %+v", again)
+	}
+	if _, err := Rejoin(ctx, reg, again, "M2XB-7KQ4"); !errors.Is(err, ErrWrongCode) {
+		t.Fatalf("a spent code: %v", err)
+	}
+}
+
+func TestKeeperStopsAtTheSignInsCap(t *testing.T) {
+	w := newWorld(t)
+	reg := w.registry()
+	state, _ := JoinAccount(context.Background(), reg, "K7QM-2XPD", "iPhone")
+	device, _ := state.Device()
+	clock := time.UnixMilli(state.Session.Exp).Add(-RenewAhead + time.Hour)
+	k := NewKeeper(reg, device.Key, state.Session, func() time.Time { return clock }, nil)
+	first, _ := k.Fresh(context.Background())
+	if w.renewals != 1 || !k.Capped() || first.Exp != state.Session.Exp {
+		t.Fatalf("renewals=%d capped=%v", w.renewals, k.Capped())
+	}
+	// Capped: asking again would only close the token a request is holding.
+	clock = clock.Add(time.Hour)
+	if s, _ := k.Fresh(context.Background()); w.renewals != 1 || s.Token != first.Token {
+		t.Fatalf("renewed past the cap: renewals=%d", w.renewals)
+	}
+}
+
+func TestKeeperRenewsOnceForManyAskers(t *testing.T) {
+	w := newWorld(t)
+	reg := w.registry()
+	state, _ := JoinAccount(context.Background(), reg, "K7QM-2XPD", "iPhone")
+	device, _ := state.Device()
+	w.extend = true
+	w.renewDelay = 50 * time.Millisecond
+	clock := time.UnixMilli(state.Session.Exp).Add(-time.Hour)
+	k := NewKeeper(reg, device.Key, state.Session, func() time.Time { return clock }, nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = k.Fresh(context.Background())
+		}()
+	}
+	// While the renewal is out, Current answers at once.
+	time.Sleep(10 * time.Millisecond)
+	started := time.Now()
+	_ = k.Current()
+	if time.Since(started) > 20*time.Millisecond {
+		t.Fatal("Current waited on the network")
+	}
+	wg.Wait()
+	if w.renewals != 1 {
+		t.Fatalf("%d renewals for one due session", w.renewals)
+	}
+}
+
+func TestNewerRetriesARenewalWhoseAnswerWasLost(t *testing.T) {
+	w := newWorld(t)
+	reg := w.registry()
+	state, _ := JoinAccount(context.Background(), reg, "K7QM-2XPD", "iPhone")
+	device, _ := state.Device()
+	w.extend = true
+	w.renewDrop = true
+	clock := time.UnixMilli(state.Session.Exp).Add(-time.Hour)
+	k := NewKeeper(reg, device.Key, state.Session, func() time.Time { return clock }, nil)
+	held, _ := k.Fresh(context.Background())
+	if held.Token != state.Session.Token || !k.RenewFailing() {
+		t.Fatalf("a lost answer: held %q failing=%v", held.Token, k.RenewFailing())
+	}
+	// The relay refuses the held token (the lost renewal closed it): Newer renews at once, rest or not.
+	next, err := k.Newer(context.Background(), held.Token)
+	if err != nil || next.Token == held.Token || w.renewals != 2 {
+		t.Fatalf("Newer: %q %v renewals=%d", next.Token, err, w.renewals)
+	}
+	// With nothing newer and nothing unanswered, the sign-in is over.
+	if _, err := k.Newer(context.Background(), next.Token); !errors.Is(err, ErrSignedOut) {
+		t.Fatalf("Newer on a good answer: %v", err)
+	}
+}
+
+func TestAJoinTheAccountRefusesSaysWhy(t *testing.T) {
+	w := newWorld(t)
+	reg := w.registry()
+	w.refuseDevice = true
+	if _, err := JoinAccount(context.Background(), reg, "K7QM-2XPD", "iPhone"); !errors.Is(err, ErrNewDevice) {
+		t.Fatalf("bad_device: %v", err)
+	}
+	w.refuseDevice, w.locked, w.code = false, true, "K7QM-2XPD"
+	if _, err := JoinAccount(context.Background(), reg, "K7QM-2XPD", "iPhone"); !errors.Is(err, ErrLocked) {
+		t.Fatalf("locked: %v", err)
+	}
+}
+
+func TestDoorsThatSayNoInTheirOwnWays(t *testing.T) {
+	cases := []struct {
+		name    string
+		set     func(*world)
+		want    error
+		refused bool
+	}{
+		{"no door", func(w *world) { w.door404 = true }, ErrNoDoor, true},
+		{"regrant", func(w *world) { w.regrant = true }, ErrRegrant, false},
+		{"forgotten", func(w *world) { w.forgotten[macA], w.forgotten[macB] = true, true }, ErrDoorRefused, true},
+		{"lies at finish", func(w *world) { w.liarFinish = true }, ErrWrongMachine, true},
+		{"a watch's token", func(w *world) { w.watchScope = true }, ErrDoorRefused, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			reg := w.registry()
+			state, _ := JoinAccount(context.Background(), reg, "K7QM-2XPD", "iPhone")
+			c.set(w)
+			next, outcomes, err := EnterAll(context.Background(), reg, state, RelayRoad(reg))
+			if err != nil {
+				t.Fatal(err)
+			}
+			o := outcomes[1]
+			if !errors.Is(o.Err, c.want) || Refused(o) != c.refused {
+				t.Fatalf("%+v: want %v refused=%v", o, c.want, c.refused)
+			}
+			if _, kept := next.Machines[macB]; kept {
+				t.Fatal("kept a token from a door that said no")
+			}
+		})
+	}
+}
+
+func TestTheRelaySigningThePhoneOutStopsEveryMachine(t *testing.T) {
+	w := newWorld(t)
+	reg := w.registry()
+	state, _ := JoinAccount(context.Background(), reg, "K7QM-2XPD", "iPhone")
+	w.relayEnds = macA
+	if _, outcomes, err := EnterAll(context.Background(), reg, state, RelayRoad(reg)); !errors.Is(err, ErrSignedOut) || len(outcomes) != 1 {
+		t.Fatalf("relay 401: %v after %d outcomes", err, len(outcomes))
+	}
+}
+
+func TestTheRegistryClientNeverFollowsARedirectWithTheSession(t *testing.T) {
+	var heard []string
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		heard = append(heard, r.Header.Get("Authorization"))
+	}))
+	defer elsewhere.Close()
+	moved := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		http.Redirect(rw, r, elsewhere.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer moved.Close()
+	reg, _ := NewRegistry(moved.URL, nil)
+	if _, err := reg.PhonePass(context.Background(), "the-session"); err == nil {
+		t.Fatal("a redirect read as a pass")
+	}
+	if len(heard) != 0 {
+		t.Fatalf("followed the redirect with %v", heard)
 	}
 }

@@ -20,9 +20,10 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
-// joinCodeShape is the registry's alphabet (no 0/O, no 1/I/L), two blocks of
+// joinCodeShape is the registry's alphabet (no 0/O, no 1/I), two blocks of
 // four with the dash optional (src/shared/join-code.ts · JOIN_CODE).
 var joinCodeShape = regexp.MustCompile(`^([2-9A-HJ-NP-Z]{4})-?([2-9A-HJ-NP-Z]{4})$`)
 
@@ -38,7 +39,13 @@ func JoinCode(scanned string) (string, error) {
 	if u, err := url.Parse(raw); err == nil && u.Scheme != "" && u.Fragment != "" {
 		raw = u.Fragment
 	}
-	plain := strings.NewReplacer(" ", "", "\t", "", "·", "").Replace(strings.ToUpper(raw))
+	// Every space and the middle dot go, as the TypeScript twin strips them (/[\s·]+/g).
+	plain := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || r == '·' {
+			return -1
+		}
+		return r
+	}, strings.ToUpper(raw))
 	match := joinCodeShape.FindStringSubmatch(plain)
 	if match == nil {
 		return "", ErrNotACode
