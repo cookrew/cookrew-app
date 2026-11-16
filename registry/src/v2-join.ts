@@ -4,6 +4,7 @@ import { relyingParty } from './v2-factor-http'
 import { asking, cookie, refuse, signedIn, v2Json, type Signed, type V2Context } from './v2-http'
 import { factorError } from './v2-factor-copy'
 import { stepUpHeld } from './v2-step-up'
+import { isJoinPurpose } from './v2-join-codes'
 
 /** The same ceiling the other /v2/me writes read a body under. */
 const SMALL_BODY = 16 * 1024
@@ -32,6 +33,12 @@ async function mintJoinCode(ctx: V2Context, signed: Signed): Promise<void> {
   }
   // The step-up itself lives in one place (v2-step-up.ts) because this is one
   // of seven acts that need it, and seven copies of a security boundary drift.
+  // A phone's code is shown by a machine (⋯ → Phone app): a phone or a browser signed in with
+  // the password must not mint one and promote itself to a phone that needs no proof again.
+  if (body.value.purpose === 'phone' && signed.device.kind !== 'desktop') {
+    refuse(ctx.response, 403, 'not_machine')
+    return
+  }
   if (!(await stepUpHeld(ctx, signed, 'mint-join-code', body.value))) return
   /**
    * SIX AN HOUR, PER ACCOUNT. A join code is a bearer that attaches a machine,
@@ -43,8 +50,9 @@ async function mintJoinCode(ctx: V2Context, signed: Signed): Promise<void> {
     refuse(ctx.response, 429, 'rate_limited', undefined, { 'retry-after': '3600' })
     return
   }
-  // A watch's code (⋯ → Apple Watch) is the only way a watch is made: a watch enters every machine on its pairing alone.
-  const minted = ctx.v2.joinCodes.mint(username, body.value.purpose === 'watch' ? 'watch' : undefined)
+  // A watch's code (⋯ → Apple Watch) is the only way a watch is made, and a phone's
+  // (⋯ → Phone app) the only way a trusted phone is: each enters every machine on its pairing alone.
+  const minted = ctx.v2.joinCodes.mint(username, isJoinPurpose(body.value.purpose) ? body.value.purpose : undefined)
   /**
    * THE CODE, THE LINK AND THE PICTURE — one answer, because they are one
    * secret in three shapes and a screen that shows all three fits every way a
@@ -109,8 +117,9 @@ async function redeemJoinCode(ctx: V2Context): Promise<void> {
     v2Json(response, 403, factorError('password_change_required'))
     return
   }
-  // A watch's code joins a watch and nothing else; any other code joins anything but a watch.
-  const attached = v2.accounts.attachDevice(username, body.value.device, { watch: spent?.purpose === 'watch' })
+  // A watch's code joins a watch and nothing else, a phone's code a trusted phone and nothing
+  // else; any other code joins anything but a watch, and trusts no phone.
+  const attached = v2.accounts.attachDevice(username, body.value.device, { watch: spent?.purpose === 'watch', phone: spent?.purpose === 'phone' })
   if (!attached.ok) {
     refuse(response, attached.reason === 'bad_device' ? 400 : 401, attached.reason)
     return

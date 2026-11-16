@@ -1,4 +1,5 @@
 import type { AdmittedDevice } from './admitted-devices'
+import type { PhoneInvite } from '../shared/join-code'
 import type {
   AccountRefusal,
   AccountStatus,
@@ -849,7 +850,7 @@ async function providerProof(deps: Pick<AccountIpcDeps, 'accounts' | 'lock'>, ac
 async function mintUnderProof(
   deps: Pick<AccountIpcDeps, 'accounts' | 'lock'>,
   current: string,
-  purpose?: 'watch',
+  purpose?: 'watch' | 'phone',
 ): Promise<AccountResult<{ code: string; expiresAt: number; url: string }>> {
   const proof = await providerProof(deps, 'mint-join-code')
   const mint = (proved: StepUpProof) => (purpose ? deps.accounts.mintJoinCode(proved, purpose) : deps.accounts.mintJoinCode(proved))
@@ -866,12 +867,37 @@ export async function mintWatchInvite(
   current: string,
   here: boolean,
 ): Promise<{ ok: true; code: string; expiresAt: number } | { ok: false; reason: string; message?: string }> {
+  // A watch's code: the only kind a watch joins with, and it joins nothing but a watch.
+  const minted = await mintInvite(deps, current, here, 'watch')
+  return minted.ok ? { ok: true, code: minted.code, expiresAt: minted.expiresAt } : minted
+}
+
+/** A code for a device that pairs once, under step-up; never a provider trip for someone not at this Mac. */
+async function mintInvite(
+  deps: Pick<AccountIpcDeps, 'accounts' | 'lock'>,
+  current: string,
+  here: boolean,
+  purpose: 'watch' | 'phone',
+): Promise<PhoneInvite> {
   if (deps.accounts.account() === null) return { ok: false, reason: 'no_account' }
   if (!here && deps.accounts.isPasswordless()) return { ok: false, reason: 'provider_required' }
-  // A watch's code: the only kind a watch joins with, and it joins nothing but a watch.
-  const minted = await mintUnderProof(deps, current, 'watch')
+  const minted = await mintUnderProof(deps, current, purpose)
   if (!minted.ok) return { ok: false, reason: minted.reason, ...(minted.message ? { message: minted.message } : {}) }
-  return { ok: true, code: minted.value.code, expiresAt: minted.value.expiresAt }
+  return { ok: true, code: minted.value.code, expiresAt: minted.value.expiresAt, url: minted.value.url }
+}
+
+/**
+ * A join code for the phone app (⋯ → Phone app, owner 2026-11-16): the only code
+ * a trusted phone is made by. `here` as for a watch: a provider's trip opens on
+ * this Mac, so a phone asking cannot take one. The link rides along because it
+ * is what the QR holds (join-code.ts · joinLink).
+ */
+export async function mintPhoneInvite(
+  deps: Pick<AccountIpcDeps, 'accounts' | 'lock'>,
+  current: string,
+  here: boolean,
+): Promise<PhoneInvite> {
+  return mintInvite(deps, current, here, 'phone')
 }
 
 /**

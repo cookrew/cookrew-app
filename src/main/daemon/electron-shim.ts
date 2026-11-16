@@ -20,7 +20,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync } from 'node:fs'
 import { homedir, hostname, tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /** What the daemon's launcher said, read once; the variables then leave process.env. */
 const launch = {
@@ -249,7 +249,54 @@ if (launch.isDaemon) {
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.once(signal, () => app.quit())
 }
 
-/** No window ever exists in the daemon. A constructed one is inert, loud, and logged. */
+/**
+ * THE OWNER'S WINDOW, held by the owner's app across the owner link
+ * (owner-link.ts). Only the window main builds with the app's own preload
+ * (index.ts · createWindow) is it: its webContents.send goes to the owner, and
+ * the page it loads is the owner page. Any other window (a capture host, a boot
+ * failure screen) is inert, as before.
+ */
+type OwnerSink = (channel: string, args: readonly unknown[]) => void
+let ownerSink: OwnerSink | null = null
+let ownerContents: object | null = null
+let ownerPage: string | null = null
+
+/** Window events sent before the owner connected, handed over when it does (bounded). */
+const EARLY_EVENTS_MAX = 1000
+let earlyEvents: { channel: string; args: readonly unknown[] }[] = []
+let earlyDropped = 0
+let ownerHasConnected = false
+
+function toOwner(channel: string, args: readonly unknown[]): void {
+  if (ownerSink !== null) {
+    ownerSink(channel, args)
+    return
+  }
+  if (ownerHasConnected) return // the owner left: nobody to tell
+  if (earlyEvents.length < EARLY_EVENTS_MAX) earlyEvents = [...earlyEvents, { channel, args }]
+  else earlyDropped += 1
+}
+
+/**
+ * Boot is done when the owner window has loaded its page: main registers every
+ * IPC handler (registerIpc) before it creates the window (index.ts · whenReady).
+ */
+let markOwnerReady: () => void = () => undefined
+const ownerReady = new Promise<void>((resolve) => {
+  markOwnerReady = resolve
+})
+let ownerIsReady = false
+const ownerLoaded = (page: string): void => {
+  ownerPage = page
+  ownerIsReady = true
+  markOwnerReady()
+}
+
+const isOwnerWindowOptions = (options: unknown): boolean => {
+  const preload = (options as { webPreferences?: { preload?: unknown } } | undefined)?.webPreferences?.preload
+  return typeof preload === 'string' && /[\\/]preload[\\/]index\.c?js$/.test(preload)
+}
+
 export class BrowserWindow extends EventEmitter {
   static getAllWindows(): BrowserWindow[] {
     return []
@@ -257,24 +304,50 @@ export class BrowserWindow extends EventEmitter {
   static getFocusedWindow(): null {
     return null
   }
-  readonly webContents = loud('webContents', Object.assign(new EventEmitter(), { send: (): void => undefined, isDestroyed: (): boolean => true }))
-  constructor() {
+  readonly webContents: EventEmitter & { send: (channel: string, ...args: unknown[]) => void; isDestroyed: () => boolean }
+  private readonly owner: boolean
+  constructor(options?: unknown) {
     super()
-    missing('BrowserWindow (a window was asked for)')
+    this.owner = isOwnerWindowOptions(options) && ownerContents === null
+    const contents = Object.assign(new EventEmitter(), {
+      send: (channel: string, ...args: unknown[]): void => {
+        if (this.owner) toOwner(channel, args)
+      },
+      isDestroyed: (): boolean => !this.owner,
+      postMessage: (channel: string): void => missing(`webContents.postMessage(${channel}) (a MessagePort cannot cross the owner link)`),
+      capturePage: (): Promise<never> => Promise.reject(new Error('cookrewd cannot see the owner window; the app captures it'))
+    })
+    this.webContents = loud('webContents', contents)
+    if (this.owner) ownerContents = this.webContents
+    else missing('BrowserWindow (a window other than the owner window was asked for)')
     return loud('BrowserWindow', this)
   }
   isDestroyed(): boolean {
-    return true
+    return !this.owner
   }
-  loadURL(): Promise<void> {
+  isMinimized(): boolean {
+    return false
+  }
+  isVisible(): boolean {
+    return this.owner
+  }
+  isFocused(): boolean {
+    return this.owner && ownerSink !== null
+  }
+  show(): void {}
+  focus(): void {}
+  restore(): void {}
+  loadURL(url: string): Promise<void> {
+    if (this.owner) ownerLoaded(url)
     return Promise.resolve()
   }
-  loadFile(): Promise<void> {
+  loadFile(file: string): Promise<void> {
+    if (this.owner) ownerLoaded(pathToFileURL(path.resolve(file)).href)
     return Promise.resolve()
   }
 }
 
-/** Handlers are kept, so a later step can serve them; nobody calls them yet. */
+/** Handlers are kept: the owner link calls them as the owner window would have. */
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
 export const ipcMain = loud('ipcMain', Object.assign(new EventEmitter(), {
   handle(channel: string, handler: (...args: unknown[]) => unknown): void {
@@ -284,6 +357,60 @@ export const ipcMain = loud('ipcMain', Object.assign(new EventEmitter(), {
     handlers.delete(channel)
   }
 }))
+
+/**
+ * The event Electron would have built for a call from the owner window's top
+ * frame: the owner checks (owner-grant.ts · isOwnerSender, isOwnerPage) hold
+ * for it, and for nothing else, because only the owner link makes one.
+ */
+function ownerEvent(): { sender: object; senderFrame: { parent: null; url: string }; ports: never[] } {
+  if (ownerContents === null || ownerPage === null) throw new Error('the owner window is not up yet')
+  return { sender: ownerContents, senderFrame: { parent: null, url: ownerPage }, ports: [] }
+}
+
+const BOOT_WAIT_MS = 30_000
+
+/** Boot done, or a refusal after BOOT_WAIT_MS. One promise for every waiter: no polling. */
+function booted(): Promise<void> {
+  if (ownerIsReady) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`the owner window was not up within ${BOOT_WAIT_MS} ms`)), BOOT_WAIT_MS)
+    void ownerReady.then(() => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
+}
+
+/** What the owner link calls: main's own handlers, with the owner's event. */
+export const ownerDispatch = {
+  async invoke(channel: string, args: readonly unknown[]): Promise<unknown> {
+    await booted()
+    const handler = handlers.get(channel)
+    if (handler === undefined) throw new Error(`no handler for ${channel}`)
+    return handler(ownerEvent(), ...args)
+  },
+  /** As ipcRenderer.send: fire and forget, delivered once boot is done. */
+  send(channel: string, args: readonly unknown[]): void {
+    const deliver = (): void => {
+      ipcMain.emit(channel, ownerEvent(), ...args)
+    }
+    if (ownerIsReady) deliver()
+    else booted().then(deliver, (error: unknown) => console.error(`[cookrewd] owner send ${channel} dropped: ${String(error)}`))
+  }
+}
+
+/** The owner's app connected (a sink for its window's events) or left (null). */
+export function connectOwner(sink: OwnerSink | null): void {
+  ownerSink = sink
+  if (sink === null) return
+  ownerHasConnected = true
+  const held = earlyEvents
+  earlyEvents = []
+  for (const event of held) sink(event.channel, event.args)
+  if (earlyDropped > 0) console.error(`[cookrewd] ${earlyDropped} window event(s) from before the owner connected were dropped`)
+  earlyDropped = 0
+}
 
 /** The IPC channels main registered: what D0's HTTP inventory must cover. */
 export const daemonIpcChannels = (): readonly string[] => [...handlers.keys()]

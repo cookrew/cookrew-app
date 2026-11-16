@@ -81,6 +81,13 @@ export interface V2Grant {
   readonly watch?: true
   /** Another machine of the account: admitted as a device here, until revoked. */
   readonly machine?: true
+  /**
+   * A trusted phone (owner 2026-11-16): admitted as a device here, until revoked.
+   * `since` is when it was made one: a phone forgotten here stays out until it
+   * joins the account again with a new phone's code.
+   */
+  readonly phone?: true
+  readonly since?: number
   /** The sign-in it was minted under: its end ends what it let in. */
   readonly sid?: string
 }
@@ -220,7 +227,19 @@ export function v2MachineGrantClaimsFor(token: string, now: number): (V2Grant & 
   return claims === null ? null : { ...claims, machine: true }
 }
 
-function grantClaimsIn(token: string, now: number, scope: 'grant' | 'watch-grant' | 'machine-grant'): (V2Grant & { jti: string; sid: string }) | null {
+/** A trusted phone's pass (registry v2-tokens.ts · mintPhoneGrant), marked so, with when it was trusted. */
+export function v2PhoneGrantClaimsFor(token: string, now: number): (V2Grant & { jti: string; sid: string; since: number }) | null {
+  const claims = grantClaimsIn(token, now, 'phone-grant')
+  // A phone pass that does not say when the phone was trusted is not one.
+  return claims === null || claims.since === undefined ? null : { ...claims, phone: true, since: claims.since }
+}
+
+/** Any pass this Mac reads, in whichever scope it came. */
+export function v2AnyGrantClaimsFor(token: string, now: number): (V2Grant & { jti: string; sid: string }) | null {
+  return v2GrantClaimsFor(token, now) ?? v2WatchGrantClaimsFor(token, now) ?? v2MachineGrantClaimsFor(token, now) ?? v2PhoneGrantClaimsFor(token, now)
+}
+
+function grantClaimsIn(token: string, now: number, scope: 'grant' | 'watch-grant' | 'machine-grant' | 'phone-grant'): (V2Grant & { jti: string; sid: string }) | null {
   const [body] = token.split('.')
   if (!body) return null
   let claims: Record<string, unknown>
@@ -239,18 +258,29 @@ function grantClaimsIn(token: string, now: number, scope: 'grant' | 'watch-grant
   if (typeof claims.jkt !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(claims.jkt)) return null
   // The sitting it was minted under: its end ends the pass.
   if (typeof claims.sid !== 'string' || claims.sid.length === 0) return null
-  return { username: claims.sub, dev: claims.dev, jkt: claims.jkt, exp: claims.exp, jti: claims.jti, sid: claims.sid }
+  // When a phone was trusted (a phone pass only reads it): a finite moment, or absent.
+  const since = typeof claims.since === 'number' && Number.isFinite(claims.since) && claims.since >= 0 ? claims.since : undefined
+  return { username: claims.sub, dev: claims.dev, jkt: claims.jkt, exp: claims.exp, jti: claims.jti, sid: claims.sid, ...(since === undefined ? {} : { since }) }
 }
 
 /** The pure check for a grant: cookrew.dev's signature, the claims, and not cut off. */
 export function verifyV2Grant(token: string, material: V2KeyMaterial, now: number): V2Grant | null {
   if (!v2SignatureHolds(token, material.jwk)) return null
-  // A device's pass or a watch's: the revoked list ends either.
-  const claims = v2GrantClaimsFor(token, now) ?? v2WatchGrantClaimsFor(token, now) ?? v2MachineGrantClaimsFor(token, now)
+  // A device's pass, a watch's, a machine's or a phone's: the revoked list ends each.
+  const claims = v2AnyGrantClaimsFor(token, now)
   if (claims === null) return null
   const cut = [claims.dev, claims.jti, claims.sid]
   if (cut.some((id) => material.revoked.includes(id))) return null
-  return { username: claims.username, dev: claims.dev, jkt: claims.jkt, exp: claims.exp, sid: claims.sid, ...(claims.watch ? { watch: true as const } : {}), ...(claims.machine ? { machine: true as const } : {}) }
+  return {
+    username: claims.username,
+    dev: claims.dev,
+    jkt: claims.jkt,
+    exp: claims.exp,
+    sid: claims.sid,
+    ...(claims.watch ? { watch: true as const } : {}),
+    ...(claims.machine ? { machine: true as const } : {}),
+    ...(claims.phone ? { phone: true as const, since: claims.since } : {})
+  }
 }
 
 /** Was this token cut off? Device id and session id are both listed. */
@@ -352,8 +382,8 @@ export function createV2CallTokenVerifier(options: {
       if (typeof token !== 'string' || token.length === 0 || token.length > 4096) return null
       const first = await material(false)
       // The same two reasons to look again as a call token: an old key, or a
-      // cached revoked list that may be behind.
-      const claims = v2GrantClaimsFor(token, now())
+      // cached revoked list that may be behind — whichever kind of pass it is.
+      const claims = v2AnyGrantClaimsFor(token, now())
       const stale =
         first === null ||
         !v2SignatureHolds(token, first.jwk) ||

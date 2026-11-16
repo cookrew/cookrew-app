@@ -95,6 +95,26 @@ export interface V2Device {
   lastSeenAt: number
   /** A desktop that proved itself once on this machine: it enters the account's others with no proof (v2-device-grant.ts · issueMachineGrant). */
   machine?: true
+  /**
+   * A PHONE JOINED BY A PHONE'S CODE (owner 2026-11-16): when it was made a
+   * trusted phone, which enters every machine of the account on its pairing
+   * alone (v2-device-grant.ts · issuePhoneGrant). Only a phone's code sets it
+   * ("phone" is a kind any sign-in may name); a password change or "Not me"
+   * drops it. The moment rides on every pass, so a machine that forgot this
+   * phone keeps it out until it joins again (account-pair.ts).
+   */
+  phonePassAt?: number
+}
+
+/**
+ * The device as a join leaves it: trusted as a phone from `at` when a phone's
+ * code joined it, keeping an earlier trust only while it stays a phone.
+ */
+function trustedPhone(device: V2Device, at: number | null): V2Device {
+  if (at !== null && device.kind === 'phone') return { ...device, phonePassAt: at }
+  if (device.kind === 'phone' || device.phonePassAt === undefined) return device
+  const { phonePassAt: _dropped, ...rest } = device
+  return rest
 }
 
 export interface V2Workspace {
@@ -688,10 +708,10 @@ export class V2Accounts {
    * that signs in twice is one phone — and its name and last-seen are brought
    * up to date, because "iPhone" being renamed should show on the profile.
    */
-  attachDevice(username: string, input: unknown, as: { watch?: boolean } = {}): Attached | Refused<'bad_credentials' | 'bad_device'> {
+  attachDevice(username: string, input: unknown, as: { watch?: boolean; phone?: boolean } = {}): Attached | Refused<'bad_credentials' | 'bad_device'> {
     const account = this.get(username)
     if (!account) return { ok: false, reason: 'bad_credentials' }
-    const device = this.readDevice(input, as.watch === true)
+    const device = this.readDevice(input, as.watch === true ? 'watch' : as.phone === true ? 'phone' : null)
     if (device === null) return { ok: false, reason: 'bad_device' }
     const owner = this.ownerOfDevice(device.id)
     if (owner !== null && owner !== account.username) return { ok: false, reason: 'bad_device' }
@@ -702,9 +722,12 @@ export class V2Accounts {
     if (known && !sameKey(known.jwk, device.jwk)) return { ok: false, reason: 'bad_device' }
     // A watch that joined as a phone (before there were watches) becomes one; nothing else does.
     if (known && as.watch === true && known.kind !== 'phone' && known.kind !== 'watch') return { ok: false, reason: 'bad_device' }
-    const attached: V2Device = known
+    // A phone's code trusts a phone, never a desktop or a browser the account already knows.
+    if (known && as.phone === true && known.kind !== 'phone') return { ok: false, reason: 'bad_device' }
+    const updated: V2Device = known
       ? { ...known, kind: device.kind, name: device.name, lastSeenAt: this.now() }
       : device
+    const attached = trustedPhone(updated, as.phone === true ? this.now() : null)
     const next: V2Account = {
       ...account,
       devices: known
@@ -774,12 +797,12 @@ export class V2Accounts {
    * nothing else. Creating an account, recovery and every other door read the
    * three kinds a client may name.
    */
-  private readDevice(input: unknown, watch = false): V2Device | null {
+  private readDevice(input: unknown, only: 'watch' | 'phone' | null = null): V2Device | null {
     if (typeof input !== 'object' || input === null || Array.isArray(input)) return null
     const raw = input as Partial<DeviceInput>
     const id = typeof raw.id === 'string' ? raw.id.toLowerCase() : ''
     if (!UUID.test(id)) return null
-    if (watch ? raw.kind !== 'watch' : raw.kind !== 'desktop' && raw.kind !== 'phone' && raw.kind !== 'browser') return null
+    if (only !== null ? raw.kind !== only : raw.kind !== 'desktop' && raw.kind !== 'phone' && raw.kind !== 'browser') return null
     const name = typeof raw.name === 'string' ? raw.name.trim() : ''
     if (name.length === 0 || name.length > DEVICE_NAME_MAX) return null
     const jwk = sanitiseJwk(raw.jwk)
@@ -937,17 +960,20 @@ export class V2Accounts {
 
   /** This sitting just proved itself again: the five-minute window opens from now. */
   /**
-   * EVERY OTHER MACHINE PROVES ITSELF AGAIN. A machine's trust was earned under
-   * the password of its day; "Not me" and a password change say that password
-   * may be someone else's, so only the machine the owner is on keeps it
-   * (security review 2026-11-09).
+   * EVERY OTHER MACHINE PROVES ITSELF AGAIN, AND EVERY OTHER PHONE JOINS AGAIN.
+   * A machine's trust was earned under the password of its day, and a trusted
+   * phone's under the step-up its code was minted with; "Not me" and a password
+   * change say that password may be someone else's, so only the device the
+   * owner is on keeps it (security review 2026-11-09; phones 2026-11-16).
    */
   untrustOtherMachines(username: string, keepDeviceId: string | null): void {
     const account = this.get(username)
-    if (!account || !account.devices.some((d) => d.machine === true && d.id !== keepDeviceId)) return
+    const trusted = (d: V2Device): boolean => d.id !== keepDeviceId && (d.machine === true || d.phonePassAt !== undefined)
+    if (!account || !account.devices.some(trusted)) return
+    // A phone joined under that password is trusted the same way, and walks back in only by a new phone's code.
     const devices = account.devices.map((d) => {
-      if (d.machine !== true || d.id === keepDeviceId) return d
-      const { machine: _dropped, ...rest } = d
+      if (!trusted(d)) return d
+      const { machine: _machine, phonePassAt: _phone, ...rest } = d
       return rest
     })
     this.replace({ ...account, devices })
