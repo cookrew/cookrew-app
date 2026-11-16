@@ -324,6 +324,7 @@ import { bootStep, paintFailure } from './boot-failure'
 import { registerAccessIpc } from './access-ipc'
 import { registerShareIpc } from './share-ipc'
 import { MagpieWeb, MAGPIE_WEB_FILE } from './route/magpie-web'
+import { remoteLoopbackPorts } from './route/remote-ports'
 import type { LiveValues } from '../shared/launch-settings'
 import { magpieBinary } from './route/share-keys'
 import { AccessStore, probeEndpoint } from './agent-access'
@@ -1018,6 +1019,7 @@ let launchLive: (() => LiveValues) | null = null
 const magpieWeb = new MagpieWeb({ bin: () => magpieBinary(defaultDiscoveryEnv()), file: path.join(homedir(), '.cookrew', MAGPIE_WEB_FILE) })
 const routeService = new RouteService({
   enabled: () => launchLive?.().magpie ?? true,
+  remotePorts: () => remoteLoopbackPorts(defaultDiscoveryEnv()),
   // PATH, ~/.local/bin (the installer's symlink, off a GUI app's PATH) and the app bundle.
   monitor: new GatewayMonitor({ hasBinary: () => magpieInstalled({ home: homedir(), env: process.env }, existsSync) }),
   fetch: (input, init) => fetch(input, init),

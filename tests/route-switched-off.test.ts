@@ -46,6 +46,7 @@ describe('the Magpie switch', () => {
         respawn: async () => true,
         dockCommands: () => [],
         enabled: () => on,
+        remotePorts: () => [13425],
         scan: new HarnessScan({ home, pathEnv: '', dockCommands: () => [], harnessOfCommand: () => null, keychain: async () => false, installed: () => false }),
         schedule: (fn) => {
           const t = setTimeout(fn, 5)
@@ -70,7 +71,8 @@ describe('the Magpie switch', () => {
       expect(svc.state().status).toBe('online')
       expect(svc.routeOf(card)).toBe('deepseek/chat')
       // The page's ports are denied to a served sandbox whatever the switch says.
-      expect(svc.gatewayPorts()).toEqual(expect.arrayContaining([...MAGPIE_WEB_PORTS]))
+      // A tunnel to another Magpie made by hand lands on its loopback, past its key: denied too.
+      expect(svc.gatewayPorts()).toEqual(expect.arrayContaining([...MAGPIE_WEB_PORTS, 13425]))
     } finally {
       server.close()
     }

@@ -36,10 +36,11 @@ describe('checkRemoteMagpie', () => {
     expect(ok('10.0.0.5:80').url).toBe('http://10.0.0.5:80')
   })
 
-  it('takes a tunnel on this computer’s loopback, on any port but Magpie’s own', () => {
-    expect(ok('127.0.0.1:13425').url).toBe('http://127.0.0.1:13425')
-    expect(ok('localhost:13425').url).toBe('http://127.0.0.1:13425')
-    expect(setupLineAllowed(ok('127.0.0.1:13425', 'solis').line)).toBe(true)
+  it('refuses a tunnel on this computer: it would reach the other Magpie past its key and cap', () => {
+    for (const address of ['127.0.0.1:13425', 'localhost:13425', 'http://127.0.0.1:3426']) {
+      expect(checkRemoteMagpie({ address, name: 'solis' })).toMatchObject({ ok: false, field: 'address', why: expect.stringContaining('past its key') })
+    }
+    expect(setupLineAllowed('magpie provider add remote-magpie url=http://127.0.0.1:13425 id=solis key=')).toBe(false)
   })
 
   it('reads every spelling of this computer’s own Magpie as this computer', () => {

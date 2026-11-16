@@ -103,6 +103,8 @@ export interface RouteServiceDeps {
   now?: () => number
   /** The owner's Magpie switch (launch settings, live): off, every card is direct and no Magpie is shown. Absent = on. */
   enabled?: () => boolean
+  /** Loopback ports of Remote magpie tunnels made by hand (route/remote-ports.ts): denied to the sandbox too. */
+  remotePorts?: () => number[]
   schedule?: (fn: () => void, ms: number) => () => void
   writeFile?: (file: string, content: string) => void
 }
@@ -236,7 +238,9 @@ export class RouteService extends EventEmitter {
   gatewayPorts(): number[] {
     const found = this.deps.monitor.probe.gateway?.port
     // Magpie's settings page too: its key could be read from a same-user environment, its port cannot be reached.
-    return [...(found ? [found, DEFAULT_PORT] : [DEFAULT_PORT]), ...MAGPIE_WEB_PORTS]
+    // And every hand-made tunnel to another Magpie: it lands on that computer's loopback, past its key.
+    const tunnels = this.deps.remotePorts?.() ?? []
+    return [...new Set([...(found ? [found, DEFAULT_PORT] : [DEFAULT_PORT]), ...MAGPIE_WEB_PORTS, ...tunnels])]
   }
 
   /** The plugin's pick wins; else the owner's own; else nothing. */
