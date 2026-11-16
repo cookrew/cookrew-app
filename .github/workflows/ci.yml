@@ -108,7 +108,7 @@ jobs:
           key: node-modules-${{ runner.os }}-${{ steps.deps.outputs.key }}
 
       - id: test
-        run: npm test -- --shard=${{ matrix.shard }}/3
+        run: npm test -- --shard=${{ matrix.shard }}/3 --pool=threads
 
       # The app bundle, once per OS, whatever the tests said: the Windows leg is
       # red on known failures, and a build that only runs after green tests
