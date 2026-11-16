@@ -1,23 +1,18 @@
 package plane
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 // SessionHeader carries the account session to the relay (src/shared/machine-relay.ts).
 // Only the relay plane sends it: the relay reads it and never forwards it, and
 // no other plane may hand the account session to a machine.
 const SessionHeader = "x-cookrew-session"
-
-// callTimeout bounds a one-shot call; streams have none and end with their context.
-const callTimeout = 20 * time.Second
 
 // Relay reaches a machine through cookrew.dev: <api>/api/m/<machine>/<route>,
 // the account session in x-cookrew-session (read by the relay, not forwarded)
@@ -88,41 +83,11 @@ func (r Relay) Do(ctx context.Context, req Request) (*http.Response, error) {
 	if path == "" {
 		return nil, fmt.Errorf("plane: the relay does not carry %q", req.Route)
 	}
-	if req.Stream {
-		resp, err := r.send(ctx, path, req)
-		if err != nil {
-			return nil, err
-		}
-		return Check(resp)
-	}
-	ctx, cancel := context.WithTimeout(ctx, callTimeout)
-	resp, err := r.send(ctx, path, req)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	resp.Body = cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
-	return Check(resp)
-}
-
-func (r Relay) send(ctx context.Context, path string, req Request) (*http.Response, error) {
-	method := req.Method
-	if method == "" {
-		method = http.MethodGet
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, method, r.api+path, bytes.NewReader(req.Body))
-	if err != nil {
-		return nil, fmt.Errorf("plane: building %s %s: %w", method, req.Route, err)
-	}
-	httpReq.Header = MachineHeaders(r.creds, req)
+	header := MachineHeaders(r.creds, req)
 	if session := r.creds.Session(); session != "" {
-		httpReq.Header.Set(SessionHeader, session)
+		header.Set(SessionHeader, session)
 	}
-	resp, err := r.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("plane: relay %s %s: %w", method, req.Route, err)
-	}
-	return resp, nil
+	return exchange(ctx, r.client, r.api+path, req, header, "relay")
 }
 
 // MachineHeaders are what a request carries for the machine itself, on any

@@ -1,0 +1,3 @@
+# SwiftPM state the Asuka CLI and Xcode leave in native packages.
+.build/
+.swiftpm/
