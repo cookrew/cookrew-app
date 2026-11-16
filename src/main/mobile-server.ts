@@ -322,6 +322,8 @@ export interface MobileServerDeps {
    * with legacy webviews it just relays the keep-capturing heartbeat.
    */
   browserThumbRequested?: (browserId: string) => void | Promise<void>
+  /** The owner's workspaces view: tile pages with no picture yet, to be started and photographed once. */
+  browserTileWake?: (browserIds: readonly string[]) => void
   /**
    * Override the read-only (wall) token (tests / a caller that owns token
    * lifecycle); a fresh one is minted per run otherwise.
@@ -1667,6 +1669,10 @@ export async function handle(
     // under the headless runtime asking is what makes the picture exist.
     // Every asked id is answered; one outside the canvas answers no-frame.
     await Promise.all(ids.map((id) => (browsers.has(id) ? deps.browserThumbRequested?.(id) : undefined)))
+    if (scope === null) {
+      const wake = parseBatchIds(url.searchParams.get('wake')).filter((id) => browsers.has(id))
+      if (wake.length > 0) deps.browserTileWake?.(wake)
+    }
     const frames = batchFrames(
       ids,
       parseKnownVersions(url.searchParams.get('known')),

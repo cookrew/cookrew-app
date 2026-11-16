@@ -59,6 +59,7 @@ function exchange(url: string): { request: http.IncomingMessage; response: http.
 }
 
 const asked: string[] = []
+const woken: string[][] = []
 const deps = (): MobileServerDeps =>
   ({
     multiInstance: () => true,
@@ -91,6 +92,7 @@ const deps = (): MobileServerDeps =>
     rendererDir: '/nonexistent',
     browserThumb: () => FRAME,
     browserThumbRequested: (id: string) => void asked.push(id),
+    browserTileWake: (ids: readonly string[]) => void woken.push([...ids]),
     identity: { account: () => null, registryOrigin: () => 'https://cookrew.dev', admitted: { has: () => false, verify: () => null } }
   }) as unknown as MobileServerDeps
 
@@ -103,7 +105,10 @@ async function frames(url: string): Promise<Array<{ id: string; at: number | nul
 }
 
 describe('GET /api/browser/thumbs', () => {
-  beforeEach(() => void asked.splice(0))
+  beforeEach(() => {
+    asked.splice(0)
+    woken.splice(0)
+  })
 
   it("answers the owner's unslugged client for a browser of a workspace that is not focused", async () => {
     expect(await frames('/api/browser/thumbs?ids=here,there,pane,gone')).toEqual([
@@ -121,5 +126,15 @@ describe('GET /api/browser/thumbs', () => {
       { id: 'there', at: null }
     ])
     expect(asked).toEqual(['here'])
+  })
+
+  it("hands the owner's tile pages to be woken, only browser cards it asked about", async () => {
+    await frames('/api/browser/thumbs?ids=here,there,pane&wake=there,pane,elsewhere')
+    expect(woken).toEqual([['there']])
+  })
+
+  it('a slugged client wakes nothing', async () => {
+    await frames('/mine/api/browser/thumbs?ids=here&wake=here')
+    expect(woken).toEqual([])
   })
 })

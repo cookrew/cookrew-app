@@ -34,6 +34,8 @@ const union = (): readonly string[] => {
 
 export const thumbWants = {
   ids: union,
+  /** The pages the workspace tiles show now: Main starts and photographs one that has no picture. */
+  tileIds: (): readonly string[] => [...claims.entries()].filter(([owner]) => owner.startsWith('tile:')).flatMap(([, ids]) => ids).slice(0, THUMB_WANTS_MAX),
   /** The one owner there used to be: kept for the troop and the tests. */
   set(ids: readonly string[]): void {
     claims.set('default', ids.slice(0, THUMB_WANTS_MAX))
