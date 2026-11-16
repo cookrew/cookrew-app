@@ -1,118 +1,93 @@
 import { useSyncExternalStore } from 'react'
-import { activeBrowserTab, type CanvasNode } from '../../../shared/model'
+import { machineScope, registerScopeState } from '../machine-scope'
 
 /**
- * SINCE YOU LAST LOOKED (owner, 2026-11-04: the bar's groups are the
- * human-in-the-loop inbox, BarGroups.tsx). Per workspace, what each browser or
- * note was when you last looked at it (its card or its full view opened), and
- * when a change to it was first noticed. Kept in localStorage, so a reload or
- * a restart does not hand everything back. An agent's reply is not in here:
- * whether it is read is the tracker's, the same on every device (bar-inbox.ts).
+ * SINCE YOU LAST LOOKED, v2 (owner, 2026-11-16; plan
+ * docs/hitl-cross-workspace-2026-11-15 · v6.2). An artifact is news when an
+ * AGENT changed it after you last looked (hitl-artifacts.ts reads that off the
+ * activity log), so the book holds, per card, the time of the agent change you
+ * last saw, and the starting point the first boot set: what the log held then
+ * is not news. Both are times the main process stamped, never this device's
+ * clock. Each device keeps its own book; a reply's read state is the tracker's,
+ * the same everywhere (bar-inbox.ts).
  *
- * The board keeps no change times, and a node is replaced, never edited, when
- * it changes (zoom-model.ts), so "what it is now" is its signature: a
- * browser's address, a note's words. The first look at a workspace is the
- * baseline: what is there already is not news (300 browsers on the owner's
- * board would otherwise all be "new" at once).
+ * v1 kept a hash of each card's words or address, so the owner's own edits and
+ * tab switches came back as news; it is forgotten on first load.
  */
 
-export interface SeenPage {
-  /** The workspace was looked at once: what it held then is the baseline. */
-  readonly based: boolean
-  /** id → its signature when you last looked. */
-  readonly seen: Readonly<Record<string, string>>
-  /** id → [the signature not looked at yet, when it was first noticed]. */
-  readonly noticed: Readonly<Record<string, readonly [string, number]>>
+export interface SeenBook {
+  /** Changes at or before this are not news; null until the first boot read sets it. */
+  readonly cutoff: number | null
+  /** card id → the agent change last looked at. */
+  readonly seen: Readonly<Record<string, number>>
 }
 
-export type SeenBook = Readonly<Record<string, SeenPage>>
+export const EMPTY_BOOK: SeenBook = Object.freeze({ cutoff: null, seen: Object.freeze({}) })
 
-export const EMPTY_PAGE: SeenPage = Object.freeze({ based: false, seen: Object.freeze({}), noticed: Object.freeze({}) })
-
-/** Pages past this many ids drop the ones the board no longer has, so the store stays small. */
-const PRUNE_AT = 4000
-
-/** A short, stable hash of a string (djb2), in base 36. */
-function hashOf(text: string): string {
-  let h = 5381
-  for (let i = 0; i < text.length; i += 1) h = ((h << 5) + h + text.charCodeAt(i)) | 0
-  return (h >>> 0).toString(36)
-}
-
-/** What a browser or note is now: its address or its words, hashed; null for anything else. */
-export function itemSig(node: CanvasNode): string | null {
-  if (node.kind === 'browser') return `b${hashOf(activeBrowserTab(node).url ?? '')}`
-  if (node.kind === 'note') return `n${hashOf(node.content ?? '')}`
-  return null
-}
-
-export const pageOf = (book: SeenBook, workspace: string): SeenPage => book[workspace] ?? EMPTY_PAGE
-
-/** Not looked at as it is now. Before the baseline nothing is news. */
-export const isUnseen = (page: SeenPage, id: string, sig: string): boolean => page.based && page.seen[id] !== sig
+export const BOOK_KEY = 'cookrew.bar-seen.v2'
+export const OLD_BOOK_KEY = 'cookrew.bar-seen'
 
 /**
- * A look at the workspace's browsers and notes: the first one sets the
- * baseline; after it, each one changed since you looked is noticed (once, at
- * the time it was first seen so). The same book back when nothing is news.
+ * The book is ONE machine's: its times are that machine's clock and its ids its
+ * cards. This page's own machine keeps the plain key; a console inside another
+ * machine keeps one per machine.
  */
-export function observe(book: SeenBook, workspace: string, items: readonly { readonly id: string; readonly sig: string }[], now: number): SeenBook {
-  const page = pageOf(book, workspace)
-  if (!page.based) {
-    if (items.length === 0) return book
-    return { ...book, [workspace]: { based: true, seen: Object.fromEntries(items.map((i) => [i.id, i.sig])), noticed: {} } }
-  }
-  const fresh = items.filter((i) => page.seen[i.id] !== i.sig && page.noticed[i.id]?.[0] !== i.sig)
-  const here = new Set(items.map((i) => i.id))
-  const gone = Object.keys(page.noticed).some((id) => !here.has(id))
-  const big = Object.keys(page.seen).length > PRUNE_AT
-  if (fresh.length === 0 && !gone && !big) return book
-  // What is noticed is only ever an item on the board: one deleted unseen goes with it.
-  const noticed = Object.fromEntries(
-    [...Object.entries(page.noticed), ...fresh.map((i) => [i.id, [i.sig, now] as const] as const)].filter(([id]) => here.has(id))
-  )
-  const seen = big ? Object.fromEntries(Object.entries(page.seen).filter(([id]) => here.has(id))) : page.seen
-  return { ...book, [workspace]: { based: true, seen, noticed } }
+export const bookKeyFor = (machineId: string | null): string => (machineId === null ? BOOK_KEY : `${BOOK_KEY}:${machineId}`)
+/** Past this many cards, the ones no longer artifacts are dropped. */
+const PRUNE_AT = 2000
+
+/** Looked at this change: the book only ever moves forward. The same book when it does not. */
+export function markSeen(book: SeenBook, id: string, at: number): SeenBook {
+  if ((book.seen[id] ?? Number.NEGATIVE_INFINITY) >= at) return book
+  return { ...book, seen: { ...book.seen, [id]: at } }
 }
 
-/** Looked at (its card or full view opened): it is what it is now, and no longer news. */
-export function markSeen(book: SeenBook, workspace: string, id: string, sig: string): SeenBook {
-  const page = pageOf(book, workspace)
-  if (page.seen[id] === sig && page.noticed[id] === undefined) return book
-  const noticed = Object.fromEntries(Object.entries(page.noticed).filter(([key]) => key !== id))
-  return { ...book, [workspace]: { based: page.based, seen: { ...page.seen, [id]: sig }, noticed } }
+/** The starting point, set once. */
+export function withCutoff(book: SeenBook, at: number): SeenBook {
+  return book.cutoff === null ? { ...book, cutoff: at } : book
+}
+
+/** A big book keeps only the cards still artifacts. */
+export function pruneBook(book: SeenBook, keep: (id: string) => boolean): SeenBook {
+  if (Object.keys(book.seen).length <= PRUNE_AT) return book
+  return { ...book, seen: Object.fromEntries(Object.entries(book.seen).filter(([id]) => keep(id))) }
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /** The stored book; anything unreadable is an empty one. */
 export function readBook(raw: string | null): SeenBook {
-  if (!raw) return {}
+  if (!raw) return EMPTY_BOOK
   try {
     const parsed: unknown = JSON.parse(raw)
-    if (!isRecord(parsed)) return {}
-    const out: Record<string, SeenPage> = {}
-    for (const [ws, page] of Object.entries(parsed)) {
-      if (!isRecord(page) || !isRecord(page.seen) || !isRecord(page.noticed)) continue
-      const seen = Object.fromEntries(Object.entries(page.seen).filter((e): e is [string, string] => typeof e[1] === 'string'))
-      const noticed = Object.fromEntries(
-        Object.entries(page.noticed).filter((e): e is [string, [string, number]] => Array.isArray(e[1]) && typeof e[1][0] === 'string' && typeof e[1][1] === 'number')
-      )
-      out[ws] = { based: page.based === true, seen, noticed }
-    }
-    return out
+    if (!isRecord(parsed)) return EMPTY_BOOK
+    const cutoff = typeof parsed.cutoff === 'number' && Number.isFinite(parsed.cutoff) ? parsed.cutoff : null
+    const seen = isRecord(parsed.seen)
+      ? Object.fromEntries(Object.entries(parsed.seen).filter((e): e is [string, number] => typeof e[1] === 'number' && Number.isFinite(e[1])))
+      : {}
+    return { cutoff, seen }
   } catch {
-    return {}
+    return EMPTY_BOOK
   }
 }
 
-const KEY = 'cookrew.bar-seen'
+/** The book a store holds under `key`; the v1 book goes on the way (its hashes count the owner's own edits). */
+export function loadBook(storage: Pick<Storage, 'getItem' | 'removeItem'>, key: string): SeenBook {
+  try {
+    storage.removeItem(OLD_BOOK_KEY)
+    return readBook(storage.getItem(key))
+  } catch {
+    return EMPTY_BOOK
+  }
+}
+
+const keyNow = (): string => bookKeyFor(machineScope().machineId)
 
 const load = (): SeenBook => {
   try {
-    return readBook(window.localStorage.getItem(KEY))
+    return loadBook(window.localStorage, keyNow())
   } catch {
-    return {}
+    return EMPTY_BOOK
   }
 }
 
@@ -123,7 +98,7 @@ function set(next: SeenBook): void {
   if (next === book) return
   book = next
   try {
-    window.localStorage.setItem(KEY, JSON.stringify(next))
+    window.localStorage.setItem(keyNow(), JSON.stringify(next))
   } catch {
     // Private mode or a full store: this session still remembers.
   }
@@ -132,17 +107,24 @@ function set(next: SeenBook): void {
 
 const current = (): SeenBook => (book ??= load())
 
-/** The one book the app reads and writes (BarGroups.tsx). */
+// Another machine, another book: read again from its own key.
+registerScopeState('bar seen', () => {
+  book = null
+  for (const listener of listeners) listener()
+})
+
+/** The one book the app reads and writes (BarGroups.tsx, hitl-artifacts.ts). */
 export const barSeen = {
   get: current,
   subscribe(listener: () => void): () => void {
     listeners.add(listener)
     return () => listeners.delete(listener)
   },
-  observe: (workspace: string, items: readonly { readonly id: string; readonly sig: string }[], now = Date.now()): void => set(observe(current(), workspace, items, now)),
-  mark: (workspace: string, id: string, sig: string): void => set(markSeen(current(), workspace, id, sig))
+  mark: (id: string, at: number): void => set(markSeen(current(), id, at)),
+  cutoff: (at: number): void => set(withCutoff(current(), at)),
+  prune: (keep: (id: string) => boolean): void => set(pruneBook(current(), keep))
 }
 
-export function useSeenPage(workspace: string | null): SeenPage {
-  return useSyncExternalStore(barSeen.subscribe, () => (workspace ? pageOf(current(), workspace) : EMPTY_PAGE), () => EMPTY_PAGE)
+export function useSeenBook(): SeenBook {
+  return useSyncExternalStore(barSeen.subscribe, current, () => EMPTY_BOOK)
 }

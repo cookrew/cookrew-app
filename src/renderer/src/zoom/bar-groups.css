@@ -120,6 +120,85 @@
   pointer-events: none;
 }
 
+/* A face from another workspace wears that workspace's mark (bar-reach.ts · badgeOf). */
+.zv-gf-ws {
+  position: absolute;
+  left: -4px;
+  bottom: -4px;
+  display: grid;
+  place-items: center;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 2px;
+  border-radius: 4px;
+  background: var(--zv-ink);
+  color: var(--zv-paper);
+  box-shadow: 0 0 0 1.5px var(--zv-paper);
+  font: 700 8px/1 ui-monospace, Menlo, monospace;
+  pointer-events: none;
+}
+
+/* Another workspace's card: read-only, where it is, and the way there (BarCards.tsx · BarAwayCard). */
+.zv-away-card {
+  width: min(280px, calc(100vw - 16px));
+  padding: 12px 14px;
+}
+
+.zv-away-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.zv-away-face {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+}
+
+.zv-away-names {
+  min-width: 0;
+}
+
+.zv-away-names b {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zv-bar-where {
+  margin: 0;
+  color: var(--zv-ink-soft);
+  font: 11px/1.3 ui-monospace, Menlo, monospace;
+  letter-spacing: 0.02em;
+}
+
+.zv-away-line {
+  margin: 8px 0 0;
+  color: var(--zv-ink-soft);
+  font-size: 13px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.zv-away-open {
+  margin-top: 10px;
+  width: 100%;
+  min-height: 32px;
+  border: 1.5px solid var(--zv-ink);
+  border-radius: 8px;
+  background: var(--zv-paper);
+  color: var(--zv-ink);
+  font: 600 12px ui-monospace, Menlo, monospace;
+  cursor: pointer;
+}
+
 /* An artifact's face: its page, as the troop's attached column draws it. */
 .zv-stops .zv-group button.zv-gf.item {
   width: 36px;
