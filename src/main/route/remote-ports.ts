@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { tailnetHost } from '../../shared/remote-magpie'
 import type { DiscoveryEnv } from './discovery'
 
 /**
@@ -75,3 +76,43 @@ export function remoteLoopbackProviders(d: DiscoveryEnv, read: (file: string) =>
   }
   return rows.sort((a, b) => a.id.localeCompare(b.id) || a.port - b.port)
 }
+
+export interface PlainRemote {
+  readonly id: string
+  readonly host: string
+}
+
+/**
+ * Each Remote magpie reached by plain http off a tailnet (owner ruling 2026-11-17:
+ * plain http only where WireGuard is under it). The key and every request cross that
+ * network unencrypted, so the panel names each one. Loopback ones are the tunnels
+ * remoteLoopbackProviders names; they are not repeated here.
+ */
+export function plainRemoteProviders(d: DiscoveryEnv, read: (file: string) => string = (file) => readFileSync(file, 'utf8')): PlainRemote[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(read(providersFile(d)))
+  } catch {
+    return []
+  }
+  const list = (parsed as { providers?: unknown })?.providers
+  if (!Array.isArray(list)) return []
+  const rows = new Map<string, PlainRemote>()
+  for (const entry of list) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const provider = entry as Record<string, unknown>
+    if (provider.preset !== 'remote-magpie' || typeof provider.id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(provider.id)) continue
+    for (const field of ENDPOINT_FIELDS) {
+      const raw = provider[field]
+      if (typeof raw !== 'string') continue
+      try {
+        const url = new URL(raw)
+        if (url.protocol === 'http:' && !LOOPBACK.has(url.hostname) && !tailnetHost(url.hostname)) rows.set(provider.id, { id: provider.id, host: url.host })
+      } catch {
+        // An address Magpie itself could not use either: nothing to warn of.
+      }
+    }
+  }
+  return [...rows.values()].sort((a, b) => a.id.localeCompare(b.id))
+}
+

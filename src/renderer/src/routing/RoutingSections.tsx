@@ -424,3 +424,16 @@ export function LoopbackRemotes({ rows, onRun }: { rows: readonly { id: string; 
   )
 }
 
+/** Remote magpie providers reached by plain http off a tailnet (owner ruling 2026-11-17): named, with the fix. */
+export function PlainRemotes({ rows }: { rows: readonly { id: string; host: string }[] | undefined }): React.JSX.Element | null {
+  if (!rows || rows.length === 0) return null
+  return (
+    <div className="cr-routing-bad" role="alert" data-section="plain-remotes">
+      <b>{SHARE_COPY.PLAIN_HEAD}</b>
+      {rows.map((row) => (
+        <p key={row.id}>{SHARE_COPY.PLAIN_REMOTE(row.id, row.host)}</p>
+      ))}
+    </div>
+  )
+}
+

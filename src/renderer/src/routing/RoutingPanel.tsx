@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import type { HarnessRow, RouteState } from '../../../shared/route'
 import { SETUP_LINE_COPY } from '../../../shared/first-run-copy'
 import { ROUTING_COPY } from '../../../shared/route-view'
-import { Accounts, Harnesses, LiveRoutes, LoopbackRemotes, Rented, SignInLink, StatusLine, type RunLine } from './RoutingSections'
+import { Accounts, Harnesses, LiveRoutes, LoopbackRemotes, PlainRemotes, Rented, SignInLink, StatusLine, type RunLine } from './RoutingSections'
 import { SetupScreen } from './SetupScreen'
 import './routing-panel.css'
 
@@ -104,6 +104,7 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
               </div>
             )}
             <LoopbackRemotes rows={state.loopbackRemotes} onRun={onRun} />
+            <PlainRemotes rows={state.plainRemotes} />
             {props.guide}
             <Harnesses rows={state.harnesses} onRun={onRun} onAddToDock={onAddToDock} running={running} />
             <Accounts state={state} onRun={onRun} onSetDefault={onSetDefault} onSetSharedMcp={onSetSharedMcp} running={running} />

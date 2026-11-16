@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { MAGPIE_PORT, privateHost } from '../../shared/remote-magpie'
+import { MAGPIE_PORT, privateHost, tailnetHost } from '../../shared/remote-magpie'
 import type { ShareIssueAnswer, SharedKey, ShareWhere } from '../../shared/share-devices'
 import type { DiscoveryEnv } from './discovery'
 
@@ -173,12 +173,16 @@ interface InterfaceAddress {
   internal: boolean
 }
 
-/** This computer's LAN and tailnet addresses, as another device types them. */
+/**
+ * This computer's LAN and tailnet addresses, as another device types them. Plain http
+ * only on a tailnet, where WireGuard is under it (owner ruling 2026-11-17); a LAN
+ * address is given as https, which Magpie serves once https is on there.
+ */
 export function shareUrls(interfaces: Record<string, readonly InterfaceAddress[] | undefined>, port: number): string[] {
   return Object.values(interfaces)
     .flatMap((list) => list ?? [])
     .filter((a) => (a.family === 'IPv4' || a.family === 4) && !a.internal && privateHost(a.address))
-    .map((a) => `http://${a.address}:${port}`)
+    .map((a) => `${tailnetHost(a.address) ? 'http' : 'https'}://${a.address}:${port}`)
 }
 
 /** Where Magpie wrote down that it listens (`magpie status`), or null. */

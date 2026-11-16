@@ -107,6 +107,8 @@ export interface RouteServiceDeps {
   remotePorts?: () => number[]
   /** The same, by provider id, for the panel's warning. */
   remoteLoopback?: () => { id: string; port: number }[]
+  /** Remote magpie providers on plain http off a tailnet (route/remote-ports.ts). */
+  plainRemotes?: () => { id: string; host: string }[]
   schedule?: (fn: () => void, ms: number) => () => void
   writeFile?: (file: string, content: string) => void
 }
@@ -214,6 +216,7 @@ export class RouteService extends EventEmitter {
     }
     return {
       loopbackRemotes: this.deps.remoteLoopback?.() ?? [],
+      plainRemotes: this.deps.plainRemotes?.() ?? [],
       status: probe.status,
       gateway: probe.gateway,
       why: probe.why,

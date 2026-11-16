@@ -2,7 +2,7 @@
 // own provider list and denied to a served sandbox. Only addresses are read.
 import { describe, expect, it } from 'vitest'
 import path from 'node:path'
-import { providersFile, remoteLoopbackPorts, remoteLoopbackProviders } from '../src/main/route/remote-ports'
+import { plainRemoteProviders, providersFile, remoteLoopbackPorts, remoteLoopbackProviders } from '../src/main/route/remote-ports'
 
 const env = { home: '/Users/x', env: {} }
 const list = (providers: unknown[]): string => JSON.stringify({ providers, groups: [], order: [] })
@@ -37,6 +37,24 @@ describe('remoteLoopbackProviders', () => {
       { id: 'Bad Id', preset: 'remote-magpie', chat: 'http://127.0.0.1:1/v1' }
     ])
     expect(remoteLoopbackProviders(env, () => json)).toEqual([{ id: 'solis', port: 13425 }])
+  })
+})
+
+describe('plainRemoteProviders', () => {
+  it('names a Remote magpie on plain http off a tailnet, and none on a tailnet, https or loopback', () => {
+    const json = list([
+      { id: 'office', preset: 'remote-magpie', chat: 'http://192.168.1.20:3425/v1' },
+      { id: 'tail', preset: 'remote-magpie', chat: 'http://100.101.102.103:3425/v1' },
+      { id: 'named', preset: 'remote-magpie', chat: 'http://mac.tail1234.ts.net:3425/v1' },
+      { id: 'secure', preset: 'remote-magpie', chat: 'https://192.168.1.21:3425/v1' },
+      { id: 'solis', preset: 'remote-magpie', chat: 'http://127.0.0.1:13425/v1' },
+      { id: 'public', preset: 'remote-magpie', chat: 'http://gw.example.com:3425/v1' },
+      { id: 'ollama', preset: 'ollama', chat: 'http://192.168.1.30:11434/v1' }
+    ])
+    expect(plainRemoteProviders(env, () => json)).toEqual([
+      { id: 'office', host: '192.168.1.20:3425' },
+      { id: 'public', host: 'gw.example.com:3425' }
+    ])
   })
 })
 

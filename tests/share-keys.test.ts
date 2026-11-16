@@ -147,14 +147,14 @@ describe('where another device reaches this Magpie', () => {
     expect(gatewayOnNetwork(null)).toBe(false)
   })
 
-  it('lists this computer’s LAN and tailnet addresses with the gateway’s port', () => {
+  it('lists this computer’s LAN addresses as https and its tailnet ones as plain http, with the gateway’s port', () => {
     const interfaces = {
       lo0: [{ address: '127.0.0.1', family: 'IPv4', internal: true }],
       en0: [{ address: '192.168.1.20', family: 'IPv4', internal: false }, { address: 'fe80::1', family: 'IPv6', internal: false }],
       utun4: [{ address: '100.101.102.103', family: 'IPv4', internal: false }],
       en9: [{ address: '8.8.8.8', family: 'IPv4', internal: false }]
     }
-    expect(shareUrls(interfaces, 3425)).toEqual(['http://192.168.1.20:3425', 'http://100.101.102.103:3425'])
+    expect(shareUrls(interfaces, 3425)).toEqual(['https://192.168.1.20:3425', 'http://100.101.102.103:3425'])
   })
 })
 

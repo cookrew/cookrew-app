@@ -160,6 +160,8 @@ export interface RouteState {
   switchedOff?: boolean
   /** Remote magpie providers on this computer's loopback (tunnels): whoever takes the port gets their key. */
   loopbackRemotes?: { id: string; port: number }[]
+  /** Remote magpie providers on plain http off a tailnet: the key crosses that network unencrypted. */
+  plainRemotes?: { id: string; host: string }[]
   /** null = new cards stay direct even when online: the owner picks once, never inferred. */
   defaultModel: string | null
   providers: number

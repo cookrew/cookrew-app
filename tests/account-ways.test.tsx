@@ -138,7 +138,19 @@ describe('Share with my devices on plain http', () => {
   it('says what plain http risks beside the addresses', () => {
     const html = renderToStaticMarkup(<ShareDevicesView keys={[]} where={{ onNetwork: true, urls: ['http://192.168.1.20:3425'] }} problem={null} issued={null} busy={false} onIssue={() => {}} onRevoke={() => {}} onCheck={() => {}} onDone={() => {}} />)
     expect(html).toContain('data-note="plain-http"')
-    expect(html).toContain('never a café’s or a hotel’s')
+    expect(html).toContain('Plain http only on a tailnet')
+    expect(html).toContain('magpie https on')
+  })
+})
+
+describe('a Remote magpie on plain http off a tailnet, in the Routing panel', () => {
+  it('is named with what it risks', () => {
+    const html = renderToStaticMarkup(
+      <RoutingPanel open onClose={() => {}} state={routeFixture('online', { plainRemotes: [{ id: 'office', host: '192.168.1.20:3425' }] })} available onRun={() => {}} setupTerminalId={null} focusTick={0} onSetDefault={() => {}} names={new Map()} />
+    )
+    expect(html).toContain('data-section="plain-remotes"')
+    expect(html).toContain('192.168.1.20:3425')
+    expect(html).toContain('tailnet address, or https')
   })
 })
 
