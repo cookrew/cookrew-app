@@ -21,14 +21,18 @@
  *
  * Framing: one JSON object per line. A byte array crosses as {"$bytes": b64};
  * an object that already has a key starting with "$" is wrapped as
- * {"$obj": …} so content can never pass for bytes. A MessagePort cannot cross
- * (the renderer then dials its socket fallback).
+ * {"$obj": …} so content can never pass for bytes. A MessagePort cannot cross:
+ * browser-card streaming waits for the shell to bridge it (D0 step 4).
  */
 import type { Readable, Writable } from 'node:stream'
+
+export type WindowTarget = 'window' | 'contents'
 
 export type OwnerFrame =
   | { readonly t: 'invoke'; readonly id: number; readonly channel: string; readonly args: readonly unknown[] }
   | { readonly t: 'send'; readonly channel: string; readonly args: readonly unknown[] }
+  /** The real window's lifecycle (focus, load, reload…), re-emitted on the daemon's owner window. */
+  | { readonly t: 'window'; readonly target: WindowTarget; readonly name: string; readonly args: readonly unknown[] }
 
 export type DaemonFrame =
   | { readonly t: 'result'; readonly id: number; readonly ok: true; readonly value: unknown }
@@ -40,6 +44,8 @@ export interface OwnerDispatch {
   invoke(channel: string, args: readonly unknown[]): Promise<unknown>
   /** ipcMain.on listeners, as a window's ipcRenderer.send would have reached them. */
   send(channel: string, args: readonly unknown[]): void
+  /** The real window's lifecycle event, for main's own listeners on its owner window. */
+  window?(target: WindowTarget, name: string, args: readonly unknown[]): void
 }
 
 /** A line longer than this (in bytes) ends the link: no legitimate request is near it. */
@@ -101,6 +107,10 @@ export function readOwnerFrame(line: string): OwnerFrame | null {
   }
   if (typeof value !== 'object' || value === null) return null
   const frame = value as Record<string, unknown>
+  if (frame.t === 'window') {
+    if ((frame.target !== 'window' && frame.target !== 'contents') || typeof frame.name !== 'string' || !Array.isArray(frame.args)) return null
+    return { t: 'window', target: frame.target, name: frame.name, args: frame.args }
+  }
   if (typeof frame.channel !== 'string' || frame.channel.length === 0 || !Array.isArray(frame.args)) return null
   if (frame.t === 'invoke' && Number.isSafeInteger(frame.id)) return { t: 'invoke', id: frame.id as number, channel: frame.channel, args: frame.args }
   if (frame.t === 'send') return { t: 'send', channel: frame.channel, args: frame.args }
@@ -116,41 +126,51 @@ export interface OwnerLink {
 
 /**
  * Splits a byte stream into lines, looking for a newline only in what is new
- * (linear in the input), and refusing a line over MAX_LINE bytes.
+ * (linear in the input). A line over MAX_LINE bytes is not kept: its bytes are
+ * skipped up to its newline and it is reported, and the link goes on (the
+ * owner's client refuses to send one in the first place; owner-client.ts).
  */
 class LineReader {
   private parts: Buffer[] = []
   private size = 0
+  private skipping = false
 
-  /** The complete lines in this chunk, or null once a line is over the limit. */
-  push(chunk: Buffer): string[] | null {
+  /** The complete lines in this chunk, and how many over-long lines were skipped. */
+  push(chunk: Buffer): { lines: string[]; skipped: number } {
     const lines: string[] = []
+    let skipped = 0
     let start = 0
     let newline = chunk.indexOf(0x0a, start)
     while (newline !== -1) {
       const piece = chunk.subarray(start, newline)
-      if (this.size + piece.length > MAX_LINE) return null
-      lines.push(Buffer.concat([...this.parts, piece]).toString('utf8'))
+      if (this.skipping || this.size + piece.length > MAX_LINE) skipped += 1
+      else lines.push(Buffer.concat([...this.parts, piece]).toString('utf8'))
       this.parts = []
       this.size = 0
+      this.skipping = false
       start = newline + 1
       newline = chunk.indexOf(0x0a, start)
     }
     const rest = chunk.subarray(start)
-    if (this.size + rest.length > MAX_LINE) return null
+    if (this.skipping) return { lines, skipped }
+    if (this.size + rest.length > MAX_LINE) {
+      this.parts = []
+      this.size = 0
+      this.skipping = true
+      return { lines, skipped }
+    }
     if (rest.length > 0) {
       this.parts.push(Buffer.from(rest))
       this.size += rest.length
     }
-    return lines
+    return { lines, skipped }
   }
 }
 
 /**
  * Serve the owner over a duplex pipe. Requests run concurrently (up to
  * MAX_IN_FLIGHT); each answer carries its request's id. The link closes when
- * the pipe ends or errors, a line is over MAX_LINE, or the owner stops reading
- * for HARD_BACKLOG bytes.
+ * the pipe ends or errors, or the owner stops reading for HARD_BACKLOG bytes.
  */
 export function startOwnerLink(input: Readable, output: Writable, dispatch: OwnerDispatch, log: (line: string) => void = console.error): OwnerLink {
   let open = true
@@ -183,6 +203,8 @@ export function startOwnerLink(input: Readable, output: Writable, dispatch: Owne
     } catch (error) {
       line = encodeFrame({ t: 'result', id, ok: false, error: `the answer cannot cross the owner link: ${String(error)}` })
     }
+    // The owner's client closes on a line over MAX_LINE: answer with an error instead.
+    if (Buffer.byteLength(line) > MAX_LINE) line = encodeFrame({ t: 'result', id, ok: false, error: `the answer is over ${MAX_LINE} bytes` })
     writeLine(line)
   }
 
@@ -200,11 +222,23 @@ export function startOwnerLink(input: Readable, output: Writable, dispatch: Owne
       log(`[cookrewd] the ${channel} event cannot cross the owner link: ${String(error)}`)
       return false
     }
+    if (Buffer.byteLength(line) > MAX_LINE) {
+      log(`[cookrewd] the ${channel} event is over ${MAX_LINE} bytes; dropped`)
+      return false
+    }
     writeLine(line)
     return true
   }
 
   const handle = (frame: OwnerFrame): void => {
+    if (frame.t === 'window') {
+      try {
+        dispatch.window?.(frame.target, frame.name, frame.args)
+      } catch (error) {
+        log(`[cookrewd] owner window event ${frame.name} failed: ${String(error)}`)
+      }
+      return
+    }
     if (frame.t === 'send') {
       try {
         dispatch.send(frame.channel, frame.args)
@@ -236,12 +270,8 @@ export function startOwnerLink(input: Readable, output: Writable, dispatch: Owne
 
   const lines = new LineReader()
   input.on('data', (chunk: Buffer | string) => {
-    const complete = lines.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
-    if (complete === null) {
-      log('[cookrewd] owner line over the limit: closing the owner link')
-      close()
-      return
-    }
+    const { lines: complete, skipped } = lines.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
+    if (skipped > 0) log(`[cookrewd] ${skipped} owner line(s) over ${MAX_LINE} bytes skipped`)
     for (const line of complete) {
       if (!open) return
       if (line.trim().length === 0) continue

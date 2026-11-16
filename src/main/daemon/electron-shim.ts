@@ -259,6 +259,9 @@ if (launch.isDaemon) {
 type OwnerSink = (channel: string, args: readonly unknown[]) => void
 let ownerSink: OwnerSink | null = null
 let ownerContents: object | null = null
+/** The owner window and its webContents as emitters, for the real window's lifecycle events. */
+let ownerWindowEmitter: EventEmitter | null = null
+let ownerContentsEmitter: EventEmitter | null = null
 let ownerPage: string | null = null
 
 /** Window events sent before the owner connected, handed over when it does (bounded). */
@@ -310,6 +313,8 @@ export class BrowserWindow extends EventEmitter {
     super()
     this.owner = isOwnerWindowOptions(options) && ownerContents === null
     const contents = Object.assign(new EventEmitter(), {
+      /** Electron numbers webContents from 1; the owner window is the daemon's only one. */
+      id: this.owner ? 1 : 0,
       send: (channel: string, ...args: unknown[]): void => {
         if (this.owner) toOwner(channel, args)
       },
@@ -318,7 +323,11 @@ export class BrowserWindow extends EventEmitter {
       capturePage: (): Promise<never> => Promise.reject(new Error('cookrewd cannot see the owner window; the app captures it'))
     })
     this.webContents = loud('webContents', contents)
-    if (this.owner) ownerContents = this.webContents
+    if (this.owner) {
+      ownerContents = this.webContents
+      ownerWindowEmitter = this
+      ownerContentsEmitter = contents
+    }
     else missing('BrowserWindow (a window other than the owner window was asked for)')
     return loud('BrowserWindow', this)
   }
@@ -370,6 +379,15 @@ function ownerEvent(): { sender: object; senderFrame: { parent: null; url: strin
 
 const BOOT_WAIT_MS = 30_000
 
+/** The meta request for the channel list; `$` keeps it apart from every IPC channel (they are `area:verb`). */
+export const OWNER_CHANNELS = '$channels'
+
+/** Channels main answers (ipcMain.handle) and listens on (ipcMain.on), once boot is done. */
+function ownerChannels(): { handle: string[]; on: string[] } {
+  const on = ipcMain.eventNames().filter((name): name is string => typeof name === 'string' && ipcMain.listenerCount(name) > 0)
+  return { handle: [...handlers.keys()].sort(), on: on.sort() }
+}
+
 /** Boot done, or a refusal after BOOT_WAIT_MS. One promise for every waiter: no polling. */
 function booted(): Promise<void> {
   if (ownerIsReady) return Promise.resolve()
@@ -386,9 +404,15 @@ function booted(): Promise<void> {
 export const ownerDispatch = {
   async invoke(channel: string, args: readonly unknown[]): Promise<unknown> {
     await booted()
+    // The one request that is not main's own: which channels main serves, so
+    // the owner's app can register a forwarder for each (shell/index.ts).
+    if (channel === OWNER_CHANNELS) return ownerChannels()
     const handler = handlers.get(channel)
     if (handler === undefined) throw new Error(`no handler for ${channel}`)
     return handler(ownerEvent(), ...args)
+  },
+  window(target: 'window' | 'contents', name: string, args: readonly unknown[]): void {
+    ownerWindowEvent(target, name, args)
   },
   /** As ipcRenderer.send: fire and forget, delivered once boot is done. */
   send(channel: string, args: readonly unknown[]): void {
@@ -398,6 +422,26 @@ export const ownerDispatch = {
     if (ownerIsReady) deliver()
     else booted().then(deliver, (error: unknown) => console.error(`[cookrewd] owner send ${channel} dropped: ${String(error)}`))
   }
+}
+
+/**
+ * The real window's lifecycle events the owner's app may tell (shell/bridge.ts
+ * · FORWARDED_*): main's own listeners on its owner window run for them. Any
+ * other name is refused, so the link cannot fake an input or a navigation the
+ * window did not make.
+ */
+const WINDOW_EVENTS: Readonly<Record<'window' | 'contents', ReadonlySet<string>>> = {
+  window: new Set(['focus', 'blur', 'show', 'hide', 'minimize', 'restore', 'closed']),
+  contents: new Set(['did-finish-load', 'dom-ready', 'did-start-navigation', 'render-process-gone', 'destroyed'])
+}
+
+function ownerWindowEvent(target: 'window' | 'contents', name: string, args: readonly unknown[]): void {
+  if (!WINDOW_EVENTS[target].has(name)) {
+    console.error(`[cookrewd] the owner link may not emit ${target} ${name}; refused`)
+    return
+  }
+  const emitter = target === 'window' ? ownerWindowEmitter : ownerContentsEmitter
+  emitter?.emit(name, ...args)
 }
 
 /** The owner's app connected (a sink for its window's events) or left (null). */
