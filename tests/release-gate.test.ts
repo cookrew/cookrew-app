@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
-import { isPrerelease, missingAssets, tagProblem } from '../scripts/release-gate.mjs'
+import { branchProblem, isPrerelease, missingAssets, tagProblem } from '../scripts/release-gate.mjs'
 
 const yaml = createRequire(import.meta.url)('js-yaml') as { load(text: string): unknown }
 
@@ -45,8 +45,28 @@ describe('isPrerelease', () => {
   })
 })
 
+describe('branchProblem', () => {
+  const merge = { tag: 'v0.6.14', onMain: true, parents: ['main1', 'dev1'], mergedFromDev: true }
+
+  it('a merge of dev into main is packaged', () => {
+    expect(branchProblem(merge)).toBeNull()
+  })
+
+  it('a tag off main is refused', () => {
+    expect(branchProblem({ ...merge, onMain: false })).toContain('not on main')
+  })
+
+  it('a commit pushed straight to main is refused', () => {
+    expect(branchProblem({ ...merge, parents: ['main1'], mergedFromDev: false })).toContain('not a merge commit')
+  })
+
+  it('a merge of another branch into main is refused', () => {
+    expect(branchProblem({ ...merge, mergedFromDev: false })).toContain('other than dev')
+  })
+})
+
 describe('release.yml', () => {
-  type Job = { if?: string; needs?: string | string[]; steps: Array<{ run?: string; name?: string }> }
+  type Job = { if?: string; needs?: string | string[]; steps: Array<{ run?: string; name?: string; uses?: string; with?: Record<string, unknown> }> }
   const { jobs } = yaml.load(readFileSync('.github/workflows/release.yml', 'utf8')) as { jobs: Record<string, Job> }
   const runs = (job: Job): string => job.steps.map((step) => step.run ?? '').join('\n')
 
@@ -56,6 +76,13 @@ describe('release.yml', () => {
     expect(runs(jobs.verify)).toContain('npm run typecheck')
     expect(runs(jobs.verify)).toContain('scripts/release-gate.mjs tag')
     expect(jobs.build.needs).toBe('verify')
+  })
+
+  it('a tag is refused before anything else unless it merges dev into main, with the history to tell', () => {
+    const script = runs(jobs.verify)
+    expect(script).toContain('scripts/release-gate.mjs branch')
+    expect(script.indexOf('scripts/release-gate.mjs branch')).toBeLessThan(script.indexOf('npm ci'))
+    expect(jobs.verify.steps.find((step) => step.uses?.startsWith('actions/checkout'))?.with?.['fetch-depth']).toBe(0)
   })
 
   it('still builds a dispatch or a pull request, which skip the tag checks', () => {
