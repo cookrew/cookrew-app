@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -194,5 +195,28 @@ func TestA502NoLinkIsOffline(t *testing.T) {
 	relay, _ := NewRelay(server.URL, machine, StaticCredentials("s", "t"), server.Client())
 	if _, err := relay.Do(context.Background(), Request{Route: "/api/agents"}); !errors.Is(err, ErrMachineOffline) {
 		t.Fatalf("got %v, want ErrMachineOffline", err)
+	}
+}
+
+func TestARefusalKeepsItsStatusTyped(t *testing.T) {
+	for _, status := range []int{401, 403} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, `{"error":"stale"}`)
+		}))
+		relay, _ := NewRelay(server.URL, machine, StaticCredentials("s", "t"), server.Client())
+		_, err := relay.Do(context.Background(), Request{Route: "/api/agents"})
+		server.Close()
+		var refused *RefusedError
+		if !errors.As(err, &refused) || refused.Status != status || refused.Said != "stale" {
+			t.Fatalf("%d: got %#v", status, err)
+		}
+		if !errors.Is(err, ErrRefused) {
+			t.Errorf("%d: no longer ErrRefused", status)
+		}
+		// The text stays what pair/enter.go matched before the type existed.
+		if want := fmt.Sprintf("plane: the machine refused this device (%d stale)", status); err.Error() != want {
+			t.Errorf("%d: text %q, want %q", status, err.Error(), want)
+		}
 	}
 }
