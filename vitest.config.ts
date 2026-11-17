@@ -54,6 +54,11 @@ export default defineConfig({
   test: {
     minWorkers: 1,
     maxWorkers: TEST_WORKERS,
+    // Windows proves a secret's file private by asking PowerShell for its owner
+    // and access list (src/main/windows-acl.ts): a few hundred ms to seconds a
+    // start on a loaded runner, two per key written and one per key read. The
+    // checks are the point, so they are given the time rather than skipped.
+    ...(process.platform === 'win32' ? { testTimeout: 30_000, hookTimeout: 30_000 } : {}),
     // A fork exits when its run is killed, and dies of OOM at 2 GB rather than
     // growing to node's 4 GB default: scripts/test-worker-guard.mjs.
     setupFiles: WORKER_GUARD.setupFiles,

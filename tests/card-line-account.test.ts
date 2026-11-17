@@ -319,6 +319,8 @@ beforeAll(async () => {
   registryDir = mkdtempSync(path.join(tmpdir(), 'v3-04c-registry-'))
   doorDir = mkdtempSync(path.join(tmpdir(), 'v3-04c-door-'))
   issuer = new CallCredentialService({ base: doorDir })
+  // Proven private before anything signs: async on Windows (file-privacy.ts).
+  await issuer.prepare()
   const doors = new DoorStore(registryDir, { allowPrivate: true })
   doors.register(OWNER, {
     handle: OWNER,
