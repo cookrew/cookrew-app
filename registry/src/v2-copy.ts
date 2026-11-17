@@ -57,6 +57,15 @@ export type V2Error =
   /** A console session asked for something only the auth host or a machine's own session does (console-scope.ts). */
   | 'console_scope'
   | 'busy'
+  /** Phone push (HITL phase 4): this deployment has no VAPID key, so there is nothing to subscribe to. */
+  | 'push_off'
+  | 'bad_push'
+  /** Reading the push keys and sending are a desktop's own: the machine that knows an agent is waiting. */
+  | 'desktop_only'
+  | 'push_gone'
+  | 'push_failed'
+  /** Every account together is sending more than the registry posts at once (review L2). */
+  | 'push_busy'
   /**
    * OURS, NOT THEIRS. A handler that raised owes the caller a status code all
    * the same: without one the request hangs until Node's own timeout, and a
@@ -99,7 +108,13 @@ const SENTENCES: Record<V2Error, string> = {
   method_not_allowed: 'That address does not answer to this method.',
   console_scope: 'That is not done from the console. Account and security changes are made at auth.cookrew.dev.',
   busy: 'cookrew.dev is checking more passwords than it can right now. Try again in a few seconds.',
-  server_error: 'Something went wrong at cookrew.dev, not on your machine. Try again in a moment.'
+  server_error: 'Something went wrong at cookrew.dev, not on your machine. Try again in a moment.',
+  push_off: 'Notifications are not turned on at this registry.',
+  bad_push: 'That notification subscription or message is not one cookrew.dev can carry.',
+  desktop_only: 'Only a desktop signed in to this account can do that.',
+  push_gone: 'That browser no longer takes notifications, so it was taken off the account.',
+  push_failed: 'The push service did not take the notification. Try again in a moment.',
+  push_busy: 'cookrew.dev is sending more notifications than it can right now. Try again in a few seconds.'
 }
 
 /**
