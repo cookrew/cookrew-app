@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config'
+import { WORKER_GUARD } from './scripts/heavy-slot.mjs'
 
 /**
  * The perf suite: tests/perf/*.perf.ts, and nothing else.
@@ -23,6 +24,9 @@ export default defineConfig({
     // itself, and a latency gate needs the CPU to itself.
     fileParallelism: false,
     pool: 'forks',
+    // The fork exits if its run is killed (scripts/test-worker-guard.mjs). No
+    // heap cap here: the heap gates measure retained memory and set their own.
+    setupFiles: WORKER_GUARD.setupFiles,
     poolOptions: {
       forks: {
         singleFork: true,

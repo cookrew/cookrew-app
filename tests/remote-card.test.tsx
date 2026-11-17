@@ -122,6 +122,12 @@ describe('RemoteBarView', () => {
     expect(bar({ ...base, switchOn: false }, 'away', { reach: 'unpaired' })).not.toContain('cannot unlock')
   })
 
+  it('the pill, which has no hint line, still offers the set-up', () => {
+    const pill = { place: 'pill' as const, rect: { left: 0, top: 0, width: 64, height: 400 } }
+    expect(bar(base, 'away', { reach: 'unpaired', onSetUpUnlock: () => undefined, band: pill })).toContain('aria-label="Set up unlock"')
+    expect(bar(base, 'away', { reach: 'ready', onSetUpUnlock: () => undefined, band: pill })).not.toContain('Set up unlock')
+  })
+
   it('no Take control when the machine switch is off, and it says only the Mac can change that', () => {
     const html = bar({ ...base, switchOn: false })
     expect(html).not.toContain('Take control')

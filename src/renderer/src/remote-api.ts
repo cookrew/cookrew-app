@@ -36,7 +36,7 @@ import { registerPlaneStream } from './plane-streams'
 import { openEventSource } from './rtc-plane'
 import { createRawInputQueue } from './raw-input-queue'
 import { relayAccountMachines, ZOOM_ACCOUNT_MAX_AGE_MS } from './relay-machines'
-import { seated, settleSeat, takeSeat } from './device-seat'
+import { deviceSeat, seated, settleSeat, takeSeat } from './device-seat'
 import { SEAT_GONE, type WorkspaceCheck, type WorkspaceRemovePlan } from '../../shared/workspace-door'
 import type { SousCommandResult } from '../../main/sous-control'
 import type { WorkspaceMeta } from '../../shared/model'
@@ -114,7 +114,7 @@ async function parse<T>(response: Response, options: ParseOptions = {}): Promise
       throw failure
     }
     // The workspace this phone stood on is gone: back to following the desktop.
-    if (response.status === 409 && message === SEAT_GONE && settleSeat({ workspaces: [] })) sharedEvents().restart()
+    if (response.status === 409 && message === SEAT_GONE && settleSeat({ workspaces: [] })) sharedEvents().reopen()
     throw new HttpStatusError(message, response.status, detail)
   }
   const text = await response.text()
@@ -487,8 +487,9 @@ function sharedEvents(): ReconnectingStream {
     // is kept for the day another machine is entered (leaveMachine).
     eventsOffPlane = registerPlaneStream({ restart: () => stream.restart(), revive: () => stream.revive() })
     // A workspace removed from under this phone: back to following the desktop.
+    // A change of seat, not of path: the old stream must stop speaking (live-stream.ts · reopen).
     stream.on('workspaces', (e) => {
-      if (settleSeat(parseOnce<WorkspaceList>(e))) stream.restart()
+      if (settleSeat(parseOnce<WorkspaceList>(e))) stream.reopen()
     })
   }
   return events
@@ -618,9 +619,23 @@ registerScopeState('machine api', leaveMachine, 'stop')
 function sitAt<T extends { seat?: string }>(answer: T): T {
   if (answer.seat) {
     takeSeat(answer.seat)
-    sharedEvents().restart()
+    sharedEvents().reopen()
   }
   return answer
+}
+
+/**
+ * THE CANVAS OF THE WORKSPACE THIS PHONE IS ON WHEN THE ANSWER LANDS, not when
+ * it was asked. A pull carries no name of its own, and over the relay it can
+ * take seconds: a phone back from sleep pulls, the person taps another
+ * workspace, the new seat's stream paints it, and then the old pull landed and
+ * painted the workspace just left under the new one's id (11-13: two
+ * "Playground" tiles where "Cookrew Dev" was). An answer for a seat already
+ * left is dropped and the canvas asked for again under the seat now held.
+ */
+function pullWorkspace(): Promise<WorkspaceState> {
+  const seat = deviceSeat()
+  return req<WorkspaceState>(apiPath('/api/workspace')).then((state) => (deviceSeat() === seat ? state : pullWorkspace()))
 }
 
 export function createRemoteApi(): CookrewApi {
@@ -628,7 +643,7 @@ export function createRemoteApi(): CookrewApi {
   // level) there is nobody to ask; the question is put when one is entered.
   if (!scopeNeedsMachine() || machineScope().machineId !== null) checkAuthOnBoot()
   return {
-    getWorkspace: () => req<WorkspaceState>(apiPath('/api/workspace')),
+    getWorkspace: () => pullWorkspace(),
     onWorkspaceState: (cb) => subscribe<WorkspaceState>('workspace', cb),
     listWorkspaces: () => req<WorkspaceList>(apiPath('/api/workspaces')),
     createWorkspace: (name, dir, team) => req<WorkspaceMeta & { seat?: string }>(apiPath('/api/workspaces'), 'POST', { name, dir, team }).then(sitAt),

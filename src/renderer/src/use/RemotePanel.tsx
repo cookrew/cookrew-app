@@ -197,6 +197,8 @@ export function RemoteBarView({
         )}
         {canTake && <button type="button" className="rp-bar-btn rp-take" aria-label="Take control" title="Take control" disabled={busy} onClick={onTake}>Take</button>}
         {mine && <button type="button" className="rp-bar-btn" aria-label="Give back" title="Give back" disabled={busy} onClick={onGive}>Give</button>}
+        {/* The pill has no line for a hint: the set-up rides as a button of its own. */}
+        {setUp && onSetUpUnlock && <button type="button" className="rp-bar-btn" aria-label="Set up unlock" title={UNLOCK_NOT_SET_UP} onClick={onSetUpUnlock}>Set up</button>}
         {zoomed && <button type="button" className="rp-bar-btn" aria-label="Fit" title="Fit" onClick={onFit}>Fit</button>}
         {extras}
         <button type="button" className="rp-bar-btn rp-end" aria-label="End session" title="End session" onClick={onEnd}>End</button>
