@@ -321,7 +321,7 @@ function shell(options: ShellOptions, main: string): string {
 <header class="hdr"><div class="wrap">
 <a class="mark" href="${local('/')}" aria-label="${tr('Cookrew home', 'Cookrew 首页')}">${LOGO}</a>
 <span class="chip">${tr('your agents on every machine · one account', '每台机器上的 agent · 一个账号')}</span>
-<nav class="top">${top}<a class="btn sm" href="${esc(staticSite.console)}/">${icon('mac')} ${tr('Open console', '打开控制台')}</a>${prefs}</nav>
+<nav class="top">${top}<a class="btn sm" href="${esc(staticSite.console)}/">${icon('mac')} ${tr('Open console', '打开控制台')}</a></nav>${prefs}
 </div></header>
 ${main}
 <footer><div class="wrap">
@@ -420,7 +420,7 @@ a{color:inherit}
 /* header — the app's own chrome: cream-hi, 2px ink rule */
 .hdr{position:sticky;top:0;z-index:50;background:var(--cream-hi);border-bottom:1px solid var(--hair)}
 .hdr .wrap{display:flex;align-items:center;gap:14px;min-height:56px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
-@media (max-width:760px){.hdr .wrap>.chip{display:none}.hdr nav.top{margin-left:0;width:100%}}
+@media (max-width:760px){.hdr .wrap>.chip{display:none}.hdr nav.top{margin-left:0;width:100%;order:2}.hdr .prefs{margin-left:auto;order:1}}
 .mark{display:flex;align-items:center;gap:9px;text-decoration:none;font:700 15px var(--font-pixel);letter-spacing:.12em}
 .mark-coo{width:25px;height:31px;display:block;flex:0 0 auto;overflow:visible;color:var(--ink)}
 
