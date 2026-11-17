@@ -13,7 +13,7 @@ import { activeBrowserTab, type CanvasNode, type Connection, type WorkspaceMeta 
 import type { AttachmentIndex } from '../terminal-attachments'
 import { hostOf, screenAspectOf, tintOf } from './zoom-layout'
 import { DECK_SHOWN } from './fleet-compose'
-import { deckView, itemInitial, machineViewOf } from './machine-view'
+import { deckView, itemInitial, machineViewOf, seatedView } from './machine-view'
 import type { FrameModel, LinkModel, TieModel } from './zoom-frame'
 import { inkStatusOfRow, statusWord, type InkStatus } from './ink-status'
 import type { LaunchFailure } from '../../../shared/launch-failure'
@@ -211,7 +211,7 @@ export interface ZoomInput {
     os?: string | null
     /** Its display in points, as its own feed tells it: the screen it is drawn with. */
     display?: { w: number; h: number } | null
-    workspaces: readonly { id: string; name: string; agents: readonly { harness: string; phase: string }[]; counts: { agents: number; waiting: number; browsers?: number; notes?: number } | null; deck?: readonly DeckSource[] }[]
+    workspaces: readonly { id: string; name: string; agents: readonly SeatedAgent[]; counts: { agents: number; waiting: number; browsers?: number; notes?: number } | null; deck?: readonly DeckSource[] }[]
   }[]
 }
 
@@ -225,12 +225,6 @@ export interface SeatedAgent {
   reply?: string | null
   orch?: boolean
   attachments?: readonly { kind: 'browser' | 'note' }[]
-}
-function seatedView(agent: SeatedAgent): AgentView | null {
-  if (!agent.id) return null
-  const phase = agent.phase as AgentPhase
-  const status = inkStatusOfRow(phase, false)
-  return { id: agent.id, name: agent.name ?? agent.id, preset: agent.harness, orch: !!agent.orch, phase, status, word: statusWord(status), line: agent.reply || agent.task || 'Nothing said yet.', browsers: agent.attachments?.filter((item) => item.kind === 'browser').length ?? 0, notes: agent.attachments?.filter((item) => item.kind === 'note').length ?? 0, turn: null }
 }
 const waitingIn = (phases: readonly string[]): number => phases.filter((p) => p === 'waiting').length
 
@@ -292,16 +286,25 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
   const all = [...input.nodes].reverse().filter((n) => n.kind === 'browser' || n.kind === 'note')
 
   // A link per coin an agent wears: its newest wires (the attachment index lists them newest first).
-  const links: LinkModel[] = []
-  const worn = new Map<string, CanvasNode>()
-  for (const a of agents) {
-    const list = (input.attachIndex.get(a.id) ?? []).slice(0, COINS_PER_AGENT)
-    list.forEach((att, k) => {
-      const o = owners.get(att.node.id) ?? []
-      links.push({ key: `${a.id}|${att.node.id}`, agent: a.id, item: att.node.id, k, j: Math.max(0, o.indexOf(a.id)) })
-      worn.set(att.node.id, att.node)
-    })
-  }
+  const wearing = agents.flatMap((a) =>
+    (input.attachIndex.get(a.id) ?? []).slice(0, COINS_PER_AGENT).map((att, k) => ({ agent: a.id, node: att.node, k }))
+  )
+  const worn = new Map<string, CanvasNode>(wearing.map((w) => [w.node.id, w.node] as const))
+  // Its place among the coins docked on its item, in the crew's order: a sharer
+  // that wears no coin for the item (its wire is past its seats) leaves no gap.
+  const onItem = new Map<string, number>()
+  const placed = wearing.map((w) => {
+    const j = onItem.get(w.node.id) ?? 0
+    onItem.set(w.node.id, j + 1)
+    return { agent: w.agent, item: w.node.id, k: w.k, j }
+  })
+  // The item page's "used by" row lists every owner in the wiring's order: its own face there is u.
+  const links: LinkModel[] = placed.map((w) => ({
+    key: `${w.agent}|${w.item}`,
+    ...w,
+    of: onItem.get(w.item) as number,
+    u: Math.max(0, (owners.get(w.item) ?? []).indexOf(w.agent))
+  }))
   // The thumbs grid holds them all and scrolls (owner, 2026-11-02); a workspace can
   // hold hundreds (300 on the owner's), so the view mounts only the rows on screen.
   // The ones somebody carries come first, newest first within each; past

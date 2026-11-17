@@ -55,8 +55,10 @@ describe('DevicesCanvas', () => {
     expect(html).toContain('Solis-Core')
     expect(html).toContain('Open Cookrew on Studio.')
     expect(html).toMatch(/aria-current="step" aria-label="devices"/)
-    // Each frame the same size.
-    expect(new Set(html.match(/width:\d+(\.\d+)?px;height:\d+(\.\d+)?px/g)).size).toBe(1)
+    // Each frame the same size (its screen's agents are sized inside it: DevicesAgents.tsx).
+    const frames = html.match(/class="zv-machine zv-other[^"]*" data-read="[a-z]+" style="width:\d+(\.\d+)?px;height:\d+(\.\d+)?px"/g) ?? []
+    expect(frames).toHaveLength(3)
+    expect(new Set(frames.map((one) => one.replace(/.*style=/, ''))).size).toBe(1)
   })
 
   const render = (machines: CanvasMachine[], openingId: string | null = null, gaugeOf?: (m: MachineView) => React.ReactNode): string =>

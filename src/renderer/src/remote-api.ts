@@ -22,6 +22,7 @@ import type { VersionPinRecord } from '../../shared/version-pin'
 import type { RenameOutcome } from '../../shared/rename-plan'
 import type { FleetEvent } from '../../shared/fleet'
 import type { UnlockAnswer, UnlockBegin } from '../../shared/remote-unlock'
+import { UNLOCK_GRANT_EVENT, UNLOCK_GRANT_PATH, type GrantAsked, type GrantDone, type GrantList, type GrantRefusal, type GrantStatus } from '../../shared/unlock-grant'
 import { apiPath } from './api-base'
 import { machineScope, registerScopeState, scopeNeedsMachine, heldScope, machineLeft, relayRefusedSession } from './machine-scope'
 import { USE_SOURCES_PATH, type UseSourceList, type UseSourceOpened, type UseSourceSettings } from '../../shared/use-sources'
@@ -35,7 +36,7 @@ import { registerPlaneStream } from './plane-streams'
 import { openEventSource } from './rtc-plane'
 import { createRawInputQueue } from './raw-input-queue'
 import { relayAccountMachines, ZOOM_ACCOUNT_MAX_AGE_MS } from './relay-machines'
-import { seated, settleSeat, takeSeat } from './device-seat'
+import { deviceSeat, seated, settleSeat, takeSeat } from './device-seat'
 import { SEAT_GONE, type WorkspaceCheck, type WorkspaceRemovePlan } from '../../shared/workspace-door'
 import type { SousCommandResult } from '../../main/sous-control'
 import type { WorkspaceMeta } from '../../shared/model'
@@ -113,7 +114,7 @@ async function parse<T>(response: Response, options: ParseOptions = {}): Promise
       throw failure
     }
     // The workspace this phone stood on is gone: back to following the desktop.
-    if (response.status === 409 && message === SEAT_GONE && settleSeat({ workspaces: [] })) sharedEvents().restart()
+    if (response.status === 409 && message === SEAT_GONE && settleSeat({ workspaces: [] })) sharedEvents().reopen()
     throw new HttpStatusError(message, response.status, detail)
   }
   const text = await response.text()
@@ -486,8 +487,9 @@ function sharedEvents(): ReconnectingStream {
     // is kept for the day another machine is entered (leaveMachine).
     eventsOffPlane = registerPlaneStream({ restart: () => stream.restart(), revive: () => stream.revive() })
     // A workspace removed from under this phone: back to following the desktop.
+    // A change of seat, not of path: the old stream must stop speaking (live-stream.ts · reopen).
     stream.on('workspaces', (e) => {
-      if (settleSeat(parseOnce<WorkspaceList>(e))) stream.restart()
+      if (settleSeat(parseOnce<WorkspaceList>(e))) stream.reopen()
     })
   }
   return events
@@ -617,9 +619,23 @@ registerScopeState('machine api', leaveMachine, 'stop')
 function sitAt<T extends { seat?: string }>(answer: T): T {
   if (answer.seat) {
     takeSeat(answer.seat)
-    sharedEvents().restart()
+    sharedEvents().reopen()
   }
   return answer
+}
+
+/**
+ * THE CANVAS OF THE WORKSPACE THIS PHONE IS ON WHEN THE ANSWER LANDS, not when
+ * it was asked. A pull carries no name of its own, and over the relay it can
+ * take seconds: a phone back from sleep pulls, the person taps another
+ * workspace, the new seat's stream paints it, and then the old pull landed and
+ * painted the workspace just left under the new one's id (11-13: two
+ * "Playground" tiles where "Cookrew Dev" was). An answer for a seat already
+ * left is dropped and the canvas asked for again under the seat now held.
+ */
+function pullWorkspace(): Promise<WorkspaceState> {
+  const seat = deviceSeat()
+  return req<WorkspaceState>(apiPath('/api/workspace')).then((state) => (deviceSeat() === seat ? state : pullWorkspace()))
 }
 
 export function createRemoteApi(): CookrewApi {
@@ -627,7 +643,7 @@ export function createRemoteApi(): CookrewApi {
   // level) there is nobody to ask; the question is put when one is entered.
   if (!scopeNeedsMachine() || machineScope().machineId !== null) checkAuthOnBoot()
   return {
-    getWorkspace: () => req<WorkspaceState>(apiPath('/api/workspace')),
+    getWorkspace: () => pullWorkspace(),
     onWorkspaceState: (cb) => subscribe<WorkspaceState>('workspace', cb),
     listWorkspaces: () => req<WorkspaceList>(apiPath('/api/workspaces')),
     createWorkspace: (name, dir, team) => req<WorkspaceMeta & { seat?: string }>(apiPath('/api/workspaces'), 'POST', { name, dir, team }).then(sitAt),
@@ -692,6 +708,12 @@ export function createRemoteApi(): CookrewApi {
     remoteRestart: () => req<RemoteAnswer>(apiPath(`${USE_SOURCES_PATH}/restart`), 'POST', {}).catch(refusal),
     remoteUnlockBegin: () => req<UnlockBegin>(apiPath(`${USE_SOURCES_PATH}/unlock/begin`), 'POST', {}),
     remoteUnlock: (sealed) => req<UnlockAnswer>(apiPath(`${USE_SOURCES_PATH}/unlock`), 'POST', { sealed }),
+    unlockGrantAsk: (commit) => req<GrantAsked | GrantRefusal>(apiPath(`${UNLOCK_GRANT_PATH}/ask`), 'POST', { commit }),
+    unlockGrantReveal: (id, key, nonce) => req<GrantDone | GrantRefusal>(apiPath(`${UNLOCK_GRANT_PATH}/reveal`), 'POST', { id, key, nonce }),
+    unlockGrantStatus: (id) => req<GrantStatus | GrantRefusal>(apiPath(`${UNLOCK_GRANT_PATH}/status?id=${encodeURIComponent(id)}`)),
+    unlockGrantPending: () => req<GrantList | GrantRefusal>(apiPath(`${UNLOCK_GRANT_PATH}/pending`)),
+    unlockGrantDecide: (id, allow) => req<GrantDone | GrantRefusal>(apiPath(`${UNLOCK_GRANT_PATH}/decide`), 'POST', { id, allow }),
+    onUnlockGrants: (cb) => subscribe<{ waiting?: unknown }>(UNLOCK_GRANT_EVENT, (frame) => cb(typeof frame.waiting === 'number' ? frame.waiting : 0)),
     remoteWake: () => req<RemoteAnswer>(apiPath(`${USE_SOURCES_PATH}/wake`), 'POST', {}).catch(refusal),
 
     // Phones can't hand the desktop a local path — upload the bytes and let

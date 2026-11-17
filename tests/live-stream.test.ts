@@ -232,3 +232,39 @@ describe('ReconnectingStream', () => {
     expect(seen).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('ReconnectingStream · reopen (a change of seat)', () => {
+  it('closes the old stream before the new one has said anything, so the seat left never paints again', () => {
+    const { stream, sources } = harness()
+    const seen: unknown[] = []
+    stream.on('workspace', (e) => seen.push(JSON.parse(e.data)))
+    stream.reopen()
+    expect(sources).toHaveLength(2)
+    expect(sources[0].closed).toBe(true)
+    sources[0].emit('workspace', { name: 'Playground' })
+    expect(seen).toEqual([])
+    sources[1].emit('workspace', { name: 'Cookrew Dev' })
+    expect(seen).toEqual([{ name: 'Cookrew Dev' }])
+  })
+
+  it('heals by the backoff when the new stream will not open, never by going back to the old one', () => {
+    const { stream, sources, clock } = harness()
+    const seen: unknown[] = []
+    stream.on('workspace', (e) => seen.push(JSON.parse(e.data)))
+    stream.reopen()
+    sources[1].die()
+    clock.run()
+    expect(sources).toHaveLength(3)
+    sources[0].emit('workspace', { name: 'Playground' })
+    sources[2].emit('workspace', { name: 'Cookrew Dev' })
+    expect(seen).toEqual([{ name: 'Cookrew Dev' }])
+  })
+
+  it('does nothing once closed', () => {
+    const { stream, sources } = harness()
+    stream.on('workspace', () => undefined)
+    stream.close()
+    stream.reopen()
+    expect(sources).toHaveLength(1)
+  })
+})

@@ -140,8 +140,12 @@ describe('the wiring', () => {
     expect(main).toContain('canvasLink.backlog()')
   })
 
-  it('only the link on the owner\'s own screen carries the code', () => {
-    expect(main.match(/connectCodes\.encoded\(\)/g)).toHaveLength(1)
+  it('only the link on the owner\'s own screen carries the code, and a set-up a person approved', () => {
+    expect(main.match(/connectCodes\.encoded\(\)/g)).toHaveLength(2)
+    expect(main).toContain('connectCode: () => connectCodes.encoded()')
+    // The other: sealed to a device only after someone compared the words (main/unlock-grant.ts).
+    const grant = main.slice(main.indexOf('createUnlockGrantDoor({'))
+    expect(grant.slice(0, grant.indexOf('\n})'))).toContain('code: () => connectCodes.encoded()')
     // The request flow that once sealed a link for another device is not wired at all: it can admit nobody.
     expect(main).not.toContain('pairingUrlFor')
   })

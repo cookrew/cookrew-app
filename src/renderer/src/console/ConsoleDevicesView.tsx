@@ -9,6 +9,8 @@ import type { PathWord } from './machine-paths'
 import { DevicesCanvas, type CanvasMachine } from '../zoom/DevicesCanvas'
 import '../header.css'
 import type { MachineView } from '../zoom/zoom-model'
+import type { ConsolePush } from './console-push'
+import { PushMenuItem } from './ConsolePushItem'
 
 /**
  * THE ACCOUNT'S MACHINES. Each is drawn as a machine: a frame, a screen, its
@@ -86,7 +88,7 @@ export function initialsOf(username: string): string {
  * the app's own bar stands in the same place (Header.tsx), so stepping in or
  * out changes what it says, never what it is.
  */
-export function TopBar({ username, accountHref, onSignOut }: { username: string; accountHref: string; onSignOut: () => void }): React.JSX.Element {
+export function TopBar({ username, accountHref, onSignOut, push }: { username: string; accountHref: string; onSignOut: () => void; push?: ConsolePush }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -125,6 +127,7 @@ export function TopBar({ username, accountHref, onSignOut }: { username: string;
             <a className="cd-quiet" role="menuitem" href={accountHref}>
               Account &amp; security
             </a>
+            {push && <PushMenuItem push={push} />}
             <button type="button" className="cd-quiet" role="menuitem" onClick={onSignOut}>
               Sign out
             </button>
@@ -168,7 +171,7 @@ function Gate({ gate, state, wants, returnTo }: { gate: ConsoleParts['gate']; st
 }
 
 export function ConsoleDevicesView({ parts, view, notice, username }: { parts: ConsoleParts; view: Extract<ConsoleView, { kind: 'devices' | 'entering' }>; notice: string | null; username: string }): React.JSX.Element {
-  const { devices, gate, runtime, router, config, paths } = parts
+  const { devices, gate, runtime, router, config, paths, push } = parts
   useSyncExternalStore(paths.subscribe, paths.version, paths.version)
   const list = useSyncExternalStore(devices.subscribe, devices.get, devices.get)
   const gateState = useSyncExternalStore(gate.subscribe, gate.get, gate.get)
@@ -181,7 +184,7 @@ export function ConsoleDevicesView({ parts, view, notice, username }: { parts: C
 
   return (
     <main className="cd-page cd-canvas-page">
-      <TopBar username={username} accountHref={`${config.authOrigin}/account`} onSignOut={() => void runtime.signOut()} />
+      <TopBar username={username} accountHref={`${config.authOrigin}/account`} onSignOut={() => void runtime.signOut()} push={push} />
       {notice && (
         <p className="cd-notice" role="status">
           <span>{notice}</span>

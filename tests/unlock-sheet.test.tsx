@@ -32,6 +32,16 @@ describe('UnlockSheetView', () => {
     expect(html).not.toContain('Remember on this device')
     expect(html).toContain('pairing code')
     expect(html).toContain('aria-label="Pairing link"')
+    expect(html).toContain('avatar → Devices → Pair a phone')
+    expect(html).toContain('open the link in this browser')
+    expect(html).toContain('Or paste the full link from the QR code')
+  })
+
+  it('with no connect code it offers the set-up from here first, the QR after', () => {
+    const html = draw({ needsCode: true, onSetUp: noop })
+    expect(html).toContain('Set up from here')
+    expect(html.indexOf('Set up from here')).toBeLessThan(html.indexOf('Pair a phone'))
+    expect(html).toContain('Or, at the unlocked Mac')
   })
 
   it('keeps no password on a page cookrew.dev serves: one altered page could read it without a keystroke', () => {

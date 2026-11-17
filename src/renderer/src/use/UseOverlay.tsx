@@ -7,6 +7,8 @@ import { useCardCursors, type CardCursor } from '../use-cursors'
 import { openSourcePicker } from './source-picker-store'
 import { accessOf, remoteWhere, useRemoteActs } from './remote-acts'
 import { coverState, frameIsStale, RemoteBarView, RemoteConfirmView, RemotePanel, type RemoteConnection } from './RemotePanel'
+import { unlockReach } from './unlock-reach'
+import { openUnlockGrantSheet } from './unlock-grant-store'
 import type { BarBand } from './remote-layout'
 import './use-overlay.css'
 
@@ -154,7 +156,7 @@ function RemoteCover({ state, onEnd }: { state: RemoteState; onEnd?: () => void 
   return (
     <div className="rp-cover">
       <div className="rp-cover-body">
-        <RemotePanel state={shown} where={remoteWhere()} busy={acts.busy} note={acts.note} onAct={acts.act} />
+        <RemotePanel state={shown} where={remoteWhere()} reach={unlockReach(remoteWhere())} busy={acts.busy} note={acts.note} onAct={acts.act} />
         {onEnd && <button type="button" className="rp-leave" onPointerDown={(event) => event.stopPropagation()} onClick={onEnd}>End session</button>}
       </div>
       {acts.confirm && <RemoteConfirmView confirm={acts.confirm} onYes={() => acts.answerConfirm(true)} onNo={() => acts.answerConfirm(false)} />}
@@ -219,7 +221,7 @@ function RemoteBar({ card, control, connection, zoomed, onFit, onEnd, band, extr
   }
   return (
     <>
-      <RemoteBarView control={control} where={remoteWhere()} connection={connection} zoomed={zoomed} now={now} error={error} busy={busy} onTake={() => ask(true)} onGive={() => ask(false)} onEnd={end} onFit={() => onFit?.()} band={band} extras={extras} notice={notice} measureRef={measureRef} />
+      <RemoteBarView control={control} where={remoteWhere()} reach={unlockReach(remoteWhere())} onSetUpUnlock={() => openUnlockGrantSheet()} connection={connection} zoomed={zoomed} now={now} error={error} busy={busy} onTake={() => ask(true)} onGive={() => ask(false)} onEnd={end} onFit={() => onFit?.()} band={band} extras={extras} notice={notice} measureRef={measureRef} />
       {refusal && <RemoteRefusalCover state={refusal} onRetry={() => ask(true)} onDismiss={() => setRefusal(null)} />}
     </>
   )
@@ -231,7 +233,7 @@ function RemoteRefusalCover({ state, onRetry, onDismiss }: { state: RemoteState;
   return (
     <div className="rp-cover">
       <div className="rp-cover-body">
-        <RemotePanel state={state} where={remoteWhere()} busy={acts.busy} note={acts.note} onAct={acts.act} />
+        <RemotePanel state={state} where={remoteWhere()} reach={unlockReach(remoteWhere())} busy={acts.busy} note={acts.note} onAct={acts.act} />
         <button type="button" className="rp-leave" onPointerDown={(event) => event.stopPropagation()} onClick={onDismiss}>Keep watching</button>
       </div>
       {acts.confirm && <RemoteConfirmView confirm={acts.confirm} onYes={() => acts.answerConfirm(true)} onNo={() => acts.answerConfirm(false)} />}

@@ -1,5 +1,5 @@
 import { defineConfig } from 'vitest/config'
-import { awaitTestSlot } from './scripts/heavy-slot.mjs'
+import { awaitTestSlot, testWorkers, WORKER_GUARD, yieldToAgents } from './scripts/heavy-slot.mjs'
 
 /**
  * The suite is THIS tree's tests, and nobody else's.
@@ -38,10 +38,12 @@ import { awaitTestSlot } from './scripts/heavy-slot.mjs'
  * Excluding them is not hiding anything: a worktree's tests belong to that
  * worktree, and running them there is the point of having one.
  */
-// Whole-suite runs take a machine-wide turn (scripts/heavy-slot.mjs), and no run
-// takes more than TEST_WORKERS: left to its default a run takes every core but
-// one, so four agents testing at once asked ten cores for 36 workers.
-const TEST_WORKERS = 4
+// Whole-suite runs take a machine-wide turn (scripts/heavy-slot.mjs), every run
+// drops to a background priority, and no run takes more than testWorkers(): left
+// to its default a run takes every core but one, so four agents testing at once
+// asked ten cores for 36 workers.
+yieldToAgents()
+const TEST_WORKERS = testWorkers()
 await awaitTestSlot()
 
 export default defineConfig({
@@ -52,6 +54,10 @@ export default defineConfig({
   test: {
     minWorkers: 1,
     maxWorkers: TEST_WORKERS,
+    // A fork exits when its run is killed, and dies of OOM at 2 GB rather than
+    // growing to node's 4 GB default: scripts/test-worker-guard.mjs.
+    setupFiles: WORKER_GUARD.setupFiles,
+    poolOptions: { forks: { execArgv: WORKER_GUARD.execArgv } },
     // Only this tree's suite. Named explicitly rather than left to the default
     // root walk, so a new directory of fixtures cannot quietly join the run.
     // `.tsx` as well as `.ts`: the renderer's components are TSX, and a

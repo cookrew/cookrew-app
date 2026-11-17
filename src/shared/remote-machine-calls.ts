@@ -20,6 +20,20 @@ export interface RemoteMachineCall {
 }
 
 const ID = '[A-Za-z0-9_-]{1,128}'
+/**
+ * THE HITL BAR'S ONE READ OF ANOTHER MACHINE'S ACTIVITY LOG (phase 6:
+ * renderer zoom/remote-hitl.ts): its agents' note and browser changes and their
+ * ends, newest HITL_EVENTS_LIMIT. Exactly this address and nothing near it: the
+ * caller's key is an owner's pairing there, so any other type (secret.*,
+ * account.*) would come back with its details, and a read without `types`
+ * walks the whole log for counts.
+ */
+export const HITL_EVENT_TYPES: readonly string[] = ['note.created', 'note.updated', 'browser.created', 'browser.navigated', 'note.deleted', 'browser.closed', 'workspace.deleted']
+export const HITL_EVENTS_LIMIT = 300
+export const HITL_EVENTS_ROUTE = `api/events/query?types=${HITL_EVENT_TYPES.join(',')}&limit=${HITL_EVENTS_LIMIT}`
+
+const literal = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 const ALLOWED: readonly { method: 'GET' | 'POST'; pattern: RegExp; binary?: true }[] = [
   // The tiles alone (?cards=0), or a crew with at most one card's whole reply (&full=): watch-routes.ts · cardsShapeOf.
   { method: 'GET', pattern: new RegExp(`^api/watch/cards(\\?cards=0|\\?workspace=${ID}(&full=${ID})?)?$`) },
@@ -30,7 +44,9 @@ const ALLOWED: readonly { method: 'GET' | 'POST'; pattern: RegExp; binary?: true
   { method: 'GET', pattern: new RegExp(`^api/watch/item/${ID}$`) },
   { method: 'POST', pattern: new RegExp(`^api/watch/item/${ID}/input$`) },
   // Control of a screen card on it, taken and given back as a phone does (use-source-routes.ts), in the workspace it is in.
-  { method: 'POST', pattern: new RegExp(`^api/use/sources/control\\?seat=${ID}$`) }
+  { method: 'POST', pattern: new RegExp(`^api/use/sources/control\\?seat=${ID}$`) },
+  // Its activity log: the HITL bar's one read (above), exactly.
+  { method: 'GET', pattern: new RegExp(`^${literal(HITL_EVENTS_ROUTE)}$`) }
 ]
 
 /** The call, if it is one a machine may make on another; null for anything else. */

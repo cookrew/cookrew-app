@@ -210,6 +210,8 @@ function workspaceRow(
     // Only when there are some, so a desktop without them sends what it always did.
     ...(traits.length > 0 ? { traits } : {}),
     state: meta.id === input.focusedWorkspaceId ? 'focused' : 'background',
+    // A customer's: another machine's bar must not hold it (phase 6, zoom/remote-hitl.ts).
+    ...(meta.served === true ? { served: true as const } : {}),
     agents,
     loose,
     ...(newest ? { newest } : {}),

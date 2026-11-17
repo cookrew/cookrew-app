@@ -41,7 +41,13 @@ const CONSOLE_ROUTES: readonly [method: string, path: RegExp][] = [
   ['POST', /^\/v2\/auth\/token$/],
   ['POST', /^\/v2\/verify-hello$/],
   ['GET', /^\/v2\/keys$/],
-  ['GET', /^\/v2\/names\/[A-Za-z0-9.-]{1,255}$/]
+  ['GET', /^\/v2\/names\/[A-Za-z0-9.-]{1,255}$/],
+  // Phone push: the console turns notifications on and off for its own browser. Reading the keys
+  // and sending stay a desktop's (v2-push-routes.ts).
+  ['GET', /^\/v2\/me\/push\/key$/],
+  ['POST', /^\/v2\/me\/push\/subscriptions$/],
+  ['GET', /^\/v2\/me\/push\/subscriptions\/mine$/],
+  ['DELETE', /^\/v2\/me\/push\/subscriptions\/[A-Za-z0-9_-]{22}$/]
 ]
 
 /** Does this token say it is a console session? Its body is read; its signature is the route's to check. */

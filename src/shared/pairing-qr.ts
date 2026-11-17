@@ -29,6 +29,8 @@ export const deviceIdPrefix = (deviceId: string): string => `${deviceId.slice(0,
 
 export const PAIRING_COPY = {
   CONSOLE: 'Scan on the phone and sign in to your account. Works from any network.',
+  /** Pairing is only possible while the Mac is open, so it is said here, before anyone needs it. */
+  CONSOLE_UNLOCK: 'Scan on the phone and sign in to your account. Works from any network, and lets that browser unlock this Mac when it locks.',
   DIRECT:
     'Claim a username to pair from anywhere; this QR pairs on this Wi-Fi only.',
   NONE: 'No address to show yet — the phone server is still starting.',
@@ -64,10 +66,11 @@ export const pairingPopoutView = (handout: PairingHandout | null): PairingPopout
     }
   }
   const onConsole = handout.via === 'console'
+  const unlocks = hostPlatform() === 'darwin'
   return {
     mode: onConsole ? 'console' : 'direct',
     qr: handout.url,
-    sentence: onConsole ? PAIRING_COPY.CONSOLE : PAIRING_COPY.DIRECT,
+    sentence: onConsole ? (unlocks ? PAIRING_COPY.CONSOLE_UNLOCK : PAIRING_COPY.CONSOLE) : PAIRING_COPY.DIRECT,
     rotateNote: onConsole ? PAIRING_COPY.ADDRESS_ONLY : PAIRING_COPY.ROTATE,
     desktopName: handout.desktopName,
     deviceIdPrefix: handout.deviceId ? deviceIdPrefix(handout.deviceId) : null

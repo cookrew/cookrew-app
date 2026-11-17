@@ -19,13 +19,17 @@ import { machineTooOld, machineWhyShows, machineWhyWords, machineSays } from './
 import { hostPlatform } from '../../../shared/machine-words'
 import { MachineTrustRow, useMachineTrust } from './MachineTrustRow'
 import { ShelfCard } from './ShelfCard'
+import { DevicesAgents, groupsOf } from './DevicesAgents'
+import { RemotePickCard } from './RemotePickCard'
+import { LOCAL_MACHINE, pickKey, ringOf, samePick, type PickGroup, type PickSpot } from './agent-keys'
+import { focusPickBox, revealIn, useAgentKeys, type KeysStop } from './use-agent-keys'
 import { CardScaleContext } from './AgentCard'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
-import { DEFAULT_TILE_SIZE, defaultCrewCols, machineFrameOf, machinesAt, screenGridCols, TILE_SIZES } from './zoom-layout'
+import { DEFAULT_TILE_SIZE, defaultCrewCols, fitScale, machineFrameOf, machinesAt, screenGridCols, TILE, TILE_DRAWN_W, TILE_SIZES } from './zoom-layout'
 import { GroupSeal, GROUP_STEP } from './agents-group'
 import { useCrewCols, useTileSize } from './crew-cols'
 import { ViewTools, type PerRow, type TileSizePick } from './ViewTools'
-import { cardStopCamera, deviceOfModel, deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from './zoom-frame'
+import { cardStopCamera, deviceCam, deviceOfModel, deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
 import { BAR_NAMES, BAR_STOPS, barSide, barStop, popsCard } from './zoom-path'
@@ -42,6 +46,7 @@ import { useZoomFleetView } from './use-zoom-fleet'
 import { MachineGaugeLine } from './MachineGauges'
 import { gaugedMachines } from './gauged-machines'
 import { RemoteMachineView } from './RemoteMachineView'
+import type { TilePick } from './WorkspaceTile'
 import { remotePlace, remoteStop } from './remote-machine-store'
 import { canEnterMachines } from './use-remote-machine'
 import './zoom.css'
@@ -62,6 +67,8 @@ const SIDE_SWIPE_PX = 64
 const SIDE_WHEEL_PX = 40
 /** A wheel's gesture ends after this quiet: what comes later is the next one. */
 const WHEEL_IDLE_MS = 140
+/** A tile the keys go to is brought this far inside the view's top and bottom (the head over the grid, the bar). */
+const TILE_REVEAL = { top: 64, bottom: 120 } as const
 /** A failure as a person reads it: its message, without the class name String() puts in front. */
 const failureWords = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
@@ -223,7 +230,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     }
     for (const t of modelRef.current.frame.ties) { const el = get(`tie:${t.key}`); if (el) ties.set(t.key, el) }
     for (const m of modelRef.current.marks) { const el = get(`mark:${m.id}`); if (el) marks.set(m.id, el) }
-    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, fold: get('fold'), glow: get('glow'), marks, next: get('newseat'), fullHead: get('fullHead'), newThumb: get('newThumb'), shelfMore: get('shelfMore'), ...deviceWordEls(get('deviceLabel'), [...marks.values(), ...(get('openMark') ? [get('openMark')!] : [])], get('devices')!) }
+    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, fold: get('fold'), glow: get('glow'), marks, next: get('newseat'), fullHead: get('fullHead'), newThumb: get('newThumb'), shelfMore: get('shelfMore'), localAgents: get('localAgents'), ...deviceWordEls(get('deviceLabel'), [...marks.values(), ...(get('openMark') ? [get('openMark')!] : [])], get('devices')!) }
   }, [])
   // THE CREW SCROLLS ON A PHONE (zoom-frame.ts · phoneCamera), THE THUMBNAILS
   // ON ANY SCREEN (deskThumbs, phoneThumbs): drawn at a readable size, a tall
@@ -421,6 +428,14 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const shelfCardOpen = useRef(false)
   shelfCardOpen.current = shelfCard !== null
   const closeShelfCard = useCallback((): void => setShelfCard(null), [])
+  // THE AGENT THE KEYS STAND ON (agent-keys.ts; owner, 2026-11-17), at the devices or the workspaces stop:
+  // there its card pops for a quick reply. `keys`: they brought it, so the caret goes to its box.
+  const [picked, setPicked] = useState<{ spot: PickSpot; keys: boolean } | null>(null)
+  const pickedNow = useRef(picked)
+  pickedNow.current = picked
+  const pickOpen = useRef(false)
+  pickOpen.current = picked !== null
+  const clearPick = useCallback((): void => setPicked(null), [])
   /** The open card's agent has words in its box (prompt-draft.ts: typed in the card or before). */
   const shelfCardDraft = (): boolean => shelfCard !== null && getDraft(draftKey(shelfCard.id)).trim() !== ''
   const atShelf = (): boolean => {
@@ -576,9 +591,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       // an IME's Escape and the overlays over it (⌘K, the board) keep theirs.
       // A name's field (NameEdit.tsx) owns its Escape: it cancels the rename, not the card;
       // the who-picker's field (WhoPicker.tsx) closes the picker first.
-      if (shelfCardOpen.current && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop, .cr-name-input, .pf-who')) {
+      if ((shelfCardOpen.current || pickOpen.current) && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop, .cr-name-input, .pf-who')) {
         e.preventDefault()
         closeShelfCard()
+        clearPick()
+        // The caret leaves the card's box with the card: the next Tab starts from the agent it stood on.
+        if ((e.target as Element | null)?.closest?.('.zv-pick-card, .dm-ov-layer')) (e.target as HTMLElement).blur?.()
         return
       }
       // The board's box and its panel own their Esc (BoardSearch.tsx).
@@ -594,7 +612,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     // Capture, so a card that stops Escape on its way up does not keep us zoomed.
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [stepBack, closeShelfCard])
+  }, [stepBack, closeShelfCard, clearPick])
   // BACK ON A WEB PAGE (the phone companion; prompt/back-guard.ts): Android's
   // back and the browser's take the Esc order, one step a press: an agent's
   // card over the artifacts, the picker, a box open for nobody, then the zoom
@@ -602,20 +620,21 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // The desktop app has no back, so it keeps no entries. Nothing is pushed
   // before the owner's first touch: Chrome skips history entries a page adds
   // without one, and back would then skip past the page.
-  const backSteps = useRef({ stepBack, closeShelfCard })
-  backSteps.current = { stepBack, closeShelfCard }
+  const backSteps = useRef({ stepBack, closeShelfCard, clearPick })
+  backSteps.current = { stepBack, closeShelfCard, clearPick }
   useEffect(() => {
     if (!isRemoteMode() && !isDemoMode()) return
     const holder = backHolder(window, window.history)
     const release = holder.hold({
       wants: () => {
         if ((navigator as { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive === false) return false
-        return barCard.get() !== null || shelfCardOpen.current || promptFold.wantsBack() || zoomStore.canBack()
+        return barCard.get() !== null || shelfCardOpen.current || pickOpen.current || promptFold.wantsBack() || zoomStore.canBack()
       },
       back: () => {
         // A bar group's card first (BarGroups.tsx), as Esc closes it first.
         if (barCard.get()) return barCard.close()
         if (shelfCardOpen.current) return backSteps.current.closeShelfCard()
+        if (pickOpen.current) return backSteps.current.clearPick()
         takeBack(() => backSteps.current.stepBack('system'))
       }
     })
@@ -729,6 +748,137 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const selectedStop = barStop(zoom.dir, zoom.v)
   // Inside another machine the bar moves through its stops, not this one's (owner 2026-11-11).
   const inside = remoteStop(useSyncExternalStore(remotePlace.subscribe, remotePlace.get, remotePlace.get))
+  // ── THE KEYS, AGENT BY AGENT (agent-keys.ts; owner, 2026-11-17) ──
+  // At rest on the devices or the workspaces stop, never in a full view or inside another machine.
+  const stopNow: KeysStop | null = zoom.full !== null || inside !== null ? null : Math.abs(zoom.v + 2) < 0.1 ? 'devices' : Math.abs(zoom.v + 1) < 0.1 ? 'workspaces' : null
+  // This machine's workspaces in the grid's order, the open one in its slot: its screen at the devices stop and its tiles.
+  const localMarks = useMemo(() => model.frame.workspaces.flatMap((id) => (id === model.frame.active ? [model.openMark] : (markOf.get(id) ?? []))), [model.frame.workspaces, model.frame.active, model.openMark, markOf])
+  // The account's other machines, and what stands in the way of reading each (machine-why.ts).
+  const others = model.machines.filter((m) => !m.local).map((m) => ({ m, say: machineSays(m, { surface: machineSurface(), trusted: trust[0]?.trusted ?? null, platform: hostPlatform(), floor: scopeNeedsMachine(), block: cookrew().machineWhy?.(m.id) ?? null }) }))
+  /** A stop's agents, workspace by workspace, as drawn: this machine first, then each other one whose screen lights. */
+  const groupsAt = (stop: KeysStop): PickGroup[] =>
+    stop === 'workspaces' ? groupsOf(LOCAL_MACHINE, localMarks) : [...groupsOf(LOCAL_MACHINE, localMarks), ...others.filter((o) => o.say === null).flatMap((o) => groupsOf(o.m.id, o.m.marks))]
+  const ringSig = stopNow ? ringOf(groupsAt(stopNow)).map(pickKey).join(' ') : ''
+  // An agent gone, or the view moved on: the card goes with it.
+  useEffect(() => {
+    if (picked && !ringSig.split(' ').includes(pickKey(picked.spot))) setPicked(null)
+  }, [ringSig, picked])
+  useAgentKeys({
+    stop: () => {
+      const z = zoomStore.get()
+      if (z.full !== null || remotePlace.get().machine) return null
+      return Math.abs(z.v + 2) < 0.1 ? 'devices' : Math.abs(z.v + 1) < 0.1 ? 'workspaces' : null
+    },
+    groups: groupsAt,
+    picked: () => pickedNow.current?.spot ?? null,
+    pick: (spot) => setPicked({ spot, keys: true }),
+    root: () => overview.current
+  })
+  const faceEl = (spot: PickSpot): HTMLElement | null => overview.current?.querySelector<HTMLElement>(`[data-pick="${CSS.escape(pickKey(spot))}"]`) ?? null
+  // Where the keys went is brought into view, and the caret into its card's box.
+  useEffect(() => {
+    if (!picked?.keys) return undefined
+    const root = overview.current
+    if (!root) return undefined
+    if (stopNow === 'devices') {
+      const face = faceEl(picked.spot)
+      const scroller = face?.closest<HTMLElement>('.da-scroll')
+      if (face && scroller) revealIn(scroller, face)
+      return focusPickBox(document, '.zv-pick-card .zv-reply input')
+    }
+    const tile = root.querySelector<HTMLElement>(`.zv-device .zv-mark[data-ws="${CSS.escape(picked.spot.workspace)}"] .dm-tile`)
+    if (tile) {
+      const r = tile.getBoundingClientRect()
+      const box = root.getBoundingClientRect()
+      const top = box.top + TILE_REVEAL.top
+      const bottom = box.bottom - TILE_REVEAL.bottom
+      if (r.top < top) scrollBy(r.top - top)
+      else if (r.bottom > bottom) scrollBy(Math.min(r.bottom - bottom, r.top - top))
+    }
+    return undefined
+  }, [picked]) // eslint-disable-line react-hooks/exhaustive-deps
+  // A workspace card's px in the devices layer's units: the faces there as big as on the workspaces stop (DevicesAgents.tsx).
+  const agentK = useMemo(() => {
+    const grid = deviceOfModel({ ...frame, deviceDesk: false }, narrow)
+    const tileK = (deviceCam(grid, size.w, size.h, narrow).S * SWS * TILE.w) / TILE_DRAWN_W
+    return tileK / fitScale(layout.devicesBox, size.w, size.h)
+  }, [frame, narrow, size, layout.devicesBox])
+  /** Into another machine, in place (RemoteMachineView.tsx): at a workspace, or an agent in it. */
+  const enterMachine = (m: MachineView, workspace: { id: string; name: string } | null, agent: { id: string; name: string } | null = null): void => {
+    const enter = (): void => {
+      setWhy(null)
+      // Entered in place: its view opens from where its frame stands (remote-entry.ts).
+      const box = registry.current.get(`machinecard:${m.id}`)?.getBoundingClientRect()
+      remotePlace.enter({ id: m.id, name: m.name, os: m.os ?? null, ...(box ? { from: { x: box.left, y: box.top, w: box.width, h: box.height } } : {}) })
+      if (workspace) remotePlace.workspace(workspace)
+      if (workspace && agent) remotePlace.agent(agent)
+    }
+    if (m.online && m.detail !== 'listed' && canEnterMachines()) enter()
+    // Asked over the network: a view gone elsewhere meanwhile neither hears the answer nor is carried into the machine.
+    else void whyNot(m).then((words) => {
+      if (!whyShowsNow.current) return
+      if (words === null) enter()
+      else setWhy(words)
+    })
+  }
+  /** A picked agent's full view: on this machine its own, on another that machine's card. */
+  const openPicked = (spot: PickSpot): void => {
+    setPicked(null)
+    if (spot.machine === LOCAL_MACHINE) {
+      if (spot.workspace === model.frame.active) zoomStore.jumpTo('agent', spot.agent)
+      else void switchWorkspace(spot.workspace, 'agents', spot.agent, true)
+      return
+    }
+    const m = model.machines.find((one) => one.id === spot.machine)
+    const mark = m?.marks.find((one) => one.id === spot.workspace)
+    const agent = mark?.agents?.find((one) => one.id === spot.agent)
+    if (m && mark) enterMachine(m, { id: mark.id, name: mark.name }, agent ? { id: agent.id, name: agent.name } : null)
+  }
+  /** A face pressed at the devices stop: its card pops; the same face again is its full view. */
+  const pickFace = (spot: PickSpot): void => {
+    if (samePick(pickedNow.current?.spot ?? null, spot)) return openPicked(spot)
+    setPicked({ spot, keys: false })
+  }
+  /** What a tile's card shows when the keys stand on one of its agents (WorkspaceTile.tsx · TilePick). */
+  const tilePick = (id: string): TilePick =>
+    picked && stopNow === 'workspaces' && picked.spot.machine === LOCAL_MACHINE && picked.spot.workspace === id ? { agent: picked.spot.agent, keys: picked.keys } : null
+  const tilePicked = (id: string) => stable(`pick:${id}`, (agentId: string | null) =>
+    setPicked((now) => (agentId ? { spot: { machine: LOCAL_MACHINE, workspace: id, agent: agentId }, keys: false } : now?.spot.workspace === id ? null : now)))
+  /** The card the keys (or a press) popped at the devices stop: this machine's own card, or another machine's. */
+  const pickCard = (): React.ReactNode => {
+    if (!picked || stopNow !== 'devices') return null
+    const { spot } = picked
+    const anchor = faceEl(spot)
+    if (spot.machine === LOCAL_MACHINE) {
+      const mark = localMarks.find((one) => one.id === spot.workspace)
+      const agent = mark?.agents?.find((one) => one.id === spot.agent)
+      if (!mark || !agent) return null
+      const open = spot.workspace === model.frame.active
+      const items = open ? (attachIndex.get(agent.id) ?? []).flatMap((at) => itemViewOf(at.node, [agent.id]) ?? []) : mark.deck.filter((item) => item.owners.includes(agent.id))
+      return (
+        <ShelfCard
+          key={pickKey(spot)}
+          className="zv-pick-card"
+          agent={agent}
+          items={items}
+          anchor={anchor}
+          onOpen={() => openPicked(spot)}
+          onItem={(itemId) => {
+            setPicked(null)
+            if (!open) return void switchWorkspace(spot.workspace, 'items', itemId, true)
+            zoomStore.focusItem(itemId)
+            zoomStore.go(1, 'items')
+          }}
+          onOutside={pressedOutside}
+          onClose={clearPick}
+        />
+      )
+    }
+    const m = model.machines.find((one) => one.id === spot.machine)
+    const agent = m?.marks.find((one) => one.id === spot.workspace)?.agents?.find((one) => one.id === spot.agent)
+    if (!m || !agent) return null
+    return <RemotePickCard key={pickKey(spot)} machine={{ id: m.id, name: m.name, os: m.os ?? null }} workspace={spot.workspace} agent={agent} anchor={anchor} onOpen={() => openPicked(spot)} onOutside={pressedOutside} onClose={clearPick} />
+  }
   const perRowAt: PerRow | null =
     zoom.dir === 'agents' && Math.abs(zoom.v - 1) < 0.25 && model.agents.length > 0
       ? { what: 'agents', narrow, cols: crewCols ?? defaultCrewCols(narrow), onPick: setCrewCols }
@@ -851,43 +1001,37 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           stepBack('background')
         }}>
         <div className="zv-devices" ref={bind('devices')}>
-          {model.machines.filter((m) => !m.local).map((m) => {
-            const say = machineSays(m, { surface: machineSurface(), trusted: trust[0]?.trusted ?? null, platform: hostPlatform(), floor: scopeNeedsMachine(), block: cookrew().machineWhy?.(m.id) ?? null })
-            // Into another machine, in place (RemoteMachineView.tsx).
-            const open = (workspace: { id: string; name: string } | null): void => {
-              const enter = (): void => {
-                setWhy(null)
-                // Entered in place: its view opens from where its frame stands (remote-entry.ts).
-                const frame = registry.current.get(`machinecard:${m.id}`)?.getBoundingClientRect()
-                remotePlace.enter({ id: m.id, name: m.name, os: m.os ?? null, ...(frame ? { from: { x: frame.left, y: frame.top, w: frame.width, h: frame.height } } : {}) })
-                if (workspace) remotePlace.workspace(workspace)
-              }
-              if (m.online && m.detail !== 'listed' && canEnterMachines()) enter()
-              // Asked over the network: a view gone elsewhere meanwhile neither hears the answer nor is carried into the machine.
-              else void whyNot(m).then((words) => {
-                if (!whyShowsNow.current) return
-                if (words === null) enter()
-                else setWhy(words)
-              })
-            }
-            return (
-              <MachineFrame
-                key={m.id}
-                machine={m}
+          {others.map(({ m, say }) => (
+            <MachineFrame
+              key={m.id}
+              machine={m}
+              frame={frameOf}
+              agentK={agentK}
+              say={say}
+              caption={say ?? machineCaption(m)}
+              gauge={gauged.has(m.id) && say === null ? <MachineGaugeLine machineId={m.id} online={m.online} /> : null}
+              picked={picked && picked.spot.machine === m.id ? pickKey(picked.spot) : null}
+              onPick={stable('pick-face', pickFace)}
+              bind={bind}
+              onOpen={() => enterMachine(m, null)}
+              onOpenWorkspace={(id) => enterMachine(m, { id, name: m.marks.find((one) => one.id === id)?.name ?? id })}
+            />
+          ))}
+          <LocalMachine name={machine} detail={`${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}`} gauge={<MachineGaugeLine machineId="local" local />} bind={bind} onOpen={() => motion.go(-1)}>
+            {/* Its screen at the devices stop: its agents only; the painter hands it over to the tiles on the way in (zoom-frame.ts · AGENTS_ONLY). */}
+            <div className="zv-local-agents" ref={bind('localAgents')}>
+              <DevicesAgents
+                machine={LOCAL_MACHINE}
+                name={machine}
+                marks={localMarks}
                 frame={frameOf}
-                narrow={narrow}
-                wordK={words.markK}
-                titleK={words.titleK}
-                say={say}
-                caption={say ?? machineCaption(m)}
-                gauge={gauged.has(m.id) && say === null ? <MachineGaugeLine machineId={m.id} online={m.online} /> : null}
-                bind={bind}
-                onOpen={() => open(null)}
-                onOpenWorkspace={(id) => open({ id, name: m.marks.find((one) => one.id === id)?.name ?? id })}
+                k={agentK}
+                picked={picked && picked.spot.machine === LOCAL_MACHINE ? pickKey(picked.spot) : null}
+                onPick={stable('pick-face', pickFace)}
+                onOpenWorkspace={stable('open-local-ws', (id: string) => (id === model.frame.active ? motion.go(1, 'agents') : void switchWorkspace(id, 'agents')))}
               />
-            )
-          })}
-          <LocalMachine name={machine} detail={`${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}`} gauge={<MachineGaugeLine machineId="local" local />} bind={bind} onOpen={() => motion.go(-1)} />
+            </div>
+          </LocalMachine>
         </div>
         <div className="zv-device" ref={bind('device')} data-density={words.density} style={{ '--zv-k': words.markK.toFixed(3), '--zv-tile-top': `${Math.round(device.tile.top)}px`, '--zv-tile-h': `${Math.round(device.tile.h)}px` } as React.CSSProperties}>
           {/* Placed and sized by the painter (zoom-frame.ts · paintDeviceWords): on a phone it keeps one size as the device zooms. */}
@@ -896,9 +1040,9 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           </div>
           {/* In the grid's order, so Tab walks it as the eye does. The open tile's faces are the scene's, over it. */}
           {model.frame.workspaces.map((id) => {
-            if (id === model.frame.active) return <WorkspaceTile key={id} mark={model.openMark} open bind={bind} onOpen={stable('open-agents', (agentId?: string, full?: boolean) => { if (agentId && full) return zoomStore.jumpTo('agent', agentId); if (agentId) zoomStore.focusAgent(agentId); motion.go(1, 'agents') })} onOpenItems={stable('open-items', (itemId?: string, full?: boolean) => { if (itemId) zoomStore.focusItem(itemId); motion.go(itemId && full ? 1 : 0, 'items') })} />
+            if (id === model.frame.active) return <WorkspaceTile key={id} mark={model.openMark} open bind={bind} pick={tilePick(id)} onPick={tilePicked(id)} onOpen={stable('open-agents', (agentId?: string, full?: boolean) => { if (agentId && full) return zoomStore.jumpTo('agent', agentId); if (agentId) zoomStore.focusAgent(agentId); motion.go(1, 'agents') })} onOpenItems={stable('open-items', (itemId?: string, full?: boolean) => { if (itemId) zoomStore.focusItem(itemId); motion.go(itemId && full ? 1 : 0, 'items') })} />
             const m = markOf.get(id)
-            return m ? <WorkspaceTile key={id} mark={m} bind={bind} onOpen={stable(`mark:${id}`, (agentId?: string, full?: boolean) => void switchWorkspace(id, 'agents', agentId, full))} onOpenItems={stable(`mark-items:${id}`, (itemId?: string, full?: boolean) => void switchWorkspace(id, 'items', itemId, full))} /> : null
+            return m ? <WorkspaceTile key={id} mark={m} bind={bind} pick={tilePick(id)} onPick={tilePicked(id)} onOpen={stable(`mark:${id}`, (agentId?: string, full?: boolean) => void switchWorkspace(id, 'agents', agentId, full))} onOpenItems={stable(`mark-items:${id}`, (itemId?: string, full?: boolean) => void switchWorkspace(id, 'items', itemId, full))} /> : null
           })}
         </div>
         {/* The full view's sheet, UNDER the scene: the open card's parts travel over it to their places (full-poses.ts). */}
@@ -1039,6 +1183,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           onClose={closeShelfCard}
         />
       )}
+      {pickCard()}
       <RemoteMachineView />
       {error && <div role="alert" className="zv-error">{error}<button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
       {/* This machine's one proof, at the foot of the devices stop and outside the camera: inside it the

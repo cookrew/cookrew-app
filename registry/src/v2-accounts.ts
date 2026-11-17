@@ -202,6 +202,11 @@ export interface V2Session extends SessionAge {
   via?: 'console'
 }
 
+/** Did this write end a session or take a device off? Reference first: most writes touch neither array. */
+const lostSomething = (previous: V2Account, account: V2Account): boolean =>
+  (previous.sessions !== account.sessions && previous.sessions.some((s) => !account.sessions.some((n) => n.jti === s.jti))) ||
+  (previous.devices !== account.devices && previous.devices.some((d) => !account.devices.some((n) => n.id === d.id)))
+
 /** The ids a door must refuse once these sessions end: each jti and its sign-in. */
 const endedIds = (sessions: readonly V2Session[], kept: readonly V2Session[] = []): string[] => {
   const live = new Set(kept.map((s) => s.sitting ?? s.jti))
@@ -364,9 +369,17 @@ export class V2Accounts {
    */
   private desktopsChanged = 0
 
-  constructor(base: string, now: () => number = Date.now) {
+  /**
+   * Told when an account lost a session or a device: sign-out, "Not me", a
+   * password change, a recovery, a revocation, a sitting closed on the clock.
+   * What lives only as long as a sign-in (a push subscription) goes then.
+   */
+  private readonly ended: (account: V2Account) => void
+
+  constructor(base: string, now: () => number = Date.now, ended: (account: V2Account) => void = () => undefined) {
     mkdirSync(base, { recursive: true })
     this.now = now
+    this.ended = ended
     this.file = path.join(base, V2_FILE)
     if (existsSync(this.file)) this.load()
   }
@@ -446,7 +459,17 @@ export class V2Accounts {
     // arrays it did not touch, so an unchanged `desktops` is the same array.
     if (previous === null || previous.desktops !== account.desktops) this.trackDesktops(previous, account)
     this.save()
+    if (previous !== null && lostSomething(previous, account)) this.tellEnded(account)
     return account
+  }
+
+  /** Never in the way of the write that ended the session: what is left over is filtered again on every read. */
+  private tellEnded(account: V2Account): void {
+    try {
+      this.ended(account)
+    } catch {
+      // A store that could not be tidied now is tidied on its next read.
+    }
   }
 
   /** The index and the serial, for one account whose desktops moved. */
@@ -1219,6 +1242,8 @@ export class V2Accounts {
     if (!account) return { ok: false, reason: 'not_found' }
     const device = account.devices.find((d) => d.id === deviceId)
     if (!device) return { ok: false, reason: 'not_found' }
+    // Only a desktop files a desktop record: a phone, a browser or a watch that did would read as a Mac (review M1).
+    if (device.kind !== 'desktop') return { ok: false, reason: 'bad_desktop' }
     const name = typeof input.name === 'string' ? input.name.trim() : ''
     if (name.length === 0 || name.length > DEVICE_NAME_MAX) return { ok: false, reason: 'bad_desktop' }
     if (!Array.isArray(input.workspaces) || input.workspaces.length > WORKSPACES_MAX) {

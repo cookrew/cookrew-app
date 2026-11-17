@@ -213,3 +213,37 @@ describe('entering another machine', () => {
     expect(seat.deviceSeat()).toBe('workspace-on-a')
   })
 })
+
+describe('a pull of the canvas, across a change of seat', () => {
+  it('drops the answer for a seat already left and asks again under the seat now held', async () => {
+    const { api } = await consoleAt(A)
+    const seat = await import('../src/renderer/src/device-seat')
+    seat.takeSeat('playground')
+    const pulled = api.cookrew().getWorkspace()
+    await tick()
+    const first = to(BASE_A, '/api/workspace')
+    expect(first).toHaveLength(1)
+    expect(first[0].url).toContain('seat=playground')
+    // Another workspace is chosen while the pull is still on the relay.
+    seat.takeSeat('cookrew-dev')
+    first[0].answer(json({ name: 'Playground', nodes: [] }))
+    await tick()
+    await tick()
+    const again = to(BASE_A, '/api/workspace').slice(1)
+    expect(again).toHaveLength(1)
+    expect(again[0].url).toContain('seat=cookrew-dev')
+    again[0].answer(json({ name: 'Cookrew Dev', nodes: [] }))
+    expect((await pulled).name).toBe('Cookrew Dev')
+  })
+
+  it('keeps the answer when the seat held still', async () => {
+    const { api } = await consoleAt(A)
+    const seat = await import('../src/renderer/src/device-seat')
+    seat.takeSeat('cookrew-dev')
+    const pulled = api.cookrew().getWorkspace()
+    await tick()
+    to(BASE_A, '/api/workspace')[0].answer(json({ name: 'Cookrew Dev', nodes: [] }))
+    expect((await pulled).name).toBe('Cookrew Dev')
+    expect(to(BASE_A, '/api/workspace')).toHaveLength(1)
+  })
+})

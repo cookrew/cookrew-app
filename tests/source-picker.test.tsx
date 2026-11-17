@@ -6,7 +6,7 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { SourceSheet, type SourceSheetProps } from '../src/renderer/src/use/SourceSheet'
-import { firstTab, sheetBody, type SourceLoad } from '../src/renderer/src/use/source-sheet'
+import { autoStep, firstTab, sheetBody, type SourceLoad } from '../src/renderer/src/use/source-sheet'
 import type { RemoteState } from '../src/shared/remote-access'
 import { closeSourcePicker, currentSourceAsk, openSourcePicker } from '../src/renderer/src/use/source-picker-store'
 import { blockedSourceList, emptySourceList, readySourceList, type UseSource, type UseSourceList } from '../src/shared/use-sources'
@@ -83,6 +83,31 @@ describe('firstTab', () => {
     expect(firstTab(list)).toBe('windows')
     expect(firstTab({ ...list, windows: [] })).toBe('screens')
     expect(firstTab({ ...list, windows: [], screens: [] })).toBe('windows')
+  })
+})
+
+describe('autoStep', () => {
+  const locked: SourceLoad = { status: 'ready', list: blockedSourceList({ ...offState, id: 'locked' }) }
+
+  it('as the remote desktop, one screen opens without a tap', () => {
+    expect(autoStep(ready, true, 'away')).toEqual({ kind: 'pick', source: main })
+  })
+
+  it('waits for a tap when there is a choice, or it was not asked as the remote desktop', () => {
+    const two: SourceLoad = { status: 'ready', list: { ...list, screens: [main, { ...main, id: 'screen:2', title: 'Display 2' }] } }
+    expect(autoStep(two, true, 'away')).toBeNull()
+    expect(autoStep(ready, false, 'away')).toBeNull()
+    expect(autoStep({ status: 'loading' }, true, 'away')).toBeNull()
+  })
+
+  it('a locked Mac that can be unlocked from here opens the unlock sheet at once', () => {
+    expect(autoStep(locked, true, 'away')).toMatchObject({ kind: 'act', action: { id: 'unlock' } })
+    expect(autoStep(locked, true, 'here')).toBeNull()
+    expect(autoStep(denied, true, 'away')).toBeNull()
+  })
+
+  it('an unpaired browser is not sent into an unlock sheet it cannot finish', () => {
+    expect(autoStep(locked, true, 'away', 'unpaired')).toBeNull()
   })
 })
 

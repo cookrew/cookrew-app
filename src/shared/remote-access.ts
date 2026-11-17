@@ -59,7 +59,7 @@ export interface RemoteState {
   readonly waiting: boolean
 }
 
-export type RemoteActionId = 'unlock' | 'open-screen-settings' | 'open-accessibility-settings' | 'check-again' | 'restart' | 'wake-display' | 'show-the-screen' | 'pick-another'
+export type RemoteActionId = 'unlock' | 'set-up-unlock' | 'open-screen-settings' | 'open-accessibility-settings' | 'check-again' | 'restart' | 'wake-display' | 'show-the-screen' | 'pick-another'
 
 export interface RemoteConfirm {
   readonly title: string
@@ -219,6 +219,18 @@ export function restartConfirm(build: RemoteBuild, where: RemoteWhere): RemoteCo
 
 const CHECK: RemoteAction = { id: 'check-again', label: 'Check again' }
 
+/**
+ * Whether this browser can send a Mac its password: a page the Mac served
+ * itself, or one holding the Mac's connect code (shared/remote-unlock.ts).
+ * One that cannot is offered the set-up instead (shared/unlock-grant.ts), which
+ * works with the Mac locked too, if a device that can already unlock it says yes.
+ */
+export type UnlockReach = 'ready' | 'unpaired'
+
+export const UNLOCK_NOT_SET_UP = 'This browser cannot unlock this Mac yet if it locks.'
+
+export const SET_UP_UNLOCK: RemoteAction = { id: 'set-up-unlock', label: 'Set up unlock' }
+
 const settingsJump = (id: RemoteActionId, where: RemoteWhere): RemoteAction => ({
   id,
   label: where === 'here' ? 'Open System Settings' : 'Open it on the Mac for later'
@@ -256,7 +268,7 @@ function restartView(state: RemoteState, where: RemoteWhere): Omit<RemoteView, '
     : { title, sentence: byHand, actions: [CHECK], needsYouThere: false, note: null }
 }
 
-function stateView(state: RemoteState, where: RemoteWhere, now: number): Omit<RemoteView, 'next'> {
+function stateView(state: RemoteState, where: RemoteWhere, now: number, reach: UnlockReach): Omit<RemoteView, 'next'> {
   const seen = state.lastSeenAt === null ? '' : ` (${lastSeenWords(state.lastSeenAt, now)})`
   const plain = (title: string, sentence: string, needsYouThere = false, actions: readonly RemoteAction[] = [CHECK]): Omit<RemoteView, 'next'> => ({
     title,
@@ -271,6 +283,14 @@ function stateView(state: RemoteState, where: RemoteWhere, now: number): Omit<Re
       return plain('Ready', 'The screen of this Mac can be shared.', false, [])
     case 'locked':
       if (where === 'away' && state.platform === 'darwin') {
+        if (reach === 'unpaired') {
+          return plain(
+            'This Mac is locked',
+            `This browser is not set up to unlock it yet. Set it up from here: a device that can already unlock this Mac approves it, or someone at the Mac does${seen}.`,
+            false,
+            [SET_UP_UNLOCK, CHECK]
+          )
+        }
         return plain('This Mac is locked', `Unlock it from here with its password, and the picture comes back by itself${seen}.`, false, [{ id: 'unlock', label: 'Unlock' }, CHECK])
       }
       return plain('This Mac is locked', `It needs someone at the Mac to unlock it, and the picture comes back by itself${seen}.`, true)
@@ -301,8 +321,8 @@ function stateView(state: RemoteState, where: RemoteWhere, now: number): Omit<Re
 }
 
 /** The state as this reader should read it. `now` is for tests; a view is drawn at the time it is drawn. */
-export function remoteView(state: RemoteState, where: RemoteWhere, now: number = Date.now()): RemoteView {
-  const view = stateView(state, where, now)
+export function remoteView(state: RemoteState, where: RemoteWhere, now: number = Date.now(), reach: UnlockReach = 'ready'): RemoteView {
+  const view = stateView(state, where, now, reach)
   const word = (sentence: string): string => machineCopy(sentence, state.platform)
   const next = state.then ? (NEXT[state.then] ?? null) : null
   return {

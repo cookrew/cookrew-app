@@ -188,10 +188,11 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
  * the words reaches. Its remote desktop is the view's toolbar's (ViewTools.tsx;
  * owner 2026-11-12: the button under the name took too much room).
  */
-export function LocalMachine({ name, detail, bind, onOpen, gauge = null }: { name: string; detail: string; bind: Bind; onOpen: () => void; gauge?: React.ReactNode }): React.JSX.Element {
+export function LocalMachine({ name, detail, bind, onOpen, gauge = null, children = null }: { name: string; detail: string; bind: Bind; onOpen: () => void; gauge?: React.ReactNode; /** Its screen at the devices stop: its agents only (DevicesAgents.tsx). */ children?: React.ReactNode }): React.JSX.Element {
   return (
     <div className="zv-machine" ref={bind('machine')} onClick={onOpen}>
       <button type="button" className="zv-machine-open" aria-label={`Open ${name}`} />
+      {children}
       <span className="zv-machine-deck" />
       <span className="zv-machine-label">
         <b>{name}</b>

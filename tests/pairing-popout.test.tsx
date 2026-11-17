@@ -41,6 +41,16 @@ const stubBridge = (handout: unknown): void => {
 }
 
 describe('the popout view model', () => {
+  it('on a Mac, says the scan is also what lets that browser unlock it later', () => {
+    const held = (globalThis as { cookrewPlatform?: unknown }).cookrewPlatform
+    ;(globalThis as { cookrewPlatform?: unknown }).cookrewPlatform = 'darwin'
+    try {
+      expect(pairingPopoutView(RELAY).sentence).toBe(PAIRING_COPY.CONSOLE_UNLOCK)
+    } finally {
+      ;(globalThis as { cookrewPlatform?: unknown }).cookrewPlatform = held
+    }
+  })
+
   it('is this machine’s address on the console, verbatim, when it has an account: an address and no key', () => {
     const view = pairingPopoutView(RELAY)
     expect(view.mode).toBe('console')

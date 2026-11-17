@@ -5,13 +5,20 @@ import { Counts } from './page-parts'
 import { byStatus } from './ink-status'
 import type { AgentView, ItemView, MarkView } from './zoom-model'
 import { sameProps } from './same-props'
+import { focusPickBox } from './use-agent-keys'
 import './workspace-tile.css'
 
 const WorkspaceTileCard = lazy(() => import('./WorkspaceTileCard').then((module) => ({ default: module.WorkspaceTileCard })))
 const WorkspaceTileShot = lazy(() => import('./WorkspaceTileShot').then((module) => ({ default: module.WorkspaceTileShot })))
 
 type Bind = (key: string) => (el: HTMLElement | null) => void
-type TileProps = { mark: MarkView; open?: boolean; bind: Bind; onOpen: (agentId?: string, full?: boolean) => void; onOpenItems?: (itemId?: string, full?: boolean) => void }
+/**
+ * The agent the keys stand on, when it is in this tile (agent-keys.ts): its card comes up as a click on
+ * its face brings it, and `keys` puts the caret in its reply box, so the next words go to it.
+ */
+export type TilePick = { readonly agent: string; readonly keys: boolean } | null
+/** `onPick`: a face pressed here (its agent), or null when the card the keys stood on went back by itself. */
+type TileProps = { mark: MarkView; open?: boolean; bind: Bind; onOpen: (agentId?: string, full?: boolean) => void; onOpenItems?: (itemId?: string, full?: boolean) => void; pick?: TilePick; onPick?: (agentId: string | null) => void }
 type Mode = 'bag' | 'agent'
 /** How long an opened fan stays once the pointer leaves or the finger lifts (owner, 2026-11-17: 1 s). */
 const LINGER_MS = 1000
@@ -165,7 +172,7 @@ export const sameTile = (a: TileProps, b: TileProps): boolean =>
   sameDeck(a.mark.deck, b.mark.deck) && JSON.stringify(a.mark.agents) === JSON.stringify(b.mark.agents) &&
   sameProps({ ...a, mark: { ...a.mark, deck: [], agents: undefined } }, { ...b, mark: { ...b.mark, deck: [], agents: undefined } })
 
-export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, bind, onOpen, onOpenItems }: TileProps): React.JSX.Element {
+export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, bind, onOpen, onOpenItems, pick = null, onPick }: TileProps): React.JSX.Element {
   // In the order the owner reads a crew: who needs them first (ink-status.ts · byStatus).
   const agents = useMemo(() => byStatus(mark.agents ?? []), [mark.agents])
   const [mode, setMode] = useState<Mode>('bag')
@@ -181,7 +188,8 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
   const total = (mark.browsers ?? 0) + (mark.notes ?? 0)
   const items = mark.deck
   const artifacts = useSwipe(items.length, 220)
-  const row = useSwipe(Math.max(agents.length, mark.presets.length), GROUP_STEP, () => setMode('agent'))
+  // A swipe along the faces shows another agent than the keys stood on: they let go of it (release).
+  const row = useSwipe(Math.max(agents.length, mark.presets.length), GROUP_STEP, () => { setMode('agent'); release() })
   const at = clamp(Math.round(row.pos), 0, Math.max(0, agents.length - 1))
   const selected = agents[at] ?? null
   const clearTimer = (timer: { current: number | null }): void => { if (timer.current !== null) window.clearTimeout(timer.current); timer.current = null }
@@ -192,24 +200,57 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
     if (event.pointerType !== 'mouse' || mode !== 'agent') return
     const card = event.currentTarget.closest('.dm-tile')?.querySelector('.dm-ov-layer') ?? null
     clearTimer(cardLinger)
-    cardLinger.current = window.setTimeout(() => { cardLinger.current = null; if (!card?.contains(document.activeElement)) setMode('bag') }, LINGER_MS)
+    cardLinger.current = window.setTimeout(() => {
+      cardLinger.current = null
+      if (card?.contains(document.activeElement)) return
+      setMode('bag')
+      // The card the keys stood on went back: they start again from it, and Esc steps out.
+      release()
+    }, LINGER_MS)
   }
-  const selectAgent = (agent: AgentView): void => { clearTimer(linger); setOpenFan(false); row.go(Math.max(0, agents.findIndex((entry) => entry.id === agent.id))); setMode('agent') }
+  const showAgent = (agent: AgentView): void => { clearTimer(linger); clearTimer(cardLinger); setOpenFan(false); row.go(Math.max(0, agents.findIndex((entry) => entry.id === agent.id))); setMode('agent') }
+  const selectAgent = (agent: AgentView): void => { showAgent(agent); onPick?.(agent.id) }
+  const tile = useRef<HTMLElement>(null)
+  /** Read by the card's linger timer: whether the keys stand here, and who to tell. */
+  const held = useRef(false)
+  const onPickNow = useRef(onPick)
+  /** This tile let go of the keys' agent itself (its card went, or shows another): the page forgets it, the tile stays as it is. */
+  const release = (): void => {
+    if (!held.current) return
+    wasPicked.current = false
+    onPickNow.current?.(null)
+  }
   const front = items[clamp(artifacts.index, 0, Math.max(0, items.length - 1))] ?? null
   const tied = front ? agents.filter((agent) => front.owners.includes(agent.id)) : []
   const cardItems = selected ? items.filter((item) => item.owners.includes(selected.id)) : []
-  const showItem = (id: string): void => { const index = items.findIndex((item) => item.id === id); if (index >= 0) artifacts.go(index); setMode('bag'); showFan(pointer.current) }
+  const showItem = (id: string): void => { const index = items.findIndex((item) => item.id === id); if (index >= 0) artifacts.go(index); setMode('bag'); release(); showFan(pointer.current) }
   const known = mark.browsers !== null && mark.notes !== null
   const itemsDoor = known && total > 0 && onOpenItems
 
   useEffect(() => { if (openFan && openedBy.current === 'touch' && !touching.current) closeSoon() }, [artifacts.index, openFan])
   useEffect(() => () => { clearTimer(linger); clearTimer(cardLinger) }, [])
   useEffect(() => { setMode('bag'); setOpenFan(false); row.go(0); clearTimer(linger) }, [mark.id])
+  // THE KEYS STAND ON AN AGENT HERE (agent-keys.ts): its card comes up, and goes when they move on or let go.
+  const picked = pick ? agents.find((agent) => agent.id === pick.agent) ?? null : null
+  const wasPicked = useRef(false)
+  held.current = picked !== null
+  onPickNow.current = onPick
+  useEffect(() => {
+    if (!picked) {
+      if (wasPicked.current) setMode('bag')
+      wasPicked.current = false
+      return
+    }
+    wasPicked.current = true
+    showAgent(picked)
+    // The caret in its reply box, once the card (a lazy chunk) is there.
+    if (pick?.keys && tile.current) return focusPickBox(tile.current, '.dm-ov-layer.on .zv-reply input')
+  }, [picked?.id, pick?.keys]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div ref={bind(open ? 'openMark' : `mark:${mark.id}`)} className="zv-mark" data-open={open || undefined} data-waiting={mark.waitingCount > 0 || undefined}>
+    <div ref={bind(open ? 'openMark' : `mark:${mark.id}`)} className="zv-mark" data-ws={mark.id} data-open={open || undefined} data-waiting={mark.waitingCount > 0 || undefined}>
       <div className="zv-tile" />
-      <section className={`dm-tile ${mode}${openFan ? ' peeking' : ''}`} data-mode={mode} data-front={artifacts.index} data-open={openFan || undefined} onPointerDownCapture={(event) => { pointer.current = event.pointerType === 'mouse' ? 'mouse' : 'touch' }}>
+      <section ref={tile} className={`dm-tile ${mode}${openFan ? ' peeking' : ''}`} data-mode={mode} data-front={artifacts.index} data-open={openFan || undefined} onPointerDownCapture={(event) => { pointer.current = event.pointerType === 'mouse' ? 'mouse' : 'touch' }}>
         <header onClick={() => onOpen(mode === 'agent' ? selected?.id : undefined)}><h3>{mark.name}</h3>{mark.waitingCount > 0 && <i className="dm-wait">{mark.waitingCount}</i>}</header>
         <div className={`dm-row${row.dragging ? ' dragging' : ''}`} {...row.handlers} onPointerEnter={holdCard} onPointerLeave={leaveCard} onClick={() => setMode('agent')}>
           <div className="dm-crew">
@@ -218,7 +259,7 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
               const distance = index - row.pos
               if (distance < -1.5 || distance > 14) return null
               const agent = agents[index]
-              return <button key={agent?.id ?? `${mark.id}:${index}`} type="button" className="dm-head" style={{ transform: `translate(${(12 + distance * GROUP_STEP + (mode === 'agent' ? Math.max(0, Math.min(1, distance)) * 176 : 0)).toFixed(1)}px, -50%)`, opacity: groupFade(distance) }} aria-label={agent?.name ?? `Agent ${index + 1}`} onClick={(event) => { event.stopPropagation(); if (agent) selectAgent(agent); else onOpen() }}><GroupFace id={agent?.id ?? `${mark.id}:${index}`} preset={agent?.preset ?? preset} status={agent?.status} /></button>
+              return <button key={agent?.id ?? `${mark.id}:${index}`} type="button" className="dm-head" aria-current={mode === 'agent' && picked !== null && agent?.id === picked.id ? 'true' : undefined} style={{ transform: `translate(${(12 + distance * GROUP_STEP + (mode === 'agent' ? Math.max(0, Math.min(1, distance)) * 176 : 0)).toFixed(1)}px, -50%)`, opacity: groupFade(distance) }} aria-label={agent?.name ?? `Agent ${index + 1}`} onClick={(event) => { event.stopPropagation(); if (agent) selectAgent(agent); else onOpen() }}><GroupFace id={agent?.id ?? `${mark.id}:${index}`} preset={agent?.preset ?? preset} status={agent?.status} /></button>
             })}
             <span className="dm-count agents"><GroupSeal count={mark.presets.length} /></span>
           </div>

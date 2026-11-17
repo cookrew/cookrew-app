@@ -53,6 +53,7 @@ import type { BoardRow, BoardSummary } from "../../shared/board";
 import type { VersionPinRecord } from "../../shared/version-pin";
 import type { FleetEvent } from "../../shared/fleet";
 import type { UnlockAnswer as MacUnlockAnswer, UnlockBegin } from "../../shared/remote-unlock";
+import type { GrantAsked, GrantDone, GrantList, GrantRefusal, GrantStatus } from "../../shared/unlock-grant";
 import type { AccountMachines } from "../../shared/zoom-fleet";
 import type { RemoteMachineAnswer } from "../../shared/remote-machine-calls";
 import type { MachineBlock } from "./relay-machine-call";
@@ -446,6 +447,15 @@ export interface CookrewApi {
   /** A phone's way to a locked Mac (use/unlock-flow.ts). The desktop has neither. */
   remoteUnlockBegin?: () => Promise<UnlockBegin>;
   remoteUnlock?: (sealed: string) => Promise<MacUnlockAnswer>;
+  /** Setting up unlock from this device (use/unlock-grant-flow.ts). The desktop has none: it is the Mac. */
+  unlockGrantAsk?: (commit: string) => Promise<GrantAsked | GrantRefusal>;
+  unlockGrantReveal?: (id: string, key: string, nonce: string) => Promise<GrantDone | GrantRefusal>;
+  unlockGrantStatus?: (id: string) => Promise<GrantStatus | GrantRefusal>;
+  /** Only answered on a page the Mac served itself; a relayed page asks inside its sealed session. */
+  unlockGrantPending?: () => Promise<GrantList | GrantRefusal>;
+  unlockGrantDecide?: (id: string, allow: boolean) => Promise<GrantDone | GrantRefusal>;
+  /** How many devices wait to be allowed to unlock this Mac. */
+  onUnlockGrants?: (cb: (waiting: number) => void) => () => void;
   /** The machine switch. The Mac's own window only: there is no route, so a phone has no such method. */
   setRemoteSwitch?: (on: boolean) => Promise<RemoteAnswer>;
   stopRemote?: () => Promise<RemoteAnswer>;
@@ -895,7 +905,7 @@ export interface CookrewApi {
   /** One code for a watch anywhere: the account's join code, armed on this Mac as the claim too. */
   watchInvite?: (current: string) => Promise<WatchInvite>;
   watchForget?: () => Promise<unknown>;
-  /** ⋯ → Phone app: a phone's join code and the link its QR holds, under the account's step-up. Absent in the demo. */
+  /** A phone's join code and the link its QR holds, under the account's step-up. No menu offers it until the phone app ships. Absent in the demo. */
   phoneInvite?: (current: string) => Promise<PhoneInvite>;
   /** Phones that joined with a code this Mac showed, waiting for its Keep (owner 2026-11-17). */
   phonePending?: () => Promise<PhonePendingResult>;

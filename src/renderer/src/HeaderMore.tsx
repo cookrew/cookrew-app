@@ -25,7 +25,6 @@ import { LaunchSettingsRow, LaunchSettingsSheet } from './LaunchSettingsSheet'
 import { WatchPairRow } from './WatchPairRow'
 import { RemoteSwitchRow } from './use/RemoteSwitch'
 import { WatchPairSheet } from './WatchPairSheet'
-import { PhoneAppSheet } from './PhoneAppSheet'
 import { cookrew, isRemoteMode } from './api'
 import { accountPageOf, readConsoleConfig } from './console/console-config'
 import type { RouteStatus } from '../../shared/route'
@@ -60,7 +59,6 @@ export function HeaderMore({
 }: HeaderMoreProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [pairingWatch, setPairingWatch] = useState(false)
-  const [phoneApp, setPhoneApp] = useState(false)
   const [launchSheet, setLaunchSheet] = useState(false)
   const [skinSheet, setSkinSheet] = useState(false)
   const closeSkinSheet = useCallback(() => setSkinSheet(false), [])
@@ -235,20 +233,6 @@ export function HeaderMore({
               setPairingWatch(true)
             }}
           />
-          {cookrew().phoneInvite && (
-            <button
-              type="button"
-              className="cr-more-item"
-              title="A QR for the Cookrew phone app: it joins your account and reaches every machine on it"
-              onClick={() => {
-                close()
-                setPhoneApp(true)
-              }}
-            >
-              <CrIcon name="mobile" />
-              <span className="cr-more-label">Phone app…</span>
-            </button>
-          )}
           <RemoteSwitchRow />
           {offerFullscreen && (
             <button
@@ -278,7 +262,6 @@ export function HeaderMore({
       )}
     </div>
     {pairingWatch && <WatchPairSheet onClose={() => setPairingWatch(false)} />}
-    {phoneApp && <PhoneAppSheet onClose={() => setPhoneApp(false)} />}
     {launchSheet && <LaunchSettingsSheet onClose={closeLaunchSheet} />}
     {skinSheet && <SkinSheet onClose={closeSkinSheet} />}
     </>

@@ -111,6 +111,11 @@ describe('feedPromptBuffer', () => {
     expect(fed.buffer).toBe('fix it')
   })
 
+  it('strips terminal query replies that carry intermediate bytes', () => {
+    const fed = feedPromptBuffer('', '\x1b[?1016;2$yfix\x1b[?2026;2$y it\x1b[>0;276;0c\x1b[2 q')
+    expect(fed.buffer).toBe('fix it')
+  })
+
   it('splits multiple submissions in one chunk', () => {
     const fed = feedPromptBuffer('', 'one\rtwo\r')
     expect(fed.submitted).toEqual(['one', 'two'])

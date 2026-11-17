@@ -226,6 +226,7 @@ import { createWaitingLatch } from './waiting-latch'
 import { createNotifier, type MomentNote, type ShownNote } from './notifier'
 import { createMomentTracker } from './hitl-moments'
 import { readNotifyPref, writeNotifyPref } from './notify-pref'
+import { createPhonePush, type PushSubscriptionKeys } from './phone-push'
 import { LazyTerminalAttachments } from './lazy-terminal'
 import { planWorkspaceSwitch } from './workspace-switch'
 import { SwitchRunner } from './switch-runner'
@@ -267,6 +268,7 @@ import { linuxHandFor } from './linux-input'
 import { createRemoteDesk, remoteGate } from './remote-desk'
 import { createUpdateCheck } from './update-check'
 import { createUnlockDoor, loadUnlockKey, unlockMissesFile } from './remote-unlock'
+import { createUnlockGrantDoor } from './unlock-grant'
 import type { SealKeyPair } from '../shared/relay-seal'
 import { fingerprintOfDigest } from '../shared/key-fingerprint'
 import { electronUpdateInstaller } from './update-install'
@@ -3068,13 +3070,13 @@ const moments = createMomentTracker()
 function noteMoments(activity: { terminalId: string; phase: TurnPhase; waitSeq?: number; dispatchId?: string | null }): void {
   try {
     const waiting = noteWaiting(activity.terminalId, activity.phase, activity.waitSeq)
-    if (waiting) notifier.notify(waiting)
+    if (waiting) tellOwner(waiting)
     const dispatched = Boolean(activity.dispatchId) || turns.hasArmedDispatch(activity.terminalId)
     const moment = moments.observe(activity.terminalId, activity.phase, dispatched)
     if (moment === 'settled') notifier.settle(activity.terminalId)
     if (moment === 'reply') {
       const reply = agentMoment(activity.terminalId, 'reply')
-      if (reply) notifier.notify(reply)
+      if (reply) tellOwner(reply)
     }
   } catch (error) {
     console.error('A notification moment failed:', error)
@@ -3119,6 +3121,67 @@ const notifier = createNotifier({
   served: (workspaceId) => isServedWorkspace(workspaceId),
   now: Date.now
 })
+
+/**
+ * THE ACCOUNT'S PHONES (phone-push.ts): the same two moments, encrypted here
+ * and forwarded by the registry. The owner ruled (11-16) the phone buzzes even
+ * while the desk is in use, so focus never quiets it; a burst folds as on the
+ * desktop, and a quiet spell starts the count again. A desktop signed out of
+ * an account has no phone to tell.
+ */
+const phonePush = createPhonePush({
+  subscriptions: async () => {
+    const answer = await accounts.authedResponse('/v2/me/push/subscriptions')
+    if (!answer.ok) return { ok: false }
+    if (answer.response.status === 404) return { ok: false, off: true }
+    if (!answer.response.ok) return { ok: false }
+    const list = (await answer.response.json()) as unknown
+    return { ok: true, list: Array.isArray(list) ? list.filter(isPushKeys) : [] }
+  },
+  send: async (request) => {
+    const answer = await accounts.authedResponse('/v2/me/push/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(request)
+    })
+    if (!answer.ok) return 'failed'
+    if (answer.response.status === 410) return 'gone'
+    return answer.response.ok ? 'sent' : 'failed'
+  },
+  now: Date.now
+})
+function isPushKeys(value: unknown): value is PushSubscriptionKeys {
+  const v = value as Partial<PushSubscriptionKeys> | null
+  return typeof v?.id === 'string' && typeof v.p256dh === 'string' && typeof v.auth === 'string'
+}
+const phoneNotifier = createNotifier({
+  show: (note) => {
+    const machineId = accounts.account()?.deviceId
+    if (machineId) {
+      void phonePush.send(
+        { v: 1, title: note.title, body: note.body, tag: note.key, machineId, workspaceId: note.workspaceId, agentId: note.agentId },
+        note.urgent ? 'high' : 'normal'
+      )
+    }
+    // A push cannot be taken back from a phone; its tag replaces it there.
+    return { close: () => undefined }
+  },
+  focused: () => false,
+  enabled: () => accounts.account() !== null,
+  served: (workspaceId) => isServedWorkspace(workspaceId),
+  now: Date.now
+})
+/** A phone's burst ends after this long with nothing to say. */
+const PHONE_QUIET_MS = 5 * 60_000
+let phoneToldAt = Number.NEGATIVE_INFINITY
+/** One moment to every surface that tells the owner: this desktop, and the account's phones. */
+function tellOwner(moment: MomentNote): void {
+  notifier.notify(moment)
+  const now = Date.now()
+  if (now - phoneToldAt > PHONE_QUIET_MS) phoneNotifier.clear()
+  phoneToldAt = now
+  phoneNotifier.notify(moment)
+}
 events.on('event', (e) => mainWindow?.webContents.send('event:new', e))
 cableSignals.on((signal) => mainWindow?.webContents.send('cable:signal', signal))
 let mainWindow: BrowserWindow | null = null
@@ -7134,6 +7197,41 @@ function viewerWho(credential: string | null): ViewerWho {
   if (id === null) return { key: 'root', name: 'A paired device', here: false }
   return { key: `device:${id}`, name: admittedDevices.list().find((device) => device.deviceId === id)?.name ?? 'A paired phone', here: false }
 }
+const unlockGrantBus = new EventEmitter()
+/**
+ * A NEW DEVICE ASKS TO UNLOCK THIS MAC (unlock-grant.ts). The words are in a
+ * system dialog, and a yes takes a finger on Touch ID, which nothing pressing
+ * the window can give. With no sensor the dialog is all there is, so it is not
+ * taken while someone away, or an agent, is driving this Mac.
+ */
+async function confirmUnlockGrant(ask: { name: string; words: readonly string[]; signal: AbortSignal }): Promise<boolean> {
+  if (process.platform === 'darwin') app.focus({ steal: true })
+  const answer = await dialog.showMessageBox({
+    type: 'question',
+    message: `Let ${ask.name} unlock this Mac?`,
+    detail: `Allow only if that device shows exactly these words:\n\n${ask.words.join('   ')}\n\nIt can then unlock this Mac with its password, from any network. You can forget it in Devices.`,
+    buttons: ['Allow', 'Don’t allow'],
+    defaultId: 1,
+    cancelId: 1,
+    signal: ask.signal
+  })
+  if (answer.response !== 0 || ask.signal.aborted) return false
+  if (systemPreferences.canPromptTouchID()) {
+    return systemPreferences.promptTouchID(`allow ${ask.name} to unlock this Mac`).then(
+      () => !ask.signal.aborted,
+      () => false
+    )
+  }
+  return !remoteDesk.hostView().rows.some((row) => row.mode === 'controlling')
+}
+const unlockGrants = createUnlockGrantDoor({
+  refusal: () => (process.platform === 'darwin' ? null : 'Only a Mac can be unlocked from another device.'),
+  code: () => connectCodes.encoded(),
+  unlockKey: () => unlockKey().publicKey,
+  confirm: confirmUnlockGrant,
+  record: (outcome, who) => store.recordEvent('remote.unlock-grant', 'machine', 'this Mac', `${who.name}: ${outcome}`),
+  changed: () => unlockGrantBus.emit('changed')
+})
 const USE_WINDOWS_FILE = path.join(homedir(), '.cookrew', 'use-windows.json')
 const useInstances = createUseInstances({
   captureDir: path.join(app.getPath('userData'), 'use-capture'),
@@ -8194,6 +8292,8 @@ app.whenReady().then(() => {
     build: { id: () => buildId, bus: buildBus },
     // The account's skin: the phone wears it and may pick another (skin-store.ts).
     skin: skins,
+    // A new device sets up unlock; one that can already unlock approves it.
+    unlockGrants: { door: unlockGrants, who: viewerWho, bus: unlockGrantBus },
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
     // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only

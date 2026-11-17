@@ -39,6 +39,14 @@ describe('RemotePanel', () => {
     expect(panel(state('locked', { then: 'needs-screen-recording' }), 'away')).toContain('Screen Recording is off too')
   })
 
+  it('a locked Mac gives an unpaired browser no Unlock that cannot finish, and says what to do', () => {
+    const html = renderToStaticMarkup(<RemotePanel state={state('locked')} where="away" reach="unpaired" busy={false} note={null} onAct={() => undefined} />)
+    expect(html).not.toContain('>Unlock<')
+    expect(html).toContain('not set up to unlock it yet')
+    expect(html).toContain('>Set up unlock<')
+    expect(panel(state('locked'), 'away')).toContain('>Unlock<')
+  })
+
   it('says what the last action did', () => {
     expect(panel(state('needs-screen-recording'), 'here', 'Turn on Cookrew, then Check again.')).toContain('Turn on Cookrew, then Check again.')
   })
@@ -102,6 +110,22 @@ describe('RemoteBarView', () => {
     const html = bar(base)
     expect(html).toContain('View only')
     expect(html).toContain('Take control')
+    expect(html).not.toContain('cannot unlock')
+  })
+
+  it('an unpaired browser is offered the set-up while the Mac is open, and only where it would unlock', () => {
+    const offered = bar(base, 'away', { reach: 'unpaired', onSetUpUnlock: () => undefined })
+    expect(offered).toContain('cannot unlock this Mac yet')
+    expect(offered).toContain('>Set up<')
+    expect(bar(base, 'here', { reach: 'unpaired' })).not.toContain('cannot unlock')
+    expect(bar({ ...base, machine: 'linux' }, 'away', { reach: 'unpaired' })).not.toContain('cannot unlock')
+    expect(bar({ ...base, switchOn: false }, 'away', { reach: 'unpaired' })).not.toContain('cannot unlock')
+  })
+
+  it('the pill, which has no hint line, still offers the set-up', () => {
+    const pill = { place: 'pill' as const, rect: { left: 0, top: 0, width: 64, height: 400 } }
+    expect(bar(base, 'away', { reach: 'unpaired', onSetUpUnlock: () => undefined, band: pill })).toContain('aria-label="Set up unlock"')
+    expect(bar(base, 'away', { reach: 'ready', onSetUpUnlock: () => undefined, band: pill })).not.toContain('Set up unlock')
   })
 
   it('no Take control when the machine switch is off, and it says only the Mac can change that', () => {

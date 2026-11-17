@@ -138,6 +138,34 @@
   pointer-events: none;
 }
 
+/* A face from another machine (BarRemote.tsx): the seal's dashed ring, and the machine's initial. */
+.zv-stops .zv-group button.zv-gf.remote {
+  outline: 1.5px dashed var(--zv-seal);
+  outline-offset: 1px;
+}
+
+.zv-gf-mc {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  display: grid;
+  place-items: center;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 2px;
+  border-radius: 6px;
+  background: var(--zv-seal);
+  color: var(--zv-paper);
+  box-shadow: 0 0 0 1.5px var(--zv-paper);
+  font: 700 8px/1 ui-monospace, Menlo, monospace;
+  pointer-events: none;
+}
+
+.zv-away-card.remote .zv-bar-where,
+.zv-away-card.remote .zv-away-open {
+  color: var(--zv-seal);
+}
+
 /* Another workspace's card: read-only, where it is, and the way there (BarCards.tsx · BarAwayCard). */
 .zv-away-card {
   width: min(280px, calc(100vw - 16px));

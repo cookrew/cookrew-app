@@ -11,13 +11,19 @@
 //
 // It names the suites it runs, so it cannot quietly grow into a whole-suite run.
 import { defineConfig } from 'vitest/config'
+import { testWorkers, WORKER_GUARD, yieldToAgents } from './scripts/heavy-slot.mjs'
 
 const ROOT = new URL('.', import.meta.url).pathname
+yieldToAgents()
 
 export default defineConfig({
   root: ROOT,
   esbuild: { jsx: 'automatic' },
   test: {
+    minWorkers: 1,
+    maxWorkers: testWorkers(),
+    setupFiles: WORKER_GUARD.setupFiles,
+    poolOptions: { forks: { execArgv: WORKER_GUARD.execArgv } },
     include: ['tests/zoom-*.test.ts', 'tests/zoom-*.test.tsx', 'tests/agent-pets.test.ts', 'tests/pet-morph.test.ts', 'tests/header-route.test.tsx', 'tests/night-scheme.test.ts', 'tests/header-layer.test.ts', 'tests/levels-removed.test.ts', 'tests/pet-dock.test.ts', 'tests/pet-strip-row.test.ts', 'tests/phone-header-bar.test.ts', 'tests/header-dial-gives.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', '**/out/**']
   }

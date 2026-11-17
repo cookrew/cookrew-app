@@ -144,6 +144,16 @@
   font-size: 11.5px;
 }
 
+.rp-bar-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .rp-bar-error {
   color: #ffb4a2;
   font-size: 11.5px;
@@ -444,6 +454,19 @@
   margin: 8px 0;
   padding: 10px;
   font-size: 16px; /* Under 16 px an iPhone zooms the page on focus. */
+}
+
+.rp-unlock-steps {
+  padding-left: 1.5em;
+  color: #d4d4d8;
+  font: 400 13.5px/1.5 system-ui, sans-serif;
+  text-align: left;
+}
+
+.rp-unlock-label {
+  display: block;
+  margin-top: 12px;
+  font: 400 13.5px/1.5 system-ui, sans-serif;
 }
 
 .rp-unlock-remember {

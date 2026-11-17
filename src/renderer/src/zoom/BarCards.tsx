@@ -185,10 +185,12 @@ export function BarItemCard({ item, crew, since, anchor, onOpen, onAgent, onOuts
  * · v6.2): who or what it is, where, and why it is here. No reply box: the box
  * speaks only to the open workspace. Open (or the face tapped again) jumps there.
  */
-export function BarAwayCard({ face, title, where, line, since, anchor, onOpen, onOutside, onClose }: {
+export function BarAwayCard({ face, title, where, machine, line, since, anchor, onOpen, onOutside, onClose }: {
   face: React.ReactNode
   title: string
   where: string
+  /** Another machine's (phase 6, BarRemote.tsx): "in <workspace> · on <machine>", and Open goes to that machine. */
+  machine?: string
   /** What it waits for, its reply's first line, or what changed. */
   line: string | null
   since?: string
@@ -197,18 +199,19 @@ export function BarAwayCard({ face, title, where, line, since, anchor, onOpen, o
   onOutside: (target: EventTarget | null) => boolean
   onClose: () => void
 }): React.JSX.Element {
+  const on = machine ? `, on ${machine}` : ''
   return (
-    <BarCardFrame anchor={anchor} className="zv-away-card" label={`${title}, in ${where}`} keep={NEVER} onOutside={onOutside} onClose={onClose}>
+    <BarCardFrame anchor={anchor} className={`zv-away-card${machine ? ' remote' : ''}`} label={`${title}, in ${where}${on}`} keep={NEVER} onOutside={onOutside} onClose={onClose}>
       <div className="zv-away-head">
         <span className="zv-away-face" aria-hidden="true">{face}</span>
         <div className="zv-away-names">
           <b>{title}</b>
-          <p className="zv-bar-where">in {where}</p>
+          <p className="zv-bar-where">in {where}{machine ? ` · on ${machine}` : ''}</p>
         </div>
       </div>
       {line && <p className="zv-away-line">{line}</p>}
       {since && <p className="cr-pet-since">{since}</p>}
-      <button type="button" className="zv-away-open" onClick={onOpen}>Open in {where}</button>
+      <button type="button" className="zv-away-open" onClick={onOpen}>{machine ? `Open on ${machine}` : `Open in ${where}`}</button>
     </BarCardFrame>
   )
 }

@@ -49,6 +49,13 @@ describe('what a moment shows', () => {
       ['Agent b replied', 'in GOAT Team']
     ])
   })
+  it('a wait and a burst are urgent (a phone push goes high), a reply is not', () => {
+    const h = harness()
+    h.notifier.notify(moment('waiting', 'a'))
+    h.notifier.notify(moment('reply', 'b'))
+    for (const id of ['c', 'd']) h.notifier.notify(moment('reply', id))
+    expect(h.shown.map((n) => [n.key, n.urgent])).toEqual([['agent:a', true], ['agent:b', false], ['agent:c', false], ['burst', true]])
+  })
   it('where a click goes: the agent and its workspace', () => {
     const h = harness()
     h.notifier.notify(moment('waiting', 'a'))

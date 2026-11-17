@@ -32,6 +32,7 @@ import { answerFresh, heldWhenFresh, mayGuessPassword, readAndStepUp } from './v
 import { handleOAuthRoute } from './v2-oauth-routes'
 import { linkedView } from './v2-links'
 import { deleteAccount } from './v2-delete'
+import { handlePushRoute } from './v2-push-routes'
 import { handleAuthRoute } from './v2-auth-routes'
 import { consoleMayAsk } from './console-scope'
 import { authorizeSession } from './auth-finish'
@@ -97,6 +98,8 @@ export function handleV2Route(ctx: V2Context): boolean {
   // Renewal sits beside the ladder for the same reason: `/v2/sessions/:id`
   // below would read `renew` as a pending's uuid and answer 404 for it.
   if (handleRenewRoute(ctx, rest)) return true
+  // Phone push, for the same reason: `/v2/me` below would swallow `/v2/me/push/…`.
+  if (handlePushRoute(ctx, rest)) return true
 
   if (rest.length === 1 && rest[0] === 'keys' && method === 'GET') {
     v2Json(response, 200, { jwk: ctx.v2.tokens.publicKeyJwk(), revoked: ctx.v2.accounts.revokedIds() })
@@ -770,6 +773,12 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     // never seen.
     if (deviceId !== claims.dev) {
       refuse(response, 403, 'not_this_device')
+      return
+    }
+    // And only a desktop: a phone, a browser or a watch filing itself would be listed as a Mac and
+    // let into a desktop's routes (security review 2026-11-17, M1).
+    if (signed.device.kind !== 'desktop') {
+      refuse(response, 403, 'desktop_only')
       return
     }
     const body = await readJsonBody(ctx.request, SMALL_BODY)

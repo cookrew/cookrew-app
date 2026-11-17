@@ -17,17 +17,32 @@
 // and giving up runs the suite anyway: a slow suite beats a failed one. A run
 // that gave up keeps its file, so whoever comes next still queues behind it.
 //
+// A slot only decides WHEN a run starts. Once running, a test run is batch work
+// sharing the machine with agents that are waiting on a shell, so every run in
+// this repo also drops to nice TEST_NICE (its forks inherit it) and takes fewer
+// workers when the machine is already oversubscribed: `testWorkers` below.
+//
 // SCOPE — plain ESM with a .d.mts beside it, because vitest.config.ts imports
 // it before anything is compiled.
 
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { availableParallelism, getPriority, homedir, loadavg, setPriority } from 'node:os'
 import path from 'node:path'
 
 const DEFAULT_SLOTS = 2
 const MAX_SLOT_AGE_MS = 2 * 3_600_000
 const DEFAULT_MAX_WAIT_MS = 4 * 60_000
 const DEFAULT_POLL_MS = 2000
+const QUIET_WORKERS = 4
+const BUSY_WORKERS = 2
+export const TEST_NICE = 10
+/** Heap per fork: a runaway test dies of OOM at this, not at node's ~4 GB default. */
+export const MAX_WORKER_HEAP_MB = 2048
+/** What every config in this repo hands its forks: the heap cap, and exit-with-parent. */
+export const WORKER_GUARD = {
+  setupFiles: [new URL('./test-worker-guard.mjs', import.meta.url).pathname],
+  execArgv: [`--max-old-space-size=${MAX_WORKER_HEAP_MB}`]
+}
 const SLOT_NAME = /^(\d+)-(\d+)$/
 const SUITE_DIRS = new Set(['tests', 'tests/', 'test', 'test/', './tests', './tests/'])
 const NOT_A_RUN = new Set(['watch', 'dev', 'bench', 'init', 'list'])
@@ -71,6 +86,33 @@ export function slotCount(raw) {
   if (raw === undefined || raw.trim() === '') return DEFAULT_SLOTS
   const slots = Number(raw)
   return Number.isInteger(slots) && slots >= 0 ? slots : DEFAULT_SLOTS
+}
+
+/**
+ * Workers for one run. `COOKREW_TEST_WORKERS` wins; otherwise QUIET_WORKERS on
+ * a machine with cores to spare and BUSY_WORKERS once the 1-minute load reaches
+ * the core count, where more workers only add memory and context switches.
+ */
+export function testWorkers(env = process.env, { cores = availableParallelism(), load = loadavg()[0] } = {}) {
+  const forced = Number(env.COOKREW_TEST_WORKERS)
+  if (Number.isInteger(forced) && forced > 0) return forced
+  const wanted = load >= cores ? BUSY_WORKERS : QUIET_WORKERS
+  return Math.max(1, Math.min(cores - 1, wanted))
+}
+
+/**
+ * Lower this process to nice TEST_NICE; the pool's forks inherit it. Skipped on
+ * CI and with `COOKREW_TEST_NICE=0`. Never raises a priority, never throws.
+ */
+export function yieldToAgents(env = process.env, { get = getPriority, set = setPriority } = {}) {
+  if (env.CI || env.COOKREW_TEST_NICE === '0') return false
+  try {
+    if (get() >= TEST_NICE) return false
+    set(TEST_NICE)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function pidAlive(pid) {
