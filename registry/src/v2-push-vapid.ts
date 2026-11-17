@@ -132,6 +132,31 @@ export function readVapidEnv(env: NodeJS.ProcessEnv, note: (message: string) => 
 /** The key file in the registry's data directory, beside token-key.jwk. */
 export const VAPID_KEY_FILE = 'vapid-key.json'
 
+const SCALAR_BYTES = 32
+
+/**
+ * A P-256 private scalar as its full 32 bytes. ECDH.getPrivateKey() drops
+ * leading zero bytes, so about one pair in 256 comes out 31 bytes long; the
+ * value is the same key once the zeros are put back.
+ */
+const fullScalar = (key: Buffer): Buffer => {
+  if (key.byteLength >= SCALAR_BYTES) return key
+  const full = Buffer.alloc(SCALAR_BYTES)
+  key.copy(full, SCALAR_BYTES - key.byteLength)
+  return full
+}
+
+/** A pair as the key file holds it: base64url, the private half always 32 bytes. */
+export function vapidPairOf(pair: { getPublicKey(): Buffer; getPrivateKey(): Buffer }): { publicKey: string; privateKey: string } {
+  return { publicKey: pair.getPublicKey().toString('base64url'), privateKey: fullScalar(pair.getPrivateKey()).toString('base64url') }
+}
+
+/** A stored private half written short by an older registry, put back to 32 bytes. */
+const storedScalar = (privateKey: string): string => {
+  const bytes = bytesOf(privateKey, SCALAR_BYTES)
+  return bytes === null ? privateKey : fullScalar(bytes).toString('base64url')
+}
+
 /**
  * THE KEY, MADE ONCE AND KEPT (owner, 2026-11-17: no key to hand-make). The
  * environment wins when it names one. Otherwise the data directory's file is
@@ -146,7 +171,7 @@ export function loadVapidKeys(env: NodeJS.ProcessEnv, dataDir: string, note: (me
   if (!existsSync(file)) {
     const pair = createECDH('prime256v1')
     pair.generateKeys()
-    const made = { publicKey: pair.getPublicKey().toString('base64url'), privateKey: pair.getPrivateKey().toString('base64url') }
+    const made = vapidPairOf(pair)
     try {
       mkdirSync(dataDir, { recursive: true, mode: 0o700 })
       // 'wx': a second process starting at the same moment keeps the first one's key.
@@ -170,7 +195,7 @@ export function loadVapidKeys(env: NodeJS.ProcessEnv, dataDir: string, note: (me
     note(`push: ${file} holds no key pair; push is off`)
     return undefined
   }
-  const keys: VapidKeys = { publicKey: record.publicKey, privateKey: record.privateKey, subject }
+  const keys: VapidKeys = { publicKey: record.publicKey, privateKey: storedScalar(record.privateKey), subject }
   const checked = vapidOf(keys)
   if (typeof checked === 'string') {
     note(`push: ${file}: the stored pair is not valid; push is off`)
