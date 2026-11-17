@@ -1,6 +1,10 @@
 import { CANVAS_RETIRED, type ToolId } from './canvas-ui'
 import type { AgentRole, CanvasNode } from '../../shared/model'
+import { useEffect } from 'react'
 import { GlobalPrompt, type PromptAgent } from './prompt/GlobalPrompt'
+import { noteLineAgents } from './prompt/live-line'
+import { isCodexCommand } from '../../shared/codex-command'
+import { sharedZoomFleet } from './zoom/use-zoom-fleet'
 import { RemotePrompt } from './prompt/RemotePrompt'
 import { SHELL_PRESET } from './prompt/harness-pref'
 import type { PromptArtifact } from './prompt/artifact-refs'
@@ -156,6 +160,16 @@ export function Dock({
   const slidIn = boardFor !== null
   // Inside another machine the bar's box is that machine's (owner 2026-11-12): RemotePrompt.tsx sends there.
   const insideMachine = useInsideMachine()
+  // Which agents' lines a send rebuilds whole: Codex's (live-line.ts · noteLineAgents).
+  // This workspace's cards, and every workspace of this machine (a tile's reply box sends there too).
+  useEffect(() => noteLineAgents(nodes.flatMap((n) => (n.kind === 'terminal' ? [{ id: n.id, codex: isCodexCommand(n.command) }] : []))), [nodes])
+  useEffect(() => {
+    const fleet = sharedZoomFleet()
+    const note = (): void =>
+      noteLineAgents(fleet.get().machines.filter((m) => m.local).flatMap((m) => m.workspaces.flatMap((w) => w.agents.map((a) => ({ id: a.id, codex: a.harness === 'codex' })))))
+    note()
+    return fleet.subscribe(note)
+  }, [])
   // `presets` arrives as harnesses AND saved teams in one list, because a
   // saved team IS a terminal preset to the placement path. To a person they
   // are not the same act at all — one boots an agent here, the other opens a
