@@ -224,9 +224,13 @@ export const LATENCY = {
  * Since lowered, each by its own change, measured the same way:
  *   33  the HITL bar's log reads in two (/api/events/query · types +
  *       limitPerType: still the newest 200 of EACH type): API 23 -> 18
+ *   29  the 3 lazy chunks ride in the entry's chunk, the header's mark in its
+ *       stylesheet (electron.vite.config.ts): static 15 -> 11. Folding the
+ *       chunks into App's instead made the entry import React and the api
+ *       from App, so nothing ran before 2.6 MB had loaded: not taken.
  *
  * What brings it back toward 24, each its own change: the log reads in two
- * (-5, done above), the lazy chunks and the mark in the entry and its stylesheet (-4),
+ * (-5, done above), the lazy chunks and the mark in the entry and its stylesheet (-4, done above),
  * then the boot's small lists in one read (route, listen, terminal-session,
  * tuning, skin, presets, roles, teams, capabilities, agents: up to -9).
  * The budget is what the boot asks for, not a margin over it: one request
@@ -239,11 +243,11 @@ export const REMOTE_OPEN = {
    * thumbnails excluded, the first beacon counted (perf-remote-open.mjs ·
    * bootCharged). Was 24 (2026-09-08), unenforced from 2026-10-30.
    */
-  maxBootRequests: 33,
+  maxBootRequests: 29,
   /** Of them, /api/ requests (the first beacon included). */
   maxBootApiRequests: 18,
   /** Of them, the page and its files. */
-  maxBootStaticRequests: 15,
+  maxBootStaticRequests: 11,
   maxWorkspaceFetches: 1,
   maxWorkspaceListFetches: 1,
   maxGitFetches: 0,
