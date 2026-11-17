@@ -48,6 +48,7 @@ const REGISTERED: Record<string, readonly string[]> = {
   'tuning-store.ts': ['agent tuning'],
   'use-cursors.ts': ['use cursors'],
   'use/source-picker-store.ts': ['source picker'],
+  'use/unlock-grant-store.ts': ['unlock grant sheet'],
   'use/unlock-sheet-store.ts': ['unlock sheet'],
   'workspace-arrival.ts': ['workspace arrival'],
   'zoom/bar-pick.ts': ['bar card'],
