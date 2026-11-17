@@ -85,6 +85,8 @@ describe.skipIf(!ready)('the remote canvas boot asks for each thing once', () =>
   let browser: Awaited<ReturnType<typeof launchChrome>> | null = null
   let cdp: CdpClient | null = null
   const hosts = new Set<string>()
+  /** When the PAGE issued each beacon (CDP monotonic ms), before any wait for a connection. */
+  const beaconSentAt: number[] = []
   let firstCardAt = 0
   let navigatedAt = 0
   /** When the recording stopped looking, before anything was torn down. */
@@ -101,10 +103,15 @@ describe.skipIf(!ready)('the remote canvas boot asks for each thing once', () =>
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 500, height: 900, deviceScaleFactor: 2, mobile: true })
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: OBSERVER })
     cdp.on('Network.requestWillBeSent', (p) => {
-      const url = String((p.request as { url: string }).url)
+      const request = p.request as { url: string; method?: string }
+      const url = String(request.url)
       if (url.startsWith('data:')) return
       try {
-        hosts.add(new URL(url).host)
+        const parsed = new URL(url)
+        hosts.add(parsed.host)
+        if (request.method === 'POST' && parsed.pathname.endsWith('/api/beacon') && recordedUntil === 0) {
+          beaconSentAt.push(Number(p.timestamp) * 1000)
+        }
       } catch {
         // Not a URL this can reason about; the fixture's own log has it.
       }
@@ -236,12 +243,15 @@ describe.skipIf(!ready)('the remote canvas boot asks for each thing once', () =>
     const beacons = recorded().filter((r) => requestKind(r.path) === 'beacon')
     // Several clock periods were watched: the clock was seen to tick twice, not just the boot's beacon.
     expect(beacons.length).toBeGreaterThanOrEqual(3)
-    // Between the clock's own beacons only. The boot beacon and the clock start
-    // together, but the boot one queues behind the boot's other requests for a
-    // free connection, so it can ARRIVE well after it was sent (2117 ms before
-    // the first tick on the macOS runner, PR #124). A timer runs late, never
-    // early; a second clock or a beacon off the clock still lands short here.
-    const gaps = beacons.slice(2).map((r, i) => r.at - beacons[i + 1].at)
+    // The page's own record of sending, which the gaps below are judged on.
+    expect(beaconSentAt.length).toBeGreaterThanOrEqual(3)
+    // Judged by when the PAGE sent each one, not when it arrived: any beacon can
+    // queue for a connection on a slow runner and arrive late, so arrival gaps
+    // came in short between clock ticks too (2117 ms after boot on PR #124,
+    // 2305 ms between ticks on PR #128). The boot beacon and the clock start
+    // together, so from the boot one on every gap is a whole period; a timer
+    // runs late, never early, and a second clock or an off-clock beacon lands short.
+    const gaps = beaconSentAt.slice(1).map((at, i) => at - beaconSentAt[i])
     expect(gaps.filter((gap) => gap < BEACON_CLOCK_MS * 0.8)).toEqual([])
     // And no more than the clock allows over the recording.
     expect(beacons.length).toBeLessThanOrEqual(2 + Math.floor((recordedUntil - beacons[0].at) / (BEACON_CLOCK_MS * 0.8)))
