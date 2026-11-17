@@ -22,6 +22,7 @@ import type { VersionPinRecord } from '../../shared/version-pin'
 import type { RenameOutcome } from '../../shared/rename-plan'
 import type { FleetEvent } from '../../shared/fleet'
 import type { UnlockAnswer, UnlockBegin } from '../../shared/remote-unlock'
+import { UNLOCK_GRANT_EVENT, UNLOCK_GRANT_PATH, type GrantAsked, type GrantDone, type GrantList, type GrantRefusal, type GrantStatus } from '../../shared/unlock-grant'
 import { apiPath } from './api-base'
 import { machineScope, registerScopeState, scopeNeedsMachine, heldScope, machineLeft, relayRefusedSession } from './machine-scope'
 import { USE_SOURCES_PATH, type UseSourceList, type UseSourceOpened, type UseSourceSettings } from '../../shared/use-sources'
@@ -692,6 +693,12 @@ export function createRemoteApi(): CookrewApi {
     remoteRestart: () => req<RemoteAnswer>(apiPath(`${USE_SOURCES_PATH}/restart`), 'POST', {}).catch(refusal),
     remoteUnlockBegin: () => req<UnlockBegin>(apiPath(`${USE_SOURCES_PATH}/unlock/begin`), 'POST', {}),
     remoteUnlock: (sealed) => req<UnlockAnswer>(apiPath(`${USE_SOURCES_PATH}/unlock`), 'POST', { sealed }),
+    unlockGrantAsk: (commit) => req<GrantAsked | GrantRefusal>(apiPath(`${UNLOCK_GRANT_PATH}/ask`), 'POST', { commit }),
+    unlockGrantReveal: (id, key, nonce) => req<GrantDone | GrantRefusal>(apiPath(`${UNLOCK_GRANT_PATH}/reveal`), 'POST', { id, key, nonce }),
+    unlockGrantStatus: (id) => req<GrantStatus | GrantRefusal>(apiPath(`${UNLOCK_GRANT_PATH}/status?id=${encodeURIComponent(id)}`)),
+    unlockGrantPending: () => req<GrantList | GrantRefusal>(apiPath(`${UNLOCK_GRANT_PATH}/pending`)),
+    unlockGrantDecide: (id, allow) => req<GrantDone | GrantRefusal>(apiPath(`${UNLOCK_GRANT_PATH}/decide`), 'POST', { id, allow }),
+    onUnlockGrants: (cb) => subscribe<{ waiting?: unknown }>(UNLOCK_GRANT_EVENT, (frame) => cb(typeof frame.waiting === 'number' ? frame.waiting : 0)),
     remoteWake: () => req<RemoteAnswer>(apiPath(`${USE_SOURCES_PATH}/wake`), 'POST', {}).catch(refusal),
 
     // Phones can't hand the desktop a local path — upload the bytes and let

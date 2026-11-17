@@ -13,6 +13,9 @@ import { writeFileAtomic } from './atomic-file'
  * on purpose. A printed link lands in a pane, which phones read through the relay.
  * ALLOW seals to a key that came through the registry, with nothing for the owner
  * to compare, so a registry that swapped the key would be handed the code.
+ * The one way out besides the QR is shared/unlock-grant.ts: sealed to a fresh key
+ * only after a person has compared words that both ends worked out, at the Mac or
+ * on a device already holding this code. The registry vouches for nothing there.
  *
  * This holds against a relay that reads, not yet one that acts: until plain routes
  * close, a relay holding the token can type into a terminal and read this file.

@@ -1,4 +1,4 @@
-import type { RemoteAction, RemoteWhere } from '../../../shared/remote-access'
+import type { RemoteAction, RemoteWhere, UnlockReach } from '../../../shared/remote-access'
 import type { UseSource } from '../../../shared/use-sources'
 import { RemotePanel } from './RemotePanel'
 import { sheetBody, type SheetBody, type SourceLoad, type SourceTab } from './source-sheet'
@@ -24,6 +24,8 @@ export interface SourceSheetProps {
   /** Asked for from the machine as its remote desktop. */
   readonly remoteDesktop: boolean
   readonly where: RemoteWhere
+  /** Whether this browser can send the Mac its password (unlock-reach.ts). */
+  readonly reach?: UnlockReach
   /** What the state panel's last action did. */
   readonly actNote: string | null
   readonly actBusy: boolean
@@ -70,7 +72,7 @@ function Body({ body, props }: { body: SheetBody; props: SourceSheetProps }): Re
     case 'remote':
       return (
         <div className="sp-remote">
-          <RemotePanel state={body.state} where={props.where} busy={props.actBusy} note={props.actNote} onAct={props.onAct} />
+          <RemotePanel state={body.state} where={props.where} reach={props.reach} busy={props.actBusy} note={props.actNote} onAct={props.onAct} />
         </div>
       )
     case 'note':

@@ -5,7 +5,7 @@
 // compare with the ⋯ menu there; after that the key is pinned, and a changed one
 // stops with nothing sent.
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
-import { hostOutsideTheMac, UNLOCK_PASSWORD_MAX } from '../../../shared/remote-unlock'
+import { UNLOCK_PASSWORD_MAX } from '../../../shared/remote-unlock'
 import { cookrew } from '../api'
 import { clientBase } from '../api-base'
 import { sealFetchFor } from './seal-fetch'
@@ -14,10 +14,12 @@ import { authHeaders, authStore, connectCodeFromInput } from '../auth-gate'
 import { seated } from '../device-seat'
 import { openSeal, SealRefusedError, type SealClient } from '../path/seal-client'
 import { closeUnlockSheet, subscribeUnlockSheet, unlockSheetOpen } from './unlock-sheet-store'
+import { openUnlockGrantSheet } from './unlock-grant-store'
 import { prepareUnlock, runUnlock, type UnlockFlowDeps } from './unlock-flow'
 import { wordsOfKey } from './unlock-seal'
 import { sealedUnlockApi } from './unlock-sealed'
 import { browserVaultStore, createUnlockVault, type KeyTrust } from './unlock-vault'
+import { onTheMacsOwnPage } from './unlock-reach'
 
 export interface UnlockSheetViewProps {
   /** This device has no connect code, or one the Mac no longer knows. */
@@ -29,6 +31,8 @@ export interface UnlockSheetViewProps {
   /** Only on a page the Mac served itself: a saved password needs no typing to be read. */
   canRemember: boolean
   onCode: (pasted: string) => void
+  /** Set up from here, with no QR (UnlockGrantSheet.tsx). Absent where this page cannot. */
+  onSetUp?: () => void
   trust: KeyTrust | null
   words: readonly string[] | null
   saved: boolean
@@ -93,16 +97,30 @@ function PasswordForm(props: UnlockSheetViewProps): React.JSX.Element {
   )
 }
 
-function NeedsCode({ stale, changed, onCode, onClose }: Pick<UnlockSheetViewProps, 'stale' | 'changed' | 'onCode' | 'onClose'>): React.JSX.Element {
+function NeedsCode({ stale, changed, onCode, onSetUp, onClose }: Pick<UnlockSheetViewProps, 'stale' | 'changed' | 'onCode' | 'onSetUp' | 'onClose'>): React.JSX.Element {
   const [pasted, setPasted] = useState('')
   return (
     <>
       <h3>Unlock this Mac</h3>
       {stale && <p>{changed ? 'The pairing code of this Mac was changed.' : 'The pairing code on this device is out of date.'}</p>}
-      <p>To unlock from any network, this device needs the pairing code, once. At the Mac, open Pair a phone, then scan it in this browser or paste the link here.</p>
-      <input className="rp-unlock-input" aria-label="Pairing link" autoComplete="off" spellCheck={false} value={pasted} onChange={(event) => setPasted(event.target.value)} />
+      <p>This browser needs this Mac’s pairing code before it can unlock the Mac remotely.</p>
+      {onSetUp && (
+        <>
+          <p>Set it up from here: a device that can already unlock this Mac approves it, or someone at the Mac does. Both compare a few words with this screen.</p>
+          <div className="rp-actions">
+            <button type="button" className="rp-action rp-primary" onClick={onSetUp}>Set up from here</button>
+          </div>
+        </>
+      )}
+      <p>{onSetUp ? 'Or, at the unlocked Mac:' : 'At the unlocked Mac:'}</p>
+      <ol className="rp-unlock-steps">
+        <li>Open Cookrew and select your avatar → Devices → Pair a phone.</li>
+        <li>Scan the QR code with this device, open the link in this browser, and sign in if asked. Then return to this Mac in Cookrew and try Unlock again.</li>
+      </ol>
+      <label className="rp-unlock-label" htmlFor="unlock-pairing-link">Or paste the full link from the QR code</label>
+      <input id="unlock-pairing-link" className="rp-unlock-input" aria-label="Pairing link" autoComplete="off" spellCheck={false} value={pasted} onChange={(event) => setPasted(event.target.value)} />
       <div className="rp-actions">
-        <button type="button" className="rp-action rp-primary" disabled={pasted.trim() === ''} onClick={() => onCode(pasted)}>Use this link</button>
+        <button type="button" className={onSetUp ? 'rp-action' : 'rp-action rp-primary'} disabled={pasted.trim() === ''} onClick={() => onCode(pasted)}>Use this link</button>
         <button type="button" className="rp-action" onClick={onClose}>Cancel</button>
       </div>
     </>
@@ -110,7 +128,7 @@ function NeedsCode({ stale, changed, onCode, onClose }: Pick<UnlockSheetViewProp
 }
 
 function SheetBody(props: UnlockSheetViewProps): React.JSX.Element {
-  if (props.needsCode) return <NeedsCode stale={props.stale} changed={props.changed} onCode={props.onCode} onClose={props.onClose} />
+  if (props.needsCode) return <NeedsCode stale={props.stale} changed={props.changed} onCode={props.onCode} onSetUp={props.onSetUp} onClose={props.onClose} />
   return props.trust === 'changed' ? <ChangedKey words={props.words} onTrustNew={props.onTrustNew} onClose={props.onClose} /> : <PasswordForm {...props} />
 }
 
@@ -124,9 +142,6 @@ export function UnlockSheetView(props: UnlockSheetViewProps): React.JSX.Element 
     </div>
   )
 }
-
-/** A page the Mac served itself, on an address cookrew.dev does not answer for. */
-const onTheMacsOwnPage = (): boolean => clientBase() === '' && !hostOutsideTheMac(window.location.host)
 
 const flowFor = (api: UnlockFlowDeps['api']): UnlockFlowDeps => ({ api, vault: createUnlockVault(browserVaultStore()), machine: clientBase() })
 
@@ -268,6 +283,14 @@ function UnlockSheetBody(): React.JSX.Element {
       changed={way.kind === 'needs-code' && way.changed === true}
       canRemember={onTheMacsOwnPage()}
       onCode={useCode}
+      onSetUp={
+        cookrew().unlockGrantAsk
+          ? () => {
+              closeUnlockSheet(false)
+              openUnlockGrantSheet()
+            }
+          : undefined
+      }
       trust={shown?.trust ?? null}
       words={shown?.words ?? null}
       saved={shown?.saved ?? false}

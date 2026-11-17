@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { UseSource, UseSourceCard } from '../../../shared/use-sources'
 import { cookrew } from '../api'
 import { closeSourcePicker, useSourceAsk } from './source-picker-store'
-import { firstTab, type SourceLoad, type SourceTab } from './source-sheet'
+import { autoStep, firstTab, type SourceLoad, type SourceTab } from './source-sheet'
 import { remoteWhere, useRemoteActs } from './remote-acts'
 import { RemoteConfirmView } from './RemotePanel'
 import { SourceSheet } from './SourceSheet'
+import { unlockReach } from './unlock-reach'
 import './source-picker.css'
 
 /**
@@ -88,6 +89,24 @@ function OpenPicker({ card, remoteDesktop, onOpened }: { card: string | null; re
 
   const acts = useRemoteActs({ state: load.status === 'ready' ? load.list.remote : null, onCheck: read, onOpened: read })
 
+  // Each answer is acted on once: a pick that fails, or an unlock sheet that is
+  // cancelled, leaves the sheet as it is, for the reader to choose. The unlock
+  // sheet opens by itself once per opening: a list read just after unlocking
+  // may still be the cached locked one.
+  const stepped = useRef<SourceLoad | null>(null)
+  const unlockOffered = useRef(false)
+  useEffect(() => {
+    if (stepped.current === load) return
+    const step = autoStep(load, remoteDesktop, remoteWhere(), unlockReach(remoteWhere()))
+    if (!step) return
+    stepped.current = load
+    if (step.kind === 'pick') void pick(step.source)
+    else if (!unlockOffered.current) {
+      unlockOffered.current = true
+      acts.act(step.action)
+    }
+  })
+
   return (
     <>
     <SourceSheet
@@ -98,6 +117,7 @@ function OpenPicker({ card, remoteDesktop, onOpened }: { card: string | null; re
       error={error}
       remoteDesktop={remoteDesktop}
       where={remoteWhere()}
+      reach={unlockReach(remoteWhere())}
       actNote={acts.note}
       actBusy={acts.busy}
       onTab={(next) => {

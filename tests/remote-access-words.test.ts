@@ -75,6 +75,13 @@ describe('remoteView · at the Mac', () => {
     expect(ids(remoteView({ ...state('locked'), platform: 'linux' }, 'away'))).toEqual(['check-again'])
   })
 
+  it('a locked Mac offers an unpaired browser the set-up in place of an Unlock it cannot finish', () => {
+    const view = remoteView(state('locked'), 'away', Date.now(), 'unpaired')
+    expect(ids(view)).toEqual(['set-up-unlock', 'check-again'])
+    expect(view.needsYouThere).toBe(false)
+    expect(view.sentence).toContain('a device that can already unlock this Mac approves it')
+  })
+
   it('says what comes after the lock, so nobody finds out at the Mac', () => {
     const view = remoteView(state('locked', { then: 'needs-screen-recording' }), 'away')
     expect(view.next).toContain('Screen Recording')

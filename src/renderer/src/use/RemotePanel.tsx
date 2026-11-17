@@ -1,6 +1,6 @@
 import type { ReactNode, Ref } from 'react'
 import type { BarBand } from './remote-layout'
-import { hostWords, remoteView, type CardControl, type RemoteAction, type RemoteConfirm, type RemoteHostView, type RemoteState, type RemoteWhere } from '../../../shared/remote-access'
+import { hostWords, remoteView, UNLOCK_NOT_SET_UP, type CardControl, type RemoteAction, type RemoteConfirm, type RemoteHostView, type RemoteState, type RemoteWhere, type UnlockReach } from '../../../shared/remote-access'
 import { machineCopy } from '../../../shared/machine-words'
 import type { UseStatus } from '../../../shared/use-signal'
 import './remote.css'
@@ -27,18 +27,21 @@ export const FRAME_CONTROLS = 'button, textarea, .rp-bar, .rp-cover, .remote-key
 export function RemotePanel({
   state,
   where,
+  reach = 'ready',
   busy,
   note,
   onAct
 }: {
   state: RemoteState
   where: RemoteWhere
+  /** Whether this browser can send the Mac its password (unlock-reach.ts). */
+  reach?: UnlockReach
   busy: boolean
   /** What the last action did. */
   note: string | null
   onAct: (action: RemoteAction) => void
 }): React.JSX.Element {
-  const view = remoteView(state, where)
+  const view = remoteView(state, where, Date.now(), reach)
   return (
     <div className={`rp-panel${view.needsYouThere ? ' rp-needs-you' : ''}`} role="alert" data-remote-state={state.id}>
       <h3>{view.title}</h3>
@@ -117,6 +120,8 @@ const Label = ({ long, short }: { long: string; short: string }): React.JSX.Elem
 export function RemoteBarView({
   control,
   where,
+  reach = 'ready',
+  onSetUpUnlock,
   connection,
   zoomed,
   now,
@@ -133,6 +138,9 @@ export function RemoteBarView({
 }: {
   control: CardControl
   where: RemoteWhere
+  /** Unpaired: said while the Mac is open, with the way to set it up before it locks. */
+  reach?: UnlockReach
+  onSetUpUnlock?: () => void
   connection: RemoteConnection
   zoomed: boolean
   now: number
@@ -156,7 +164,9 @@ export function RemoteBarView({
   const canTake = !mine && control.switchOn && control.heldBy === null
   const word = (sentence: string): string => machineCopy(sentence, control.machine)
   const place = band?.place ?? 'row'
-  const hint = line.hint ? word(line.hint) : null
+  const pairFirst = reach === 'unpaired' && where === 'away' && control.machine === 'darwin' && control.switchOn
+  const setUp = !line.hint && pairFirst
+  const hint = line.hint ? word(line.hint) : setUp ? UNLOCK_NOT_SET_UP : null
   const awake = control.awake ? word('Keeping the Mac awake while you watch') : null
   const style = band ? { left: band.rect.left, top: band.rect.top, width: band.rect.width, height: band.rect.height } : undefined
   const shared = {
@@ -214,7 +224,12 @@ export function RemoteBarView({
             <button type="button" className="rp-bar-btn rp-end" aria-label="End session" onClick={onEnd}><Label long="End session" short="End" /></button>
           </span>
         </div>
-        {hint && <p className="rp-bar-hint">{hint}</p>}
+        {hint && (
+          <p className="rp-bar-hint">
+            {hint}
+            {setUp && onSetUpUnlock && <> <button type="button" className="rp-bar-link" onClick={onSetUpUnlock}>Set up</button></>}
+          </p>
+        )}
         {/* Always its line, said or not: other viewers coming and going must not move the picture. */}
         {band ? <p className={`rp-bar-hint${awake ? '' : ' rp-unsaid'}`} aria-hidden={awake ? undefined : true}>{awake ?? '\u00a0'}</p> : awake && <p className="rp-bar-hint">{awake}</p>}
       </div>

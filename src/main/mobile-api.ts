@@ -66,7 +66,12 @@ import { handleStreamAdapters } from "./stream-adapters";
 import type { LoopHealthSnapshot } from "./loop-health";
 import { ROUTE_ID_RE, type CardRouteState, type RouteState } from "../shared/route";
 import { ownerSubmit } from "./ask";
-import { handleUseSourceRoutes, isUseSourceRoute } from "./use-source-routes";
+import { fromTheMacsOwnPage, handleUseSourceRoutes, isUseSourceRoute } from "./use-source-routes";
+import { handleUnlockGrantRoutes, isUnlockGrantRoute } from "./unlock-grant-routes";
+import type { UnlockGrantDoor } from "./unlock-grant";
+import { carriesSealProof } from "./seal-proof";
+import { UNLOCK_GRANT_EVENT } from "../shared/unlock-grant";
+import type { ViewerWho } from "../shared/remote-access";
 import type { SkinStore } from "./skin-store";
 import { SKIN_PATH } from "../shared/skins";
 import type { UseSourceService } from "./use-source-service";
@@ -308,6 +313,12 @@ export interface MobileApiDeps {
    * opening and again when it changes, whichever device picked it.
    */
   skin?: Pick<SkinStore, "get" | "choose" | "bus">;
+  /**
+   * Setting up unlock from a new device (unlock-grant.ts): its routes, who a
+   * credential is, and `bus` emitting "changed" when the waiting list moves, so
+   * a device that can approve hears of it on its stream.
+   */
+  unlockGrants?: { door: UnlockGrantDoor; who: (credential: string | null) => ViewerWho; bus: EventEmitter };
   /**
    * Cold-boot wait window for a stream open (acquireViewWhenReady). Omitted in
    * production (defaults ~2s in 50ms steps); tests shrink it for determinism.
@@ -807,6 +818,18 @@ export async function handleMobileApi(
   }
 
   // What is on the owner's screen: the pairing credential, reads included.
+  // Setting up unlock: an admitted device's own credential, never a watch's.
+  if (isUnlockGrantRoute(p)) {
+    const grants = deps.unlockGrants;
+    await handleUnlockGrantRoutes(request, response, p, url, {
+      door: grants?.door,
+      paired: ownerPairing,
+      who: grants ? grants.who(presentedToken(request, url)) : { key: "root", name: "A paired device", here: false },
+      inside: carriesSealProof(request) || fromTheMacsOwnPage(request),
+    });
+    return true;
+  }
+
   if (isUseSourceRoute(p)) {
     await handleUseSourceRoutes(request, response, p, {
       service: ops?.useSources,
@@ -2185,6 +2208,15 @@ export async function handleMobileApi(
       const onSkin = (skin: string): void => send("skin", { skin });
       deps.skin.bus.on("skin", onSkin);
       onClose(() => deps.skin?.bus.removeListener("skin", onSkin));
+    }
+    // HOW MANY DEVICES WAIT TO BE ALLOWED TO UNLOCK: a count and no more. Who they
+    // are and their words are read inside the sealed session (unlock-grant-routes.ts).
+    if (deps.unlockGrants && ownerPairing) {
+      const grants = deps.unlockGrants;
+      send(UNLOCK_GRANT_EVENT, { waiting: grants.door.waiting() });
+      const onGrants = (): void => send(UNLOCK_GRANT_EVENT, { waiting: grants.door.waiting() });
+      grants.bus.on("changed", onGrants);
+      onClose(() => grants.bus.removeListener("changed", onGrants));
     }
     // Sous's zoom / zoom-back, so the phone and the TV follow the owner's
     // voice. A scoped stream only hears about its own canvas.

@@ -39,7 +39,7 @@ export const isUseSourceRoute = (path: string): boolean => path === USE_SOURCES_
  * cookrew.dev whose traffic moved to the LAN still carries that Origin, which its
  * browser will not let it change.
  */
-function fromTheMacsOwnPage(request: http.IncomingMessage): boolean {
+export function fromTheMacsOwnPage(request: http.IncomingMessage): boolean {
   if (request.headers[RELAY_MARKER] === '1' || request.headers[DOOR_MARKER] === '1') return false
   const { host, origin } = request.headers
   if (hostOutsideTheMac(host)) return false

@@ -268,6 +268,7 @@ import { linuxHandFor } from './linux-input'
 import { createRemoteDesk, remoteGate } from './remote-desk'
 import { createUpdateCheck } from './update-check'
 import { createUnlockDoor, loadUnlockKey, unlockMissesFile } from './remote-unlock'
+import { createUnlockGrantDoor } from './unlock-grant'
 import type { SealKeyPair } from '../shared/relay-seal'
 import { fingerprintOfDigest } from '../shared/key-fingerprint'
 import { electronUpdateInstaller } from './update-install'
@@ -7181,6 +7182,41 @@ function viewerWho(credential: string | null): ViewerWho {
   if (id === null) return { key: 'root', name: 'A paired device', here: false }
   return { key: `device:${id}`, name: admittedDevices.list().find((device) => device.deviceId === id)?.name ?? 'A paired phone', here: false }
 }
+const unlockGrantBus = new EventEmitter()
+/**
+ * A NEW DEVICE ASKS TO UNLOCK THIS MAC (unlock-grant.ts). The words are in a
+ * system dialog, and a yes takes a finger on Touch ID, which nothing pressing
+ * the window can give. With no sensor the dialog is all there is, so it is not
+ * taken while someone away, or an agent, is driving this Mac.
+ */
+async function confirmUnlockGrant(ask: { name: string; words: readonly string[]; signal: AbortSignal }): Promise<boolean> {
+  if (process.platform === 'darwin') app.focus({ steal: true })
+  const answer = await dialog.showMessageBox({
+    type: 'question',
+    message: `Let ${ask.name} unlock this Mac?`,
+    detail: `Allow only if that device shows exactly these words:\n\n${ask.words.join('   ')}\n\nIt can then unlock this Mac with its password, from any network. You can forget it in Devices.`,
+    buttons: ['Allow', 'Don’t allow'],
+    defaultId: 1,
+    cancelId: 1,
+    signal: ask.signal
+  })
+  if (answer.response !== 0 || ask.signal.aborted) return false
+  if (systemPreferences.canPromptTouchID()) {
+    return systemPreferences.promptTouchID(`allow ${ask.name} to unlock this Mac`).then(
+      () => !ask.signal.aborted,
+      () => false
+    )
+  }
+  return !remoteDesk.hostView().rows.some((row) => row.mode === 'controlling')
+}
+const unlockGrants = createUnlockGrantDoor({
+  refusal: () => (process.platform === 'darwin' ? null : 'Only a Mac can be unlocked from another device.'),
+  code: () => connectCodes.encoded(),
+  unlockKey: () => unlockKey().publicKey,
+  confirm: confirmUnlockGrant,
+  record: (outcome, who) => store.recordEvent('remote.unlock-grant', 'machine', 'this Mac', `${who.name}: ${outcome}`),
+  changed: () => unlockGrantBus.emit('changed')
+})
 const USE_WINDOWS_FILE = path.join(homedir(), '.cookrew', 'use-windows.json')
 const useInstances = createUseInstances({
   captureDir: path.join(app.getPath('userData'), 'use-capture'),
@@ -8241,6 +8277,8 @@ app.whenReady().then(() => {
     build: { id: () => buildId, bus: buildBus },
     // The account's skin: the phone wears it and may pick another (skin-store.ts).
     skin: skins,
+    // A new device sets up unlock; one that can already unlock approves it.
+    unlockGrants: { door: unlockGrants, who: viewerWho, bus: unlockGrantBus },
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
     // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only

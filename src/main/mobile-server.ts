@@ -254,6 +254,8 @@ export interface MobileServerDeps {
   build?: MobileApiDeps['build']
   /** The account's skin (skin-store.ts) — passed straight through. */
   skin?: MobileApiDeps['skin']
+  /** Setting up unlock from a new device (unlock-grant.ts) — passed straight through. */
+  unlockGrants?: MobileApiDeps['unlockGrants']
   /** Sous's door and its `ui` bus — see MobileApiDeps; passed through as-is. */
   sous?: MobileApiDeps['sous']
   /** The Mac's ear for the phone's recordings — see MobileApiDeps; passed through as-is. */
