@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AgentCard, cardScaleStyle, useCardScale, type CardScale } from './AgentCard'
+import { AgentCard, cardScaleStyle, markOverhang, useCardScale, type CardScale } from './AgentCard'
 import { eatNextClick } from './ShelfCard'
 import { ItemCard, type CrewFace, type ItemFace } from '../pets/ItemPets'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
@@ -80,11 +80,10 @@ function BarCardFrame({ anchor, className, label, keep, onOutside, onClose, size
       const face = last.current
       if (!face) return
       // The card's remove mark hangs past its corner (agent-card.css · .zv-del): it too stays on screen.
-      const mark = el.querySelector<HTMLElement>('.zv-del')
-      const over = mark ? Math.max(0, Math.ceil(mark.getBoundingClientRect().right - el.getBoundingClientRect().right)) : 0
+      const over = markOverhang(el)
       // A long menu scrolls inside its card (wait-choices.css): it never runs under the bar or off the top.
       if (el.classList.contains('wc-card')) el.style.maxHeight = `${Math.max(180, boxTop() - stageTop() - 20)}px`
-      const next = barCardSpot(face, { width: el.offsetWidth * size.scale + over, height: el.offsetHeight * size.scale }, window.innerWidth, boxTop(), stageTop())
+      const next = barCardSpot(face, { width: el.offsetWidth * size.scale + over.right, height: el.offsetHeight * size.scale }, window.innerWidth, boxTop(), stageTop() + over.top)
       setSpot((at) => (at && at.left === next.left && at.top === next.top ? at : next))
     }
     // The box opens behind an agent's card (its flight is 360 ms): follow it a moment, and on any resize.

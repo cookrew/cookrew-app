@@ -1331,13 +1331,15 @@
    arriving from the face it opened under. */
 .zv-shelf-card {
   transform-origin: top center;
+  /* The card stop's size (AgentCard.tsx · cardScaleStyle), from its corner; 1:1 where none is set. */
+  transform: scale(var(--zv-card-s, 1));
   animation: zv-shelf-card-in 150ms ease-out both;
 }
 
 @keyframes zv-shelf-card-in {
   from {
     opacity: 0;
-    transform: translateY(-6px) scale(0.96);
+    transform: translateY(-6px) scale(calc(0.96 * var(--zv-card-s, 1)));
   }
 }
 

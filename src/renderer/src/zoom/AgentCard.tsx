@@ -45,10 +45,25 @@ export interface CardScale {
 export const CardScaleContext = createContext<CardScale>({ scale: 1, narrow: false })
 export const useCardScale = (): CardScale => useContext(CardScaleContext)
 
-/** The floating card's own style at this scale: its corner stays where it is placed. */
+/**
+ * The floating card's own style at this scale: its corner stays where it is
+ * placed. The scale rides --zv-card-s, which the card's CSS reads for its rest
+ * and for its arrival (zoom.css · .zv-shelf-card, bar-groups.css · .zv-bar-card),
+ * so it settles from 0.96 of its size, not from 1:1.
+ */
 export function cardScaleStyle({ scale, narrow }: CardScale): React.CSSProperties {
   if (scale === 1) return {}
-  return { transform: `scale(${scale.toFixed(4)})`, transformOrigin: '0 0', ...(narrow ? ({ '--zv-k-card': scale.toFixed(4) } as React.CSSProperties) : {}) }
+  const s = scale.toFixed(4)
+  return { '--zv-card-s': s, transformOrigin: '0 0', ...(narrow ? { '--zv-k-card': s } : {}) } as React.CSSProperties
+}
+
+/** How far the card's remove mark hangs past its right edge and above its top, as seen (the transform counted). */
+export function markOverhang(card: HTMLElement): { right: number; top: number } {
+  const mark = card.querySelector<HTMLElement>('.zv-del')
+  if (!mark) return { right: 0, top: 0 }
+  const m = mark.getBoundingClientRect()
+  const c = card.getBoundingClientRect()
+  return { right: Math.max(0, Math.ceil(m.right - c.right)), top: Math.max(0, Math.ceil(c.top - m.top)) }
 }
 
 /** Thumbnails on the card, as the crew card's strip holds. */

@@ -105,7 +105,8 @@ export function settle(dir: ZoomDir, v: number): number {
  */
 export function popsCard(dir: ZoomDir, v: number, inFull: boolean): boolean {
   if (inFull) return false
-  return dir === 'items' ? Math.abs(v) < 0.5 : Math.abs(v - 1) < 0.5
+  // The agents stop once the zoom has come to it: a tap during the arrival from the workspaces still zooms.
+  return dir === 'items' ? Math.abs(v) < 0.5 : Math.abs(v - 1) < 0.1
 }
 
 /** What a click on an agent does, from where the view is (and which agent holds the focus). */
