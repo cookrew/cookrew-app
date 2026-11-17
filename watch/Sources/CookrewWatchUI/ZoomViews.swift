@@ -147,7 +147,9 @@ private struct WorkspaceAvatar: View {
             VStack(alignment: .leading, spacing: 3) {
               if let wait = store.waitView(card) { WaitBlock(store: store, card: card, view: wait) }
               else { CardWordsView(card: card, sent: store.sent(card.id)).lineLimit(2) }
-              if let item = card.items.first(where: { $0.kind == .browser }) { Text(item.title).font(InkType.word(9)).lineLimit(1).foregroundStyle(ink.muted) }
+              if let item = card.items.first(where: { $0.kind == .browser }) {
+                Button { show(item) } label: { Text(item.title).font(InkType.word(9)).lineLimit(1).foregroundStyle(ink.muted) }.buttonStyle(.plain)
+              }
               if let notice = store.notice { Text(notice).font(InkType.word(9)).foregroundStyle(ink.wait) }
               ReplyBar(store: store, card: card)
             }
@@ -184,7 +186,7 @@ private struct WorkspaceAvatar: View {
           dragOffset = 0
           if expanded { closeLater() }
         })
-        .simultaneousGesture(LongPressGesture(minimumDuration: 0.35).onEnded { _ in
+        .simultaneousGesture(TapGesture().onEnded {
           guard !tile.artifacts.isEmpty else { return }
           closeTask?.cancel()
           withAnimation { expanded = true }
@@ -200,7 +202,18 @@ private struct WorkspaceAvatar: View {
           }
         }
       }
-      Text("\(tile.agents) agents · \(tile.artifacts.count) artifacts\(tile.artifacts.isEmpty ? "" : " · \(itemIndex + 1)/\(tile.artifacts.count)")").font(InkType.word(9)).foregroundStyle(ink.muted).lineLimit(1)
+      HStack(spacing: 5) {
+        Text(currentItem?.title ?? "No artifacts").font(InkType.words(10)).foregroundStyle(currentItem == nil ? ink.muted : ink.ink).lineLimit(1)
+        Spacer(minLength: 0)
+        if !tile.artifacts.isEmpty {
+          Text("\(itemIndex + 1)/\(tile.artifacts.count)").font(InkType.word(9)).foregroundStyle(ink.muted)
+        }
+        let browsers = tile.artifacts.filter { $0.kind == .browser }.count
+        let notes = tile.artifacts.count - browsers
+        if browsers > 0 { Text("▭\(browsers)").font(InkType.word(9)).foregroundStyle(ink.soft) }
+        if notes > 0 { Text("▤\(notes)").font(InkType.word(9)).foregroundStyle(ink.soft) }
+      }
+      .lineLimit(1)
     }
     .padding(8)
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -217,6 +230,14 @@ private struct WorkspaceAvatar: View {
       guard !Task.isCancelled else { return }
       withAnimation { expanded = false }
     }
+  }
+
+  private func show(_ item: CardItem) {
+    if let index = tile.artifacts.firstIndex(where: { $0.id == item.id }) { itemIndex = index }
+    selected = nil
+    closeTask?.cancel()
+    withAnimation { expanded = true }
+    closeLater()
   }
 
   private func artifact(_ item: CardItem) -> some View {

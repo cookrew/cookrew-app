@@ -65,6 +65,19 @@ export function findChrome() {
   return CHROME_CANDIDATES.find((candidate) => existsSync(candidate)) ?? null
 }
 
+/**
+ * resources/cr-disclaim, when postinstall built it: Chrome then answers to
+ * macOS for itself. Spawned straight from an agent pane, its launch-time write
+ * into its own bundle is charged to Cookrew and macOS pops "Cookrew was
+ * prevented from modifying apps" on every test run (2026-11-16).
+ */
+const DISCLAIM = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'resources', 'cr-disclaim', 'cr-disclaim')
+
+/** What to spawn for Chrome: through cr-disclaim on a Mac that has it, else Chrome itself. */
+export function chromeCommand(chrome, args, launcher = process.platform === 'darwin' && existsSync(DISCLAIM) ? DISCLAIM : null) {
+  return launcher ? { command: launcher, args: [chrome, ...args] } : { command: chrome, args }
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function freePort() {
@@ -90,9 +103,7 @@ export async function launchChrome({ width, height, chrome = findChrome() }) {
   reapOrphans('cookrew-dom-probe-')
   const port = await freePort()
   const profile = mkdtempSync(path.join(tmpdir(), 'cookrew-dom-probe-'))
-  const child = spawn(
-    chrome,
-    [
+  const launch = chromeCommand(chrome, [
       '--headless=new',
       `--remote-debugging-port=${port}`,
       `--user-data-dir=${profile}`,
@@ -105,9 +116,8 @@ export async function launchChrome({ width, height, chrome = findChrome() }) {
       '--hide-scrollbars',
       '--mute-audio',
       'about:blank'
-    ],
-    { stdio: 'ignore' }
-  )
+  ])
+  const child = spawn(launch.command, launch.args, { stdio: 'ignore' })
   // Chrome does not notice when this process dies — the vitest worker killed
   // on timeout never reaches kill(). The guard is a detached shell that does.
   const guard = guardChromeWithParent({ childPid: child.pid })

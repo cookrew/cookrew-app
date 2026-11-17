@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import { WorkspaceTile } from './WorkspaceTile'
-import { deviceOf, screenAspectOf, screenFit, SWS } from './zoom-layout'
+import { deviceOnScreen, screenAspectOf, screenFit, SWS } from './zoom-layout'
 import type { Bind } from './page-parts'
 import type { MachineView } from './zoom-model'
 
@@ -49,7 +49,8 @@ export interface MachineFrameProps {
 
 export const MachineFrame = memo(function MachineFrame({ machine, frame, narrow, wordK, titleK, say, caption, gauge, openable = true, badge = null, bind, onOpen, onOpenWorkspace }: MachineFrameProps): React.JSX.Element {
   const lit = say === null
-  const device = deviceOf(machine.marks.map((m) => m.id), narrow, screenAspectOf(machine.display ?? null))
+  // As its desktop shows it, filling its screen, on a phone too (owner, 2026-11-16, 2026-11-17).
+  const device = deviceOnScreen(machine.marks.map((m) => m.id), screenAspectOf(machine.display ?? null))
   const k = screenFit(device, frame)
   const screen: React.CSSProperties = {
     transform: `translate(${frame.w / 2}px, ${frame.h / 2}px) scale(${k}) translate(0px, ${-device.box.cy}px)`,

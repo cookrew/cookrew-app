@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { batchFrames, parseBatchIds, parseKnownVersions, scopedBrowserIds, scopedThumbLookup, THUMB_BATCH_MAX } from '../src/main/browser-thumb-batch'
+import { batchFrames, ownerBrowserIds, parseBatchIds, parseKnownVersions, scopedBrowserIds, scopedThumbLookup, THUMB_BATCH_MAX } from '../src/main/browser-thumb-batch'
 import {
   applyThumbBatch,
   knownVersions,
@@ -69,6 +69,15 @@ describe('the companion half — scope', () => {
     const frames = new Map([['b1', { data: Buffer.from('x'), type: 'image/jpeg', at: 1 }]])
     const lookup = scopedThumbLookup(browsers, (id) => frames.get(id))
     expect(batchFrames(['b2'], {}, lookup)).toEqual([{ id: 'b2', at: null }])
+  })
+
+  it("the owner's unslugged client reads every workspace's browser cards, and nothing that is not one", () => {
+    const everywhere = new Map([['b1', { kind: 'browser' }], ['b9', { kind: 'browser' }], ['t1', { kind: 'terminal' }]])
+    const browsers = ownerBrowserIds(['b1', 'b9', 't1', 'gone'], (id) => everywhere.get(id))
+    expect([...browsers]).toEqual(['b1', 'b9'])
+    const frame = { data: Buffer.from('x'), type: 'image/jpeg', at: 1 }
+    const lookup = scopedThumbLookup(browsers, () => frame)
+    expect(batchFrames(['b9', 't1', 'gone'], {}, lookup).map((entry) => entry.at)).toEqual([1, null, null])
   })
 })
 

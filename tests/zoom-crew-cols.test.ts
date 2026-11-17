@@ -3,9 +3,10 @@
 // pick is remembered per form factor, and anything else stored falls back to
 // the form factor's own default (2 on a phone, 5 on a desk).
 import { describe, expect, it } from 'vitest'
-import { crewOf, CREW_COLS, defaultCrewCols, defaultDeviceCols, deviceOf, DEVICE_COLS } from '../src/renderer/src/zoom/zoom-layout'
-import { crewColsOf, crewColsKey, perRowKey } from '../src/renderer/src/zoom/crew-cols'
-import { layoutOf, type FrameModel } from '../src/renderer/src/zoom/zoom-frame'
+import { crewOf, CREW_COLS, defaultCrewCols, defaultDeviceCols, deviceOf, DEVICE_COLS, SWS, TILE, TILE_DRAWN_W, TILE_SIZES, gridColsFor, screenCols, screenGridCols } from '../src/renderer/src/zoom/zoom-layout'
+import { crewColsOf, crewColsKey, perRowChoices, perRowKey, tileSizeOf } from '../src/renderer/src/zoom/crew-cols'
+import { deviceOfModel, layoutOf, type FrameModel } from '../src/renderer/src/zoom/zoom-frame'
+import { deviceCam } from '../src/renderer/src/zoom/zoom-camera'
 
 const agents = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `a${i}`, orch: false }))
 const rowsOf = (at: Record<string, { y: number }>): number[] => {
@@ -65,8 +66,8 @@ describe('agents per row', () => {
   })
 })
 
-// WORKSPACES PER ROW (owner, 2026-11-01: "per row 3 4 5 at the workspaces
-// view too"): the device's marks take the same choices, a pick of their own.
+// WORKSPACES PER ROW (owner, 2026-11-16: a tile at an agent card's type, so
+// "per row only 1 or 2"): a pick of their own, apart from the crew's.
 describe('workspaces per row', () => {
   const ids = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`)
 
@@ -78,11 +79,11 @@ describe('workspaces per row', () => {
     }
   })
 
-  it('keeps the old defaults when nothing is picked', () => {
-    expect(rowsOf(deviceOf(ids(7), false).at)).toEqual([3, 3, 1])
-    expect(rowsOf(deviceOf(ids(7), true).at)).toEqual([2, 2, 2, 1])
-    expect(defaultDeviceCols(false)).toBe(3)
-    expect(defaultDeviceCols(true)).toBe(2)
+  it('unpicked, two to a row on a desk and one on a phone', () => {
+    expect(rowsOf(deviceOf(ids(5), false).at)).toEqual([2, 2, 1])
+    expect(rowsOf(deviceOf(ids(3), true).at)).toEqual([1, 1, 1])
+    expect(defaultDeviceCols(false)).toBe(2)
+    expect(defaultDeviceCols(true)).toBe(1)
   })
 
   it('a wider row frames a wider, shorter device', () => {
@@ -92,8 +93,15 @@ describe('workspaces per row', () => {
     expect(three.box.h).toBeGreaterThan(five.box.h)
   })
 
-  it('offers the crew’s choices, remembered apart from the crew’s pick', () => {
-    expect(DEVICE_COLS).toEqual(CREW_COLS)
+  it('offers 1 or 2 only, remembered apart from the crew’s pick', () => {
+    expect(DEVICE_COLS).toEqual({ wide: [1, 2], narrow: [1, 2] })
+    expect(CREW_COLS.wide).toEqual([3, 4, 5])
+    expect(perRowChoices('device', false)).toEqual([1, 2])
+    expect(perRowChoices('crew', false)).toEqual([3, 4, 5])
+    // A pick stored before the change (3, 4, 5) is no pick now: the default stands.
+    expect(crewColsOf('3', false, 'device')).toBeNull()
+    expect(crewColsOf('2', true, 'device')).toBe(2)
+    expect(crewColsOf('2', false, 'crew')).toBeNull()
     expect(perRowKey('device', false)).not.toBe(perRowKey('crew', false))
     expect(perRowKey('device', true)).not.toBe(perRowKey('device', false))
     // The crew's key is the one a pick was already stored under.
@@ -112,11 +120,83 @@ describe('workspaces per row', () => {
       active: 'w0',
       newest: null,
       crewCols: 3,
-      deviceCols: 5
+      deviceCols: 1
     }
     const L = layoutOf(model, false)
-    expect(rowsOf(L.device.at)).toEqual([5, 5])
+    expect(rowsOf(L.device.at)).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
     expect(rowsOf(L.crew.at)).toEqual([3, 3, 3, 3])
-    expect(rowsOf(layoutOf({ ...model, deviceCols: undefined }, false).device.at)).toEqual([3, 3, 3, 1])
+    expect(rowsOf(layoutOf({ ...model, deviceCols: undefined }, false).device.at)).toEqual([2, 2, 2, 2, 2])
+  })
+})
+
+// A TILE'S TYPE (owner, 2026-11-16: "bigger icons and words, a setting, the
+// frame after the agent card, holding its type"): the camera draws a tile's px
+// at the pick on screen, room allowing, and the pick is only one of the sizes.
+describe('a workspace tile’s type', () => {
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`)
+  const onScreen = (d: ReturnType<typeof deviceOf>, w: number, h: number, narrow: boolean): number => deviceCam(d, w, h, narrow).S * SWS * (TILE.w / TILE_DRAWN_W)
+
+  it('a desk draws a tile at an agent card’s own type, and larger at a larger pick, two to a row', () => {
+    expect(onScreen(deviceOf(ids(4), false), 1440, 900, false)).toBeCloseTo(1, 6)
+    expect(onScreen(deviceOf(ids(4), false, undefined, undefined, 1.3), 1440, 900, false)).toBeCloseTo(1.3, 6)
+  })
+
+  it('a window too narrow for the pick shrinks to fit rather than cut a tile', () => {
+    const d = deviceOf(ids(4), false, undefined, undefined, 1.3)
+    expect(onScreen(d, 600, 900, false)).toBeLessThan(1.3)
+    expect(d.box.w * deviceCam(d, 600, 900, false).S).toBeLessThanOrEqual(600 - 32 + 1e-6)
+  })
+
+  it('a phone draws its one tile to a row at an agent card’s own type too', () => {
+    expect(onScreen(deviceOf(ids(3), true), 390, 844, true)).toBeCloseTo(1, 6)
+  })
+
+  it('only a size offered is a pick', () => {
+    expect(TILE_SIZES).toEqual([1, 1.15, 1.3])
+    expect(tileSizeOf('1.15')).toBe(1.15)
+    expect(tileSizeOf('2')).toBeNull()
+    expect(tileSizeOf(null)).toBeNull()
+  })
+})
+
+// THE WORKSPACES GRID BY THE SCREEN (owner, 2026-11-17: "取消feed，仅保留grid，按照屏幕大小平铺"),
+// and the devices stop pictured as a desktop shows it.
+describe('the workspaces grid, as many to a row as the screen holds', () => {
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`)
+  const model = (over: Partial<FrameModel>): FrameModel => ({ agents: [], items: [], links: [], ties: [], workspaces: ids(9), otherMachines: 0, active: 'w0', newest: null, ...over })
+  const type = (d: ReturnType<typeof deviceOf>, w: number, h: number, narrow: boolean): number => deviceCam(d, w, h, narrow).S * SWS * (TILE.w / TILE_DRAWN_W)
+
+  it('a phone upright two to a row; a desk four, a wide screen more, a phone on its side as many as fit; a larger type fewer', () => {
+    expect(screenGridCols(390, 795, true)).toBe(2)
+    expect(screenGridCols(844, 390, false)).toBe(gridColsFor(844, false))
+    expect(screenGridCols(844, 390, false)).toBeGreaterThanOrEqual(2)
+    expect(screenGridCols(1440, 851, false)).toBe(4)
+    expect(gridColsFor(1440, false)).toBe(4)
+    expect(gridColsFor(2560, false)).toBeGreaterThan(4)
+    expect(gridColsFor(1440, false, 1.3)).toBeLessThan(4)
+  })
+
+  it('a full row fills the width; on a desk or a phone on its side every tile at least an agent card’s type', () => {
+    for (const [w, h, narrow] of [[390, 795, true], [844, 390, false], [1440, 851, false], [2560, 1400, false]] as const) {
+      const d = deviceOfModel(model({ fitCols: screenGridCols(w, h, narrow) }), narrow)
+      expect(rowsOf(d.at)[0]).toBe(screenGridCols(w, h, narrow))
+      if (!(narrow && h > w)) expect(type(d, w, h, narrow)).toBeGreaterThanOrEqual(1 - 1e-9)
+      expect(d.box.w * deviceCam(d, w, h, narrow).S).toBeCloseTo(w - 32, 6)
+    }
+  })
+
+  it('fewer than a row stand at their own type, not stretched', () => {
+    const d = deviceOfModel(model({ fitCols: screenGridCols(1440, 851, false), workspaces: ids(2) }), false)
+    expect(rowsOf(d.at)).toEqual([2])
+    expect(type(d, 1440, 851, false)).toBeCloseTo(1, 6)
+  })
+
+  it('the devices stop fills each machine’s screen with its workspaces, whatever this screen (owner, 2026-11-17: 平铺占满屏中屏)', () => {
+    const d = deviceOfModel(model({ workspaces: ids(8), fitCols: 2, deviceDesk: true }), true)
+    expect(rowsOf(d.at)).toEqual([4, 4])
+    // No other count draws the tiles larger on a 16:10 screen.
+    for (let c = 1; c <= 8; c++) expect(deviceOf(ids(8), false, undefined, c).screen.w).toBeGreaterThanOrEqual(d.screen.w - 1e-6)
+    expect(screenCols(1)).toBe(1)
+    expect(screenCols(2)).toBe(2)
   })
 })

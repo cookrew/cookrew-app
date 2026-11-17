@@ -989,6 +989,7 @@ export interface CookrewApi {
   /** Still of a headless browser page for its card thumbnail; null when the
    *  flag is off or the page cannot be captured right now. */
   browserSnapshot?: (browserId: string) => Promise<string | null>;
+  browserTileWake?: (browserIds: readonly string[]) => void;
   // ── the owner's account (identity v2, phase 1) ──
   //
   // ALL OPTIONAL, and the surface feature-detects rather than branching on

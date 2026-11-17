@@ -298,6 +298,8 @@ import { WatchPairing } from './watch-pairing'
 import { createWatchHost } from './watch-host'
 import { inviteWatch, setWatchHost } from './watch-routes'
 import { BrowserThumbCache } from './browser-thumb-cache'
+import { createTileWake } from './browser-tile-wake'
+import { browserThumbKeep } from './browser-thumb-keep'
 import { machineCopy, registryArgument } from '../shared/machine-words'
 import { commandRunsInMain, mainDrawsCard } from './browser-owner'
 import { REFUSAL_FOR_A_PERSON } from './host-claim'
@@ -6869,6 +6871,8 @@ const browserWaiters = new Map<string, { resolve: (v: string) => void; reject: (
  * the headless page main itself owns with the flag on.
  */
 const browserThumbs = new BrowserThumbCache({
+  // The last picture of each browser, past a restart: a tile's front page shows the page as last seen.
+  keep: browserThumbKeep(),
   // peek, not get: drawing a thumbnail must never be what launches a browser.
   // A page that cannot be photographed right now (navigating, mid-resize) is
   // ordinary, not an error: the card keeps its last frame and the next poll
@@ -6898,6 +6902,17 @@ async function noteBrowserViewed(browserId: string): Promise<void> {
     mainWindow.webContents.send('browser:phone-viewing', browserId)
   }
 }
+
+/** A workspace tile's page with no picture anywhere: started once, photographed, stopped (browser-tile-wake.ts). */
+const tileWake = createTileWake({
+  held: (id) => browserThumbs.frame(id) !== undefined,
+  running: (id) => browserManager.liveIds().includes(id),
+  wakeable: (id) => store.nodeAcrossWorkspaces(id)?.node.kind === 'browser' && streamsCard(id) && !showsThisMachine(id),
+  start: async (id) => (await browserManager.get(id)) !== null,
+  capture: (id) => browserThumbs.refresh(id, { force: true }),
+  usedSince: (id, since) => browserManager.liveIds(since).includes(id),
+  stop: (id) => browserManager.remove(id)
+})
 
 /** Decided once per launch: on by default where a Chrome is installed (launch-defaults.ts). */
 let interactiveBrowserDecision: boolean | null = null
@@ -8373,6 +8388,7 @@ app.whenReady().then(() => {
     browserThumb: (id) => browserThumbs.frame(id),
     interactiveBrowserEnabled,
     browserThumbRequested: noteBrowserViewed,
+    browserTileWake: (ids) => tileWake.want(ids),
     onUpgrade: (request, socket) => browserCast.upgrade(request, socket),
     // Built renderer bundle — served to phones so mobile gets the full
     // desktop canvas UI. Dev proxies Vite so LAN phones get live code; a
@@ -9879,6 +9895,11 @@ function registerIpc(handlers: RestoreHandlers): void {
   // Thumbnail frames from the renderer's browser capture loop (data URLs).
   ipcMain.on('browser:thumb', (_e, browserId: string, dataUrl: string) => {
     browserThumbs.putDataUrl(browserId, dataUrl)
+  })
+
+  // The desktop's workspaces view: its tiles' pages that have no picture anywhere (browser-tile-wake.ts).
+  ipcMain.on('browser:tile-wake', (_e, ids: unknown) => {
+    if (Array.isArray(ids)) tileWake.want(ids.filter((id): id is string => typeof id === 'string').slice(0, 12))
   })
 
   /**

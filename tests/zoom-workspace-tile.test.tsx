@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { deviceCam, deviceWords, SWS } from '../src/renderer/src/zoom/zoom-frame'
-import { BENCH, deviceOf, DECK_POSE, fanOf, stackOf, TILE, tileOf, TILE_SPLIT } from '../src/renderer/src/zoom/zoom-layout'
+import { BENCH, deviceOf, DECK_POSE, fanOf, stackOf, TILE, TILE_DRAWN_W, tileOf, TILE_SPLIT } from '../src/renderer/src/zoom/zoom-layout'
 import { deckOf } from '../src/renderer/src/zoom/use-zoom-fleet'
 import { deckDepth, sameTile, WorkspaceTile } from '../src/renderer/src/zoom/WorkspaceTile'
 import { buildZoomModel, type MarkView } from '../src/renderer/src/zoom/zoom-model'
@@ -96,8 +96,8 @@ describe('the phone camera at the workspaces stop', () => {
   })
 
   it('does not scroll what fits', () => {
-    expect(deviceCam(deviceOf(ids(8), true), 360, 724, true).panMax).toBe(0)
-    expect(deviceCam(deviceOf(ids(8), false), 1440, 828, false).panMax).toBe(0)
+    expect(deviceCam(deviceOf(ids(1), true), 360, 724, true).panMax).toBe(0)
+    expect(deviceCam(deviceOf(ids(2), false), 1440, 828, false).panMax).toBe(0)
   })
 
   it('scrolls a desk of many rows, past three, instead of shrinking', () => {
@@ -107,12 +107,12 @@ describe('the phone camera at the workspaces stop', () => {
     expect(many.panMax).toBeGreaterThan(0)
   })
 
-  it('fills the width', () => {
+  it('draws a tile at an agent card’s own size, inside the width (owner, 2026-11-16: the tile fits the card)', () => {
     for (const [w, h] of PHONES) {
       const d = deviceOf(ids(8), true)
       const list = tiles(d)
       const width = (Math.max(...list.map((t) => t.right)) - Math.min(...list.map((t) => t.left))) * deviceCam(d, w, h, true).S
-      expect(width).toBeGreaterThanOrEqual(w - 40)
+      expect(width).toBeCloseTo(TILE_DRAWN_W, 0)
       expect(width).toBeLessThanOrEqual(w - 24)
     }
   })
@@ -203,8 +203,9 @@ describe('a tile', () => {
 
   it('never shows a made-up zero: no feed, no artifacts door', () => {
     const html = render(mark({ browsers: null, notes: null }))
-    expect(html).not.toContain('artifacts')
-    expect(html).not.toContain('zv-deck')
+    expect(html).not.toContain('zv-door items')
+    expect(html).not.toContain('▭')
+    expect(html).not.toContain('▤')
   })
 
   it('says when a workspace is known to hold nothing, and opens no door on it', () => {
@@ -212,7 +213,7 @@ describe('a tile', () => {
     expect(html).toContain('no artifacts')
     expect(html).not.toContain('zv-door items')
     expect(html).toContain('zv-door agents whole')
-    expect(render(mark({ presets: [] }))).toContain('no agents')
+    expect(render(mark({ presets: [] })).match(/title="0 agents"/)).not.toBeNull()
   })
 
   it('puts the first agent on top of the fan, as the open crew does', () => {
@@ -226,20 +227,20 @@ describe('a tile', () => {
   })
 
   it('marks a split too long for a snug tile, which then says the total', () => {
-    expect(render(mark({ browsers: 230, notes: 91 }))).not.toContain('data-long')
-    expect(render(mark({ browsers: 230, notes: 191 }))).toContain('data-long')
+    expect(render(mark({ browsers: 230, notes: 191 }))).toContain('▭230')
+    expect(render(mark({ browsers: 230, notes: 191 }))).toContain('▤191')
   })
 
   it('counts who is waiting', () => {
-    expect(render(mark({ waiting: true, waitingCount: 3 }))).toContain('3 waiting')
-    expect(render(mark())).not.toContain('zv-tile-wait')
+    expect(render(mark({ waiting: true, waitingCount: 3 }))).toContain('class="dm-wait">3')
+    expect(render(mark())).not.toContain('dm-wait')
   })
 
   it('draws the tile row for both open and other workspaces', () => {
     const html = render(mark(), true)
     expect(html).toContain('data-open="true"')
-    expect(html).toContain('zv-workspace-agent')
-    expect(render(mark())).toContain('zv-av')
+    expect(html).toContain('dm-head')
+    expect(render(mark())).toContain('dm-crew')
   })
 
   // Owner, 2026-11-04: "the circle round the agents can go". The faces stand on the tile by themselves.

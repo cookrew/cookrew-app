@@ -433,6 +433,7 @@ const api = {
   laneAuto: (nodeId: string, on: boolean) => ipcRenderer.invoke('lane:auto', nodeId, on),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   browserSnapshot: (browserId: string) => ipcRenderer.invoke('browser:snapshot', browserId),
+  browserTileWake: (browserIds: readonly string[]) => ipcRenderer.send('browser:tile-wake', [...browserIds]),
   onWorkspaceList: (cb: (list: unknown) => void) => {
     const listener = (_e: unknown, list: unknown): void => cb(list)
     ipcRenderer.on('workspace:list', listener)

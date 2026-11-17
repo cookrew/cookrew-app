@@ -1,617 +1,84 @@
-/* ── A WORKSPACE'S TILE (WorkspaceTile.tsx; owner, 2026-11-04) ──
-   One bench: the agents' faces on the left, the artifacts' deck on the right,
-   a name over both, each group a door. Everything is placed in a mark's units
-   (zoom-layout.ts · TILE, DECK_POSE, TILE_SPLIT: keep the numbers here with
-   them). What must look the same at every per-row pick (the hairline, the
-   corners, the words' margins) is multiplied by --zv-k, how many of a mark's
-   units make a pixel on screen at rest (zoom-camera.ts · deviceWords). */
-
-.zv-mark {
-  --zv-tile-r: calc(12px * var(--zv-k, 1));
-  --zv-pad: 11px;
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 0;
-  height: 0;
-  transform-origin: 0 0;
-}
-
-.zv-mark > * {
-  pointer-events: none;
-}
-
-.zv-mark .zv-av {
-  will-change: auto;
-}
-
-.zv-tile {
-  position: absolute;
-  left: -112px;
-  top: var(--zv-tile-top, -174px);
-  width: 430px;
-  height: var(--zv-tile-h, 318px);
-  border-radius: var(--zv-tile-r);
-  background: var(--zv-card);
-  box-shadow:
-    inset 0 0 0 calc(1px * var(--zv-k, 1)) var(--zv-hair-2),
-    0 calc(1px * var(--zv-k, 1)) calc(3px * var(--zv-k, 1)) var(--zv-shadow-sm);
-}
-
-/* A workspace avatar: one artifact folder is the body, with the agents seated
-   across its top edge. The body stays the same size at every zoom pick. */
-.zv-workspace-artifact {
-  position: absolute;
-  left: -82px;
-  top: -118px;
-  width: 370px;
-  height: 230px;
-  z-index: 5;
-  pointer-events: none;
-}
-
-.zv-workspace-folder {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  border: calc(1.5px * var(--zv-k, 1)) solid var(--zv-rule);
-  border-radius: 13px 13px 16px 16px;
-  background: var(--zv-paper-2);
-  box-shadow: 0 calc(2px * var(--zv-k, 1)) calc(7px * var(--zv-k, 1)) var(--zv-shadow-sm);
-}
-
-.zv-workspace-folder::before {
-  content: '';
-  position: absolute;
-  left: -1px;
-  top: -13px;
-  width: 110px;
-  height: 28px;
-  border: inherit;
-  border-bottom: 0;
-  border-radius: 12px 12px 0 0;
-  background: var(--zv-paper-2);
-}
-
-.zv-artifact-fan {
-  position: absolute;
-  left: 14%;
-  right: 14%;
-  top: 14px;
-  bottom: 12px;
-  transform-origin: 50% 100%;
-}
-
-.zv-artifact-sheet {
-  position: absolute;
-  inset: 0;
-  transform-origin: 50% 100%;
-  filter: drop-shadow(0 1px 2px var(--zv-shadow));
-}
-
-.zv-artifact-page {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  border-radius: 5px 5px 0 0;
-  background: var(--zv-card);
-  box-shadow: inset 0 0 0 calc(1px * var(--zv-k, 1)) var(--zv-hair-2);
-}
-
-.zv-artifact-page > .zv-bar {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 20px;
-  padding: 0 10px;
-  overflow: hidden;
-  white-space: nowrap;
-  border-bottom: calc(1px * var(--zv-k, 1)) solid var(--zv-hair);
-  background: var(--zv-paper-2);
-  font: 9px/1 var(--zv-mono);
-  color: var(--zv-ink-soft);
-}
-
-.zv-artifact-page > .zv-shot {
-  display: block;
-  width: 100%;
-  height: calc(100% - 20px);
-  object-fit: cover;
-  object-position: top center;
-}
-
-.zv-artifact-page > .zv-pg {
-  display: grid;
-  gap: 8px;
-  padding: 28px 20px;
-}
-
-.zv-artifact-page > .zv-pg b {
-  display: block;
-  height: 34px;
-  border-radius: 5px;
-}
-
-.zv-artifact-page > .zv-pg i {
-  display: block;
-  height: 7px;
-  border-radius: 4px;
-  background: var(--zv-hair-2);
-}
-
-.zv-artifact-page > .zv-pg i:last-child {
-  width: 62%;
-}
-
-.zv-artifact-page > .zv-nt {
-  display: grid;
-  align-content: start;
-  gap: 8px;
-  padding: 28px 20px;
-}
-
-.zv-artifact-page > .zv-nt b {
-  font: 600 15px/1.25 var(--zv-serif);
-  color: var(--zv-ink);
-}
-
-.zv-artifact-page > .zv-nt i {
-  display: block;
-  height: 7px;
-  border-radius: 4px;
-  background: var(--zv-hair-2);
-}
-
-.zv-workspace-folder > .zv-bar,
-.zv-workspace-folder > .zv-shot,
-.zv-workspace-folder > .zv-pg,
-.zv-workspace-folder > .zv-nt {
-  position: absolute;
-  inset: 0;
-}
-
-.zv-workspace-folder > .zv-bar {
-  z-index: 2;
-  height: 28px;
-  padding: 0 16px;
-  border-bottom: calc(1px * var(--zv-k, 1)) solid var(--zv-hair);
-  background: var(--zv-paper-2);
-  font: 12px/28px var(--zv-mono);
-  color: var(--zv-ink-soft);
-}
-
-.zv-workspace-folder > .zv-shot {
-  top: 28px;
-  width: 100%;
-  height: calc(100% - 28px);
-  object-fit: cover;
-  object-position: top center;
-}
-
-.zv-workspace-folder > .zv-pg {
-  display: grid;
-  align-content: start;
-  gap: 10px;
-  padding: 58px 34px 24px;
-}
-
-.zv-workspace-folder > .zv-pg b {
-  display: block;
-  height: 54px;
-  border-radius: 8px;
-}
-
-.zv-workspace-folder > .zv-pg i {
-  display: block;
-  height: 10px;
-  border-radius: 5px;
-  background: var(--zv-hair-2);
-}
-
-.zv-workspace-folder > .zv-pg i:last-child {
-  width: 62%;
-}
-
-.zv-workspace-folder.note {
-  background: var(--zv-card);
-  clip-path: polygon(0 0, calc(100% - 24px) 0, 100% 24px, 100% 100%, 0 100%);
-}
-
-.zv-workspace-folder > .zv-nt {
-  display: grid;
-  align-content: start;
-  gap: 12px;
-  padding: 56px 32px 24px;
-}
-
-.zv-workspace-folder > .zv-nt b {
-  font: 600 18px/1.25 var(--zv-serif);
-  color: var(--zv-ink);
-}
-
-.zv-workspace-folder > .zv-nt i {
-  display: block;
-  height: 9px;
-  border-radius: 5px;
-  background: var(--zv-hair-2);
-}
-
-.zv-workspace-agents {
-  position: absolute;
-  left: -74px;
-  top: -152px;
-  z-index: 9;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 352px;
-  height: 70px;
-  padding: 0 10px;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.zv-mark .zv-workspace-agent {
-  position: relative;
-  left: auto;
-  top: auto;
-  flex: none;
-  width: 52px;
-  height: 52px;
-  transform: scale(.81);
-  transform-origin: center;
-  background: var(--zv-paper);
-  box-shadow: 0 2px 5px var(--zv-shadow-sm);
-}
-
-.zv-workspace-agent .ink-avatar {
-  width: 52px;
-  height: 52px;
-}
-
-/* The open one: in ink. The header says its name too; this says which tile that is. */
-.zv-mark[data-open] .zv-tile {
-  box-shadow:
-    inset 0 0 0 calc(1.5px * var(--zv-k, 1)) var(--zv-ink),
-    0 calc(1px * var(--zv-k, 1)) calc(3px * var(--zv-k, 1)) var(--zv-shadow-sm);
-}
-
-/* ── the two doors: the tile's two halves, under the words, over the groups ── */
-.zv-mark > .zv-door {
-  appearance: none;
-  position: absolute;
-  z-index: 20;
-  top: var(--zv-tile-top, -174px);
-  height: var(--zv-tile-h, 318px);
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  cursor: pointer;
-  /* The layer's: the painter closes the doors where the tiles are only a picture (zoom-frame.ts). */
-  pointer-events: inherit;
-  transition: background-color 120ms ease;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.zv-door.agents {
-  left: -112px;
-  width: 210px;
-  border-radius: var(--zv-tile-r) 0 0 var(--zv-tile-r);
-}
-
-.zv-door.items {
-  left: 98px;
-  width: 220px;
-  border-radius: 0 var(--zv-tile-r) var(--zv-tile-r) 0;
-}
-
-/* Nothing to open on its right: the agents' door is the whole tile. */
-.zv-door.agents.whole {
-  width: 430px;
-  border-radius: var(--zv-tile-r);
-}
-
-.zv-door:active {
-  background: var(--zv-wash);
-}
-
-@media (hover: hover) {
-  .zv-door:hover {
-    background: var(--zv-wash);
-  }
-}
-
-.zv-door:focus-visible {
-  outline: calc(2px * var(--zv-k, 1)) solid var(--zv-seal);
-  outline-offset: calc(-2px * var(--zv-k, 1));
-}
-
-/* ── the deck: real things, a sheet each; its depth is how much the workspace holds ── */
-.zv-deck {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 0;
-  height: 0;
-}
-
-.zv-sheet {
-  position: absolute;
-  left: -84px;
-  top: -54px;
-  width: 168px;
-  height: 108px;
-  border-radius: calc(3px * var(--zv-k, 1));
-  box-shadow: 0 calc(1px * var(--zv-k, 1)) calc(2.5px * var(--zv-k, 1)) var(--zv-shadow);
-}
-
-/* Its edge in the faces' ink: the two groups weigh the same on the tile. */
-.zv-sheet.zv-th::before {
-  box-shadow: inset 0 0 0 calc(1px * var(--zv-k, 1)) var(--zv-rule);
-}
-
-.zv-sheet.zv-th.blank::before {
-  box-shadow: inset 0 0 0 calc(1px * var(--zv-k, 1)) var(--zv-hair-2);
-}
-
-.zv-sheet.blank {
-  background: var(--zv-card);
-}
-
-.zv-sheet.empty {
-  border: calc(1px * var(--zv-k, 1)) dashed var(--zv-hair-2);
-  box-shadow: none;
-}
-
-.zv-mark .zv-sheet .zv-bar {
-  height: 20px;
-  padding-left: 0;
-}
-
-.zv-mark .zv-sheet .zv-shot {
-  height: calc(100% - 20px);
-}
-
-.zv-mark .zv-sheet .zv-pg {
-  gap: 9px;
-  padding: 11px 13px;
-}
-
-.zv-mark .zv-sheet .zv-pg b {
-  height: 26px;
-  border-radius: 4px;
-}
-
-.zv-mark .zv-sheet .zv-pg i {
-  height: 8px;
-  border-radius: 4px;
-}
-
-.zv-mark .zv-sheet .zv-nt {
-  gap: 11px;
-  padding: 24px 16px 0;
-}
-
-.zv-mark .zv-sheet .zv-nt i {
-  display: block;
-  height: 8px;
-  border-radius: 4px;
-  background: var(--zv-hair-2);
-}
-
-.zv-sheet.zv-th.note {
-  border-radius: 0;
-  clip-path: polygon(0 0, calc(100% - 22px) 0, 100% 22px, 100% 100%, 0 100%);
-}
-
-.zv-sheet.zv-th.note::after {
-  width: 22px;
-  height: 22px;
-}
-
-/* ── the words: 1:1 on screen, inside the frame; the painter scales them about these corners ── */
-.zv-tw {
-  position: absolute;
-  z-index: 21;
-  white-space: nowrap;
-  color: var(--zv-ink-soft);
-}
-
-.zv-tile-name {
-  left: calc(-112px + var(--zv-pad) * var(--zv-k, 1));
-  top: calc(var(--zv-tile-top, -174px) + 7px * var(--zv-k, 1));
-  /* The frame's width in a word's own px, less the margins. */
-  max-width: calc(430px / var(--zv-k, 1) - 2 * var(--zv-pad));
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transform-origin: 0 0;
-  font: 600 14px/1.3 var(--zv-serif);
-  color: var(--zv-ink);
-}
-
-/* Who is waiting, in the corner, in the red that always says so. */
-.zv-tile-wait {
-  right: calc(-318px + 7px * var(--zv-k, 1));
-  top: calc(var(--zv-tile-top, -174px) + 7px * var(--zv-k, 1));
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  box-sizing: border-box;
-  transform-origin: 100% 0;
-  background: var(--zv-wait);
-  color: var(--zv-on-seal);
-  font: 600 10px/16px var(--zv-mono);
-  text-align: center;
-}
-
-.zv-mark[data-waiting] .zv-tile-name {
-  max-width: calc(430px / var(--zv-k, 1) - 2 * var(--zv-pad) - 20px);
-}
-
-.zv-tile-cap {
-  /* The frame's foot, from the mark's origin: its top and height are the pick's (tileOf). */
-  top: calc(var(--zv-tile-top, -174px) + var(--zv-tile-h, 318px) - 23px * var(--zv-k, 1));
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 16px;
-  transform-origin: 0 0;
-  font: 10px/16px var(--zv-mono);
-  letter-spacing: 0.02em;
-}
-
-.zv-tile-cap {
-  overflow: hidden;
-}
-
-/* Each caption inside its door, in its own px. */
-.zv-tile-cap.agents {
-  left: calc(-112px + var(--zv-pad) * var(--zv-k, 1));
-  max-width: calc(210px / var(--zv-k, 1) - var(--zv-pad));
-}
-
-.zv-tile-cap.items {
-  left: 104px;
-  max-width: calc(214px / var(--zv-k, 1) - 4px);
-}
-
-.zv-tile-cap small {
-  font: inherit;
-}
-
-.zv-tile-cap em {
-  font-style: italic;
-  color: var(--zv-muted);
-}
-
-.zv-tile-cap .zv-seal {
-  flex: none;
-  width: auto;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 3px;
-  box-sizing: border-box;
-  border-radius: 2px;
-  font: 600 10px/16px var(--zv-mono);
-}
-
-.zv-tile-cap .zv-split,
-.zv-tile-cap .zv-split > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.zv-tile-cap .zv-split {
-  gap: 7px;
-}
-
-.zv-tile-cap :is(.zv-total, .zv-zero) {
-  display: none;
-}
-
-/* What a smaller tile lets go: the word beside the seal, then the split, then the counts. */
-.zv-device[data-density='snug'] .zv-tile-cap small,
-.zv-device[data-density='compact'] .zv-tile-cap small,
-.zv-device[data-density='compact'] .zv-tile-cap .zv-split {
-  display: none;
-}
-
-.zv-device[data-density='compact'] .zv-tile-cap .zv-total {
-  display: inline;
-}
-
-/* A snug tile keeps the split while it fits, closer together; past that, the total. */
-.zv-device[data-density='snug'] .zv-tile-cap .zv-split {
-  gap: 4px;
-}
-
-.zv-device[data-density='snug'] .zv-tile-cap .zv-split > span {
-  gap: 2px;
-}
-
-.zv-device[data-density='snug'] .zv-tile-cap[data-long] .zv-split {
-  display: none;
-}
-
-.zv-device[data-density='snug'] .zv-tile-cap[data-long] .zv-total {
-  display: inline;
-}
-
-/* "No artifacts" has no room under a smaller deck: a plain zero says it. */
-.zv-device:is([data-density='snug'], [data-density='compact']) .zv-tile-cap em {
-  display: none;
-}
-
-.zv-device:is([data-density='snug'], [data-density='compact']) .zv-tile-cap .zv-zero {
-  display: inline;
-  color: var(--zv-muted);
-}
-
-.zv-device[data-density='tiny'] .zv-tile-cap {
-  display: none;
-}
-
-/* Tiny, the name takes the caption's size: more of it reads than at its own. */
-.zv-device[data-density='tiny'] .zv-tile-name {
-  font-size: 10px;
-}
-
-.zv-device[data-density='tiny'] .zv-mark {
-  --zv-pad: 6px;
-}
-
-.zv-fan-window {
-  position: absolute;
-  left: -112px;
-  top: calc(var(--zv-tile-top, -174px) + 112px);
-  width: 430px;
-  height: calc(var(--zv-tile-h, 318px) - 160px);
-  z-index: 22;
-  overflow: hidden;
-  background: var(--zv-paper-2);
-  pointer-events: inherit;
-  touch-action: pan-y;
-  cursor: grab;
-  transition: top 420ms, height 420ms, border-radius 420ms;
-}
-
-.zv-fan-window.expanded {
-  z-index: 30;
-  top: var(--zv-tile-top, -174px);
-  height: var(--zv-tile-h, 318px);
-  border-radius: var(--zv-tile-r);
-}
-
-.zv-fan-window.dragging { cursor: grabbing; }
-.zv-fan-window .zv-workspace-artifact { inset: 0; width: auto; height: auto; }
-.zv-fan-window .zv-workspace-folder { border: 0; border-radius: 0; box-shadow: none; }
-.zv-fan-window .zv-workspace-folder::before { display: none; }
-.zv-fan-window .zv-artifact-fan { bottom: -12px; transition: inset 420ms; }
-.zv-fan-window.expanded .zv-artifact-fan { left: 10px; right: 24px; top: 20px; bottom: 10px; }
-.zv-fan-window .zv-artifact-sheet { transition: transform 360ms, opacity 360ms; }
-.zv-fan-window.dragging .zv-artifact-sheet { transition: none; }
-.zv-artifact-sheet:not(.front) .zv-bar { color: transparent; }
-.zv-artifact-sheet:not(.front) .zv-pg, .zv-artifact-sheet:not(.front) .zv-nt { visibility: hidden; }
-.zv-workspace-agents { top: calc(var(--zv-tile-top, -174px) + 35px); }
-.zv-tile-cap.agents { top: calc(var(--zv-tile-top, -174px) + 52px); left: 275px; max-width: 35px; }
-.zv-tile-cap.agents small { display: none; }
-.zv-tile-art-title { left: calc(-112px + var(--zv-pad) * var(--zv-k, 1)); top: calc(var(--zv-tile-top, -174px) + var(--zv-tile-h, 318px) - 23px * var(--zv-k, 1)); max-width: calc(195px / var(--zv-k, 1)); overflow: hidden; text-overflow: ellipsis; font: 11px/16px var(--zv-serif); color: var(--zv-ink); transform-origin: 0 0; }
-
-.zv-workspace-agents { z-index: 23; pointer-events: inherit; touch-action: pan-y; display: block; }
-.zv-mark .zv-workspace-agent { position: absolute; left: 10px; top: 9px; margin: 0; padding: 0; border: 0; cursor: pointer; transition: transform 260ms; }
-.zv-workspace-agents.dragging .zv-workspace-agent { transition: none; }
-.zv-tile-agent-name { position: absolute; left: 68px; top: 12px; width: 160px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 600 20px var(--zv-serif); color: var(--zv-ink); pointer-events: none; background: var(--zv-card); }
-.zv-tile-agent-name small { display: block; font: 12px var(--zv-mono); color: var(--zv-muted); }
-.zv-fan-tied { position: absolute; top: 8px; right: 8px; z-index: 300; display: flex; gap: 4px; }
-.zv-fan-tied button { border: 0; padding: 3px; border-radius: 50%; background: var(--zv-card); cursor: pointer; }
-.zv-tile-card-window { position: absolute; left: -112px; top: calc(var(--zv-tile-top, -174px) + 112px); width: 430px; height: calc(var(--zv-tile-h, 318px) - 112px); z-index: 22; overflow: hidden; background: var(--zv-card); pointer-events: inherit; }
-.zv-tile-card { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px; }
-.zv-tile-card .zv-tile-card-body { position: static; flex: 1; min-height: 0; width: auto; max-height: none; overflow: hidden; --zv-words-room: 100%; }
-.zv-tile-card-art { display: flex; flex: none; align-items: center; height: 48px; gap: 8px; background: var(--zv-paper-2); overflow: hidden; }
-.zv-tile-card-art .zv-artifact-page { position: relative; inset: auto; flex: none; width: 75px; height: 44px; }
-.zv-tile-card-art span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 14px var(--zv-mono); }
-.zv-tile-card .zv-tile-card-reply { position: static; flex: none; width: auto; height: 36px; }
-.zv-tile-card-back { position: absolute; top: 0; right: 0; border: 0; background: var(--zv-card); color: var(--zv-ink); cursor: pointer; }
+.zv-mark { --zv-tile-r: calc(12px * var(--zv-k, 1)); position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
+.zv-mark > * { pointer-events: none; }
+.zv-tile { position: absolute; left: -112px; top: -174px; width: 430px; height: var(--zv-tile-h, 486px); border-radius: var(--zv-tile-r); background: var(--zv-card); opacity: 0; }
+.dm-tile { position: absolute; left: -112px; top: -174px; width: 260px; height: calc(var(--zv-tile-h, 486px) * 260 / 430); transform: scale(calc(430 / 260)); transform-origin: 0 0; overflow: hidden; isolation: isolate; border-radius: calc(var(--zv-tile-r) * 260 / 430); background: var(--zv-card); box-shadow: inset 0 0 0 1px var(--zv-hair-2), 0 1px 3px var(--zv-shadow-sm); color: var(--zv-ink); font-family: var(--zv-mono); pointer-events: none; z-index: 5; }
+.dm-tile header,.dm-row,.dm-folder,.dm-fan,.dm-fan-tied,.dm-fan-tied button,.dm-ov-layer,.dm-agent-card,.dm-head { pointer-events: auto; }
+.dm-tile header { position: relative; z-index: 4; display: flex; align-items: center; gap: 6px; height: 30px; padding: 9px 10px 0; box-sizing: border-box; }
+.dm-tile h3 { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 17px/1.3 var(--zv-serif); }
+.dm-wait { flex: none; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: var(--zv-wait); color: var(--zv-on-seal); font: 600 11px/18px var(--zv-mono); font-style: normal; text-align: center; }
+.dm-row { position: relative; z-index: 4; height: 46px; overflow: hidden; touch-action: pan-y; user-select: none; -webkit-user-select: none; cursor: grab; }
+.dm-row.dragging { cursor: grabbing; }
+.dm-crew { position: absolute; inset: 0; }
+.dm-head { position: absolute; left: 0; top: 50%; display: grid; place-items: center; margin: 0; padding: 0; border: 0; background: none; cursor: pointer; transition: transform 260ms cubic-bezier(.2,.8,.2,1), opacity 260ms; -webkit-tap-highlight-color: transparent; }
+.dm-row.dragging .dm-head { transition: none; }
+.dm-head .ink-avatar { display: block; }
+.dm-head { width: 36px; height: 36px; }
+.dm-tile .dm-card-head > .zv-nm,
+.dm-tile .dm-card-head > .ag-meta,
+.dm-tile .dm-card-head .zv-st,
+.dm-tile .dm-card-head .zv-cnt { position: relative; left: auto; top: auto; transform: none; will-change: auto; }
+.dm-tile .dm-card-head > .ag-meta { display: flex; }
+.dm-card-head { position: absolute; left: 54px; top: 50%; display: grid; gap: 1px; width: 160px; translate: 0 -50%; opacity: 0; pointer-events: none; transition: opacity 200ms; }
+.dm-tile.agent .dm-card-head { opacity: 1; }
+.dm-card-head .zv-nm { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 15px/1.25 var(--zv-serif); }
+.dm-card-head .ag-meta { display: flex; gap: 6px; align-items: center; font: 10.5px/1.2 var(--zv-mono); }
+.dm-card-head .zv-st { position: static; font: inherit; letter-spacing: .08em; text-transform: uppercase; }
+.dm-card-head .zv-cnt { display: inline-flex; gap: 4px; color: var(--zv-muted); }
+.dm-card-head .zv-cnt span { display: inline-flex; align-items: center; gap: 1px; }
+.dm-card-head .zv-cnt svg { width: 10px; height: 10px; }
+.dm-count.agents { position: absolute; right: 0; top: 0; bottom: 0; z-index: 2; display: flex; align-items: center; padding: 0 9px 0 22px; pointer-events: none; background: linear-gradient(to right, transparent, var(--zv-card) 60%); }
+.dm-seal { min-width: 18px; height: 18px; padding: 0 3px; box-sizing: border-box; border-radius: 2px; background: var(--zv-seal-fill); color: var(--zv-on-seal); font: 600 11px/18px var(--zv-mono); font-style: normal; text-align: center; }
+.dm-folder { position: relative; height: calc(100% - 76px); overflow: hidden; border-top: 1px solid var(--zv-rule); }
+.dm-folder-view { position: relative; height: calc(100% - 30px); overflow: hidden; background: var(--zv-paper-2); }
+.dm-ov-layer { position: absolute; inset: 0 0 30px; z-index: 5; overflow: hidden; background: var(--zv-card); box-shadow: 0 2px 6px var(--zv-shadow); translate: 0 -104%; transition: translate 320ms cubic-bezier(.2,.8,.2,1); touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.dm-ov-layer:not(.on) { pointer-events: none; }
+.dm-ov-layer.on { translate: 0 0; cursor: pointer; }
+.dm-pocket { position: absolute; left: 0; right: 0; bottom: 0; height: 30px; z-index: 4; display: flex; align-items: center; gap: 6px; padding: 0 10px; box-sizing: border-box; background: var(--zv-card); box-shadow: 0 -1px 3px var(--zv-shadow-sm); font: 11px/1 var(--zv-mono); color: var(--zv-ink-soft); pointer-events: auto; }
+.dm-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12.5px var(--zv-serif); color: var(--zv-ink); }
+.dm-count.items { flex: none; display: flex; gap: 6px; align-items: center; }
+.dm-count.items em { font-style: normal; color: var(--zv-muted); }
+.dm-page { position: absolute; inset: 0; overflow: hidden; border-radius: 6px 6px 0 0; background: var(--zv-card); box-shadow: inset 0 0 0 1px var(--zv-hair-2); }
+.dm-bar { display: flex; align-items: center; gap: 5px; height: 15px; padding: 0 6px; border-bottom: 1px solid var(--zv-hair); background: var(--zv-paper-2); font: 8px/1 var(--zv-mono); color: var(--zv-ink-soft); white-space: nowrap; overflow: hidden; }
+.dm-bar i { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.dm-page i,.dm-page em { display: block; height: 4px; border-radius: 2px; background: var(--zv-hair-2); }
+.dm-page b { display: block; border-radius: 3px; opacity: .85; }
+.dm-doc,.dm-code { display: grid; gap: 5px; padding: 8px 10px; }
+.dm-doc b { height: 40px; }
+.dm-code b { width: 45%; height: 10px; }
+.dm-dash { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; padding: 8px 10px; }
+.dm-dash b { grid-column: 1 / -1; height: 18px; }
+.dm-dash em { height: 40px; border-radius: 3px; }
+.dm-dash i { grid-column: 1 / -1; }
+.dm-page.note { display: grid; align-content: start; gap: 5px; padding: 10px; clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%); }
+.dm-page.note b { font: 600 10px/1.3 var(--zv-serif); opacity: 1; }
+.dm-page.shot { display: flex; flex-direction: column; }
+.dm-shot { display: block; flex: 1; min-height: 0; width: 100%; object-fit: cover; object-position: top; }
+.dm-fan { position: absolute; left: 0; right: 0; top: 77px; bottom: 30px; z-index: 3; overflow: hidden; background: var(--zv-paper-2); touch-action: pan-y; user-select: none; -webkit-user-select: none; cursor: grab; transition: inset 420ms cubic-bezier(.2,.8,.2,1), border-radius 420ms, z-index 0s linear 420ms; pointer-events: auto; }
+.dm-fan.open { inset: 0; z-index: 10; border-radius: calc(var(--zv-tile-r) * 260 / 430); transition: inset 420ms cubic-bezier(.2,.8,.2,1), border-radius 420ms, z-index 0s; }
+.dm-fan.dragging { cursor: grabbing; }
+.dm-bag { position: absolute; left: 14%; right: 14%; top: 12px; bottom: -12px; transition: left 420ms cubic-bezier(.2,.8,.2,1), right 420ms cubic-bezier(.2,.8,.2,1), top 420ms cubic-bezier(.2,.8,.2,1), bottom 420ms cubic-bezier(.2,.8,.2,1); }
+.dm-fan.open .dm-bag { left: 10px; right: 24px; top: 20px; bottom: 10px; }
+.dm-bag-sheet { position: absolute; inset: 0; transform-origin: 50% 100%; filter: drop-shadow(0 1px 2px var(--zv-shadow)); transition: transform 360ms cubic-bezier(.2,.8,.2,1), opacity 360ms ease; will-change: transform, opacity; }
+.dm-fan.dragging .dm-bag-sheet { transition: none; }
+.dm-bag-sheet .dm-page { border-radius: 4px; }
+.dm-bag-sheet .dm-bar span { transition: opacity 200ms; }
+.dm-bag-sheet:not(.front) .dm-bar span { opacity: 0; }
+.dm-fan.open .dm-bag-sheet .dm-bar { height: 20px; font-size: 10px; }
+.dm-fan.open .dm-doc b,.dm-fan.open .dm-dash b { height: 34px; }
+.dm-fan.open .dm-dash em { height: 34px; }
+.dm-fan.open .dm-page i,.dm-fan.open .dm-page em { height: 6px; }
+.dm-fan.open .dm-doc,.dm-fan.open .dm-code,.dm-fan.open .dm-dash { gap: 8px; padding: 12px 14px; }
+.dm-none { position: absolute; inset: 0; display: grid; place-items: center; color: var(--zv-muted); font: italic 12px var(--zv-mono); }
+.dm-fan-tied { position: absolute; top: 6px; right: 6px; z-index: 300; display: flex; gap: 3px; opacity: 0; translate: 0 -6px; pointer-events: none; transition: opacity 240ms ease, translate 240ms ease; }
+.dm-fan.open .dm-fan-tied { opacity: 1; translate: 0 0; pointer-events: auto; transition-delay: 140ms; }
+.dm-fan-tied button { display: grid; place-items: center; margin: 0; padding: 2px; border: 0; border-radius: 50%; background: var(--zv-card); box-shadow: 0 1px 3px var(--zv-shadow); cursor: pointer; }
+.dm-agent-card { position: absolute; left: 16px; top: 10px; width: 228px; height: 168px; }
+.dm-agent-card-box { position: absolute; left: -16px; top: -66px; width: 260px; height: 244px; }
+.dm-agent-card .ag-plate > :is(.zv-av, .zv-nm, .ag-meta, .zv-del) { display: none; }
+.zv-door { appearance: none; position: absolute; z-index: 1; top: -174px; height: var(--zv-tile-h, 486px); margin: 0; padding: 0; border: 0; background: none; cursor: pointer; pointer-events: auto !important; }
+.zv-tile-name { max-width: calc(430px / var(--zv-k, 1)); overflow: hidden; text-overflow: ellipsis; }
+.zv-mark > .zv-door { pointer-events: inherit; }
+.zv-door.agents { left: -112px; width: 210px; border-radius: var(--zv-tile-r) 0 0 var(--zv-tile-r); }
+.zv-door.items { left: 98px; width: 220px; border-radius: 0 var(--zv-tile-r) var(--zv-tile-r) 0; }
+.zv-door.agents.whole { width: 430px; border-radius: var(--zv-tile-r); }
+.dm-tile ~ .zv-door { opacity: 0; }

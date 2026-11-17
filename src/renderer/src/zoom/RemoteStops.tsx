@@ -16,7 +16,7 @@ export function RemoteWorkspaces({ machine, tiles, onOpen }: { machine?: string;
   // As this machine's workspaces stop draws its own: its name and count over the tiles, the grid in the middle.
   return (
     <div className="rm-ws-stop">
-      <div className="rm-ws-block" style={{ ['--rm-cols' as string]: Math.min(tiles.length, 3) }}>
+      <div className="rm-ws-block" style={{ ['--rm-cols' as string]: Math.min(tiles.length, 2) }}>
       {machine && (
         <div className="rm-ws-title">
           <b>{machine}</b>
