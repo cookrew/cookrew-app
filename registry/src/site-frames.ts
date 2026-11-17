@@ -38,6 +38,8 @@ export interface Frame {
   twins: readonly number[]
   /** Its own framing for a phone screen (<file>-phone.jpg), when the desktop framing would be too small to read there. */
   phone?: { width: number; height: number }
+  /** A sparse picture (two faces) is drawn no wider than this many CSS px on a desktop, not blown up to the page. */
+  maxWidth?: number
 }
 
 /** The words a figure wears for what it is, beside its caption. */
@@ -52,10 +54,10 @@ export const sourceOf = (frame: Frame): FrameSource => frame.source
 /** Where the pictures were made, once, for every caption that needs to say it. */
 export const RENDERED = 'Rendered on 17 Nov 2026 from the app’s code on dev, on demo data.'
 
-const demo = (file: string, alt: string, caption: string, source: FrameSource = 'illustration'): Frame => {
+const demo = (file: string, alt: string, caption: string, source: FrameSource = 'illustration', maxWidth?: number): Frame => {
   const size = FRAME_SIZES[file]
   if (!size) throw new Error(`site-frames: no size for ${file}; run scripts/site-demo/assets.mjs`)
-  return { file, alt, caption, source, width: size.width, height: size.height, twins: size.twins, ...(size.phone ? { phone: size.phone } : {}) }
+  return { file, alt, caption, source, width: size.width, height: size.height, twins: size.twins, ...(size.phone ? { phone: size.phone } : {}), ...(maxWidth ? { maxWidth } : {}) }
 }
 
 /**
@@ -91,7 +93,7 @@ export const DEMO = {
   browserCard: demo('demo-browser-card.jpg', 'A browser card open on a release-notes page, used by Checker',
     'Clicked Release notes: the browser card opened on the page Checker checked, a local demo page, with the agent that uses it named at the top right.'),
   docsCrew: demo('demo-docs-crew.jpg', 'A second workspace, Docs Site: Writer waiting on you, Editor done',
-    'Clicked Docs Site, the second workspace on the same machine: Writer on Claude Code waiting on you, Editor on Codex done.')
+    'Clicked Docs Site, the second workspace on the same machine: Writer on Claude Code waiting on you, Editor on Codex done.', 'illustration', 720)
 } as const satisfies Record<string, Frame>
 
 export type DemoKey = keyof typeof DEMO
@@ -130,5 +132,6 @@ export function figure(frame: Frame, options: { sizes?: string; note?: string; e
   const portrait = frame.height > frame.width
   const note = options.note ? ` ${escText(options.note)}` : ''
   const cls = `shot ${source}${portrait ? ' portrait' : ''}${options.cls ? ` ${options.cls}` : ''}`
-  return `<figure class="${cls}" data-source="${source}">${frameImg(frame, { sizes: options.sizes, eager: options.eager })}<figcaption><span class="rec src-${source}">${escText(SOURCE_CHIP[source])}</span><span>${escText(frame.caption)}${note}</span></figcaption></figure>`
+  const style = frame.maxWidth ? ` style="--max:${frame.maxWidth}px"` : ''
+  return `<figure class="${cls}${frame.maxWidth ? ' narrow' : ''}" data-source="${source}"${style}>${frameImg(frame, { sizes: options.sizes, eager: options.eager })}<figcaption><span class="rec src-${source}">${escText(SOURCE_CHIP[source])}</span><span>${escText(frame.caption)}${note}</span></figcaption></figure>`
 }

@@ -44,8 +44,8 @@ function frame(name, src, { box = null, dsf = 1, max = 2880, phone = null } = {}
 // Desktop stops: 1024×640 at ×6 (walk.mjs prefix h, DSF=6). Boxes frame the subject, not the window.
 frame('demo-agents', `${raw}/h-agents.png`, { box: [295, 180, 430, 270], dsf: 6 })
 frame('demo-workspaces', `${raw}/h-workspaces.png`, { box: [215, 135, 590, 370], dsf: 6 })
-frame('demo-docs-crew', `${raw}/h-docs.png`, { box: [220, 130, 420, 320], dsf: 6 })
-frame('demo-hitl-desk', `${raw}/h-hitl.png`, { box: [0, 60, 700, 520], dsf: 6, phone: { box: [25, 375, 535, 200] } })
+frame('demo-docs-crew', `${raw}/h-docs.png`, { box: [235, 140, 320, 300], dsf: 6 })
+frame('demo-hitl-desk', `${raw}/h-hitl.png`, { box: [0, 60, 700, 520], dsf: 6, phone: { box: [25, 375, 430, 200] } })
 frame('demo-artifacts', `${raw}/h-artifacts.png`, { box: [215, 110, 585, 450], dsf: 6, phone: { box: [250, 240, 520, 160] } })
 frame('demo-browser-card', `${raw}/h-browser.png`, { box: [60, 50, 910, 540], dsf: 6, phone: { box: [70, 60, 450, 500] } })
 frame('demo-board', `${raw}/h-board.png`, { box: [445, 50, 570, 475], dsf: 6, phone: { box: [450, 110, 410, 410] } })

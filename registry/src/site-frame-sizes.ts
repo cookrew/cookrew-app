@@ -17,8 +17,8 @@ export const FRAME_SIZES: Readonly<Record<string, { width: number; height: numbe
     ]
   },
   "demo-docs-crew.jpg": {
-    "width": 2520,
-    "height": 1920,
+    "width": 1920,
+    "height": 1800,
     "twins": [
       1440,
       800
@@ -33,7 +33,7 @@ export const FRAME_SIZES: Readonly<Record<string, { width: number; height: numbe
     ],
     "phone": {
       "width": 1170,
-      "height": 438
+      "height": 544
     }
   },
   "demo-artifacts.jpg": {
