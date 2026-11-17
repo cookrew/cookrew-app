@@ -206,11 +206,11 @@ describe('the zoom is driven by clicks, not the wheel (owner, 2026-10-31)', () =
     // …and the handler that does step out is the same one: the guard above it,
     // then the node test, then the step.
     const click = source.slice(source.indexOf('onClick={(e) => {'))
-    expect(click.slice(0, 900)).toContain('stepBack()')
+    expect(click.slice(0, 900)).toContain("stepBack('background')")
   })
 
   it('keeps the back button, the stops and Esc, and still zooms in on a click', () => {
-    expect(source).toContain('aria-label="Zoom out"')
+    expect(source).toContain("aria-label={backWords ? `Back to ${backWords}` : 'Zoom out'}")
     expect(source).toContain('zv-stops')
     expect(source).toMatch(/e\.key !== 'Escape'/)
     expect(source).toContain('motion.agent(a.id)')

@@ -1538,6 +1538,10 @@
   padding-left: 0;
   border-left: 0;
   font-size: 12px;
+  /* It names where the ‹ goes (ZoomView · backWords): an agent's name or a page's title is cut short. */
+  max-width: 16em;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 @media (hover: hover) {

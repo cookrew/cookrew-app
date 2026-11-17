@@ -26,7 +26,10 @@ import { ViewTools, type PerRow } from './ViewTools'
 import { deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
-import { BAR_NAMES, BAR_STOPS, barSide, barStop, stepOut } from './zoom-path'
+import { BAR_NAMES, BAR_STOPS, barSide, barStop } from './zoom-path'
+import { placeWords } from './full-return'
+import { backCardsOf, cardsSeenOf, goneCards, type CardsSeen } from './full-back-cards'
+import type { BackInput } from '../nav-events'
 import { BarGroups } from './BarGroups'
 import { barCard } from './bar-pick'
 import { setFaceSlot } from '../prompt/face-slot'
@@ -437,16 +440,16 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // NO WHEEL ZOOM (owner, 2026-10-31): the wheel is the page's, and in a list it
   // scrolls that list. Zoom in and out are clicks (motion.agent / motion.item for
   // in, the background and the back button for out), plus the stops and Esc.
-  /** One stop out; false at the outermost, where there is nowhere further. */
-  const stepBack = useCallback((): boolean => {
+  /**
+   * Back: from a full view to the page it was opened from (owner, 2026-11-17;
+   * full-return.ts), else one stop out; false at the outermost, where there is
+   * nowhere further. `by` is what asked, for the counts (nav-events.ts).
+   */
+  const stepBack = useCallback((by: BackInput): boolean => {
     // Inside another machine (RemoteMachineView.tsx): out of its stops first, one a press.
     if (remotePlace.stepOut()) return true
-    const z = zoomStore.get()
-    const next = stepOut(z.dir, z.v)
-    if (next === z.v) return false
-    motion.go(next, z.dir)
-    return true
-  }, [motion.go])
+    return zoomStore.back(by)
+  }, [])
   // A zoom that moves on (a stop on the bar, a jump to an agent) leaves the other machine: the stage stood on the devices stop.
   useEffect(() => {
     let at = zoomStore.get()
@@ -484,7 +487,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       e.preventDefault()
       // The picker closes first, then an open prompt box folds; the view
       // stays. Only then does the zoom step out (prompt/prompt-fold.ts · takeBack).
-      takeBack(stepBack)
+      takeBack(() => stepBack('esc'))
     }
     // Capture, so a card that stops Escape on its way up does not keep us zoomed.
     window.addEventListener('keydown', onKey, true)
@@ -505,14 +508,13 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     const release = holder.hold({
       wants: () => {
         if ((navigator as { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive === false) return false
-        const z = zoomStore.get()
-        return barCard.get() !== null || shelfCardOpen.current || promptFold.wantsBack() || stepOut(z.dir, z.v) !== z.v
+        return barCard.get() !== null || shelfCardOpen.current || promptFold.wantsBack() || zoomStore.canBack()
       },
       back: () => {
         // A bar group's card first (BarGroups.tsx), as Esc closes it first.
         if (barCard.get()) return barCard.close()
         if (shelfCardOpen.current) return backSteps.current.closeShelfCard()
-        takeBack(backSteps.current.stepBack)
+        takeBack(() => backSteps.current.stepBack('system'))
       }
     })
     const offFold = promptFold.subscribe(holder.sync)
@@ -631,6 +633,18 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         ? { what: 'workspaces', narrow, cols: deviceCols ?? defaultDeviceCols(narrow), onPick: setDeviceCols }
         : null
   const side = barSide(zoom.dir, zoom.v)
+  // Back from a full view (full-return.ts): a closed card leaves the way back, and the ‹ says where it goes.
+  const backCards = useMemo(() => (workspace ? backCardsOf(workspace.nodes) : null), [workspace])
+  const cardsSeen = useRef<CardsSeen | null>(null)
+  useEffect(() => {
+    if (!workspace) return
+    const seen = cardsSeenOf(workspaceId, workspace.nodes)
+    const gone = goneCards(cardsSeen.current, seen)
+    cardsSeen.current = seen
+    if (gone.size > 0) zoomStore.prune((_kind, id) => !gone.has(id))
+  }, [workspace, workspaceId])
+  const backTo = zoom.full !== null ? zoomStore.backTarget() : null
+  const backWords = backTo ? placeWords(backTo, backCards?.nameOf ?? (() => null)) : null
   // Pinch only changes the scene; the full terminal keeps its own native scroll.
   const pointers = useRef(new Map<number, { x: number; y: number }>())
   const pinch = useRef<{ distance: number; v: number } | null>(null)
@@ -697,7 +711,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           if (moved.current || pinch.current !== null) return
           // A node, a card, a button, a field: its own click, which zooms in.
           if ((e.target as Element).closest('button, input, textarea, form, a, [role="button"], .zv-m, .zv-card, .zv-ip, .zv-lk, .zv-mark, .zv-machine')) return
-          stepBack()
+          stepBack('background')
         }}>
         <div className="zv-devices" ref={bind('devices')}>
           {model.machines.filter((m) => !m.local).map((m) => {
@@ -810,7 +824,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         </button>
       )}
       <nav className="zv-controls" aria-label="Semantic zoom">
-        <button type="button" className="zv-back" onClick={stepBack} aria-label="Zoom out">‹</button>
+        <button type="button" className="zv-back" onClick={() => stepBack('button')} aria-label={backWords ? `Back to ${backWords}` : 'Zoom out'} title={backWords ? `Back to ${backWords}` : undefined}>‹</button>
         <div className="zv-zoom-control">
           {inside !== null ? (
             <div className="zv-stops" data-machine="other">
@@ -862,7 +876,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           </div>
           )}
         </div>
-        <span className="zv-location">{zoom.dir === 'agents' ? 'agents' : 'artifacts'}</span>
+        {/* At a full view it names where the ‹ goes; at a stop, the side the view is on. */}
+        <span className="zv-location">{backWords ?? (zoom.dir === 'agents' ? 'agents' : 'artifacts')}</span>
         {/* The prompt's face, folded: the send key at the bar's end (prompt/face-slot.ts). */}
         <span className="zv-face-slot" ref={setFaceSlot} />
       </nav>
