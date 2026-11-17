@@ -65,6 +65,33 @@ describe('what the agents carry', () => {
     expect(m.agents.find((a) => a.id === 't1')).toMatchObject({ browsers: 1, notes: 1 })
     // Owners are listed in the cabling order, so each link can dock in turn.
     expect(m.frame.links.filter((l) => l.item === 'b1').map((l) => l.j)).toEqual([0, 1])
+    expect(m.frame.links.filter((l) => l.item === 'b1').map((l) => l.of)).toEqual([2, 2])
+  })
+
+  // A sharer whose wire to the item is past its seats wears no coin for it:
+  // its place in the docked row once stayed empty (owner, 2026-11-17).
+  it('numbers the coins docked on an item over the coins it has, leaving no gap', () => {
+    const newer = ['x0', 'x1', 'x2', 'x3'].map((id) => browser(id, `https://${id}.dev`, id))
+    const nodes = [term('t1', 'A'), term('t2', 'B'), term('t3', 'C'), browser('b1', 'https://x.dev', 'X'), ...newer]
+    const m = fixture(nodes, [
+      cable('c1', 't1', 'b1'),
+      cable('c2', 't2', 'b1'),
+      ...newer.map((b, i) => cable(`n${i}`, 't2', b.id)),
+      cable('c3', 't3', 'b1')
+    ])
+    expect([...m.items.find((i) => i.id === 'b1')!.owners].sort()).toEqual(['t1', 't2', 't3'])
+    const docked = m.frame.links.filter((l) => l.item === 'b1')
+    expect(docked.map((l) => [l.agent, l.j, l.of])).toEqual([['t1', 0, 2], ['t3', 1, 2]])
+    // On the item's page each coin flies to its own agent's face in "used by", which lists every owner.
+    const owners = m.items.find((i) => i.id === 'b1')!.owners
+    for (const l of docked) expect(owners[l.u]).toBe(l.agent)
+  })
+
+  it('sends each coin to its own face on the item page, wiring order and all', () => {
+    const nodes = [term('t1', 'A'), term('t2', 'B'), browser('b1', 'https://x.dev', 'X')]
+    const m = fixture(nodes, [cable('c1', 't1', 'b1'), cable('c2', 't2', 'b1')])
+    const owners = m.items.find((i) => i.id === 'b1')!.owners
+    for (const l of m.frame.links) expect(owners[l.u]).toBe(l.agent)
   })
 
   it('points at the newest browser that somebody carries; loose items are still drawn', () => {
