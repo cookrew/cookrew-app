@@ -36,6 +36,8 @@ export interface ShownNote {
   /** Where a click goes; null for the burst, which only brings the window up. */
   readonly agentId: string | null
   readonly workspaceId: string | null
+  /** A wait, or a burst of them: a phone push is sent high urgency (phone-push.ts). */
+  readonly urgent: boolean
 }
 
 export interface NoteHandle {
@@ -92,14 +94,14 @@ export function createNotifier(deps: NotifierDeps): {
       recent = new Map([...[...recent].filter(([, at]) => now - at < BURST_WINDOW_MS), [m.agentId, now]])
       if (folded.size === 0 && recent.size <= BURST_SIZE) {
         const title = m.kind === 'waiting' ? `${m.name} needs you` : `${m.name} replied`
-        return show({ key: keyOf(m.agentId), title, body: `in ${m.workspaceName}`, agentId: m.agentId, workspaceId: m.workspaceId })
+        return show({ key: keyOf(m.agentId), title, body: `in ${m.workspaceName}`, agentId: m.agentId, workspaceId: m.workspaceId, urgent: m.kind === 'waiting' })
       }
       // A burst: the single ones come down, and one counts them until the window takes focus.
       const count = new Set([...folded, ...recent.keys()])
       for (const key of [...open.keys()]) if (key !== BURST_KEY) close(key)
       if (count.size === folded.size && open.has(BURST_KEY)) return
       folded = count
-      show({ key: BURST_KEY, title: `${count.size} agents need you`, body: 'Open Cookrew to see them in the bar', agentId: null, workspaceId: null })
+      show({ key: BURST_KEY, title: `${count.size} agents need you`, body: 'Open Cookrew to see them in the bar', agentId: null, workspaceId: null, urgent: true })
     },
     settle(agentId) {
       close(keyOf(agentId))

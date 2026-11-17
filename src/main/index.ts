@@ -226,6 +226,7 @@ import { createWaitingLatch } from './waiting-latch'
 import { createNotifier, type MomentNote, type ShownNote } from './notifier'
 import { createMomentTracker } from './hitl-moments'
 import { readNotifyPref, writeNotifyPref } from './notify-pref'
+import { createPhonePush, type PushSubscriptionKeys } from './phone-push'
 import { LazyTerminalAttachments } from './lazy-terminal'
 import { planWorkspaceSwitch } from './workspace-switch'
 import { SwitchRunner } from './switch-runner'
@@ -3066,13 +3067,13 @@ const moments = createMomentTracker()
 function noteMoments(activity: { terminalId: string; phase: TurnPhase; waitSeq?: number; dispatchId?: string | null }): void {
   try {
     const waiting = noteWaiting(activity.terminalId, activity.phase, activity.waitSeq)
-    if (waiting) notifier.notify(waiting)
+    if (waiting) tellOwner(waiting)
     const dispatched = Boolean(activity.dispatchId) || turns.hasArmedDispatch(activity.terminalId)
     const moment = moments.observe(activity.terminalId, activity.phase, dispatched)
     if (moment === 'settled') notifier.settle(activity.terminalId)
     if (moment === 'reply') {
       const reply = agentMoment(activity.terminalId, 'reply')
-      if (reply) notifier.notify(reply)
+      if (reply) tellOwner(reply)
     }
   } catch (error) {
     console.error('A notification moment failed:', error)
@@ -3117,6 +3118,67 @@ const notifier = createNotifier({
   served: (workspaceId) => isServedWorkspace(workspaceId),
   now: Date.now
 })
+
+/**
+ * THE ACCOUNT'S PHONES (phone-push.ts): the same two moments, encrypted here
+ * and forwarded by the registry. The owner ruled (11-16) the phone buzzes even
+ * while the desk is in use, so focus never quiets it; a burst folds as on the
+ * desktop, and a quiet spell starts the count again. A desktop signed out of
+ * an account has no phone to tell.
+ */
+const phonePush = createPhonePush({
+  subscriptions: async () => {
+    const answer = await accounts.authedResponse('/v2/me/push/subscriptions')
+    if (!answer.ok) return { ok: false }
+    if (answer.response.status === 404) return { ok: false, off: true }
+    if (!answer.response.ok) return { ok: false }
+    const list = (await answer.response.json()) as unknown
+    return { ok: true, list: Array.isArray(list) ? list.filter(isPushKeys) : [] }
+  },
+  send: async (request) => {
+    const answer = await accounts.authedResponse('/v2/me/push/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(request)
+    })
+    if (!answer.ok) return 'failed'
+    if (answer.response.status === 410) return 'gone'
+    return answer.response.ok ? 'sent' : 'failed'
+  },
+  now: Date.now
+})
+function isPushKeys(value: unknown): value is PushSubscriptionKeys {
+  const v = value as Partial<PushSubscriptionKeys> | null
+  return typeof v?.id === 'string' && typeof v.p256dh === 'string' && typeof v.auth === 'string'
+}
+const phoneNotifier = createNotifier({
+  show: (note) => {
+    const machineId = accounts.account()?.deviceId
+    if (machineId) {
+      void phonePush.send(
+        { v: 1, title: note.title, body: note.body, tag: note.key, machineId, workspaceId: note.workspaceId, agentId: note.agentId },
+        note.urgent ? 'high' : 'normal'
+      )
+    }
+    // A push cannot be taken back from a phone; its tag replaces it there.
+    return { close: () => undefined }
+  },
+  focused: () => false,
+  enabled: () => accounts.account() !== null,
+  served: (workspaceId) => isServedWorkspace(workspaceId),
+  now: Date.now
+})
+/** A phone's burst ends after this long with nothing to say. */
+const PHONE_QUIET_MS = 5 * 60_000
+let phoneToldAt = Number.NEGATIVE_INFINITY
+/** One moment to every surface that tells the owner: this desktop, and the account's phones. */
+function tellOwner(moment: MomentNote): void {
+  notifier.notify(moment)
+  const now = Date.now()
+  if (now - phoneToldAt > PHONE_QUIET_MS) phoneNotifier.clear()
+  phoneToldAt = now
+  phoneNotifier.notify(moment)
+}
 events.on('event', (e) => mainWindow?.webContents.send('event:new', e))
 cableSignals.on((signal) => mainWindow?.webContents.send('cable:signal', signal))
 let mainWindow: BrowserWindow | null = null
