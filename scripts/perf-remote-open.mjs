@@ -112,8 +112,61 @@ export function pathShape(url) {
     .replace(/\/[A-Za-z0-9_-]{16,}(?=\/|$)/g, '/:id')
 }
 
-const isStream = (url) => /\/api\/events(\?|$)|\/api\/terminal\/[^/]+\/stream(\?|$)/.test(url)
-const isThumb = (url) => /\/api\/browser\/[^/]+\/thumb/.test(url)
+/**
+ * The first card a phone sees: an agent of the zoom view. It was a canvas
+ * card (.react-flow__node) until the canvas was retired (29765969,
+ * 2026-10-30); from then until this marker moved, nothing ever matched it,
+ * firstCard stayed null, and every count here and in the CI gate read the
+ * wrong window. The CI gate (tests/perf/remote-open.perf.ts) uses this one.
+ */
+export const FIRST_CARD_SELECTOR = '.zv-card'
+
+/** A request's path as the companion sees it: a relay address's prefix comes off. */
+function companionPath(pathOrUrl) {
+  let pathname = pathOrUrl
+  try {
+    pathname = new URL(pathOrUrl, 'http://companion.local').pathname
+  } catch {
+    // not a URL; taken as a path
+  }
+  return pathname.replace(/^\/relay\/@[^/]+\/desktop\/[^/]+/, '')
+}
+
+/**
+ * What a boot request IS, for counting: one rule shared by this recorder (the
+ * nightly perf-eval) and the CI gate, so the two never disagree about it.
+ *
+ *   stream   a held-open EventSource: the canvas's events, the device fleet,
+ *            a terminal. Never in the request budget; the gate counts each
+ *            one's OPENINGS instead, because a stream that reconnects in a
+ *            loop is the regression a budget would hide.
+ *   thumb    browser thumbnails, polled by what is on screen, not by the boot.
+ *   beacon   the phone's black box (phone-beacon.ts): one at boot, then one
+ *            per 3 s clock. The first is a boot request like any other; the
+ *            rest follow the runner's speed, not the boot's cost.
+ *   request  everything else, the budget's own.
+ */
+export function requestKind(pathOrUrl) {
+  const p = companionPath(pathOrUrl)
+  if (/^\/api\/events$|^\/api\/fleet\/stream$|^\/api\/terminal\/[^/]+\/stream$/.test(p)) return 'stream'
+  if (/^\/api\/browser\/thumbs$|^\/api\/browser\/[^/]+\/thumb$/.test(p)) return 'thumb'
+  if (p === '/api/beacon') return 'beacon'
+  return 'request'
+}
+
+/**
+ * The requests a boot is charged with, in order: every 'request', and the
+ * FIRST beacon. `pathOf` reads a row's path or URL.
+ */
+export function bootCharged(rows, pathOf) {
+  let beacons = 0
+  return rows.filter((row) => {
+    const kind = requestKind(pathOf(row))
+    if (kind === 'request') return true
+    if (kind === 'beacon') return (beacons += 1) === 1
+    return false
+  })
+}
 
 /**
  * Critical-path depth: the longest chain of requests where each began only
@@ -137,11 +190,12 @@ export function waterfallDepth(requests) {
 export function summarise({ requests, navStart, marks, settleS }) {
   const rel = (t) => (t === null || t === undefined ? null : Math.round((t - navStart) * 1000))
   const firstCard = marks.firstCard ?? null
-  const boot = requests.filter(
-    (r) => !isStream(r.url) && !isThumb(r.url) && (firstCard === null || r.start <= navStart + firstCard / 1000 + 2)
-  )
-  const bootEnd = Math.max(...boot.map((r) => r.end ?? r.start))
-  const interactive = firstCard === null ? null : Math.max(firstCard, rel(bootEnd))
+  // No first card, no boot window: the boot was NOT measured, and says so
+  // (requests: null) rather than charging it with everything the settle saw.
+  const inWindow = firstCard === null ? [] : requests.filter((r) => r.start <= navStart + firstCard / 1000 + 2)
+  const boot = bootCharged([...inWindow].sort((a, b) => a.start - b.start), (r) => r.url)
+  const bootEnd = boot.length > 0 ? Math.max(...boot.map((r) => r.end ?? r.start)) : null
+  const interactive = firstCard === null ? null : bootEnd === null ? firstCard : Math.max(firstCard, rel(bootEnd))
   const beforeFirstCard = requests.filter((r) => firstCard !== null && rel(r.start) <= firstCard)
   const bytesOf = (list) => list.reduce((sum, r) => sum + (r.bytes ?? 0), 0)
   const after = requests.filter((r) => interactive !== null && rel(r.start) > interactive)
@@ -169,7 +223,8 @@ export function summarise({ requests, navStart, marks, settleS }) {
     requests: requests.length,
     bytes: bytesOf(requests),
     boot: {
-      requests: boot.length,
+      measured: firstCard !== null,
+      requests: firstCard === null ? null : boot.length,
       bytes: bytesOf(boot),
       depth: waterfallDepth(boot),
       shapes: [...bootShapes.values()].sort((a, b) => b.count - a.count || b.bytes - a.bytes)
@@ -209,7 +264,7 @@ const OBSERVER = `(() => {
   window.addEventListener('load', () => { marks.load = Math.round(performance.now()) })
   const seen = () => {
     if (marks.firstCard !== null) return
-    if (document.querySelector('.react-flow__node')) { marks.firstCard = Math.round(performance.now()); observer.disconnect() }
+    if (document.querySelector(${JSON.stringify(FIRST_CARD_SELECTOR)})) { marks.firstCard = Math.round(performance.now()); observer.disconnect() }
   }
   const observer = new MutationObserver(seen)
   document.addEventListener('DOMContentLoaded', () => { observer.observe(document.documentElement, { childList: true, subtree: true }); seen() })
@@ -299,7 +354,13 @@ export async function recordOpen(opts) {
     const now = Math.max(...list.map((r) => r.end ?? r.start))
     const closed = list.map((r) => (r.end === null ? { ...r, end: now, bytes: r.bytes ?? r.streamed ?? 0 } : r))
     cdp.close()
-    return { url: url.replace(/token=[^&]+/, 'token=…'), summary: summarise({ requests: closed, navStart, marks, settleS: opts.settleS }), latencyMs: opts.latencyMs }
+    return {
+      url: url.replace(/token=[^&]+/, 'token=…'),
+      summary: summarise({ requests: closed, navStart, marks, settleS: opts.settleS }),
+      latencyMs: opts.latencyMs,
+      settleS: opts.settleS,
+      firstCardSelector: FIRST_CARD_SELECTOR
+    }
   } finally {
     // Ask the browser to close before killing it: a persistent (signed-in)
     // profile killed mid-write reopens with "didn't shut down correctly".
@@ -328,7 +389,9 @@ export function renderOpen(report) {
   const lines = [
     `remote open ${report.url}${report.latencyMs ? ` (+${report.latencyMs} ms RTT)` : ''}`,
     `  first paint ${s.firstPaintMs ?? '—'} ms · first card ${s.firstCardMs ?? '—'} ms · interactive ${s.interactiveMs ?? '—'} ms`,
-    `  boot: ${s.boot.requests} requests, ${fmtKb(s.boot.bytes)}, depth ${s.boot.depth}; before first card ${s.beforeFirstCard.requests} requests / ${fmtKb(s.beforeFirstCard.bytes)}`,
+    s.boot.measured
+      ? `  boot: ${s.boot.requests} requests, ${fmtKb(s.boot.bytes)}, depth ${s.boot.depth}; before first card ${s.beforeFirstCard.requests} requests / ${fmtKb(s.beforeFirstCard.bytes)}`
+      : `  boot: NOT MEASURED — no ${FIRST_CARD_SELECTOR} was ever drawn`,
     ...s.boot.shapes.map((row) => `    ${String(row.count).padStart(3)}× ${row.shape} ${fmtKb(row.bytes)} (slowest ${row.ms} ms)`),
     `  third-party: ${s.thirdParty.requests} requests${s.thirdParty.hosts.length ? ` (${s.thirdParty.hosts.join(', ')})` : ''}`,
     `  afterwards: ${s.afterwards.requests} requests (${s.afterwards.perMinute}/min), ${fmtKb(s.afterwards.bytes)}`,

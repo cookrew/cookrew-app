@@ -200,14 +200,67 @@ export const LATENCY = {
  * makes (auth, account, workspaces, presets, roles, teams, activity,
  * capabilities) and for one asset chunk more; today's code fails it on four
  * counts at once.
+ *
+ * ---- 2026-11-18: THE 24 GATE HAD BEEN DEAD. Re-measured: 38 ----
+ *
+ * From the canvas's retirement (2026-10-30, 29765969) the gate's first-card
+ * marker never fired, so it counted an EMPTY window and passed on nothing:
+ * 24 was not enforced at all from then on, and the boot grew unseen. The
+ * number below is not 24 loosened; it is the first real measurement since,
+ * against a fixture that answers every route as the companion does (a 404
+ * had made the fleet stream reconnect and the manifest load twice) and
+ * carries an event log with agent history like a working desktop's.
+ *
+ * c972436d, three runs, macOS, identical lists — 38:
+ *   15 static  document, 2 CSS, entry, App, 3 chunks the entry imports lazily
+ *              and App needs at once (skin-look, account-device,
+ *              account-pair-client), manifest, favicon, icon-192, the co
+ *              mark, 2 fonts, the tile-shot chunk
+ *   23 API     auth, beacon, workspaces, workspace, account, route, listen,
+ *              terminal-session, agents, capabilities, presets, roles,
+ *              teams, activity, tuning, skin, and SEVEN log reads: the HITL
+ *              bar read /api/events/query once per type, 4 + 3
+ *
+ * What brings it back toward 24, each its own change: the log reads in two
+ * (-5), the lazy chunks and the mark in the entry and its stylesheet (-4),
+ * then the boot's small lists in one read (route, listen, terminal-session,
+ * tuning, skin, presets, roles, teams, capabilities, agents: up to -9).
+ * The budget is what the boot asks for, not a margin over it: one request
+ * more fails, and the split fails growth on either side even where the
+ * other side shrank. Each change that lowers it lowers these numbers.
  */
 export const REMOTE_OPEN = {
-  /** Requests until first card plus the two seconds after, streams excluded. */
-  maxBootRequests: 24,
+  /**
+   * Requests until first card plus the two seconds after: streams and
+   * thumbnails excluded, the first beacon counted (perf-remote-open.mjs ·
+   * bootCharged). Was 24 (2026-09-08), unenforced from 2026-10-30.
+   */
+  maxBootRequests: 38,
+  /** Of them, /api/ requests (the first beacon included). */
+  maxBootApiRequests: 23,
+  /** Of them, the page and its files. */
+  maxBootStaticRequests: 15,
   maxWorkspaceFetches: 1,
   maxWorkspaceListFetches: 1,
   maxGitFetches: 0,
   maxTailReadsAtBoot: 0,
+  /**
+   * The ONE path a boot may ask more than once (the gate keys its no-repeat
+   * check on path, query dropped): the HITL bar's log reads, as many as it
+   * makes. Each change to that read changes this number.
+   *
+   * THE WINDOW IS TIME-BASED, and the gate checks it rather than trusting it:
+   * requests are counted to first card + 2 s, the recording runs on to first
+   * card + 10.5 s (3.5 beacon periods), and any boot request (not a stream,
+   * a thumbnail or a beacon) after the window FAILS the gate by name. Measured
+   * on macOS the boot ends ~0.3 s after first card. The Linux CI runner is
+   * slower and was not measured here: there the risk is that a late chunk or
+   * the second log read lands past the window, and the gate goes red saying
+   * so — never that it is counted short and passes. An event-based end (the
+   * last boot request answered) would not need the 2 s; it needs a signal the
+   * app does not send today.
+   */
+  maxLogReads: 7,
   maxThirdPartyRequests: 0
 } as const
 
@@ -261,21 +314,38 @@ export const MEMORY = {
   noteRenderCacheMb: 12
 } as const
 
+/**
+ * ---- The zoom view's React renders (tests/perf/render-count.perf.ts) ----
+ *
+ * Replaces the ReactFlow pan gate (perf lane L6, commitsPerPanFrameMax 4),
+ * whose canvas was retired on 2026-10-30 (29765969). The zoom view moves by
+ * its painter, through refs, so a motion costs a FIXED number of commits
+ * however many frames it runs; per-frame React work is the regression.
+ *
+ * Measured 2026-11-18, three runs, the demo App with 41 agents (the 40
+ * seeded and the demo api's own conductor) on a 500x900
+ * stage: a stop-to-stop zoom 86-95 frames, 2 commits, 22 renders (every
+ * component counted; the probe kept only the top 16 until 2026-11-18), zero
+ * AgentNode; a 60-tick wheel scroll of the crew (faces moved 49,200 px
+ * summed) 1 commit, 0 renders. Budgets at 2x the worst, rounded up. What the
+ * regression looks like (mutation run, AgentNode un-memo'd): 41 AgentNode
+ * renders per zoom commit, and a one-agent rename rendering all 41 — a zoom
+ * that rendered per frame would be ~90 commits and thousands of renders.
+ *
+ * Structural assertions sit beside these and are the real gate: zero
+ * AgentNode/ItemNode renders in any motion, a one-agent rename renders that
+ * agent's node alone and no InkAvatar, and a crew-wide rename renders every
+ * agent (the canary that the counter sees the name and the key).
+ */
 export const RENDER = {
-  /**
-   * React commits per frame of a real pan gesture on the seeded demo canvas
-   * (tests/perf/fixtures/render-census), counted through the React DevTools
-   * hook shim in scripts/perf-dom-probe.mjs. Measured 2026-09-06 on the live
-   * 170-node workspace after perf lane L6: 2.3-2.7 — ReactFlow's own
-   * transform commit plus the LOD arbiter's settle. Before the lane it was
-   * 2.4-2.6 as well: the count of commits never was the problem, WHAT each
-   * commit rendered was. That is the structural assertion beside this:
-   * ZERO card wrappers rendered by a pan that moves no card off the stage,
-   * and zero renders of the app shell. The legacy fixture in the same file
-   * (App's wiring before the lane) renders every card on every frame, so
-   * the gate is known to see the trap it guards.
-   */
-  commitsPerPanFrameMax: 4
+  /** React commits across one stop-to-stop zoom, start to rest. */
+  commitsPerStopZoom: 4,
+  /** Component renders, all names, across one stop-to-stop zoom. */
+  rendersPerStopZoom: 50,
+  /** React commits across a 60-tick wheel scroll of the crew. */
+  commitsPerScroll: 2,
+  /** Component renders, all names, across that scroll: measured 0, so 0. */
+  rendersPerScroll: 0
 } as const
 
 export const STORAGE = {

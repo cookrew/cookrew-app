@@ -334,6 +334,61 @@ function acquireLock(dir) {
 }
 
 /** The worst verdict wins: fail > warn > ok. */
+/**
+ * A scroll MOVED when each face went at least this share of the scroll asked
+ * for. Judged per face (perf-zoom-motion.mjs · wheelScroll): a sum over forty
+ * faces passed a flat 100 px when each had crept 2-3. A crew too short to take
+ * half the scroll asked for is not measured, and says so.
+ */
+const MOVED_SHARE = 0.5
+
+/**
+ * The DOM probe's zoom view motion (perf-dom-probe.mjs · measureCompanion), as
+ * checks. TOTALS per motion, not per frame: the painter moves the view, so a
+ * motion costs React a fixed few commits however many frames it runs, and the
+ * regression — every agent rendering on every frame — reads under 1 a frame
+ * per agent and would pass any per-frame budget. A scroll that did not move
+ * the crew, or a zoom that jumped, measured nothing, and says so as warn.
+ */
+export function zoomMotionChecks(probe, budgets) {
+  const requested = probe.scrollRequestedPx ?? 0
+  const perFace = probe.scrolledPerFacePx ?? 0
+  const moved = requested > 0 && perFace >= requested * MOVED_SHARE
+  const scroll = probe.pan
+  const unmeasured = (name, unit, value, why) => ({ name, value, unit, verdict: 'warn', note: `not measured: ${why}` })
+  const measured = (name, unit, value, budget, note) => ({ name, value, unit, verdict: judge(value, budget), note })
+  const stillWhy = `each face moved ${Math.round(perFace)} of ${Math.round(requested)} px asked (a crew that fits, or the wheel missed it)`
+  const checks = [
+    {
+      name: 'zoom view scroll moved',
+      value: Math.round(perFace),
+      unit: 'px/face',
+      verdict: moved ? 'ok' : 'warn',
+      note: moved ? `of ${Math.round(requested)} px asked, over ${scroll?.frames ?? 0} frames` : stillWhy
+    },
+    moved && scroll
+      ? measured('zoom view scroll commits', '', scroll.commits, budgets.zoomScroll.commits, `over ${scroll.frames} frames`)
+      : unmeasured('zoom view scroll commits', '', scroll?.commits ?? null, stillWhy),
+    moved && scroll
+      ? measured('zoom view scroll card renders', '', scroll.keyedCount ?? 0, budgets.zoomScroll.cardRenders, 'keyed instances, every render counted')
+      : unmeasured('zoom view scroll card renders', '', scroll?.keyedCount ?? null, stillWhy)
+  ]
+  const zoom = probe.zoom
+  const zoomWhy = zoom ? 'the view jumped, not travelled (reduced motion?)' : 'no agents stop on the bar'
+  const travelled = zoom !== null && zoom !== undefined && probe.zoomTravel === true
+  checks.push(
+    travelled
+      ? measured('zoom in to the crew commits', '', zoom.commits, budgets.zoomStop.commits, `over ${zoom.frames} frames`)
+      : unmeasured('zoom in to the crew commits', '', zoom?.commits ?? null, zoomWhy),
+    // Every agent rendering on each of the zoom's commits is what the CI
+    // gate's mutation run measured (41 a commit); the nightly fails it too.
+    travelled
+      ? measured('zoom in to the crew card renders', '', zoom.keyedCount ?? 0, budgets.zoomStop.cardRenders, `keyed instances over ${zoom.commits} commits`)
+      : unmeasured('zoom in to the crew card renders', '', zoom?.keyedCount ?? null, zoomWhy)
+  )
+  return checks
+}
+
 export function worstOf(verdicts) {
   if (verdicts.includes('fail')) return 'fail'
   if (verdicts.includes('warn')) return 'warn'

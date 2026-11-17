@@ -49,9 +49,15 @@ export interface FrameCensus {
   renders: Record<string, number>
   /** Node ids whose card wrapper rendered. */
   cards: string[]
+  /** Component name → the React keys of its instances that rendered, sorted. */
+  keyed: Record<string, string[]>
+  /** Renders of keyed instances, all names: a count, not a set. */
+  keyedCount: number
 }
 
 export function recordFrames(page: CdpPage, run: () => Promise<number>): Promise<FrameCensus>
+/** Renders of keyed instances, all components together (a count). */
+export function keyedRenders(census: Pick<FrameCensus, 'keyedCount'> | null | undefined): number
 export function pan(page: CdpPage, point: { x: number; y: number }, frames: number, step?: number): Promise<number>
 export function zoom(page: CdpPage, point: { x: number; y: number }, frames: number, delta?: number): Promise<number>
 export function waitForCanvas(page: CdpPage, timeoutMs?: number, settleMs?: number): Promise<number>

@@ -52,7 +52,16 @@ export const BUDGETS = {
     commitsPerPanFrame: { warn: 4, fail: 8 },
     layers: { warn: 24, fail: 60 },
     // Elements the board leaves mounted after it closes: none.
-    boardResidueElements: { warn: 50, fail: 500 }
+    boardResidueElements: { warn: 50, fail: 500 },
+    // The zoom view (the canvas above was retired 2026-10-30), TOTALS per
+    // motion: its painter moves the view, so a motion costs React a fixed few
+    // commits. Calibrated by the CI gate (tests/perf/budgets.ts · RENDER):
+    // a 60-tick scroll 1 commit / 0 renders, a stop-to-stop zoom 2 commits.
+    // Every agent on every frame is ~60 commits and thousands of renders.
+    zoomScroll: { commits: { warn: 2, fail: 10 }, cardRenders: { warn: 4, fail: 40 } },
+    // A stop-to-stop zoom rendered 0 agents (CI); the mutation run, 41 on each
+    // of its 2 commits. Fail is under one crew's worth on ONE commit.
+    zoomStop: { commits: { warn: 4, fail: 12 }, cardRenders: { warn: 4, fail: 40 } }
   },
   latency: {
     events: {
@@ -76,7 +85,10 @@ export const BUDGETS = {
   // AFTER 17 / 0 / 1287 ms. Requests are the budget that no fast machine
   // fakes; the clock warns before it fails.
   remote: {
-    bootRequests: { warn: 24, fail: 40 },
+    // warn at the CI gate's measured boot (tests/perf/budgets.ts · REMOTE_OPEN,
+    // every request named there; it moves with that ledger): a standing warn
+    // at the old 24 would hide real growth up to the fail line.
+    bootRequests: { warn: 38, fail: 40 },
     thirdPartyRequests: { fail: 0 },
     interactiveMs: { warn: 3000, fail: 6000 },
     firstCardMs: { warn: 2000, fail: 4000 },

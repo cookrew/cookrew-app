@@ -19,7 +19,18 @@ import { fileURLToPath } from 'node:url'
 
 const LABEL = 'dev.cookrew.perf-eval'
 const INTERVAL_SECONDS = 3600
-const SCRIPTS = ['perf-eval.mjs', 'perf-eval-lib.mjs', 'perf-budgets.mjs', 'perf-dom-probe.mjs', 'perf-remote-open.mjs', 'perf-cdp.mjs']
+// Every local module the eval imports, transitively: one left out and the
+// installed copy fails to load (chrome-reaper.mjs was, from the reaper on).
+const SCRIPTS = [
+  'perf-eval.mjs',
+  'perf-eval-lib.mjs',
+  'perf-budgets.mjs',
+  'perf-dom-probe.mjs',
+  'perf-zoom-motion.mjs',
+  'perf-remote-open.mjs',
+  'perf-cdp.mjs',
+  'chrome-reaper.mjs'
+]
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const cookrew = path.join(homedir(), '.cookrew')
