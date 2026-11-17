@@ -1,4 +1,4 @@
-import { FRAMES, frameImg, type Frame } from './site-frames'
+import { DEMO, figure } from './site-frames'
 import { esc } from './site-shell'
 import { PILLARS, ROADMAP, STATUS, type Claim, type ClaimStatus, type Pillar } from './site-content'
 
@@ -8,14 +8,11 @@ import { PILLARS, ROADMAP, STATUS, type Claim, type ClaimStatus, type Pillar } f
  * the app does today from what is in dev, in beta, tried once by hand, or
  * only planned; the legend says what each label means.
  *
- * THE PICTURES ARE RECORDINGS. Each pillar shows one still taken from the
- * running app (site-frames.ts, retaken on 2026-11-01), captioned with what
- * was clicked and its date. Nothing here is drawn to look like the app: the
- * one drawing, the route, is labelled a diagram and drawn as boxes of text.
+ * THE PICTURES SAY WHAT THEY ARE. Each is the current UI rendered from the
+ * app's code on a demo cast (site-frames.ts DEMO) and wears that label; a
+ * claim the picture does not show carries a sentence saying so. The route is
+ * the one drawing, labelled a diagram and drawn as boxes of text.
  */
-
-/** The day the stills were retaken from the running app (git log of registry/assets/site). */
-const RECORDED = '1 Nov 2026'
 
 export function statusPill(status: ClaimStatus): string {
   return `<span class="st st-${status}">${esc(STATUS[status].label)}</span>`
@@ -30,12 +27,8 @@ function claim(c: Claim): string {
   return `<li class="claim" data-status="${c.status}">${statusPill(c.status)}<div><b>${esc(c.title)}</b><p>${esc(c.text)}</p></div></li>`
 }
 
-function still(p: Pillar): string {
-  if (p.frame === null) return ''
-  const frame: Frame = FRAMES[p.frame]
-  const portrait = frame.height > frame.width
-  const note = p.frameNote ? ` ${esc(p.frameNote)}` : ''
-  return `<figure class="shot${portrait ? ' portrait' : ''}">${frameImg(frame, { sizes: portrait ? '300px' : '(max-width: 860px) 100vw, 40vw' })}<figcaption><span class="rec">● REC</span><span>Recorded from the running app, ${RECORDED}; the interface has moved on since.${note} ${esc(frame.caption)}</span></figcaption></figure>`
+function media(p: Pillar): string {
+  return p.media.map((m) => figure(DEMO[m.key], { note: m.note })).join('')
 }
 
 /** The route as it is today, and the one hand-made experiment, as text in boxes: a diagram, never a screen. */
@@ -46,7 +39,7 @@ function routeDiagram(): string {
 <ol>${box('Agent card', 'Claude Code · Codex · OpenCode · Pi')}${box('Magpie, this machine', 'on loopback, run by you')}${box('Your models', 'subscription · API key · local model')}</ol>
 <p class="route-row">${statusPill('experiment')} ssh tunnel, 12 Nov 2026 — not a product path</p>
 <ol class="exp">${box('Agent on machine A', 'its tools run on A')}${box('Magpie on machine B', 'reached over ssh -L, by hand', 'dashed')}${box('B’s model', 'one model, one run')}</ol>
-<figcaption>Diagram, not a screenshot. The Routing panel itself has not been recorded for this page yet.</figcaption>
+<figcaption>Diagram, not a screenshot.</figcaption>
 </figure>`
 }
 
@@ -56,7 +49,7 @@ function pillar(p: Pillar, index: number): string {
 <h2>${esc(p.title)}</h2>
 <p class="lede">${esc(p.lede)}</p>
 <div class="pillar-body"><ul class="claims">${p.claims.map(claim).join('')}</ul>
-<div class="pillar-media">${p.id === 'gateway' ? routeDiagram() : ''}${still(p)}</div></div>
+<div class="pillar-media">${p.id === 'gateway' ? routeDiagram() : ''}${media(p)}</div></div>
 </div></section>`
 }
 

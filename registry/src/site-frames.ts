@@ -1,40 +1,78 @@
 import { SITE_FRAMES } from './site-shell'
 
 /**
- * RECORDED FEATURE CASES — what the homepage shows instead of describing.
+ * WHAT THE SITE SHOWS, AND WHAT EACH PICTURE IS (2026-11-17).
  *
- * Every frame is a capture of the running app driven with real input by QA,
- * and its caption says in the past tense what was actually done, not what
- * the feature is for. The files live in this repository under
- * registry/assets/site/ and are served from GitHub, so a frame can be retaken
- * with a commit and never lives in the registry's bundle.
+ * The 1 Nov recordings were of the maintainer's own workspace and machine, and
+ * the interface has moved on since; none of them is on a page any more. Every
+ * picture now is the CURRENT product UI, rendered from the app's own code on a
+ * demo cast with nobody's data in it (the workspace "Release Room": Planner on
+ * Claude Code, Reviewer on Codex, Checker on OpenCode, Notes on Pi), and each
+ * says so beside it: an illustration on demo data, never a recording.
+ *
+ *   illustration  the app's renderer (or the watch's SwiftUI views) on the
+ *                 demo cast, driven by real clicks; nothing drawn over it
+ *   composite     several such renders set side by side; nothing painted in
+ *   recording     the running app on real work — none on the site this round
+ *
+ * Source of every file: the worktree's renderer at dev d28ddfbb on the demo api
+ * with a synthetic seed, and watch/Sources/watch-shots on a recast copy of its
+ * fixture (the seed, the recast and the shoot scripts are listed in the commit
+ * that added the files). The files live under registry/assets/site/ and are
+ * served from GitHub at the commit the site is built from.
  */
+export type FrameSource = 'illustration' | 'composite' | 'recording'
+
 export interface Frame {
   file: string
   alt: string
   caption: string
   width: number
   height: number
+  /** Absent: a recording (the old frames' shape). */
+  source?: FrameSource
+  /** The width of the -800 twin when it is not 800 (a portrait's twin is narrower). */
+  smallWidth?: number
 }
 
-/** Pixel size of every 1400-wide frame in registry/assets/site (an 800-wide twin exists for each). */
-const SIZES: Record<string, [number, number]> = {
-  'intro-1.jpg': [1400, 874],
-  'intro-2.jpg': [1400, 874],
-  'intro-6.jpg': [1400, 874],
-  'qa-board.jpg': [1400, 874],
-  'qa-canvas.jpg': [1400, 874],
-  'promo-poster.jpg': [1400, 874],
-  'qa-history-trace.jpg': [1400, 874],
-  'qa-marketplace.jpg': [1400, 874],
-  'qa-mobile.jpg': [700, 1400],
-  'qa-terminal-rail.jpg': [1400, 874]
+/** The words a figure wears for what it is, beside its caption. */
+export const SOURCE_CHIP: Readonly<Record<FrameSource, string>> = {
+  illustration: 'Product UI on demo data · illustration',
+  composite: 'Composite of product UI renders on demo data · illustration',
+  recording: '● REC'
 }
 
-const frame = (file: string, alt: string, caption: string): Frame => {
-  const [width, height] = SIZES[file] ?? [1400, 875]
-  return { file, alt, caption, width, height }
-}
+export const sourceOf = (frame: Frame): FrameSource => frame.source ?? 'recording'
+
+/** Where the pictures were made, once, for every caption that needs to say it. */
+export const RENDERED = 'Rendered on 17 Nov 2026 from the app’s code on dev, on demo data.'
+
+const demo = (file: string, width: number, height: number, alt: string, caption: string, source: FrameSource = 'illustration', smallWidth?: number): Frame =>
+  ({ file, alt, caption, width, height, source, ...(smallWidth ? { smallWidth } : {}) })
+
+export const DEMO = {
+  devices: demo('demo-devices.jpg', 1400, 876, 'The devices stop: this desktop drawn as a laptop with its two workspaces on the screen',
+    'Clicked the empty paper: the view stepped out to the devices stop, this desktop with Release Room and Docs Site on its screen.'),
+  workspaces: demo('demo-workspaces.jpg', 1400, 876, 'The workspaces stop: Release Room and Docs Site, each with its agents’ faces and what needs you',
+    'The workspaces stop: Release Room with four agents on four harnesses and Docs Site with two, each tile counting what needs you.'),
+  agents: demo('demo-agents.jpg', 1400, 876, 'One workspace, four agents on four harnesses: Planner working, Reviewer waiting on you, Checker replied, Notes resting',
+    'Clicked Release Room: Planner on Claude Code working, Reviewer on Codex waiting on you, Checker on OpenCode replied, Notes on Pi resting.'),
+  hitlDesk: demo('demo-hitl-desk.jpg', 1400, 876, 'Reviewer’s card with the question Codex asked, mirrored as rows to pick',
+    'Clicked Reviewer: its card opened, and the permission prompt Codex is waiting on came up as rows to pick, 1 to 3, or Esc.'),
+  artifacts: demo('demo-artifacts.jpg', 1400, 876, 'The artifacts stop: a browser card, a note, a phone screen card and a computer screen card',
+    'Clicked artifacts: the browser card Checker uses, the checklist note Planner keeps, and two screen cards, a phone simulator and the main display. Their pictures are the demo’s flat placeholders, not screens.'),
+  browserCard: demo('demo-browser-card.jpg', 1400, 876, 'A browser card open on a release-notes page, used by Checker',
+    'Clicked Release notes: the browser card opened on the page Checker checked, a local demo page, with the agent that uses it named at the top right.'),
+  routing: demo('demo-routing.jpg', 1400, 828, 'The Routing panel: Magpie online, four harnesses ready to route, subscriptions and a local model, the default group',
+    'Opened Routing from the menu: the four harnesses each ticked installed, signed in and routed, two subscriptions and a local model, and the default every new card takes.'),
+  crewPhone: demo('demo-crew-phone.jpg', 700, 1514, 'The same four agents at phone width', 'The same workspace at phone width (390 px): the four agents and their states.', 'illustration', 400),
+  hitlPhone: demo('demo-hitl-phone.jpg', 700, 1514, 'Reviewer’s question as rows to tap, at phone width',
+    'Reviewer’s question at phone width (390 px): the same rows to tap, with the reply box under them.', 'illustration', 400),
+  watch: demo('demo-watch.jpg', 1400, 556, 'Three Apple Watch screens: Reviewer’s question, a row picked, and the workspace’s agents',
+    'Three watch screens drawn by the watch app’s own views: Reviewer’s question, the row it would send, and Release Room’s agents with what needs you at the foot.', 'composite')
+} as const satisfies Record<string, Frame>
+
+export type DemoKey = keyof typeof DEMO
 
 /** An <img> with its size known up front (no layout shift) and a smaller twin for narrow screens. */
 export function frameImg(frame: Frame, options: { eager?: boolean; sizes?: string } = {}): string {
@@ -43,57 +81,22 @@ export function frameImg(frame: Frame, options: { eager?: boolean; sizes?: strin
   const small = `${SITE_FRAMES}${frame.file.replace(/\.jpg$/, '-800.jpg')}`
   const large = frameUrl(frame)
   const esc = (v: string): string => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
-  return `<img src="${esc(large)}" srcset="${esc(small)} 800w, ${esc(large)} ${frame.width}w" sizes="${esc(options.sizes ?? '(max-width: 860px) 100vw, 60vw')}" width="${frame.width}" height="${frame.height}" alt="${esc(frame.alt)}"${options.eager ? ' fetchpriority="high"' : ' loading="lazy" decoding="async"'}>`
+  return `<img src="${esc(large)}" srcset="${esc(small)} ${frame.smallWidth ?? 800}w, ${esc(large)} ${frame.width}w" sizes="${esc(options.sizes ?? '(max-width: 860px) 100vw, 60vw')}" width="${frame.width}" height="${frame.height}" alt="${esc(frame.alt)}"${options.eager ? ' fetchpriority="high"' : ' loading="lazy" decoding="async"'}>`
 }
-
-export const FRAMES = {
-  canvas: frame(
-    'qa-canvas.jpg',
-    'One workspace in Cookrew: its agents as ink faces on paper, tied by the cables of who can ask whom',
-    'Clicked Cookrew Dev on the machine: its crew stood on the paper, each agent with its name and state under it, the cables between them showing who can ask whom. Lark, Finch and Moss at the top and bottom were working a small TypeScript package together.'
-  ),
-  task: frame(
-    'intro-1.jpg',
-    'An agent opened to its full transcript: the tool calls, the test run and its reply',
-    'Clicked Lark twice: the card grew into its full transcript, every Bash call in mono, the test run with 22 passing, and the reply in which Lark took Finch’s review of chunk.ts and fixed the guard. The rail on the right counts its checkpoints.'
-  ),
-  harness: frame(
-    'intro-2.jpg',
-    "The dock's harness picker: Claude Code, Codex, OpenCode, Pi and a plain shell",
-    'Pressed TERMINAL in the dock: the picker opened with the five harnesses Cookrew ships, the saved teams and + IMPORT A TEAM, and the next click on the paper places an agent on the one chosen.'
-  ),
-  trace: frame(
-    'qa-history-trace.jpg',
-    'A checkpoint rail dragged open, every past turn listed with the title it was given',
-    'Pressed the rail at its live end and dragged up: the checkpoints opened as a list of titled turns, the one under the marker offered ROLE, FORK and REWIND, and the transcript followed back to that turn, Update comments and rerun tests.'
-  ),
-  rail: frame(
-    'qa-terminal-rail.jpg',
-    'An orchestrator’s transcript: the cookrew commands it ran to hand work to its crew',
-    'Scrolled Lark’s transcript back to its first turn: one Bash call dispatched chunk.ts to Finch and kebab-case to Moss with the cookrew CLI, another polled both dispatches for their replies, and the rail on the right kept one checkpoint per turn.'
-  ),
-  board: frame(
-    'qa-board.jpg',
-    'One machine with every workspace at once, each a ring of the agents in it',
-    'Clicked the machine: its seven workspaces laid out as rings, each holding its agents’ faces with the count on its label. A click on a name opens that crew; a click on the paper steps back out to the machines.'
-  ),
-  mobile: frame(
-    'qa-mobile.jpg',
-    'The phone companion showing an agent’s full transcript, the rail down the right edge',
-    'Opened the phone companion against the same Mac at 412 px and tapped Lark twice: its transcript filled the phone, with Finch’s NaN and 1.5 findings and the 22 passing tests, the rail down the right and a key row with arrows and Esc under it.'
-  ),
-  workspaces: frame(
-    'intro-6.jpg',
-    'The workspace wall: every workspace as a screen with a snapshot of its paper',
-    'Opened the wall from the header menu: every workspace on this Mac as a tilted screen with a snapshot of its paper, GOAT Team picked in front with its directory under it, and OPEN, DIRECTORIES, REMOVE and HISTORY below.'
-  ),
-  market: frame(
-    'qa-marketplace.jpg',
-    'Import a team: a served team looked up by its cookrew.dev address, with what a seat costs',
-    'Pressed + IMPORT A TEAM, pasted cookrew.dev/@drej/cookrew-alpha and pressed LOOK UP: the sheet answered with the team, COOKREW Alpha at 1 USD a seat with Pilot answering and running the other two on the owner’s side, and CONTINUE — REVIEW THE TERMS.'
-  )
-} as const
 
 export function frameUrl(frame: Frame): string {
   return `${SITE_FRAMES}${frame.file}`
+}
+
+const escText = (v: string): string => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+/**
+ * ONE FIGURE, AND WHAT IT IS. The chip says illustration, composite or recording before the caption says what was
+ * clicked; an extra sentence (a status the picture shows, what it is not) follows the caption.
+ */
+export function figure(frame: Frame, options: { sizes?: string; note?: string; eager?: boolean } = {}): string {
+  const source = sourceOf(frame)
+  const portrait = frame.height > frame.width
+  const note = options.note ? ` ${escText(options.note)}` : ''
+  return `<figure class="shot ${source}${portrait ? ' portrait' : ''}" data-source="${source}">${frameImg(frame, { sizes: options.sizes ?? (portrait ? '300px' : '(max-width: 860px) 100vw, 40vw'), eager: options.eager })}<figcaption><span class="rec src-${source}">${escText(SOURCE_CHIP[source])}</span><span>${escText(frame.caption)}${note}</span></figcaption></figure>`
 }

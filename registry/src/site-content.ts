@@ -1,4 +1,5 @@
 import { LEGAL_PUBLISHED } from './site-legal-entity'
+import type { DemoKey } from './site-frames'
 
 /**
  * THE WORDS — every sentence cookrew.dev says about itself, in one place.
@@ -109,8 +110,8 @@ export interface FeatureSpec {
   short: string
   definition: string
   pts: string[]
-  /** Frame keys from site-frames.ts (overview) — detailed step sequences are added from sequences. */
-  frames: string[]
+  /** Pictures from site-frames.ts DEMO: the current UI on demo data. Empty: no picture shows this yet, and none stands in. */
+  frames: DemoKey[]
   faq: Faq[]
   related: string[]
 }
@@ -123,7 +124,7 @@ export const FEATURES: FeatureSpec[] = [
     definition:
       'The Cookrew canvas is a zoom you walk by clicking: your machines, a machine’s workspaces, one workspace’s crew tied by ink cables, one agent’s card, and its whole transcript. Each agent is a live terminal with a name, a role and a turn tracker; sticky notes hold specs and handovers; browser cards are real Chromium tabs an agent can drive; and the cables say who hands work to whom.',
     pts: ['Agent terminals with a name, a role and a live turn tracker', 'Sticky notes for specs, reviews and handovers', 'Connected browser cards that agents can drive', 'Wires say who hands work to whom, and who reviews whom'],
-    frames: ['canvas', 'task'],
+    frames: ['agents', 'hitlDesk'],
     faq: [
       { q: 'Is the terminal on a card a real terminal?', a: 'Yes. Each card is a PTY hosted by tmux or herdr, running the harness’s own CLI. What you see is what the agent sees.' },
       { q: 'Can an agent use a browser card?', a: 'Yes. Browser cards are Chromium pages driven over the DevTools protocol; an agent can navigate, click, fill and read them with the cookrew browser commands.' }
@@ -137,7 +138,7 @@ export const FEATURES: FeatureSpec[] = [
     definition:
       'A harness is an agent CLI Cookrew knows how to host, watch and dispatch to. Claude Code, Codex, OpenCode and Pi ship as presets; each declares its capabilities in Cookrew’s registry, so orchestration is the same command line whatever answers.',
     pts: ['Pick a preset, click the canvas, the teammate boots and its card opens', 'One CLI for every harness; the orchestrator does not care which one answers', 'The turn tracker reports thinking, waiting and replied from the harness itself, no scraping', 'Route each harness through your own Magpie gateway, or run it directly on its own login'],
-    frames: ['harness'],
+    frames: ['routing'],
     faq: [
       { q: 'Can I add a harness Cookrew does not ship?', a: 'A harness is a registry entry that declares how it starts, how its turns are detected and what it can do. New ones are added there without touching call sites.' }
     ],
@@ -149,7 +150,7 @@ export const FEATURES: FeatureSpec[] = [
     short: 'Scrub back through a session and fork a new agent from any past turn; nothing ever touches the original.',
     definition: CHECKPOINT_DEFINITION,
     pts: ['The rail beside the live terminal lists every turn as it lands', 'Hold the rail and drag: the transcript follows you back; drag far and the checkpoints open as a list of titled turns', 'Fork from turn N; the original keeps running', 'History trace: each checkpoint carries the block the agent actually produced'],
-    frames: ['trace', 'rail'],
+    frames: [],
     faq: [
       { q: 'What happens to my session when I fork or export?', a: 'Nothing. Forking and exporting both copy from a checkpoint; the original session is never touched.' },
       { q: 'Where do checkpoints come from?', a: 'From the harness’s own session record: Cookrew reads the transcript the agent writes, so a checkpoint is the turn as the agent saw it, not a scrape of the screen.' }
@@ -163,7 +164,7 @@ export const FEATURES: FeatureSpec[] = [
     definition:
       'Cookrew’s fleet view is the top of the zoom: every machine with its workspaces and how many agents each one holds, and inside a workspace every agent with its state — working, done, resting, offline or waiting on you — under its name. Red is kept for the agent that is waiting on you.',
     pts: ['Machines, then workspaces, then a crew: one click each', 'Each agent shows working, done, resting, offline or waiting', 'Red is kept for the agent waiting on you', 'The command box gathers what is waiting on you in one list'],
-    frames: ['board'],
+    frames: ['devices', 'workspaces'],
     faq: [{ q: 'Does the fleet view show offline agents?', a: 'Yes. An agent with no live pane shows as offline under its name; its history is still there.' }],
     related: ['checkpoints', 'workspaces']
   },
@@ -185,7 +186,7 @@ export const FEATURES: FeatureSpec[] = [
     definition:
       'A phone reaches your agents two ways. Signed in, the console opens in any phone browser, on any network, with every machine of your account. On the same Wi-Fi or Tailscale, the companion your desktop app hosts opens from a QR code: the same zoom by touch — crew, card, whole transcript with its rail — voice input and spoken replies, and a fixed slug URL per workspace for a bookmark.',
     pts: ['The console: any phone browser, any network, every machine of your account', 'The companion: cookrew mobile prints a QR code on your Wi-Fi or Tailscale', 'The same zoom by touch: crew, card, transcript', 'Voice in, spoken replies out'],
-    frames: ['mobile'],
+    frames: ['crewPhone', 'hitlPhone'],
     faq: [{ q: 'Does the phone need an app installed?', a: 'No. The console and the companion are both web pages; a phone opens either in its browser.' }],
     related: ['canvas', 'board']
   },
@@ -206,7 +207,7 @@ export const FEATURES: FeatureSpec[] = [
     short: 'The marketplace lists doors, not copies. A team stays on its author’s machine; you sign in, buy a seat once if it is priced, and get a live sandboxed session of your own.',
     definition: MARKET_DEFINITION,
     pts: ['One cookrew.dev link: served on the author’s side, opened on yours', 'The relay carries bytes it cannot read; the author can end a session any time', '200 signed delivery · 401 sign in · 402 pay · 403 not covered — money goes straight to the author', 'The placed card is the team’s own terminal, the same PTY its author sees'],
-    frames: ['market'],
+    frames: [],
     faq: [
       { q: 'Can the team’s author see what I type?', a: 'Yes. The session runs on their machine, so the author can see what you send and what their agents do with it, and can end the session. The relay in between cannot read it.' },
       { q: 'What can a served team access on my computer?', a: 'No files and no programs: it runs on the author’s machine in a sandbox, and the app only carries keystrokes and screen bytes. Like any terminal, text you select in its card is copied to your clipboard, so a served team can place text there; it cannot read your clipboard.' }
@@ -285,13 +286,10 @@ export interface Pillar {
   lede: string
   claims: readonly Claim[]
   /**
-   * A key of FRAMES (site-frames.ts): a still recorded from the running app, or
-   * none when no recording shows what the pillar claims (the Routing panel has
-   * not been recorded yet; the harness picker shows a choice, not a route).
+   * Its pictures (site-frames.ts DEMO), each with a sentence of what it is not when the claims beside it say
+   * more than the picture shows. Every one is the current UI on demo data, labelled as an illustration.
    */
-  frame: 'mobile' | 'canvas' | null
-  /** What the still is not: said in its caption when the picture is an older surface than the claims beside it. */
-  frameNote?: string
+  media: readonly { key: DemoKey; note?: string }[]
 }
 
 export const PILLARS: readonly Pillar[] = [
@@ -308,7 +306,7 @@ export const PILLARS: readonly Pillar[] = [
       { status: 'planned', title: 'A gateway across your machines', text: 'Reach another machine’s gateway through your account, without a hand-made tunnel.' },
       { status: 'planned', title: 'An official model gateway', text: 'Models offered through Cookrew itself. No provider agreement is in place.' }
     ],
-    frame: null
+    media: [{ key: 'routing', note: 'The gateway the panel reads is Magpie, installed separately on the same machine.' }]
   },
   {
     id: 'everywhere',
@@ -323,8 +321,11 @@ export const PILLARS: readonly Pillar[] = [
       { status: 'beta', title: 'Apple Watch', text: 'See who is waiting and reply from the wrist. Running on our own watches; not on the App Store or TestFlight.' },
       { status: 'planned', title: 'One request, any device, every machine', text: 'A request that waits on you is answered once, from whichever device is at hand, across every machine of the account.' }
     ],
-    frame: 'mobile',
-    frameNote: 'This is the phone companion on the same Wi-Fi; the console on a phone has not been recorded for this page yet.'
+    media: [
+      { key: 'hitlPhone', note: 'Drawn at phone width from the app’s code; not filmed on a phone, and not the console’s sign-in around it.' },
+      { key: 'watch', note: 'Beta: the watch app runs on our own watches and is not on the App Store or TestFlight.' },
+      { key: 'artifacts', note: 'What an agent operates, shown as cards. Taking control of a screen needs the machine’s switch and a 15-minute grant.' }
+    ]
   },
   {
     id: 'workspace',
@@ -337,7 +338,7 @@ export const PILLARS: readonly Pillar[] = [
       { status: 'shipped', title: 'Every turn is a checkpoint', text: 'Scrub back through a session and fork a new agent from any past turn; the original keeps running.' },
       { status: 'planned', title: 'Cloud Workspace', text: 'Teammates, clients or family working with agents in one workspace, with roles, an isolated sandbox and an audit trail. Not available: it waits on security work that has to land first.' }
     ],
-    frame: 'canvas'
+    media: [{ key: 'agents' }, { key: 'browserCard' }]
   }
 ]
 

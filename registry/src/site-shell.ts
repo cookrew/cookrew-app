@@ -500,6 +500,11 @@ figure.shot video{aspect-ratio:1400/874;background:var(--phos-bg)}
 figure.shot figcaption{font-size:13px;color:var(--muted);padding:9px 12px;background:var(--cream-hi);border-top:1px solid var(--hair);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 figure.shot .rec{font:8.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;background:var(--hp);color:var(--on-seal);border:1px solid var(--line);padding:2px 6px}
 figure.shot.missing{min-height:220px;display:grid;place-items:center;color:var(--phos-dim);font:18px var(--font-screen)}
+/* What a picture is, before what it shows (site-frames.ts SOURCE_CHIP): an illustration never wears the recording's green. */
+figure.shot .rec.src-illustration,figure.shot .rec.src-composite{background:var(--cream-md);color:var(--ink-soft);border-style:dashed}
+figure.shot.illustration,figure.shot.composite{background:var(--cream-md)}
+.feature-shots{display:grid;gap:18px}
+.feature-shots figure.shot.portrait{max-width:340px}
 /* sections */
 section{padding:56px 0;border-bottom:1px solid var(--line-soft)}
 .feature{display:grid;gap:34px;grid-template-columns:minmax(0,5fr) minmax(0,7fr);align-items:center}

@@ -1,0 +1,153 @@
+/**
+ * THE DEMO CAST for the site's illustrations (2026-11-17, with Intro Page). Synthetic and English
+ * throughout: no owner workspace, machine, account, path or session stands behind any of it.
+ * Built through the demo api's own verbs so the renderer sees one consistent store; only the
+ * read-outs no demo has (activity, roster, inbox) are answered here.
+ */
+import { rankInbox } from '@repo/src/shared/inbox-rank'
+import { routeFixture } from '@repo/src/shared/route-fixture'
+
+type Api = Record<string, (...args: any[]) => any>
+const now = Date.now()
+const ago = (min: number): number => now - min * 60_000
+
+export const RELEASE = 'demo-ws'
+export let DOCS = ''
+
+const term = (id: string, name: string, preset: string, command: string, x: number, y: number, orch = false) => ({
+  kind: 'terminal', id, name, preset, command, cwd: '~/release-room', orch, role: null, position: { x, y }, size: { width: 560, height: 420 }
+})
+
+const CHECKLIST = '# release-checklist\n\n- [x] Changelog drafted (Planner)\n- [ ] API diff reviewed (Reviewer)\n- [x] Browser check on the notes page (Checker)\n- [ ] Customer notes summarised (Notes)\n\nShip when every box is ticked.'
+
+function activity(terminalId: string, phase: string, extra: Record<string, unknown> = {}) {
+  return {
+    terminalId, agent: true, phase, prompt: null, pendingInput: null, lines: [], reply: null, glance: null, title: null,
+    turnCount: 3, turnStartLine: null, scrollRow: null, tailLines: null, scrollBase: null, turnStartedAt: ago(2), dispatchId: null, updatedAt: ago(1),
+    ...extra
+  }
+}
+
+export const ACTIVITY = [
+  activity('rr-planner', 'thinking', {
+    prompt: 'Draft the v1.4 release notes from the merged changes',
+    glance: { status: 'Writing… (41s)', tools: ['Read CHANGELOG.md', 'Bash git log --oneline v1.3..HEAD'], message: 'Grouping the changes into features and fixes.' }
+  }),
+  activity('rr-reviewer', 'waiting', {
+    prompt: 'Review the API diff for breaking changes',
+    waitSeq: 1,
+    waitChoice: {
+      kind: 'menu', question: 'Allow this edit to src/api/routes.ts?', sub: 'Edit · routes.ts · +4 −1', cursor: 0, escIndex: 2,
+      options: [
+        { key: '1', label: 'Yes', detail: null },
+        { key: '2', label: 'Yes, and allow edits this session', detail: null },
+        { key: '3', label: 'No, and tell Codex what to change', detail: null }
+      ]
+    }
+  }),
+  activity('rr-checker', 'replied', {
+    prompt: 'Open the notes page and check every link',
+    reply: 'All 12 links on the release notes page resolve, and the page renders at 390 px without overflow. One image is missing its alt text; I listed it in release-checklist.'
+  }),
+  activity('rr-notes', 'idle', { prompt: 'Summarise the customer notes', reply: 'Three themes: faster sign-in, clearer errors, and an export button.' }),
+  activity('ds-writer', 'waiting', {
+    prompt: 'Update the install guide for v1.4',
+    waitSeq: 1,
+    waitChoice: {
+      kind: 'menu', question: 'Which install path should the guide lead with?', sub: null, cursor: 0, escIndex: null,
+      options: [
+        { key: '1', label: 'The download button', detail: 'Mac app first' },
+        { key: '2', label: 'Homebrew', detail: 'one command' }
+      ]
+    }
+  }),
+  activity('ds-editor', 'replied', { prompt: 'Proofread the FAQ', reply: 'The FAQ reads cleanly; I fixed two broken anchors.' })
+]
+
+export function roster(docs: string) {
+  const row = (id: string, name: string, preset: string, workspaceId: string, workspaceName: string, orch = false) => ({
+    id, name, preset, role: null, cwd: '~/release-room', workspaceId, workspaceName, spawnedAt: ago(90), orch, active: true, failure: null
+  })
+  return [
+    row('rr-planner', 'Planner', 'Claude Code', RELEASE, 'Release Room', true),
+    row('rr-reviewer', 'Reviewer', 'Codex', RELEASE, 'Release Room'),
+    row('rr-checker', 'Checker', 'OpenCode', RELEASE, 'Release Room'),
+    row('rr-notes', 'Notes', 'Pi', RELEASE, 'Release Room'),
+    row('ds-writer', 'Writer', 'Claude Code', docs, 'Docs Site'),
+    row('ds-editor', 'Editor', 'Codex', docs, 'Docs Site')
+  ]
+}
+
+/**
+ * The Routing panel's read-out, cleaned for the site: the product's own fixture (route-fixture.ts) carries a
+ * maintainer's address, maintainer crew names and group wording the Magpie page ruling dropped. Here: no
+ * account email, generic group names, one real local tag (ollama qwen3:32b), the four harnesses ready.
+ */
+export function cleanRoute() {
+  const base = routeFixture('online')
+  const group = (id: string, displayName: string) => ({ id, displayName, ownedBy: 'magpie', group: true, reasoning: true, levels: ['low', 'medium', 'high'], contextWindow: null })
+  return {
+    ...base,
+    defaultModel: 'group/default',
+    mcpServers: ['memory'],
+    providers: 3,
+    models: [group('group/default', 'default'), group('group/review', 'review'), { id: 'ollama/qwen3:32b', displayName: 'qwen3:32b', ownedBy: 'ollama', group: false, reasoning: false, levels: [], contextWindow: 32_000 }],
+    quotas: [
+      { provider: 'claude', account: null, alias: 'Claude subscription', plan: null, kind: 'subscription', windows: [], last: false, error: null },
+      { provider: 'codex', account: null, alias: 'ChatGPT subscription', plan: null, kind: 'subscription', windows: [{ name: '5 hours', used: 20, limit: 100, resetsAt: null, display: '20 / 100' }], last: false, error: null },
+      { provider: 'ollama', account: null, alias: null, plan: null, kind: 'local', windows: [], last: false, error: null }
+    ],
+    live: [],
+    harnesses: base.harnesses.map((h: Record<string, unknown>) => ({ ...h, installed: true, signedIn: true, inDock: true })),
+    autoGroup: false,
+    setup: { ...base.setup, addGroupLine: 'magpie group add default' }
+  }
+}
+
+const ROUTES: Record<string, string> = { 'rr-planner': 'group/default', 'rr-reviewer': 'group/review', 'rr-checker': 'group/default', 'rr-notes': 'ollama/qwen3:32b' }
+
+export async function seed(api: Api, options: { page: string }): Promise<void> {
+  await api.renameWorkspace(RELEASE, 'Release Room')
+  for (const id of ['demo-conductor', 'demo-note', 'demo-browser']) await api.removeNode(id)
+  const nodes = [
+    term('rr-planner', 'Planner', 'Claude Code', 'claude', 340, 120, true),
+    term('rr-reviewer', 'Reviewer', 'Codex', 'codex', 960, 120),
+    term('rr-checker', 'Checker', 'OpenCode', 'opencode', 340, 620),
+    term('rr-notes', 'Notes', 'Pi', 'pi', 960, 620),
+    { kind: 'note', id: 'rr-note', name: 'release-checklist', customName: 'release-checklist', content: CHECKLIST, locked: false, position: { x: 1600, y: 120 }, size: { width: 300, height: 320 } },
+    { kind: 'browser', id: 'rr-browser', name: 'Release notes', url: options.page, position: { x: 1600, y: 520 }, size: { width: 560, height: 420 } },
+    { kind: 'browser', id: 'rr-screen', name: 'Main display', url: 'screen://main', position: { x: 2240, y: 120 }, size: { width: 720, height: 460 } },
+    { kind: 'browser', id: 'rr-phone', name: 'iPhone 17 Pro', url: 'window://Simulator?id=103', position: { x: 2240, y: 640 }, size: { width: 420, height: 720 } }
+  ]
+  for (const n of nodes) await api.addNode(n)
+  for (const [a, b] of [['rr-planner', 'rr-reviewer'], ['rr-planner', 'rr-checker'], ['rr-planner', 'rr-notes'], ['rr-reviewer', 'rr-checker'], ['rr-planner', 'rr-note'], ['rr-checker', 'rr-browser']]) await api.connectNodes(a, b)
+
+  const docs = await api.createWorkspace('Docs Site', '~/docs-site')
+  DOCS = docs.id
+  for (const n of [term('ds-writer', 'Writer', 'Claude Code', 'claude', 340, 120, true), term('ds-editor', 'Editor', 'Codex', 'codex', 960, 120)]) await api.addNode(n)
+  await api.connectNodes('ds-writer', 'ds-editor')
+  await api.switchWorkspace(RELEASE)
+
+  const list = roster(DOCS)
+  Object.assign(api, {
+    routeState: () => Promise.resolve(cleanRoute()),
+    terminalRoute: (id: string) =>
+      Promise.resolve({ route: ROUTES[id] ?? 'direct', effective: ROUTES[id] ?? null, appliesOn: 'now', live: null, turn: null, offline: false, note: null, gateway: 'online', routable: true }),
+    listActivity: () => Promise.resolve(ACTIVITY),
+    onTerminalActivity: () => () => undefined,
+    listAgents: () => Promise.resolve(list),
+    onAgentRegistry: () => () => undefined,
+    onAgentChanged: () => () => undefined,
+    onAgentSpawn: () => () => undefined,
+    inbox: () =>
+      Promise.resolve(
+        rankInbox(
+          [
+            { kind: 'waiting', nodeId: 'rr-reviewer', nodeName: 'Reviewer', nodeKind: 'terminal', workspaceId: RELEASE, workspaceName: 'Release Room', reason: 'asks you — "Allow this edit to src/api/routes.ts?"', since: ago(3), served: false, blockedDownstream: 1 },
+            { kind: 'waiting', nodeId: 'ds-writer', nodeName: 'Writer', nodeKind: 'terminal', workspaceId: DOCS, workspaceName: 'Docs Site', reason: 'asks you — "Which install path should the guide lead with?"', since: ago(6), served: false, blockedDownstream: 0 }
+          ],
+          now
+        )
+      )
+  })
+}

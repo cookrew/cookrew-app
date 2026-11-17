@@ -1,8 +1,7 @@
-import { FRAMES, frameImg, type Frame } from './site-frames'
+import { DEMO, figure } from './site-frames'
 import { esc, page, type Page } from './site-shell'
 import { COMPARE, DEFINITION, FEATURES, GITHUB_REPO, LISTED_FEATURES, type FeatureSpec } from './site-content'
 import type { Commit } from './github-commits'
-import { SEQUENCES, type Step } from './site-sequences'
 import { breadcrumbs, faqPage, organization, webPage } from './site-seo'
 
 /**
@@ -19,29 +18,15 @@ import { breadcrumbs, faqPage, organization, webPage } from './site-seo'
  * page.
  */
 
-function stepFigure(step: Step, index: number): string {
-  const frame: Frame = { file: step.file, alt: step.title, caption: step.caption, width: step.width, height: step.height }
-  return `<li class="step"><div class="step-no">${index + 1}</div><div><h3>${esc(step.title)}</h3><figure class="shot">${frameImg(frame, { sizes: '(max-width: 860px) 100vw, 70vw' })}<figcaption><span class="rec">● REC</span>${esc(step.caption)}</figcaption></figure></div></li>`
-}
-
-function overviewFigure(key: string): string {
-  const frame = (FRAMES as Record<string, Frame>)[key]
-  if (!frame) return ''
-  return `<figure class="shot">${frameImg(frame, { sizes: '(max-width: 860px) 100vw, 70vw' })}<figcaption><span class="rec">● REC</span>${esc(frame.caption)}</figcaption></figure>`
-}
-
 export function featurePage(slug: string): Page | null {
   const f = FEATURES.find((x) => x.slug === slug)
   if (!f) return null
-  const steps = SEQUENCES[slug] ?? []
   const related = f.related.map((r) => LISTED_FEATURES.find((x) => x.slug === r)).filter((x): x is FeatureSpec => x !== undefined)
   const path = `/features/${f.slug}`
   // A page still built for old links but listed nowhere is not to be indexed as current (LISTED_FEATURES).
   const unlisted = !LISTED_FEATURES.some((x) => x.slug === f.slug)
-  const visual =
-    steps.length > 0
-      ? `<ol class="steps">${steps.map(stepFigure).join('')}</ol>`
-      : f.frames.map(overviewFigure).join('')
+  // The current UI on demo data, labelled; a feature no picture shows yet has none, and nothing stands in.
+  const visual = f.frames.map((key) => figure(DEMO[key], { sizes: '(max-width: 860px) 100vw, 70vw' })).join('')
 
   return page(
     {
@@ -69,8 +54,8 @@ export function featurePage(slug: string): Page | null {
 <ul class="pts">${f.pts.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
 <p class="row"><a class="btn primary" href="/#download">Get Cookrew</a><a class="btn" href="/#start">Get started</a></p>
 </div>
-<section><div class="wrap"><p class="kicker"><span class="no">RECORDED</span>${steps.length > 0 ? `${steps.length} steps, captured from the running app` : 'captured from the running app'}</p>
-<h2>How it looks</h2>${visual}</div></section>
+${visual ? `<section><div class="wrap"><p class="kicker"><span class="no">ILLUSTRATION</span>the current interface on demo data</p>
+<h2>How it looks</h2><div class="feature-shots">${visual}</div></div></section>` : ''}
 <section id="faq"><div class="wrap"><h2>Questions about ${esc(f.slug === 'cli' ? 'the CLI' : f.slug)}</h2><div class="faq">${f.faq
       .map((q) => `<details open><summary>${esc(q.q)}</summary><p>${esc(q.a)}</p></details>`)
       .join('')}</div></div></section>
@@ -98,14 +83,10 @@ export function commitsSection(commits: readonly Commit[] | null): string {
 }
 
 /**
- * Every feature as a card with its first recorded frame — the overview the
- * homepage shows. The frame is a card face (a 16:10 window onto the
- * recording, .card-shot), never the image at its own pixel size.
+ * Every listed feature as a card: its title and one line. No picture: the
+ * front page's figures are each shown once, in the pillars, and a feature's
+ * own page carries its pictures.
  */
 export function featuresGrid(): string {
-  return `<div class="grid shots">${LISTED_FEATURES.map((f) => {
-    const steps = SEQUENCES[f.slug] ?? []
-    const frame = steps[0] ? { file: steps[0].file, alt: steps[0].title, caption: steps[0].caption, width: steps[0].width, height: steps[0].height } : (FRAMES as Record<string, Frame>)[f.frames[0] ?? '']
-    return `<div class="card" style="padding:0;overflow:hidden">${frame ? `<a class="card-shot" href="/features/${f.slug}">${frameImg(frame, { sizes: '(max-width: 860px) 100vw, 33vw' })}</a>` : ''}<div style="padding:14px 16px"><h3><a href="/features/${f.slug}">${esc(f.title)}</a></h3><p>${esc(f.short)}</p></div></div>`
-  }).join('')}</div>`
+  return `<div class="grid">${LISTED_FEATURES.map((f) => `<div class="card"><h3><a href="/features/${f.slug}">${esc(f.title)}</a></h3><p>${esc(f.short)}</p></div>`).join('')}</div>`
 }

@@ -6,16 +6,18 @@ import { DEFINITION, FACTS, FAQ, HEADLINE, HEADLINE_SUB, PILLARS, START_FAQ, STA
 import { commitsSection, compareTable, featuresGrid } from './site-features'
 import { faqPage, organization, softwareApplication, webPage } from './site-seo'
 import { BRAND_LOCKUP_CSS, BRAND_LOCKUP_HTML } from './site-brand'
-import { MOTION, PROMO, type Motion } from './site-motion'
+import { PROMO } from './site-motion'
+import { SOURCE_CHIP } from './site-frames'
 import { pillarsSection, roadmapSection } from './site-pillars'
 
 /**
  * THE FRONT PAGE OF THE STATIC SITE (0.6.0, site-static.ts) — one page, top to
  * bottom: the hero (the claim, the download, the way to the console and the
- * recorded promo), the three pillars (site-pillars.ts: every claim with its
- * status, a recorded still where one shows the claim), the roadmap, GET STARTED (the two steps and
- * the commands the orch runs) and the FEATURES (every one with its recorded
- * frame, the comparison, the questions, the commits). The page's sections are
+ * hero clip), the three pillars (site-pillars.ts: every claim with its
+ * status, and pictures of the current UI on demo data, each labelled as an
+ * illustration), the roadmap, GET STARTED (the two steps and the commands the
+ * orch runs) and the FEATURES (every one as a card, the comparison, the
+ * questions, the commits). The page's sections are
  * its catalog, on the right rail. A feature's own page (/features/<slug>) is
  * the long tail, and the cards lead there.
  *
@@ -31,28 +33,17 @@ const ONE_LINE = DEFINITION.slice(0, DEFINITION.indexOf('. ') + 1)
 const DESCRIPTION = DEFINITION.slice(0, 157).replace(/\s+\S*$/, '') + '…'
 
 /**
- * THE PROMO — the hero's video: the running app, recorded in its ink theme
- * (2026-10-31), walking the semantic zoom by click from the machines down to
- * one agent's full transcript and back out. Real agents in the owner's own
- * workspace, real cables, real replies; nothing staged, nothing written for
- * the shot. The file lives with the frames on GitHub; the bundle has no room
- * for it. No script: <video autoplay muted loop playsinline> needs none, and
- * a reader whose browser refuses autoplay sees the poster.
+ * THE HERO CLIP (2026-11-17) — twenty seconds of the current UI on the demo
+ * cast, every beat one real click through the app's renderer: the workspaces
+ * stop, Release Room's four agents on four harnesses, Reviewer's question as
+ * rows to pick, the artifacts, Checker's browser card, and back out. It is an
+ * illustration on demo data and says so; the file and its poster live with
+ * the frames on GitHub. No script: <video autoplay muted loop playsinline>
+ * needs none, and a reader whose browser refuses autoplay sees the poster.
  */
 function promo(): string {
-  const poster = `${SITE_FRAMES}promo-poster.jpg`
-  return `<figure class="shot promo"><video autoplay muted loop playsinline preload="metadata" poster="${esc(poster)}" width="1400" height="874" aria-label="${esc(PROMO.label)}"><source src="${SITE_FRAMES}promo.mp4" type="video/mp4"></video><figcaption><span class="rec">● REC</span>${esc(PROMO.caption)}</figcaption></figure>`
-}
-
-/**
- * THE ZOOM, RECORDED — one short clip per step of the navigator, each the
- * real app answering one click. They loop muted and carry a poster, so a
- * reader whose browser refuses autoplay still sees the step.
- */
-function motionStrip(): string {
-  const clip = (m: Motion): string =>
-    `<figure class="shot"><video autoplay muted loop playsinline preload="none" poster="${SITE_FRAMES}${m.file}.jpg" width="${m.w}" height="${m.h}" aria-label="${esc(m.title)}"><source src="${SITE_FRAMES}${m.file}.mp4" type="video/mp4"></video><figcaption><span class="rec">${esc(m.step)}</span><span><b class="serif">${esc(m.title)}</b> — ${esc(m.caption)}</span></figcaption></figure>`
-  return `<div class="motion" id="zoom">${MOTION.map(clip).join('')}</div>`
+  const poster = `${SITE_FRAMES}${PROMO.poster}`
+  return `<figure class="shot promo illustration" data-source="illustration"><video autoplay muted loop playsinline preload="metadata" poster="${esc(poster)}" width="1400" height="874" aria-label="${esc(PROMO.label)}"><source src="${SITE_FRAMES}${PROMO.file}" type="video/mp4"></video><figcaption><span class="rec src-illustration">${esc(SOURCE_CHIP.illustration)}</span><span>${esc(PROMO.caption)}</span></figcaption></figure>`
 }
 
 /** GET STARTED: the two steps, the crew builder, and the two questions people ask first. */
@@ -75,14 +66,12 @@ $ cookrew orch "Forge"</code>
 </div></section>`
 }
 
-/** FEATURES: every one with its recorded frame, then what each thing can do, the questions, the proof. */
+/** FEATURES: every one as a card, then what each thing can do, the questions, the proof. */
 function featuresSection(commits: readonly Commit[] | null): string {
   return `<section id="features"><div class="wrap">
-<p class="kicker"><span class="no">FEATURES</span>recorded, not described</p>
+<p class="kicker"><span class="no">FEATURES</span>what each part does</p>
 <h2>What Cookrew does</h2>
 <p class="lede">${esc(DEFINITION)}</p>
-<h3 class="mkt-h" style="margin-top:6px">The zoom, recorded<span class="chip">one click each · the running app</span></h3>
-${motionStrip()}
 ${featuresGrid()}
 <h3 id="compare" style="margin-top:32px">A chat tab, one CLI agent, or a team</h3>${compareTable()}
 <h3 id="faq" style="margin-top:32px">Questions and answers</h3><div class="faq">${FAQ.map((f) => `<details><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')}</div>
@@ -122,7 +111,6 @@ function staticCatalog(console: string, built: boolean): string {
     ['#serve', 'Save the team', true],
     ['#build', 'What your orch runs', true],
     ['#features', 'Features', false],
-    ['#zoom', 'The zoom, recorded', true],
     ['#compare', 'Chat tab, one agent, or a team', true],
     ['#faq', 'Questions', true],
     ['#built', 'What landed on dev', true]
@@ -144,7 +132,7 @@ export function staticHomePage(input: StaticHomeInput): Page {
       active: 'home',
       description: DESCRIPTION,
       path: '/',
-      preload: [`${SITE_FRAMES}promo-poster.jpg`],
+      preload: [`${SITE_FRAMES}${PROMO.poster}`],
       jsonLd: [
         organization(),
         softwareApplication(input.release),

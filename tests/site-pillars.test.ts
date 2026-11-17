@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { buildStaticSite } from '../registry/src/site-static'
 import { PILLARS, ROADMAP, STATUS, llmsText } from '../registry/src/site-content'
-import { FRAMES } from '../registry/src/site-frames'
+import { existsSync } from 'node:fs'
+import path from 'node:path'
+import { DEMO } from '../registry/src/site-frames'
+import { PROMO } from '../registry/src/site-motion'
 
 /**
  * THE FRONT PAGE KEEPS WHAT IS SHIPPED APART FROM WHAT IS NOT (2026-11-16).
@@ -112,19 +115,64 @@ describe('the pillars say where every claim stands', () => {
   })
 })
 
-describe('the pictures are recordings', () => {
-  it('the hero is the recorded promo, and no drawn demo scene is on the page', () => {
-    const body = home()
-    expect(body).toMatch(/<source src="[^"]+\/site\/promo\.mp4"/)
-    expect(body).not.toMatch(/shared-demo|site-demo|Release Room/)
+describe('the pictures say what they are (2026-11-17)', () => {
+  const pages = (): Map<string, string> => {
+    const out = new Map<string, string>()
+    for (const [name, body] of site()) if (typeof body === 'string' && name.endsWith('.html')) out.set(name, body)
+    return out
+  }
+  const figures = (html: string): string[] => [...html.matchAll(/<figure class="shot[\s\S]*?<\/figure>/g)].map((m) => m[0])
+
+  it('no page shows a 1 Nov recording of the maintainer’s own workspace', () => {
+    const old = /\/site\/(promo\.mp4|promo-poster|motion-|qa-|seq-|intro-[0-9])/
+    for (const [name, body] of pages()) expect(body, name).not.toMatch(old)
   })
 
-  it('a pillar shows a recorded still, dated, or none; the one drawing calls itself a diagram', () => {
+  it('the hero is the demo clip, and it says it is an illustration on demo data', () => {
     const body = home()
-    const shown = PILLARS.flatMap((p) => (p.frame === null ? [] : [FRAMES[p.frame]]))
-    for (const frame of shown) expect(body).toContain(frame.file.replace(/\.jpg$/, '-800.jpg'))
-    expect(body.match(/Recorded from the running app, 1 Nov 2026/g)).toHaveLength(shown.length)
+    expect(body).toContain(`/site/${PROMO.file}"`)
+    expect(body).toContain(`poster="`)
+    expect(body).toMatch(/<figure class="shot promo illustration" data-source="illustration">/)
+    expect(PROMO.caption).toMatch(/demo data/)
+    expect(PROMO.caption).not.toMatch(/record/i)
+  })
+
+  it('every figure on every page wears what it is; none claims to be recorded', () => {
+    let seen = 0
+    for (const [name, body] of pages()) {
+      for (const fig of figures(body)) {
+        seen += 1
+        expect(fig, name).toMatch(/data-source="(illustration|composite)"/)
+        expect(fig, name).toMatch(/Product UI on demo data · illustration|Composite of product UI renders on demo data · illustration/)
+        expect(fig, name).not.toMatch(/● REC|[Rr]ecorded|captured from the running app/)
+      }
+    }
+    expect(seen).toBeGreaterThan(5)
+  })
+
+  it('the front page shows each picture once', () => {
+    const files = figures(home()).map((fig) => /src="[^"]*\/site\/([^"?]+)"/.exec(fig)?.[1])
+    expect(files.every(Boolean)).toBe(true)
+    expect(new Set(files).size).toBe(files.length)
+  })
+
+  it('a pillar shows its pictures, each with the sentence of what it is not when one is needed; the drawing is a diagram', () => {
+    const body = home()
+    for (const p of PILLARS) for (const m of p.media) {
+      expect(body).toContain(DEMO[m.key].file.replace(/\.jpg$/, '-800.jpg'))
+      if (m.note) expect(body).toContain(m.note.replace(/&/g, '&amp;'))
+    }
+    expect(PILLARS.find((p) => p.id === 'everywhere')!.media.find((m) => m.key === 'watch')!.note).toMatch(/^Beta/)
     expect(body).toContain('Diagram, not a screenshot.')
-    expect(body).not.toContain('intro-2')
+  })
+
+  it('every picture the pages name is a file in the repository, with its small twin', () => {
+    const dir = path.join(__dirname, '..', 'registry', 'assets', 'site')
+    for (const frame of Object.values(DEMO)) {
+      expect(existsSync(path.join(dir, frame.file)), frame.file).toBe(true)
+      expect(existsSync(path.join(dir, frame.file.replace(/\.jpg$/, '-800.jpg'))), frame.file).toBe(true)
+    }
+    expect(existsSync(path.join(dir, PROMO.file))).toBe(true)
+    expect(existsSync(path.join(dir, PROMO.poster))).toBe(true)
   })
 })
