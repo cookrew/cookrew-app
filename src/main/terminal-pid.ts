@@ -34,9 +34,48 @@ export interface TerminalPidDeps {
 export interface TerminalPid {
   pid(): Promise<number | null>
   alive(pid: number): Promise<boolean>
-  signal(pid: number, signal: 'SIGTERM' | 'SIGKILL'): void
+  signal(pid: number, signal: 'SIGTERM' | 'SIGKILL'): Promise<void>
   /** The start time the pid was named by; null when it could not be. */
   identity(): string | null
+}
+
+/**
+ * node-pty's own child, in a DIRECT session (no multiplexer: Windows always).
+ * node-pty holds that child itself (a process handle on Windows, the unreaped
+ * child on POSIX), so its exit event is about that very process and no other.
+ */
+export interface OwnChild {
+  /** node-pty reported this child's exit. */
+  readonly exited: boolean
+  /** End it through node-pty (on Windows, its pseudoconsole), naming no pid. */
+  terminate(): void
+}
+
+/**
+ * How a terminal's end is judged and pressed. With an own child: alive until
+ * node-pty says it exited, whatever the pid number now holds; pressed through
+ * node-pty on Windows, which has no process identity to check a pid against,
+ * and through the identity-checked signal elsewhere. Without one (a
+ * multiplexer holds the pane): the pid rules above, unchanged.
+ */
+export function childJudge(
+  root: TerminalPid,
+  own: OwnChild | null,
+  platform: NodeJS.Platform = process.platform
+): { alive: (pid: number) => Promise<boolean>; signal: (pid: number, signal: 'SIGTERM' | 'SIGKILL') => Promise<void> } {
+  if (own === null) return { alive: (pid) => root.alive(pid), signal: (pid, signal) => root.signal(pid, signal) }
+  return {
+    alive: async () => !own.exited,
+    signal: async (pid, signal) => {
+      if (own.exited) return
+      if (platform !== 'win32') return root.signal(pid, signal)
+      try {
+        own.terminate()
+      } catch {
+        // node-pty already let go of it: its exit, or the deadline, says what happened.
+      }
+    }
+  }
 }
 
 export function terminalPid(deps: TerminalPidDeps): TerminalPid {
@@ -64,8 +103,13 @@ export function terminalPid(deps: TerminalPidDeps): TerminalPid {
       if (now.state === 'unknown') return true
       return now.state === 'running' && (identity === null || now.started === identity)
     },
-    signal(pid, signal) {
+    async signal(pid, signal) {
       if (identity === null) return
+      // Read again right before EVERY signal: only the very process that was
+      // named, still running, is signalled. No answer, an end, or another
+      // start time on the number all mean hands off.
+      const now = await deps.fact(pid)
+      if (now.state !== 'running' || now.started !== identity) return
       try {
         deps.kill(pid, signal)
       } catch {
