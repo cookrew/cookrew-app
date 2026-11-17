@@ -123,10 +123,13 @@ export function StageView({
   }, [showing, onShowing])
   useEffect(() => () => onShowing(null), [onShowing])
 
+  // The page's own way out (the terminal's Back, a browser's ✕): where this full
+  // view was opened from, as the ‹ goes (zoom-store.ts · back).
+  // Landing on another full view, the stage keeps showing: the zoom picks its card
+  // (use-zoom-motion.ts), and following what needs you would flash another one first.
   const back = useCallback(() => {
-    const z = zoomStore.get()
-    zoomStore.go(z.dir === 'agents' ? 2 : 0, z.dir)
-    stageSelect.clear()
+    zoomStore.back('pane')
+    if (zoomStore.get().full === null) stageSelect.clear()
   }, [])
   // You touched it: it stays. A new arrival waits on its card instead of
   // taking the middle from under your hands.

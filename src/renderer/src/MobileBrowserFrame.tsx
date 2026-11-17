@@ -38,7 +38,6 @@ import { NO_ZOOM, panZoom, pinchZoom, type FrameZoom } from './frame-zoom'
 import { hitArea, pictureFit, remoteLayout, ROW_HEIGHT_GUESS } from './use/remote-layout'
 import { FRAME_CONTROLS } from './use/RemotePanel'
 import { thumbStore, useThumb } from './activity-thumb-store'
-import { stepOut } from './zoom/zoom-path'
 import { zoomStore } from './zoom/zoom-store'
 import { handOffBlob, shouldHandOff } from './browser-poster'
 import { useRemoteKeyboard } from './useRemoteKeyboard'
@@ -345,8 +344,7 @@ export function MobileBrowserFrame({
   zoomRef.current = { fit: baseFit, view: area, origin, control: interactive }
   /** Leaving the card is what ends a viewer: the stream closes as it goes. */
   const endSession = (): void => {
-    const zoom = zoomStore.get()
-    zoomStore.go(stepOut(zoom.dir, zoom.v), zoom.dir)
+    zoomStore.back('pane')
   }
   // A screen that went blind leaves nothing behind to become the card's picture.
   const blind = stream.deviceStatus?.remote !== undefined
