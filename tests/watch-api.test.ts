@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
-import { CHECKPOINT_MEMO_MS, pageSettler, watchWriteRefusal, cardCheckpoint, checkpointsOf, setWatchHost, watchRouteAllowed, browserInputOf, type WatchHost } from '../src/main/watch-routes'
+import { CHECKPOINT_MEMO_MS, pageSettler, watchWriteRefusal, cardCheckpoint, checkpointsOf, setWatchHost, watchRouteAllowed, browserInputOf, holdWatchView, watchViewport, WATCH_PAGE_WIDTH, type WatchHost } from '../src/main/watch-routes'
 import { WatchPairing } from '../src/main/watch-pairing'
 import { watchBases } from '../src/main/watch-bases'
 import { cardRows, itemsOfAgent, watchCards } from '../src/main/watch-cards'
@@ -450,6 +450,51 @@ describe('through the real gate', () => {
       ['b1', 160, true],
       ['b1', 300, false]
     ])
+  })
+
+  // Owner, 2026-11-17: "artifact视图点击直接全屏且渲染手表版本大小，支持点击支持输入".
+  it('a wrist on a page, saying its glass, has it laid out at a watch\'s size; a peek and a screen do not', async () => {
+    const viewer = () => ({ registerViewportViewer: vi.fn(), claimViewport: vi.fn(() => true), offerViewport: vi.fn(), releaseViewport: vi.fn(), unregisterViewportViewer: vi.fn() })
+    const page = viewer()
+    const screen = { ...viewer(), needsViewer: true }
+    const frame = vi.fn(async () => ({ type: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 3]) }))
+    setWatchHost(host(pairing, { frame, browser: async (id: string) => (id === 's1' ? screen : page) as never }))
+    const token = await paired()
+    expect((await call('/api/watch/item/b1/frame?w=396&vw=208&vh=248', token)).status).toBe(200)
+    expect(page.claimViewport).toHaveBeenCalledWith('watch:b1', { width: WATCH_PAGE_WIDTH, height: 382, mobile: true, scale: 1.5 })
+    expect((await call('/api/watch/item/b1/frame?w=160&peek=1&vw=208&vh=248', token)).status).toBe(200)
+    expect((await call('/api/watch/item/b1/frame?w=396', token)).status).toBe(200)
+    expect(page.claimViewport).toHaveBeenCalledTimes(1)
+    expect(page.registerViewportViewer).toHaveBeenCalledTimes(1)
+    await call('/api/watch/item/s1/frame?w=396&vw=208&vh=248', token)
+    expect(screen.claimViewport).not.toHaveBeenCalled()
+  })
+
+  it('lets the page go once the wrist has stopped looking', () => {
+    vi.useFakeTimers()
+    try {
+      const page = { registerViewportViewer: vi.fn(), claimViewport: vi.fn(() => false), offerViewport: vi.fn(), releaseViewport: vi.fn(), unregisterViewportViewer: vi.fn() }
+      const glass = watchViewport(184, 224)!
+      holdWatchView('bx', page, glass, 1000)
+      // In another viewer's cool-down the claim waits as an offer.
+      expect(page.offerViewport).toHaveBeenCalledWith('watch:bx', glass)
+      vi.advanceTimersByTime(900)
+      holdWatchView('bx', page, glass, 1000)
+      vi.advanceTimersByTime(900)
+      expect(page.releaseViewport).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(200)
+      expect(page.releaseViewport).toHaveBeenCalledWith('watch:bx')
+      expect(page.unregisterViewportViewer).toHaveBeenCalledWith('watch:bx')
+      expect(page.registerViewportViewer).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reads a glass as a phone-shaped page, never past the viewport\'s bounds', () => {
+    expect(watchViewport(0, 248)).toBeNull()
+    expect(watchViewport(Number.NaN, 248)).toBeNull()
+    expect(watchViewport(208, 2000)).toEqual({ width: 320, height: 800, mobile: true, scale: 1.5 })
   })
 
   it('a machine\'s screen is never driven from a wrist: refused out loud, and nothing reaches it', async () => {
