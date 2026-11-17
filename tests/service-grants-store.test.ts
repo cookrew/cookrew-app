@@ -97,7 +97,8 @@ describe('env grants', () => {
   })
 
   // Skipped on Windows: it opens the file to others with chmod, which Windows
-  // cannot express, and openToOthers (file-privacy.ts) reads no bits there.
+  // cannot express; there filePrivacy reads the access list, opened to Everyone
+  // with icacls in file-privacy.test.ts.
   it.skipIf(!HAS_POSIX_MODES)('warns once when a lent credential file is readable by other users', () => {
     const envFile = path.join(base, 'loose.env')
     writeFileSync(envFile, 'K=v\n', { mode: 0o644 })

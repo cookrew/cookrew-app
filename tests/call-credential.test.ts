@@ -1,10 +1,14 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { CallCredentialService, type CallScope } from '../src/main/call-credential'
+import { FIRST_RETRY_MS, PrivacyCache } from '../src/main/file-privacy'
 import { makeCallAuthorize, type CallTarget } from '../src/main/call-authorize'
 import type { Visibility } from '../src/shared/gate'
+import { ACE_ALLOWED, ace, acl, descriptor } from './support/security-descriptor'
+
+const ME = 'S-1-5-21-1111111111-2222222222-3333333333-1001'
 
 /**
  * THE OWNER'S ISSUER AND THE LIVE-CALL BINDING (④ · S1).
@@ -21,10 +25,12 @@ let base = ''
 let clock = 1_700_000_000_000
 let issuer: CallCredentialService
 
-beforeEach(() => {
+beforeEach(async () => {
   base = mkdtempSync(path.join(tmpdir(), 'cookrew-call-'))
   clock = 1_700_000_000_000
   issuer = new CallCredentialService({ base, now: () => clock })
+  // Proven private before anything signs: async on Windows (file-privacy.ts).
+  await issuer.prepare()
 })
 afterEach(() => rmSync(base, { recursive: true, force: true }))
 
@@ -168,5 +174,116 @@ describe('makeCallAuthorize — the gate mounts per workspace session', () => {
       return 'identified'
     })(PLAY, issuer.mint('alice', PLAY.workspaceId))
     expect(asked).toEqual([PLAY])
+  })
+})
+
+// Windows, injected (file-privacy.ts): an access list that lets Everyone in.
+describe('the signing key where its file is not proven private', () => {
+  const OPEN = descriptor({ owner: ME, dacl: acl([ace(ACE_ALLOWED, ME), ace(ACE_ALLOWED, 'S-1-1-0')]) })
+  const PRIVATE = descriptor({ owner: ME, dacl: acl([ace(ACE_ALLOWED, ME)]), protectedDacl: true })
+  // Its own folder: the shared `base` already holds the real key prepared above.
+  let winBase = ''
+  beforeEach(() => {
+    winBase = mkdtempSync(path.join(tmpdir(), 'cookrew-call-win-'))
+  })
+  afterEach(() => rmSync(winBase, { recursive: true, force: true }))
+  let made = 0
+  let wall = 1_000
+  const windows = (created: Buffer, read: Buffer): CallCredentialService =>
+    new CallCredentialService({
+      base: winBase,
+      now: () => clock,
+      privacy: {
+        platform: 'win32',
+        cache: new PrivacyCache(),
+        now: () => wall,
+        windows: {
+          readFolder: async () => ({ userSid: ME, descriptor: PRIVATE }),
+          createPrivate: async (file, data) => {
+            made += 1
+            writeFileSync(file, data, { flag: 'wx' })
+            return { userSid: ME, descriptor: created }
+          },
+          read: async () => ({ userSid: ME, descriptor: read })
+        }
+      }
+    })
+
+  it('a key it could not make is not tried again per request: creation backs off like a read', async () => {
+    made = 0
+    const service = windows(OPEN, OPEN)
+    await expect(service.prepare()).rejects.toThrow(/lets S-1-1-0 in/)
+    expect(made).toBe(1)
+    // Within the back-off: no PowerShell, no fresh key pair, whatever asks.
+    await expect(service.prepare()).rejects.toThrow(/lets S-1-1-0 in/)
+    for (let i = 0; i < 50; i += 1) {
+      expect(service.verifyToken('a.b')).toBeNull()
+      expect(service.ready()).toBe(false)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(made).toBe(1)
+    wall += FIRST_RETRY_MS
+    await expect(service.prepare()).rejects.toThrow(/lets S-1-1-0 in/)
+    expect(made).toBe(2)
+  })
+
+  it('POSIX too: a key it could not write is not regenerated and rewritten per call', () => {
+    let writes = 0
+    const service = new CallCredentialService({
+      base: winBase,
+      now: () => clock,
+      privacy: {
+        platform: 'linux',
+        uid: () => 0,
+        now: () => wall,
+        // Every write finds its descriptor open to others, so every write is refused.
+        fstat: () => {
+          writes += 1
+          return { mode: 0o100644, uid: 0, dev: 1, ino: writes, size: 0, mtimeMs: 0, ctimeMs: 0 }
+        }
+      }
+    })
+    expect(() => service.mint('alice', 'ws')).toThrow(/readable by others/)
+    for (let i = 0; i < 20; i += 1) {
+      expect(() => service.mint('alice', 'ws')).toThrow(/readable by others/)
+      expect(service.ready()).toBe(false)
+      expect(service.verifyToken('a.b')).toBeNull()
+    }
+    expect(writes).toBe(1)
+    wall += FIRST_RETRY_MS
+    expect(() => service.mint('alice', 'ws')).toThrow(/readable by others/)
+    expect(writes).toBe(2)
+  })
+
+  it('is ready only once the key is proven, and asking never waits', async () => {
+    const service = windows(PRIVATE, PRIVATE)
+    expect(service.ready()).toBe(false)
+    await service.prepare()
+    expect(service.ready()).toBe(true)
+  })
+
+  it('NEVER WAITS: refuses while the key is made, answers no token, and mints once prepared', async () => {
+    const service = windows(PRIVATE, PRIVATE)
+    expect(() => service.mint('alice', 'ws-cookrew-dev')).toThrow(/being made/)
+    expect(service.verifyToken('a.b')).toBeNull()
+    await service.prepare()
+    expect(service.verifyToken(service.mint('alice', 'ws-cookrew-dev'))).toMatchObject({ sub: 'alice' })
+  })
+
+  it('keeps nothing, in memory or on disk, when the key cannot be proven private', async () => {
+    const service = windows(OPEN, OPEN)
+    await expect(service.prepare()).rejects.toThrow(/lets S-1-1-0 in/)
+    // Never kept: the next ask is refused again, not signed with it.
+    expect(() => service.mint('alice', 'ws-cookrew-dev')).toThrow(/being made/)
+    await expect(service.prepare()).rejects.toThrow(/lets S-1-1-0 in/)
+    expect(existsSync(path.join(winBase, 'call-token-key.jwk'))).toBe(false)
+    expect(readdirSync(winBase)).toEqual([])
+  })
+
+  it('refuses a key file that is already there when it reads back open', async () => {
+    await windows(PRIVATE, PRIVATE).prepare()
+    const reopened = windows(PRIVATE, OPEN)
+    await expect(reopened.prepare()).rejects.toThrow(/not private: it lets S-1-1-0 in/)
+    expect(() => reopened.mint('alice', 'ws-cookrew-dev')).toThrow(/not private: it lets S-1-1-0 in/)
   })
 })

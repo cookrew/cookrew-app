@@ -7606,6 +7606,10 @@ app.whenReady().then(() => {
   } catch (error) {
     console.error('[cookrew] secrets could not be moved', error)
   }
+  // The call signing key, proven private before the first request asks for it:
+  // on Windows that proof is async (file-privacy.ts), and until it lands every
+  // call is refused rather than any request waiting on it.
+  callCredentials.prepare().catch((error: unknown) => console.error('[cookrew] call signing key not ready:', error))
   // Dock icon must be set at runtime in dev; packaged builds also bundle
   // resources/icon.icns via the packager config when one is added.
   if (process.platform === 'darwin' && app.dock) {

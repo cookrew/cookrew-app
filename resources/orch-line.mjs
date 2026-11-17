@@ -21,12 +21,13 @@
  *   node orch-line.mjs --origin http://host:8639 --slug research-crew
  *        [--name label] [--sub name]
  */
-import { generateKeyPairSync, createPrivateKey, sign } from 'node:crypto'
-import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { generateKeyPairSync, createPrivateKey, randomBytes, sign } from 'node:crypto'
+import { closeSync, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
+import { fsyncDir, signInAtHome } from './caller-keys.mjs'
 import { clipboardGuard, plainText } from './line-guard.mjs'
 
 const arg = (name, fallback = undefined) => {
@@ -178,6 +179,10 @@ const legacyKeyFiles = [
   path.join(homedir(), '.cookrew', 'crew-keys', legacyName)
 ]
 
+// THE KEY FILES ARE KEPT AS THE APP KEEPS THEM: which key is tried, kept, made
+// or let go is the one walk both share (./caller-keys.mjs, under one lock per
+// door); how a key is read and written privately is this card's own.
+
 function readKey(file) {
   try {
     // A key another user can read is not this account's key. Refuse it out
@@ -192,19 +197,66 @@ function readKey(file) {
   }
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8'))
-    return { priv: createPrivateKey({ key: parsed.priv, format: 'jwk' }), jwk: parsed.pub }
+    return { priv: createPrivateKey({ key: parsed.priv, format: 'jwk' }), jwk: parsed.pub, raw: parsed }
   } catch {
     return null
   }
 }
 
-function saveKey(serviceId, raw) {
-  mkdirSync(keyDir, { recursive: true, mode: 0o700 })
-  const file = keyFileFor(serviceId)
-  writeFileSync(file, JSON.stringify(raw), { mode: 0o600 })
-  // `mode` on writeFileSync applies at CREATION only — an existing file keeps
-  // whatever it had, so the private half is chmod'd unconditionally.
-  chmodSync(file, 0o600)
+/**
+ * Write a key so it exists only private and whole: an O_EXCL 0600 temp, its
+ * owner and mode checked on the descriptor, every byte written through it,
+ * then renamed into place, where the name must hold that same file, still
+ * this user's and private. Any doubt removes what was written and throws.
+ */
+function writePrivate(file, data) {
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  const temp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`)
+  const notPrivate = (why) => new Error(`${file} was not written: ${why} — chmod 600 it`)
+  let made
+  try {
+    const fd = openSync(temp, 'wx', 0o600)
+    try {
+      fchmodSync(fd, 0o600)
+      made = fstatSync(fd)
+      if (made.uid !== process.getuid?.() || (made.mode & 0o077) !== 0) throw notPrivate('it is not private to this user')
+      const bytes = Buffer.from(data, 'utf8')
+      for (let done = 0; done < bytes.length; ) {
+        const took = writeSync(fd, bytes, done, bytes.length - done)
+        if (took <= 0) throw new Error(`${file} was not written: the disk took ${done} of ${bytes.length} bytes`)
+        done += took
+      }
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+    renameSync(temp, file)
+    fsyncDir(path.dirname(file))
+  } catch (error) {
+    rmSync(temp, { force: true })
+    throw error
+  }
+  const placed = lstatSync(file)
+  if (placed.dev !== made.dev || placed.ino !== made.ino) throw new Error(`${file} is not the file that was just written there`)
+  if (placed.uid !== made.uid || (placed.mode & 0o077) !== 0) {
+    rmSync(file, { force: true })
+    throw notPrivate('it is not private to this user')
+  }
+}
+
+/**
+ * File a key under its door WITHOUT replacing anything: a hard link (EEXIST
+ * if one is filed there already), the old name dropped, the folder synced,
+ * and the filed key still this user's and private.
+ */
+function promote(from, to) {
+  linkSync(from, to)
+  unlinkSync(from)
+  fsyncDir(path.dirname(to))
+  const placed = lstatSync(to)
+  if (placed.uid !== process.getuid?.() || (placed.mode & 0o077) !== 0) {
+    throw new Error(`${to} is not private once filed — chmod 600 it`)
+  }
 }
 
 function mintKey() {
@@ -326,41 +378,51 @@ async function askTheApp() {
  * identity. Nothing follows the caller elsewhere, which is the point of it.
  */
 async function signInWithKey() {
+  // NOT ON WINDOWS, and said before any key is made or shown. A key file there
+  // has no permission bits to prove it private; the app proves it from its
+  // owner and access list (src/main/windows-acl.ts), which this card cannot.
+  // Making a key it then could not trust would bind the name to a key it can
+  // never use again.
+  if (process.platform === 'win32') {
+    throw new Error(`this card's own sign-in is not available on Windows yet (its key could not be proven private here) — open ${slug} from Cookrew`)
+  }
   const face = await request('GET', '/crew')
   const serviceId = face.body?.serviceId ?? ''
   if (!serviceId) throw new Error('this door did not say who it is')
 
-  // One attempt with one key. A fresh challenge each time — they are spent.
-  const attempt = async ({ priv, jwk }) => {
-    const ch = await request('POST', '/api/call/challenge')
-    if (ch.status !== 200) throw new Error(`no challenge (${ch.status}) — is the team still serving?`)
-    const payload = Buffer.from(`cookrew-call/1\n${serviceId}\n${sub}\n${ch.body.challenge}`, 'utf8')
-    const signature = sign(null, payload, priv).toString('base64url')
-    const res = await request('POST', '/api/call/assert', {
-      body: { sub, challenge: ch.body.challenge, signature, jwk }
-    })
-    return res.status === 200 ? res.body.token : null
-  }
-
-  const canonical = keyFileFor(serviceId)
-  for (const file of [canonical, ...legacyKeyFiles]) {
-    const key = readKey(file)
-    if (!key) continue
-    const token = await attempt(key)
-    if (token === null) continue
-    // Promote whichever key this account actually is, so the address-named
-    // file is never consulted again.
-    if (file !== canonical) saveKey(serviceId, { pub: key.jwk, priv: key.priv.export({ format: 'jwk' }) })
-    return token
-  }
-
-  const minted = mintKey()
-  const token = await attempt(minted)
-  if (token === null) {
-    throw new Error('sign-in refused — this name already belongs to another key at this door')
-  }
-  saveKey(serviceId, minted.raw)
-  return token
+  mkdirSync(keyDir, { recursive: true, mode: 0o700 })
+  return signInAtHome({
+    home: keyFileFor(serviceId),
+    others: legacyKeyFiles,
+    readKey: async (file) => {
+      const found = readKey(file)
+      return found ? { key: found, raw: found.raw } : null
+    },
+    // A fresh challenge each time: they are spent.
+    challenge: async () => {
+      const ch = await request('POST', '/api/call/challenge')
+      if (ch.status !== 200) throw new Error(`no challenge (${ch.status}) — is the team still serving?`)
+      return ch.body.challenge
+    },
+    // A token; null ONLY for a 401; any other answer, a lost one included,
+    // refused nothing and throws.
+    assert: async ({ priv, jwk }, challenge) => {
+      const payload = Buffer.from(`cookrew-call/1\n${serviceId}\n${sub}\n${challenge}`, 'utf8')
+      const signature = sign(null, payload, priv).toString('base64url')
+      const res = await request('POST', '/api/call/assert', { body: { sub, challenge, signature, jwk } })
+      if (res.status === 200) return res.body.token
+      if (res.status === 401) return null
+      throw new Error(`this door could not sign anyone in just now (${res.status}); try again`)
+    },
+    mint: () => {
+      const minted = mintKey()
+      return { key: { priv: minted.priv, jwk: minted.jwk }, raw: minted.raw }
+    },
+    savePending: async (file, raw) => writePrivate(file, JSON.stringify(raw)),
+    promote: async (from, to) => promote(from, to),
+    remove: (file) => rmSync(file, { force: true }),
+    report: (message) => process.stderr.write(dim(message))
+  })
 }
 
 /**
