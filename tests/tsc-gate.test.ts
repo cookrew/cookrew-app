@@ -6,7 +6,7 @@
 // with the preload, because what matters is what node does with it.
 import { fork, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
-import { getPriority, tmpdir } from 'node:os'
+import { availableParallelism, getPriority, tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { installTscGate, tscGateEnv, tscGateOptions, TSC_GATE_SOURCE } from '../src/main/tsc-gate'
@@ -131,7 +131,10 @@ describe('a vitest through the preload, in a real node', () => {
   it('drops to nice 10 and caps the pool, whatever config it loads next', () => {
     const seen = run(rig())
     expect(seen.nice).toBe(Math.max(base, 10))
-    expect(['2', '4']).toContain(seen.forks)
+    // 4, or 2 under load, never more than cores - 1: a 4-core CI runner gets 3.
+    const cores = availableParallelism()
+    const allowed = [2, 4].map((cap) => String(Math.max(1, Math.min(cores - 1, cap))))
+    expect(allowed).toContain(seen.forks)
     expect(seen.threads).toBe(seen.forks)
   })
 
