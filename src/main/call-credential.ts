@@ -7,11 +7,11 @@ import {
   verify,
   type KeyObject
 } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type { GateIssuer } from '../shared/gate'
-import { openToOthers } from './file-privacy'
+import { checkFilePrivacy, filePrivacy, FIRST_RETRY_MS, MAX_RETRY_MS, sweepStaleTemps, writePrivateFile, writePrivateFileSync, type FilePrivacy, type FilePrivacyDeps } from './file-privacy'
 
 /**
  * THE OWNER'S ISSUER (§9, ④ · S1) — credentials for calling an exported agent.
@@ -119,10 +119,13 @@ export interface CallCredentialOptions {
   now?: () => number
   tokenTtlMs?: number
   challengeTtlMs?: number
+  /** How the key file's privacy is proven (file-privacy.ts); this host by default. */
+  privacy?: FilePrivacyDeps
 }
 
 export class CallCredentialService implements CallIssuer {
   private readonly keyFile: string
+  private readonly privacy: FilePrivacyDeps
   private readonly now: () => number
   private readonly tokenTtlMs: number
   private readonly challengeTtlMs: number
@@ -157,6 +160,7 @@ export class CallCredentialService implements CallIssuer {
     const base = options.base ?? path.join(homedir(), '.cookrew')
     this.keyFile = path.join(base, 'call-token-key.jwk')
     this.now = options.now ?? Date.now
+    this.privacy = options.privacy ?? {}
     this.tokenTtlMs = options.tokenTtlMs ?? TOKEN_TTL_MS
     this.challengeTtlMs = options.challengeTtlMs ?? CHALLENGE_TTL_MS
   }
@@ -180,25 +184,137 @@ export class CallCredentialService implements CallIssuer {
       // read. Failing here fails the gate closed: nothing can be minted or
       // verified, so every call is refused rather than served on a key that
       // may not be private any more.
-      const mode = statSync(this.keyFile).mode & 0o777
-      if (openToOthers(mode)) {
-        throw new Error(
-          `call signing key is readable by others (mode ${mode.toString(8)}); ` +
-            'chmod 600 it, or delete it to mint a fresh one and re-enrol callers'
-        )
+      //
+      // NEVER WAITS (on Windows the proof is async): an unproven file answers
+      // "still being checked" and is refused this time, while prepare() proves it.
+      const privacy = filePrivacy(this.keyFile, this.privacy)
+      if (privacy.open) {
+        if (privacy.pending) this.prepareQuietly()
+        throw this.notPrivate(privacy)
       }
-      const jwk = JSON.parse(readFileSync(this.keyFile, 'utf8')) as Record<string, unknown>
-      const privateKey = createPrivateKey({ key: jwk as never, format: 'jwk' })
-      this.signingKey = { privateKey, publicKey: createPublicKey(privateKey) }
-      return this.signingKey
+      return this.load()
     }
+    if (this.onWindows()) {
+      // The file is created and proven off this thread; nothing signs until then.
+      this.prepareQuietly()
+      throw new Error('call signing key is being made; try again in a moment')
+    }
+    // A write that failed is not tried again until the back-off ends: every
+    // Bearer request asks for the key, and each try is a key pair and a write.
+    if (this.lastFailure !== null && this.wallClock() < this.retryAt) throw this.lastFailure
     const pair = generateKeyPairSync('ed25519')
-    mkdirSync(path.dirname(this.keyFile), { recursive: true })
-    writeFileSync(this.keyFile, JSON.stringify(pair.privateKey.export({ format: 'jwk' })), {
-      mode: 0o600
-    })
+    // Kept only once its file is PROVEN private: a write that fails throws
+    // here and nothing is cached, so no call is ever signed with a key whose
+    // file anyone else may read.
+    try {
+      writePrivateFileSync(this.keyFile, JSON.stringify(pair.privateKey.export({ format: 'jwk' })), this.privacy)
+    } catch (error) {
+      throw this.failed(error)
+    }
+    this.lastFailure = null
+    this.failures = 0
     this.signingKey = pair
     return pair
+  }
+
+  /** Remember a failed preparation and when another may be tried; the error, to rethrow. */
+  private failed(error: unknown): Error {
+    this.lastFailure = error instanceof Error ? error : new Error(String(error))
+    this.failures += 1
+    this.retryAt = this.wallClock() + Math.min(FIRST_RETRY_MS * 2 ** (this.failures - 1), MAX_RETRY_MS)
+    return this.lastFailure
+  }
+
+  private preparing: Promise<void> | null = null
+  /** The last failed preparation, and when another may be tried. */
+  private lastFailure: Error | null = null
+  private failures = 0
+  private retryAt = 0
+
+  /**
+   * Have the signing key ready: proven and loaded, or made and proven. The app
+   * calls it at launch so the first call is not the one that waits. Rejects,
+   * keeping nothing, when the key cannot be proven private.
+   *
+   * A FAILURE BACKS OFF, as a refused read does (file-privacy.ts): every
+   * Bearer request asks for the key, and a key that cannot be made would
+   * otherwise cost a key pair, a PowerShell run or two and an error line per
+   * request. Until the back-off ends the last failure is answered again and
+   * nothing is tried.
+   */
+  prepare(): Promise<void> {
+    if (this.signingKey) return Promise.resolve()
+    if (this.lastFailure !== null && this.wallClock() < this.retryAt) return Promise.reject(this.lastFailure)
+    this.preparing ??= this.prepareOnce().then(
+      () => {
+        this.preparing = null
+        this.lastFailure = null
+        this.failures = 0
+      },
+      (error: unknown) => {
+        this.preparing = null
+        // The POSIX path in keys() records its own failure; recorded once either way.
+        throw error === this.lastFailure ? error : this.failed(error)
+      }
+    )
+    return this.preparing
+  }
+
+  /** Whether a token can be minted NOW. Never waits: a key not ready yet is being prepared. */
+  ready(): boolean {
+    try {
+      this.keys()
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private wallClock(): number {
+    return (this.privacy.now ?? Date.now)()
+  }
+
+  private async prepareOnce(): Promise<void> {
+    // A write a crash or a killed PowerShell cut short left a temp beside the key.
+    sweepStaleTemps(path.dirname(this.keyFile))
+    if (!this.onWindows()) {
+      this.keys()
+      return
+    }
+    if (existsSync(this.keyFile)) {
+      const privacy = await checkFilePrivacy(this.keyFile, this.privacy)
+      if (privacy.open) throw this.notPrivate(privacy)
+      this.load()
+      return
+    }
+    const pair = generateKeyPairSync('ed25519')
+    await writePrivateFile(this.keyFile, JSON.stringify(pair.privateKey.export({ format: 'jwk' })), this.privacy)
+    this.signingKey = pair
+  }
+
+  /** Start preparing, at most once per back-off, and say so only when a real attempt fails. */
+  private prepareQuietly(): void {
+    if (this.preparing !== null) return
+    if (this.lastFailure !== null && this.wallClock() < this.retryAt) return
+    this.prepare().catch((error: unknown) => console.error('Preparing the call signing key failed:', error))
+  }
+
+  private onWindows(): boolean {
+    return (this.privacy.platform ?? process.platform) === 'win32'
+  }
+
+  private notPrivate(privacy: Exclude<FilePrivacy, { open: false }>): Error {
+    return new Error(
+      `call signing key is not private: ${privacy.why}; ` +
+        `${privacy.fix}, or delete it to mint a fresh one and re-enrol callers`
+    )
+  }
+
+  private load(): { publicKey: KeyObject; privateKey: KeyObject } {
+    const jwk = JSON.parse(readFileSync(this.keyFile, 'utf8')) as Record<string, unknown>
+    const privateKey = createPrivateKey({ key: jwk as never, format: 'jwk' })
+    this.signingKey = { privateKey, publicKey: createPublicKey(privateKey) }
+    return this.signingKey
   }
 
   /**

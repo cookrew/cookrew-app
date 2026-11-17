@@ -61,7 +61,7 @@ export class ServedCallers {
     serviceId: string,
     input: Partial<ServedAssertInput>,
     consumeChallenge: (value: string) => boolean
-  ): { ok: true; sub: string } | { ok: false; reason: ServedAssertFailure } {
+  ): { ok: true; sub: string; enrolled: boolean } | { ok: false; reason: ServedAssertFailure } {
     if (
       typeof input?.sub !== 'string' ||
       input.sub.length === 0 ||
@@ -110,7 +110,20 @@ export class ServedCallers {
       const service = this.byService.get(serviceId) ?? new Map()
       service.set(input.sub, { ...(input.jwk as Record<string, unknown>) })
       this.byService.set(serviceId, service)
+      return { ok: true, sub: input.sub, enrolled: true }
     }
-    return { ok: true, sub: input.sub }
+    return { ok: true, sub: input.sub, enrolled: false }
+  }
+
+  /**
+   * Undo a sign-up THIS request just made, when it could not be answered with
+   * a token: a name bound to a key whose holder never got in would refuse that
+   * holder's every retry. Never called for a name that was known before.
+   */
+  forget(serviceId: string, sub: string, jwk: unknown): void {
+    const stored = this.keyOf(serviceId, sub)
+    // Only while the name still holds THAT key: never another key's binding.
+    if (stored === null || JSON.stringify(stored) !== JSON.stringify(jwk)) return
+    this.byService.get(serviceId)?.delete(sub)
   }
 }

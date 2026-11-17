@@ -69,9 +69,11 @@ let deps: ServedEndpointDeps
 const { publicKey, privateKey } = generateKeyPairSync('ed25519')
 const jwk = publicKey.export({ format: 'jwk' }) as Record<string, unknown>
 
-beforeEach(() => {
+beforeEach(async () => {
   base = mkdtempSync(path.join(tmpdir(), 'served-'))
   issuer = new CallCredentialService({ base })
+  // Proven private before anything signs: async on Windows (file-privacy.ts).
+  await issuer.prepare()
   callers = new ServedCallers()
   sessions = new Map()
   ended = []
@@ -257,6 +259,64 @@ describe('the public face', () => {
 
   it('returns null for a path this surface does not own', async () => {
     expect(await handleServedRoute(deps, FREE, 'GET', '/anything', { headers: {}, body: null })).toBeNull()
+  })
+})
+
+describe('a token is mintable BEFORE a name is bound (a bound name with no token is a locked-out account)', () => {
+  /** One assert of `sub` with a fresh key pair, through `using`'s issuer; its status and the key used. */
+  const assertAs = async (using: ServedEndpointDeps, sub = 'ana') => {
+    const pair = generateKeyPairSync('ed25519')
+    const ch = await handleServedRoute(using, FREE, 'POST', '/api/call/challenge', { headers: {}, body: null })
+    const challenge = (ch!.body as { challenge: string }).challenge
+    const signature = sign(null, Buffer.from(callAssertionPayload(FREE.serviceId, sub, challenge), 'utf8'), pair.privateKey).toString('base64url')
+    const res = await handleServedRoute(using, FREE, 'POST', '/api/call/assert', {
+      headers: {},
+      body: { sub, challenge, signature, jwk: pair.publicKey.export({ format: 'jwk' }) }
+    })
+    return res!.status
+  }
+  const issuerWith = (over: Partial<ServedEndpointDeps['issuer']>): ServedEndpointDeps => ({
+    ...deps,
+    issuer: {
+      challenge: (binding) => issuer.challenge(binding),
+      consumeChallenge: (value, binding) => issuer.consumeChallenge(value, binding),
+      mint: (sub, scope) => issuer.mint(sub, scope),
+      verifyToken: (token) => issuer.verifyToken(token),
+      ...over
+    }
+  })
+
+  it('answers 503 while the signing key is not ready, and binds nobody', async () => {
+    expect(await assertAs(issuerWith({ ready: () => false }))).toBe(503)
+    // The name is still free: any key may take it once the door is ready.
+    expect(await assertAs(deps)).toBe(200)
+  })
+
+  it('undoes a first-sight binding when the mint then fails', async () => {
+    const failing = issuerWith({ mint: () => { throw new Error('call signing key is being made') } })
+    expect(await assertAs(failing)).toBe(503)
+    expect(await assertAs(deps)).toBe(200)
+  })
+
+  it('forget undoes a name only while it is still bound to the key it names', async () => {
+    await signIn(FREE)
+    const stranger = generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }) as Record<string, unknown>
+    callers.forget(FREE.serviceId, 'ana', stranger)
+    expect(await assertAs(deps)).toBe(401)
+    callers.forget(FREE.serviceId, 'ana', jwk)
+    expect(await assertAs(deps)).toBe(200)
+  })
+
+  it('never undoes a binding it did not make: a known name stays with its key', async () => {
+    await signIn(FREE)
+    const failing = issuerWith({ mint: () => { throw new Error('boom') } })
+    // The real key, known already: the failed mint must not release the name.
+    const ch = await handleServedRoute(failing, FREE, 'POST', '/api/call/challenge', { headers: {}, body: null })
+    const challenge = (ch!.body as { challenge: string }).challenge
+    const signature = sign(null, Buffer.from(callAssertionPayload(FREE.serviceId, 'ana', challenge), 'utf8'), privateKey).toString('base64url')
+    const res = await handleServedRoute(failing, FREE, 'POST', '/api/call/assert', { headers: {}, body: { sub: 'ana', challenge, signature, jwk } })
+    expect(res!.status).toBe(503)
+    expect(await assertAs(deps)).toBe(401)
   })
 })
 

@@ -200,9 +200,11 @@ describe('POST /api/call/assert with { registryToken }', () => {
     throw new Error('not reached by sign-in')
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     base = mkdtempSync(path.join(tmpdir(), 'served-registry-token-'))
     issuer = new CallCredentialService({ base })
+    // Proven private before anything signs: async on Windows (file-privacy.ts).
+    await issuer.prepare()
     callers = new ServedCallers()
     deps = {
       issuer,

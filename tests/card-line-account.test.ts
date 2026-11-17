@@ -319,6 +319,8 @@ beforeAll(async () => {
   registryDir = mkdtempSync(path.join(tmpdir(), 'v3-04c-registry-'))
   doorDir = mkdtempSync(path.join(tmpdir(), 'v3-04c-door-'))
   issuer = new CallCredentialService({ base: doorDir })
+  // Proven private before anything signs: async on Windows (file-privacy.ts).
+  await issuer.prepare()
   const doors = new DoorStore(registryDir, { allowPrivate: true })
   doors.register(OWNER, {
     handle: OWNER,
@@ -422,7 +424,10 @@ describe('the placed card at a listed door', () => {
   }, SLOW)
 })
 
-describe('the DIRECT walk is untouched', () => {
+// Not on Windows: the card's own key walk refuses there before any key is made
+// (orch-line.mjs; its key file cannot be proven private by the card), which
+// card-key-walk.test.ts pins on every OS.
+describe.skipIf(process.platform === 'win32')('the DIRECT walk is untouched', () => {
   it('an unlisted door is still met with this Mac’s own key', async () => {
     signedInAs = null
     openedBy = []

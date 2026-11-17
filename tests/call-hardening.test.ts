@@ -275,7 +275,8 @@ describe('HIGH-2 · the node lookup memo', () => {
 
 describe('LOW-1 · nothing from this machine reaches an anonymous caller', () => {
   // Skipped on Windows: it opens the file to others with chmod, which Windows
-  // cannot express, and openToOthers (file-privacy.ts) reads no bits there.
+  // cannot express; there filePrivacy reads the access list, opened to Everyone
+  // with icacls in file-privacy.test.ts.
   it.skipIf(!HAS_POSIX_MODES)('keeps the key-mode message inside the process', () => {
     const service = new CallCredentialService({ base, now: () => clock })
     service.mint('alice', 'ws')

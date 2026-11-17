@@ -21,8 +21,8 @@
  *   node orch-line.mjs --origin http://host:8639 --slug research-crew
  *        [--name label] [--sub name]
  */
-import { generateKeyPairSync, createPrivateKey, sign } from 'node:crypto'
-import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { generateKeyPairSync, createPrivateKey, randomBytes, sign } from 'node:crypto'
+import { closeSync, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
@@ -178,6 +178,15 @@ const legacyKeyFiles = [
   path.join(homedir(), '.cookrew', 'crew-keys', legacyName)
 ]
 
+// THE KEY FILES ARE KEPT AS THE APP KEEPS THEM (src/main/file-privacy.ts,
+// src/main/served-admission.ts): the same names, the same rules, because the
+// app and this card read and write one folder for one account.
+
+/** A new key waits here, one name per attempt, until the door has bound it. */
+const PENDING_INFIX = '.pending-'
+/** A kept key the door keeps refusing is let go once it is this old; never sooner. */
+const PENDING_KEEP_MS = 30 * 24 * 3600_000
+
 function readKey(file) {
   try {
     // A key another user can read is not this account's key. Refuse it out
@@ -192,19 +201,59 @@ function readKey(file) {
   }
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8'))
-    return { priv: createPrivateKey({ key: parsed.priv, format: 'jwk' }), jwk: parsed.pub }
+    return { priv: createPrivateKey({ key: parsed.priv, format: 'jwk' }), jwk: parsed.pub, raw: parsed }
   } catch {
     return null
   }
 }
 
-function saveKey(serviceId, raw) {
-  mkdirSync(keyDir, { recursive: true, mode: 0o700 })
-  const file = keyFileFor(serviceId)
-  writeFileSync(file, JSON.stringify(raw), { mode: 0o600 })
-  // `mode` on writeFileSync applies at CREATION only — an existing file keeps
-  // whatever it had, so the private half is chmod'd unconditionally.
-  chmodSync(file, 0o600)
+/**
+ * Write a key so it exists only private and whole: an O_EXCL 0600 temp, its
+ * owner and mode checked on the descriptor, every byte written through it,
+ * then renamed into place, where the name must hold that same file, still
+ * this user's and private. Any doubt removes what was written and throws.
+ */
+function writePrivate(file, data) {
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  const temp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`)
+  const notPrivate = (why) => new Error(`${file} was not written: ${why} — chmod 600 it`)
+  let made
+  try {
+    const fd = openSync(temp, 'wx', 0o600)
+    try {
+      fchmodSync(fd, 0o600)
+      made = fstatSync(fd)
+      if (made.uid !== process.getuid?.() || (made.mode & 0o077) !== 0) throw notPrivate('it is not private to this user')
+      const bytes = Buffer.from(data, 'utf8')
+      for (let done = 0; done < bytes.length; ) {
+        const took = writeSync(fd, bytes, done, bytes.length - done)
+        if (took <= 0) throw new Error(`${file} was not written: the disk took ${done} of ${bytes.length} bytes`)
+        done += took
+      }
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+    renameSync(temp, file)
+  } catch (error) {
+    rmSync(temp, { force: true })
+    throw error
+  }
+  const placed = lstatSync(file)
+  if (placed.dev !== made.dev || placed.ino !== made.ino) throw new Error(`${file} is not the file that was just written there`)
+  if (placed.uid !== made.uid || (placed.mode & 0o077) !== 0) {
+    rmSync(file, { force: true })
+    throw notPrivate('it is not private to this user')
+  }
+}
+
+/** File a kept key under its door, in the same folder. Never deletes it: it may be the only key the account has. */
+function fileUnderDoor(from, home) {
+  try {
+    renameSync(from, home)
+  } catch (error) {
+    console.error(dim(`could not file the account key under its door; it stays where it is: ${error.message}`))
+  }
 }
 
 function mintKey() {
@@ -326,11 +375,22 @@ async function askTheApp() {
  * identity. Nothing follows the caller elsewhere, which is the point of it.
  */
 async function signInWithKey() {
+  // NOT ON WINDOWS, and said before any key is made or shown. A key file there
+  // has no permission bits to prove it private; the app proves it from its
+  // owner and access list (src/main/windows-acl.ts), which this card cannot.
+  // Making a key it then could not trust would bind the name to a key it can
+  // never use again.
+  if (process.platform === 'win32') {
+    throw new Error(`this card's own sign-in is not available on Windows yet (its key could not be proven private here) — open ${slug} from Cookrew`)
+  }
   const face = await request('GET', '/crew')
   const serviceId = face.body?.serviceId ?? ''
   if (!serviceId) throw new Error('this door did not say who it is')
 
-  // One attempt with one key. A fresh challenge each time — they are spent.
+  // One attempt with one key; a fresh challenge each time, since they are
+  // spent. A token, or null ONLY when the door refused this key (401). Any
+  // other answer, a lost one included, refused nothing: it throws, so no key
+  // is given up or minted over.
   const attempt = async ({ priv, jwk }) => {
     const ch = await request('POST', '/api/call/challenge')
     if (ch.status !== 200) throw new Error(`no challenge (${ch.status}) — is the team still serving?`)
@@ -339,27 +399,55 @@ async function signInWithKey() {
     const res = await request('POST', '/api/call/assert', {
       body: { sub, challenge: ch.body.challenge, signature, jwk }
     })
-    return res.status === 200 ? res.body.token : null
+    if (res.status === 200) return res.body.token
+    if (res.status === 401) return null
+    throw new Error(`this door could not sign anyone in just now (${res.status}); try again`)
   }
 
-  const canonical = keyFileFor(serviceId)
-  for (const file of [canonical, ...legacyKeyFiles]) {
+  const home = keyFileFor(serviceId)
+  const pendingName = new RegExp(`^${path.basename(home).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.pending-[0-9a-f]{12}$`)
+  const isPending = (file) => path.dirname(file) === keyDir && pendingName.test(path.basename(file))
+  const kept = () => {
+    try {
+      return readdirSync(keyDir).filter((name) => pendingName.test(name)).sort().map((name) => path.join(keyDir, name))
+    } catch {
+      return []
+    }
+  }
+
+  // Every key that waited to be bound is offered after the filed ones: the
+  // door may have bound one just as its answer was lost.
+  for (const file of [home, ...legacyKeyFiles, ...kept()]) {
     const key = readKey(file)
     if (!key) continue
     const token = await attempt(key)
-    if (token === null) continue
-    // Promote whichever key this account actually is, so the address-named
-    // file is never consulted again.
-    if (file !== canonical) saveKey(serviceId, { pub: key.jwk, priv: key.priv.export({ format: 'jwk' }) })
+    if (token === null) {
+      // A 401 is any failure at the door (a spent challenge as much as a
+      // wrong key), so a kept key the door may hold is NOT dropped for one:
+      // it is let go only once it has been kept past PENDING_KEEP_MS.
+      if (isPending(file) && Date.now() - lstatSync(file).mtimeMs > PENDING_KEEP_MS) rmSync(file, { force: true })
+      continue
+    }
+    if (isPending(file)) fileUnderDoor(file, home)
+    else if (file !== home) writePrivate(home, JSON.stringify(key.raw))
+    // The name is this key's now: no other waiting key can be this account's.
+    for (const other of kept()) if (other !== file) rmSync(other, { force: true })
     return token
   }
 
+  // KEPT BEFORE IT IS BOUND: saved and proven private under its own pending
+  // name before the door ever sees it, so a reply lost after the door bound it
+  // leaves the key on disk, offered next time.
   const minted = mintKey()
+  const pending = `${home}${PENDING_INFIX}${randomBytes(6).toString('hex')}`
+  writePrivate(pending, JSON.stringify(minted.raw))
   const token = await attempt(minted)
   if (token === null) {
+    // Refused at once, and never bound: this key is nobody's account.
+    rmSync(pending, { force: true })
     throw new Error('sign-in refused — this name already belongs to another key at this door')
   }
-  saveKey(serviceId, minted.raw)
+  fileUnderDoor(pending, home)
   return token
 }
 
