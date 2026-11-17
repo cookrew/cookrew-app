@@ -3,6 +3,7 @@ import { readJsonBody } from './http'
 import { asking, cookie, refuse, v2Json, type V2Context } from './v2-http'
 import { verifyDeviceSignature } from './v2-reach'
 import { tokenExpiry } from './v2-session-age'
+import { livesUntilRevoked } from './v2-accounts'
 import { SESSION_TTL_MS } from './v2-tokens'
 
 /**
@@ -183,6 +184,11 @@ async function renewSession(ctx: V2Context): Promise<void> {
    * is over — idle a week, or thirty days old — so the device key keeps a
    * machine reachable between sign-ins and never stands in for one.
    */
+  // A phone not kept yet renews nothing: its session opens nothing either (owner 2026-11-17).
+  if (found.device.phonePending !== undefined) {
+    refuse(response, 401, 'bad_credentials')
+    return
+  }
   const live = v2.accounts.liveSessionOf(found.username, deviceId)
   if (live === null) {
     v2Json(response, 401, {
@@ -208,7 +214,9 @@ async function renewSession(ctx: V2Context): Promise<void> {
    * the old session rather than signed out of both.
    */
   v2.accounts.closeOtherSessionsForDevice(found.username, deviceId, session.jti)
-  const minted = v2.tokens.mintSession(found.username, deviceId, session.jti, tokenExpiry(session, v2.now(), SESSION_TTL_MS), session.via)
+  // A kept phone's sign-in lives until revoked: its token is a full month from now, not capped at the sign-in's thirtieth day.
+  const expAt = livesUntilRevoked(found.device) && session.via !== 'console' ? v2.now() + SESSION_TTL_MS : tokenExpiry(session, v2.now(), SESSION_TTL_MS)
+  const minted = v2.tokens.mintSession(found.username, deviceId, session.jti, expAt, session.via)
   v2Json(
     response,
     201,

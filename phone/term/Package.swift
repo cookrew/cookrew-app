@@ -1,0 +1,30 @@
+// swift-tools-version:5.9
+// Swift 5 language mode on purpose: ScreenBox.swift's assumeIsolatedCompat
+// relies on it (macOS 11 has no MainActor.assumeIsolated).
+// The terminal's Swift, for iOS and macOS: SwiftTerm (MIT) behind the term
+// package's module and view. The Asuka CLI builds it with the apps that import
+// the package, and points `asuka` at its own copy of the host.
+import PackageDescription
+
+let package = Package(
+    name: "CookrewTermNative",
+    platforms: [.iOS("16.0"), .macOS("11.0")],
+    products: [.library(name: "CookrewTermNative", targets: ["CookrewTermNative"])],
+    dependencies: [
+        .package(url: "https://github.com/egoist/asuka", from: "0.1.0"),
+        // Pinned: a terminal emulator's escape handling is behaviour, not an API.
+        // 1.20 compiles a Metal shader: the building Mac's Xcode needs the
+        // Metal Toolchain (once: xcodebuild -downloadComponent MetalToolchain).
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm", exact: "1.20.0"),
+    ],
+    targets: [
+        .target(
+            name: "CookrewTermNative",
+            dependencies: [
+                .product(name: "Asuka", package: "asuka"),
+                .product(name: "SwiftTerm", package: "SwiftTerm"),
+            ],
+            path: "swift"
+        ),
+    ]
+)

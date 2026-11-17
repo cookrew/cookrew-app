@@ -185,7 +185,9 @@ import { sealedSwitchMemory } from './remote-switch-memory'
 import { singleConfirm } from './remote-switch-confirm'
 import { createConnectCodes } from './connect-code'
 import { IdleLock } from './lock'
-import { mintWatchInvite, registerAccountIpc } from './account-ipc'
+import { mintPhoneInvite, mintWatchInvite, registerAccountIpc } from './account-ipc'
+import { setPhoneInviter } from './phone-invite'
+import { createRefusedPhones, refusalOnForget } from './refused-phones'
 import type { AccountDoor, LoginAudit } from './login-cli'
 import { paneInputs } from './pane-input'
 import { injectWindowInput } from './ui-input'
@@ -221,6 +223,9 @@ import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
 import { createSessionDrain, SESSION_DRAIN_TICK_MS } from './session-drain'
 import { createWaitingLatch } from './waiting-latch'
+import { createNotifier, type MomentNote, type ShownNote } from './notifier'
+import { createMomentTracker } from './hitl-moments'
+import { readNotifyPref, writeNotifyPref } from './notify-pref'
 import { LazyTerminalAttachments } from './lazy-terminal'
 import { planWorkspaceSwitch } from './workspace-switch'
 import { SwitchRunner } from './switch-runner'
@@ -1415,6 +1420,8 @@ const machineKeys = createMachineKeyStore(path.join(homedir(), '.cookrew', 'mach
 const MACHINE_KEYS_EVERY_MS = 10 * 60_000
 /** Machines of the account the owner forgot here: their passes are turned away at the door. */
 const refusedMachines = createRefusedMachines(path.join(homedir(), '.cookrew', 'machine-refused.json'))
+/** Trusted phones forgotten here: out until they join the account again with a new phone's code. */
+const refusedPhones = createRefusedPhones(path.join(homedir(), '.cookrew', 'phone-refused.json'))
 /** Present once cookrew.dev has taken this machine's one proof (registry issueMachineGrant). */
 const MACHINE_TRUSTED_FILE = path.join(homedir(), '.cookrew', 'machine-trusted')
 
@@ -1614,6 +1621,7 @@ const accountPairDoor = createAccountPairDoor({
   // Read when a watch arrives, long after startup: watchPairing is declared further down.
   watch: { enter: (deviceId) => watchPairing.enter(deviceId) },
   refusedMachine: (deviceId) => refusedMachines.has(deviceId),
+  refusedPhone: (deviceId, since) => refusedPhones.refuses(deviceId, since),
   log: (message: string) => console.error(`[cookrew] ${message}`)
 })
 
@@ -3029,16 +3037,47 @@ function syncBackendPhases(): void {
  * this row: it is for the Activity log and the notifications.
  */
 const waits = createWaitingLatch()
-function noteWaiting(terminalId: string, phase: TurnPhase, waitSeq?: number): void {
-  if (!waits.observe(terminalId, phase, waitSeq)) return
-  const hit = store.nodeAcrossWorkspaces(terminalId)
-  if (!hit || hit.node.kind !== 'terminal' || !isAgentTerminal(terminalId)) return
+function noteWaiting(terminalId: string, phase: TurnPhase, waitSeq?: number): MomentNote | null {
+  if (!waits.observe(terminalId, phase, waitSeq)) return null
+  const at = agentMoment(terminalId, 'waiting')
+  if (!at) return null
   try {
-    store.withOpContext({ actor: (hit.node as TerminalNodeData).orch ? 'orch' : 'agent' }, () =>
-      store.recordEventIn(hit.workspaceId, 'agent.waiting', terminalId, hit.node.name)
+    store.withOpContext({ actor: (store.nodeAcrossWorkspaces(terminalId)?.node as TerminalNodeData).orch ? 'orch' : 'agent' }, () =>
+      store.recordEventIn(at.workspaceId, 'agent.waiting', terminalId, at.name)
     )
   } catch (error) {
     console.error('agent.waiting could not be recorded:', error)
+  }
+  return at
+}
+
+/** An agent card's moment, named and placed; null for a shell, or a card no longer on any canvas. */
+function agentMoment(terminalId: string, kind: MomentNote['kind']): MomentNote | null {
+  const hit = store.nodeAcrossWorkspaces(terminalId)
+  if (!hit || hit.node.kind !== 'terminal' || !isAgentTerminal(terminalId)) return null
+  const workspaceName = store.list().workspaces.find((w) => w.id === hit.workspaceId)?.name ?? hit.workspaceId
+  return { kind, agentId: terminalId, name: hit.node.name, workspaceId: hit.workspaceId, workspaceName }
+}
+
+/**
+ * The owner's notifications, from the same activity every agent passes through
+ * (hitl-moments.ts): a wait said, a reply landed unread, a wait answered or a
+ * reply read. Nothing here may throw into the tracker's emit.
+ */
+const moments = createMomentTracker()
+function noteMoments(activity: { terminalId: string; phase: TurnPhase; waitSeq?: number; dispatchId?: string | null }): void {
+  try {
+    const waiting = noteWaiting(activity.terminalId, activity.phase, activity.waitSeq)
+    if (waiting) notifier.notify(waiting)
+    const dispatched = Boolean(activity.dispatchId) || turns.hasArmedDispatch(activity.terminalId)
+    const moment = moments.observe(activity.terminalId, activity.phase, dispatched)
+    if (moment === 'settled') notifier.settle(activity.terminalId)
+    if (moment === 'reply') {
+      const reply = agentMoment(activity.terminalId, 'reply')
+      if (reply) notifier.notify(reply)
+    }
+  } catch (error) {
+    console.error('A notification moment failed:', error)
   }
 }
 
@@ -3057,6 +3096,29 @@ syncBackendPhases()
 // the log's live stream broadcasts to the renderer (mobile gets the same
 // stream over the /api/events SSE, subscribed in mobile-api).
 store.on('op', (e) => events.append(e))
+// What needs the owner, as a system notification while the window is not in
+// front (notifier.ts): an agent waiting, an unread reply. Silent: the chime rings.
+let notifyOn: boolean | null = null
+const notifyEnabled = (): boolean => (notifyOn ??= readNotifyPref(app.getPath('userData')))
+function openFromNote(note: ShownNote): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+  if (note.agentId && note.workspaceId) mainWindow.webContents.send('hitl:open', { workspaceId: note.workspaceId, id: note.agentId })
+}
+const notifier = createNotifier({
+  show: (note) => {
+    const shown = new Notification({ title: note.title, body: note.body, silent: true })
+    shown.on('click', () => openFromNote(note))
+    shown.show()
+    return shown
+  },
+  focused: () => mainWindow?.isFocused() ?? false,
+  enabled: () => notifyEnabled() && Notification.isSupported(),
+  served: (workspaceId) => isServedWorkspace(workspaceId),
+  now: Date.now
+})
 events.on('event', (e) => mainWindow?.webContents.send('event:new', e))
 cableSignals.on((signal) => mainWindow?.webContents.send('cable:signal', signal))
 let mainWindow: BrowserWindow | null = null
@@ -7328,6 +7390,8 @@ function createWindow(): void {
   // Focus is presence, for the same reason a keystroke is. Without it, coming
   // back to a window left open for twenty minutes locks a second later.
   mainWindow.on('focus', () => ownerLock.focus())
+  // In front, the bar holds what the notifications said.
+  mainWindow.on('focus', () => notifier.clear())
   // And it is the moment the owner can actually answer a waiting device, so
   // the queue is re-read then rather than waiting out the poll (D6).
   mainWindow.on('focus', () => void requests.refresh())
@@ -8702,7 +8766,11 @@ function registerIpc(handlers: RestoreHandlers): void {
       list: () => admittedDevices.list(),
       forget: (deviceId) => {
         // A machine of the account would come back with its pass: forgotten here, it stays out.
-        if (admittedDevices.list().some((device) => device.deviceId === deviceId && device.via === 'machine')) refusedMachines.add(deviceId)
+        const row = admittedDevices.list().find((device) => device.deviceId === deviceId)
+        if (row?.via === 'machine') refusedMachines.add(deviceId)
+        // So would a trusted phone, whatever pass it last came in on: out until it joins again with a new phone's code.
+        const keptOut = refusalOnForget(row, Date.now())
+        if (keptOut !== null) refusedPhones.add(deviceId, keptOut)
         const forgotten = admittedDevices.forget(deviceId)
         remoteDesk.forgetDevice(`device:${deviceId}`)
         return forgotten
@@ -9204,7 +9272,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   // Turn/summary activity for the canvas cards.
   turns.on('activity', (activity) => {
     lazyTerminals.reconsider(activity.terminalId)
-    noteWaiting(activity.terminalId, activity.phase, activity.waitSeq)
+    noteMoments(activity)
     // A routed card in flight is followed at the gateway; at rest, it is not.
     routeService.onActivity(activity.terminalId, activity.phase)
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
@@ -9343,6 +9411,14 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('events:query', (_e, query) => events.query(query ?? {}))
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))
   ipcMain.handle('agents:list', () => agents.list())
+  ipcMain.handle('notify:get', () => notifyEnabled())
+  ipcMain.handle('notify:set', (_e, on: unknown) => {
+    if (typeof on !== 'boolean') throw new Error('Notifications are on or off')
+    writeNotifyPref(app.getPath('userData'), on)
+    notifyOn = on
+    if (!on) notifier.clear()
+    return on
+  })
   ipcMain.handle('agents:launch-check', (_e, id: string) => checkLaunch(id))
   ipcMain.handle('agents:trust-folder', (_e, id: unknown) => {
     if (typeof id !== 'string') throw new Error('An agent id is needed')
@@ -9631,6 +9707,23 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle(
     'watch:invite',
     ownerOnly((current: unknown) => inviteWatch(watchHost, typeof current === 'string' ? current : '', true))
+  )
+  // ⋯ → Phone app: a phone's join code for the QR, minted on this Mac (a provider's trip may open here).
+  const invitePhone = (current: string, here: boolean) => mintPhoneInvite({ accounts, lock: ownerLock }, current, here)
+  setPhoneInviter(invitePhone)
+  ipcMain.handle(
+    'phone:invite',
+    ownerOnly((current: unknown) => invitePhone(typeof current === 'string' ? current : '', true))
+  )
+  // A phone joined: keep it? (owner 2026-11-17). Asked of this Mac only, answered here only.
+  ipcMain.handle('phone:pending', ownerOnly(() => accounts.pendingPhones()))
+  ipcMain.handle(
+    'phone:answer',
+    ownerOnly((deviceId: unknown, answer: unknown) =>
+      typeof deviceId === 'string' && (answer === 'keep' || answer === 'remove')
+        ? accounts.answerPhone(deviceId, answer)
+        : { ok: false, reason: 'unknown' }
+    )
   )
   ipcMain.handle(
     'watch:forget',

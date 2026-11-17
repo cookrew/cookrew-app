@@ -27,6 +27,7 @@ interface BuilderConfig {
     notarize?: boolean
     entitlements?: string
     entitlementsInherit?: string
+    requirements?: string
     extendInfo: Record<string, string>
   }
 }
@@ -71,6 +72,28 @@ describe('signing config', () => {
   it('points at entitlement files that exist', () => {
     expect(existsSync(path.join(ROOT, builder.mac.entitlements ?? 'missing'))).toBe(true)
     expect(existsSync(path.join(ROOT, builder.mac.entitlementsInherit ?? 'missing'))).toBe(true)
+  })
+})
+
+// macOS keeps Screen Recording and Accessibility grants against the app's
+// designated requirement. The default one names a single certificate, so
+// moving from Apple Development to Developer ID, or renewing, would cost every
+// user their grants again. Naming the team keeps one identity across both.
+describe('designated requirement', () => {
+  const requirement = (): string => read(builder.mac.requirements ?? 'missing').trim()
+
+  it('is set from a file that exists', () => {
+    expect(existsSync(path.join(ROOT, builder.mac.requirements ?? 'missing'))).toBe(true)
+  })
+
+  it('anchors on Apple and the team, nothing else', () => {
+    expect(requirement()).toMatch(/^designated => anchor apple generic and certificate leaf\[subject\.OU\] = "[A-Z0-9]{10}"$/)
+  })
+
+  // electron-builder hands the same file to every binary it signs, helpers
+  // included: an identifier would leave each helper failing its own check.
+  it('names no identifier, certificate name or hash', () => {
+    expect(requirement()).not.toMatch(/identifier|subject\.CN|cdhash/)
   })
 })
 

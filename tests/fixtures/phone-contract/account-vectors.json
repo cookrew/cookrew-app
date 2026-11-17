@@ -1,0 +1,220 @@
+{
+  "pair": {
+    "desktopId": "6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41",
+    "challengeId": "2f9d6e1a-4b3c-4d5e-9f60-718293a4b5c6",
+    "nonce": "bm9uY2Utb2YtdGhpcnR5LXR3by1ieXRlcy1sb25nLiE"
+  },
+  "renewNonce": "cmVuZXctbm9uY2UtMThieXQ",
+  "keys": [
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg"
+      },
+      "thumbprint": "1IG2tMH7J2wbJZnOf8LJzQitKf7LMvoAElsuDMVM54Y",
+      "deviceId": "ead074e4-96b9-8ed9-9e02-2ca7bbe51d5a",
+      "pairTranscript": "cookrew-pair/2 6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41 2f9d6e1a-4b3c-4d5e-9f60-718293a4b5c6 bm9uY2Utb2YtdGhpcnR5LXR3by1ieXRlcy1sb25nLiE ead074e4-96b9-8ed9-9e02-2ca7bbe51d5a",
+      "pairSig": "IdYuporahGttOMcWOo2GCD2Yf5ittPTE4QCr4SxP57VWCdyFYDSlJq3WKzTryaQ95d6bRuEAQFPINqzfDLu-Ag",
+      "renewMessage": "cookrew-renew/1 alice ead074e4-96b9-8ed9-9e02-2ca7bbe51d5a cmVuZXctbm9uY2UtMThieXQ",
+      "renewSig": "QS_U69rNePDNTNSY628s5ueC3r874cStD4abi0QPF3LiXLZPNIazD0K1BFYzFQXJaVoODhYGxOA37UHyVYDCAg"
+    },
+    {
+      "seed": "f0e1d2c3b4a5968778695a4b3c2d1e0f00112233445566778899aabbccddeeff",
+      "jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "94SHWUYq5qeiiqYxf7lo7OeuPCw1g_ku7FmT_ogtyHA"
+      },
+      "thumbprint": "mW_r-GSjV_le8RWShCzBz3IpPN-VLmbnxw-7L09oi-0",
+      "deviceId": "45ddfe5a-a1db-82c7-bf92-b5276f2d4ced",
+      "pairTranscript": "cookrew-pair/2 6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41 2f9d6e1a-4b3c-4d5e-9f60-718293a4b5c6 bm9uY2Utb2YtdGhpcnR5LXR3by1ieXRlcy1sb25nLiE 45ddfe5a-a1db-82c7-bf92-b5276f2d4ced",
+      "pairSig": "cpZc820NyNTcKPZNZKkk0pknWMFvZgvYuxzlnmLrogY6yqBgvk76FlP8-GVBPRfJ3CphdGvpBCr82C-n5me_AA",
+      "renewMessage": "cookrew-renew/1 alice 45ddfe5a-a1db-82c7-bf92-b5276f2d4ced cmVuZXctbm9uY2UtMThieXQ",
+      "renewSig": "xp8bZqHLBzYy8pvAvHKlsR9x2NbrTic7mLhExhp0iAfemJEUzGFEGrH9TLBGC9DwHRbaKTwOr55fI6VqgKdFDw"
+    }
+  ],
+  "relayPaths": [
+    {
+      "machineId": "6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41",
+      "route": "api/fleet/stream",
+      "path": "/api/m/6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41/api/fleet/stream"
+    },
+    {
+      "machineId": "6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41",
+      "route": "/api/terminal/t1/raw?seat=w1",
+      "path": "/api/m/6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41/api/terminal/t1/raw?seat=w1"
+    },
+    {
+      "machineId": "6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41",
+      "route": "/~seal/hello",
+      "path": "/api/m/6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41/~seal/hello"
+    },
+    {
+      "machineId": "6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41",
+      "route": "/~seal/down?s=abc&from=3",
+      "path": "/api/m/6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41/~seal/down?s=abc&from=3"
+    },
+    {
+      "machineId": "6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41",
+      "route": "//api/x",
+      "path": "/api/m/6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41/api/x"
+    },
+    {
+      "machineId": "6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41",
+      "route": "api/./x",
+      "path": null
+    },
+    {
+      "machineId": "6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41",
+      "route": "api/../etc",
+      "path": null
+    },
+    {
+      "machineId": "6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41",
+      "route": "api/a%2fb",
+      "path": null
+    },
+    {
+      "machineId": "6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41",
+      "route": "api/a%2Eb",
+      "path": null
+    },
+    {
+      "machineId": "6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41",
+      "route": "api\\x",
+      "path": null
+    },
+    {
+      "machineId": "6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41",
+      "route": "assets/app.js",
+      "path": null
+    },
+    {
+      "machineId": "6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41",
+      "route": "",
+      "path": null
+    },
+    {
+      "machineId": "6C1F3A52-0E9B-4C7D-8A21-5F0D9E3B7C41",
+      "route": "api/fleet/stream",
+      "path": "/api/m/6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41/api/fleet/stream"
+    },
+    {
+      "machineId": "6C1F3A52-0E9B-4C7D-8A21-5F0D9E3B7C41",
+      "route": "/api/terminal/t1/raw?seat=w1",
+      "path": "/api/m/6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41/api/terminal/t1/raw?seat=w1"
+    },
+    {
+      "machineId": "6C1F3A52-0E9B-4C7D-8A21-5F0D9E3B7C41",
+      "route": "/~seal/hello",
+      "path": "/api/m/6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41/~seal/hello"
+    },
+    {
+      "machineId": "6C1F3A52-0E9B-4C7D-8A21-5F0D9E3B7C41",
+      "route": "/~seal/down?s=abc&from=3",
+      "path": "/api/m/6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41/~seal/down?s=abc&from=3"
+    },
+    {
+      "machineId": "6C1F3A52-0E9B-4C7D-8A21-5F0D9E3B7C41",
+      "route": "//api/x",
+      "path": "/api/m/6c1f3a52-0e9b-4c7d-8a21-5f0d9e3b7c41/api/x"
+    },
+    {
+      "machineId": "6C1F3A52-0E9B-4C7D-8A21-5F0D9E3B7C41",
+      "route": "api/./x",
+      "path": null
+    },
+    {
+      "machineId": "6C1F3A52-0E9B-4C7D-8A21-5F0D9E3B7C41",
+      "route": "api/../etc",
+      "path": null
+    },
+    {
+      "machineId": "6C1F3A52-0E9B-4C7D-8A21-5F0D9E3B7C41",
+      "route": "api/a%2fb",
+      "path": null
+    },
+    {
+      "machineId": "6C1F3A52-0E9B-4C7D-8A21-5F0D9E3B7C41",
+      "route": "api/a%2Eb",
+      "path": null
+    },
+    {
+      "machineId": "6C1F3A52-0E9B-4C7D-8A21-5F0D9E3B7C41",
+      "route": "api\\x",
+      "path": null
+    },
+    {
+      "machineId": "6C1F3A52-0E9B-4C7D-8A21-5F0D9E3B7C41",
+      "route": "assets/app.js",
+      "path": null
+    },
+    {
+      "machineId": "6C1F3A52-0E9B-4C7D-8A21-5F0D9E3B7C41",
+      "route": "",
+      "path": null
+    },
+    {
+      "machineId": "not-a-machine",
+      "route": "api/fleet/stream",
+      "path": null
+    },
+    {
+      "machineId": "not-a-machine",
+      "route": "/api/terminal/t1/raw?seat=w1",
+      "path": null
+    },
+    {
+      "machineId": "not-a-machine",
+      "route": "/~seal/hello",
+      "path": null
+    },
+    {
+      "machineId": "not-a-machine",
+      "route": "/~seal/down?s=abc&from=3",
+      "path": null
+    },
+    {
+      "machineId": "not-a-machine",
+      "route": "//api/x",
+      "path": null
+    },
+    {
+      "machineId": "not-a-machine",
+      "route": "api/./x",
+      "path": null
+    },
+    {
+      "machineId": "not-a-machine",
+      "route": "api/../etc",
+      "path": null
+    },
+    {
+      "machineId": "not-a-machine",
+      "route": "api/a%2fb",
+      "path": null
+    },
+    {
+      "machineId": "not-a-machine",
+      "route": "api/a%2Eb",
+      "path": null
+    },
+    {
+      "machineId": "not-a-machine",
+      "route": "api\\x",
+      "path": null
+    },
+    {
+      "machineId": "not-a-machine",
+      "route": "assets/app.js",
+      "path": null
+    },
+    {
+      "machineId": "not-a-machine",
+      "route": "",
+      "path": null
+    }
+  ]
+}

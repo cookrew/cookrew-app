@@ -28,6 +28,10 @@ async function macSigned(facts: InstallFacts): Promise<boolean> {
   const bundle = /^(.*\.app)\/Contents\/MacOS\//.exec(facts.execPath)?.[1]
   if (!bundle) return false
   const description = await facts.describeSignature(bundle).catch(() => '')
+  // Squirrel installs only a release that meets the running build's requirement.
+  // Releases are team-signed under a requirement naming only the team
+  // (electron-builder.yml), so any team identity, development or Developer ID,
+  // accepts the next one; an ad hoc build has no Authority and stays put.
   return /^Authority=/m.test(description)
 }
 

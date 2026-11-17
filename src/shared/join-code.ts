@@ -38,3 +38,28 @@ export const isJoinCode = (raw: string): boolean => normaliseJoinCode(raw) !== n
  * names it.
  */
 export const joinLink = (site: string, code: string): string => `${site.replace(/\/+$/, '')}/join#${code}`
+
+/**
+ * ⋯ → PHONE APP (owner 2026-11-16): a phone's join code, its end and the link
+ * its QR holds; or why not, in the registry's reason words. One shape for the
+ * desktop's IPC and the companion's route (main/phone-invite.ts).
+ */
+export type PhoneInvite =
+  | { readonly ok: true; readonly code: string; readonly expiresAt: number; readonly url: string }
+  | { readonly ok: false; readonly reason: string; readonly message?: string }
+
+/** A phone that joined with a code this Mac showed, waiting to be kept (owner 2026-11-17). */
+export interface WaitingPhone {
+  readonly deviceId: string
+  readonly name: string
+  /** The phone's key in six digits: the phone shows the same (registry v2-phone-match.ts). */
+  readonly match: string
+  readonly at: number
+  /** When no answer becomes a Remove, everywhere. */
+  readonly until: number
+}
+
+/** What the sheet is told: the waiting phones, or why they could not be read. */
+export type PhonePendingResult =
+  | { readonly ok: true; readonly value: readonly WaitingPhone[] }
+  | { readonly ok: false; readonly reason: string }

@@ -1,4 +1,6 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCanvasUi } from '../canvas-ui'
+import type { WorkspaceFace } from './bar-reach'
 import type { WorkspaceList, WorkspaceState } from '../../../shared/model'
 import { countOf } from '../../../shared/workspace-door'
 import type { AttachmentIndex } from '../terminal-attachments'
@@ -607,6 +609,16 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     return () => thumbWants.release('zoom')
   }, [claimed])
   const agentOf = useMemo(() => new Map(model.agents.map((a) => [a.id, a])), [model.agents])
+  // The bar's groups reach every workspace (bar-reach.ts): each one's name, icon and served mark,
+  // from the live list. Until it lands none is known, so nothing served can flash in.
+  const wsFaces = useMemo(
+    (): ReadonlyMap<string, WorkspaceFace> =>
+      new Map((list?.workspaces ?? []).map((w) => [w.id, { name: w.name, icon: w.icon || null, ...(w.served ? { served: true } : {}) }])),
+    [list]
+  )
+  const { jumpToNode } = useCanvasUi()
+  // A notification clicked (main/notifier.ts): that agent, in its own workspace.
+  useEffect(() => cookrew().onHitlOpen?.(({ workspaceId: ws, id }) => void jumpToNode(ws, id)), [jumpToNode])
   const markOf = useMemo(() => new Map(model.marks.map((m) => [m.id, m])), [model.marks])
   // One names list per item, so a row scrolled into view does not draw every mounted thumbnail again (ItemNode is memo'd).
   const namesOf = useMemo(() => new Map(model.items.map((i) => [i.id, i.owners.map((id) => agentOf.get(id)?.name ?? id)])), [model.items, agentOf])
@@ -916,6 +928,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
               workspaceId={workspaceId}
               nodes={workspace?.nodes ?? null}
               rows={crew.crew}
+              all={crew.all}
+              workspaces={wsFaces}
               agents={agentOf}
               attachIndex={attachIndex}
               side={side}
@@ -923,6 +937,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
               onStop={(v, dir) => motion.go(v, dir)}
               onAgentFull={(id) => zoomStore.jumpTo('agent', id)}
               onItemFull={(id) => motion.item(id)}
+              onJump={(ws, id) => void jumpToNode(ws, id)}
               onDelete={onDelete}
               onOutside={pressedOutside}
             />

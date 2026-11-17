@@ -9,13 +9,16 @@ import { thumbWants } from '../pets/thumb-wants'
 import { itemFaceOf, type CrewFace } from '../pets/ItemPets'
 import { InkAvatar } from './InkAvatar'
 import { Page } from './ZoomParts'
-import { itemViewOf, type AgentView, type ItemView } from './zoom-model'
+import { agentViewOf, itemViewOf, type AgentView, type ItemView } from './zoom-model'
 import { BAR_SIDES, type ZoomDir } from './zoom-path'
 import { zoomStore } from './zoom-store'
-import { barSeen, itemSig, useSeenPage } from './bar-seen'
-import { agentInbox, groupSize, itemInbox, sinceWord, withHeld, type AgentEntry, type ItemEntry } from './bar-inbox'
+import { barSeen, useSeenBook } from './bar-seen'
+import { artifactInbox, useArtifacts, type ArtifactEntry } from './hitl-artifacts'
+import { badgeOf, inboxRows, secondTap, type WorkspaceFace } from './bar-reach'
+import { deckView } from './machine-view'
+import { agentInbox, groupSize, sinceWord, withHeld, type AgentEntry } from './bar-inbox'
 import { barCard, useBarCard, type FaceBox } from './bar-pick'
-import { BarAgentCard, BarItemCard } from './BarCards'
+import { BarAgentCard, BarAwayCard, BarItemCard } from './BarCards'
 import { pageInView } from '../page-in-view'
 import './bar-groups.css'
 
@@ -35,9 +38,21 @@ import './bar-groups.css'
  * from this face; again, its full view. An artifact opens its card; again,
  * its full view. Looked at, it is handled (bar-seen.ts) and leaves the stack
  * once its card closes, ~220 ms out, the next sliding in from the right.
+ *
+ * EVERY WORKSPACE (owner, 2026-11-16; plan docs/hitl-cross-workspace-2026-11-15
+ * · v6.2): AGENTS reads the whole crew, ARTIFACTS the activity log's agent
+ * changes (hitl-artifacts.ts). A face from another workspace wears its mark
+ * (bar-reach.ts) and opens a read-only card; the second tap, or Open, jumps
+ * there (onJump · canvas-ui.ts jumpToNode).
  */
 
 const STACK_MS = 220
+
+/** Another workspace's agent holds no attachments here: its notes and browsers are another canvas's. */
+const NO_ATTACHMENTS: AttachmentIndex = new Map()
+/** A workspace the list does not name yet: its faces are still marked as away. */
+const SOMEWHERE: WorkspaceFace = { name: 'another workspace', icon: '•' }
+const kindWord = (kind: 'browser' | 'note'): string => (kind === 'browser' ? 'Browser' : 'Note')
 
 /** The full view the zoom holds, if any, as one key: the groups do not redraw on every step of the zoom. */
 function useFullView(): { full: 'agent' | 'item' | null; id: string | null } {
@@ -105,12 +120,16 @@ function usePage(total: number, size: number): { start: number; end: number; mor
   return { start: paged.start, end: paged.end, more, moreLabel: paged.last ? 'Back to the first' : `${paged.rest} more`, turn: () => setPage((p) => p + 1) }
 }
 
-export function BarGroups({ workspaceId, nodes, rows, agents, attachIndex, side, narrow, onStop, onAgentFull, onItemFull, onDelete, onOutside }: {
+export function BarGroups({ workspaceId, nodes, rows, all, workspaces, agents, attachIndex, side, narrow, onStop, onAgentFull, onItemFull, onJump, onDelete, onOutside }: {
   workspaceId: string | null
-  /** The open workspace's cards; null while it loads (no baseline is set from nothing). */
+  /** The open workspace's cards: its artifacts' faces and cards draw from them. */
   nodes: readonly CanvasNode[] | null
   /** The open workspace's crew (agent-rows.ts · crewOf). */
   rows: readonly AgentRow[]
+  /** Every workspace's agents (stage/crew-rows.ts · Crew.all). */
+  all: readonly AgentRow[]
+  /** Every workspace's name, icon and served mark, by id. */
+  workspaces: ReadonlyMap<string, WorkspaceFace>
   agents: ReadonlyMap<string, AgentView>
   attachIndex: AttachmentIndex
   /** The side the view is in, once it is in the workspace; null above it. */
@@ -119,44 +138,73 @@ export function BarGroups({ workspaceId, nodes, rows, agents, attachIndex, side,
   onStop: (v: number, dir: ZoomDir) => void
   onAgentFull: (id: string) => void
   onItemFull: (id: string) => void
+  /** To a card of another workspace (canvas-ui.ts · jumpToNode). */
+  onJump: (workspaceId: string, id: string) => void
   onDelete?: (id: string) => void
   /** Whether a press there is on the zoom's page (its click is eaten), not the bar or the header. */
   onOutside: (target: EventTarget | null) => boolean
 }): React.JSX.Element {
-  const page = useSeenPage(workspaceId)
+  const book = useSeenBook()
+  const artifacts = useArtifacts()
   const card = useBarCard()
   const zoom = useFullView()
   const owners = useMemo(() => ownersOf(attachIndex), [attachIndex])
-  // The browsers and notes, newest made first, each with what it is now.
-  const itemNodes = useMemo(() => (nodes ?? []).filter((n) => n.kind === 'browser' || n.kind === 'note').reverse(), [nodes])
-  const nodeOf = useMemo(() => new Map(itemNodes.map((n) => [n.id, n])), [itemNodes])
-  const sigs = useMemo(() => itemNodes.flatMap((n) => {
-    const sig = itemSig(n)
-    return sig ? [{ id: n.id, sig }] : []
-  }), [itemNodes])
-  const loaded = nodes !== null
+  // The open workspace's browsers and notes: their faces and cards are drawn from the nodes.
+  const nodeOf = useMemo(() => new Map((nodes ?? []).filter((n) => n.kind === 'browser' || n.kind === 'note').map((n) => [n.id, n])), [nodes])
+  const wsOf = (id: string): WorkspaceFace => workspaces.get(id) ?? SOMEWHERE
+
+  // AGENTS: the open workspace's crew, then every other workspace's (bar-reach.ts).
+  const reach = useMemo(() => inboxRows(rows, all, workspaceId, workspaces), [rows, all, workspaceId, workspaces])
+  const rowById = useMemo(() => new Map(all.map((r) => [r.id, r])), [all])
+  const awayViews = useMemo(
+    () => new Map(reach.filter((r) => !agents.has(r.id)).map((r) => [r.id, agentViewOf(r, NO_ATTACHMENTS)])),
+    [reach, agents]
+  )
+  /** This workspace's view of an agent, else one of another workspace's, from its row. */
+  const viewOfAgent = (id: string): AgentView | null => {
+    const own = agents.get(id) ?? awayViews.get(id)
+    if (own) return own
+    const row = rowById.get(id)
+    return row ? agentViewOf(row, NO_ATTACHMENTS) : null
+  }
+  /** Another workspace's agent: the open workspace's are the ones its view draws. */
+  const agentAway = (id: string): boolean => !agents.has(id)
+  // An open-workspace row the view does not draw is no face of anywhere: left out, as before.
+  const agentEntries = useMemo(
+    () => agentInbox(reach).filter((e) => agents.has(e.id) || (rowById.has(e.id) && rowById.get(e.id)?.workspaceId !== workspaceId)),
+    [reach, agents, rowById, workspaceId]
+  )
+
+  // ARTIFACTS: what an agent changed since you looked, every workspace (hitl-artifacts.ts).
+  const itemEntries = useMemo(
+    () => artifactInbox(artifacts.entries.values(), book, { workspaces, here: workspaceId, onCanvas: (id) => nodeOf.has(id) }),
+    [artifacts, book, workspaces, workspaceId, nodeOf]
+  )
+  const entryOf = (id: string): ArtifactEntry | undefined => artifacts.entries.get(id)
+  /** Another workspace's artifact: not on the open canvas, whatever the log named (a team move sends none). */
+  const itemAway = (id: string): boolean => {
+    const entry = entryOf(id)
+    return !nodeOf.has(id) && entry !== undefined && entry.workspaceId !== workspaceId
+  }
+  // The book keeps only what is still an artifact, once it grows big: only once the
+  // boot read has landed, or every card would look unknown and be forgotten.
   useEffect(() => {
-    if (workspaceId && loaded) barSeen.observe(workspaceId, sigs)
-  }, [workspaceId, loaded, sigs])
+    if (artifacts.ready) barSeen.prune((id) => artifacts.entries.has(id))
+  }, [artifacts])
   // A full view opened is a look, and so is every change seen while it is open
   // with the window in view (page-in-view.ts). An agent's is its overlay's to say.
   const fullItem = zoom.full === 'item' ? zoom.id : null
-  const fullItemSig = fullItem ? sigs.find((s) => s.id === fullItem)?.sig ?? null : null
+  const fullAt = fullItem ? (entryOf(fullItem)?.at ?? null) : null
   useEffect(() => {
-    if (workspaceId && fullItem && fullItemSig && pageInView()) barSeen.mark(workspaceId, fullItem, fullItemSig)
-  }, [workspaceId, fullItem, fullItemSig])
+    if (fullItem && fullAt !== null && pageInView()) barSeen.mark(fullItem, fullAt)
+  }, [fullItem, fullAt])
 
-  const agentEntries = useMemo(() => agentInbox(rows).filter((e) => agents.has(e.id)), [rows, agents])
-  const itemEntries = useMemo(() => itemInbox(sigs, page), [sigs, page])
   const agentById = useMemo(() => new Map(agentEntries.map((e) => [e.id, e])), [agentEntries])
-  const itemById = useMemo(() => new Map(itemEntries.map((e) => [e.id, e])), [itemEntries])
   const agentIds = useHeld(useMemo(() => agentEntries.map((e) => e.id), [agentEntries]), card?.kind === 'agent' ? card.id : null)
   const itemIds = useHeld(useMemo(() => itemEntries.map((e) => e.id), [itemEntries]), card?.kind === 'item' ? card.id : null)
   // What each held face was when its card opened: still drawn, though no longer in the inbox.
   const lastAgent = useRef(new Map<string, AgentEntry>())
-  const lastItem = useRef(new Map<string, ItemEntry>())
   for (const e of agentEntries) lastAgent.current.set(e.id, e)
-  for (const e of itemEntries) lastItem.current.set(e.id, e)
 
   const size = groupSize(narrow)
   const agentPage = usePage(agentIds.length, size)
@@ -164,53 +212,66 @@ export function BarGroups({ workspaceId, nodes, rows, agents, attachIndex, side,
   const agentStack = useStack(agentIds.slice(agentPage.start, agentPage.end))
   const itemStack = useStack(itemIds.slice(itemPage.start, itemPage.end))
 
-  // The browsers' faces want their pictures (thumb-wants.ts), as the troop's do.
+  // The open workspace's browsers want their pictures (thumb-wants.ts), as the troop's do.
   const shownBrowsers = itemStack.order.filter((id) => nodeOf.get(id)?.kind === 'browser').join(' ')
   useEffect(() => {
     thumbWants.claim('bar', shownBrowsers ? shownBrowsers.split(' ') : [])
   }, [shownBrowsers])
   useEffect(() => () => thumbWants.release('bar'), [])
 
+  /** An artifact's face: its node here, else what the log named it (machine-view.ts · deckView). */
   const viewOf = (id: string): ItemView | null => {
     const n = nodeOf.get(id)
-    return n ? itemViewOf(n, owners.get(id) ?? []) : null
+    if (n) return itemViewOf(n, owners.get(id) ?? [])
+    const entry = entryOf(id)
+    return entry ? deckView({ id, kind: entry.kind, title: entry.title }) : null
   }
 
   // The card closes when what it shows is gone, or the view leaves for a full view or another workspace.
   useEffect(() => {
     if (!card) return
-    const gone = card.kind === 'agent' ? !agents.has(card.id) : !nodeOf.has(card.id)
+    const gone = card.kind === 'agent' ? !agents.has(card.id) && !rowById.has(card.id) : !nodeOf.has(card.id) && !artifacts.entries.has(card.id)
     if (gone || zoom.full !== null) barCard.close()
-  }, [card, agents, nodeOf, zoom.full])
+  }, [card, agents, rowById, nodeOf, artifacts, zoom.full])
   useEffect(() => () => barCard.close(), [workspaceId])
+  // An agent changing an artifact while its card is open: that change is seen too.
+  const openItemAt = card?.kind === 'item' ? (entryOf(card.id)?.at ?? null) : null
+  useEffect(() => {
+    if (card?.kind === 'item' && openItemAt !== null) barSeen.mark(card.id, openItemAt)
+  }, [card, openItemAt])
 
   const faces = useRef(new Map<string, HTMLButtonElement>())
   const faceRef = (key: string) => (el: HTMLButtonElement | null): void => {
     if (el) faces.current.set(key, el)
     else faces.current.delete(key)
   }
-  /** "Since" captured when the card opened: looking at it forgets when it was noticed. */
-  const since = useRef<number | null>(null)
+  /** The second tap: the full view here, or the jump to the workspace it is in. */
+  const goTo = (itsWorkspace: string | undefined, id: string, full: (id: string) => void): void => {
+    if (itsWorkspace && secondTap(itsWorkspace, workspaceId) === 'jump') return onJump(itsWorkspace, id)
+    full(id)
+  }
   const tapAgent = (id: string, el: HTMLElement): void => {
+    const away = agentAway(id)
     const open = barCard.get()
     if (open?.kind === 'agent' && open.id === id) {
       barCard.close()
-      return onAgentFull(id)
+      return goTo(away ? rowById.get(id)?.workspaceId : (workspaceId ?? undefined), id, onAgentFull)
     }
-    barCard.open({ kind: 'agent', id }, boxOf(el.getBoundingClientRect()))
+    // Another workspace's card is read-only: it selects nobody for the box, and no face flies.
+    if (away) barCard.open({ kind: 'agent', id, away: true })
+    else barCard.open({ kind: 'agent', id }, boxOf(el.getBoundingClientRect()))
     if (agentById.get(id)?.why === 'reply') cookrew().turnSeen(id)
   }
   const tapItem = (id: string): void => {
     const open = barCard.get()
+    const entry = entryOf(id)
     if (open?.kind === 'item' && open.id === id) {
       barCard.close()
-      return onItemFull(id)
+      return goTo(itemAway(id) ? entry?.workspaceId : (workspaceId ?? undefined), id, onItemFull)
     }
-    const entry = itemById.get(id)
-    since.current = entry?.at ?? null
     // No flight from a thumbnail: only an agent's card puts a face in the box.
-    barCard.open({ kind: 'item', id })
-    if (workspaceId && entry) barSeen.mark(workspaceId, id, entry.sig)
+    barCard.open(itemAway(id) ? { kind: 'item', id, away: true } : { kind: 'item', id })
+    if (entry) barSeen.mark(id, entry.at)
   }
 
   const crewFaces = useMemo(() => new Map<string, CrewFace>([...agents].map(([id, a]) => [id, { name: a.name, preset: a.preset, orch: a.orch }])), [agents])
@@ -218,33 +279,38 @@ export function BarGroups({ workspaceId, nodes, rows, agents, attachIndex, side,
     stack.leaving.has(id) ? ' out' : stack.entering.has(id) ? ' in' : ''
 
   const agentFaces = agentStack.order.flatMap((id) => {
-    const a = agents.get(id)
+    const a = viewOfAgent(id)
     const why = (agentById.get(id) ?? lastAgent.current.get(id))?.why ?? 'reply'
     if (!a) return []
     const word = why === 'waiting' ? 'needs you' : 'replied'
     const out = agentStack.leaving.has(id)
+    const ws = agentAway(id) ? wsOf(rowById.get(id)?.workspaceId ?? '') : null
+    const where = ws ? `, in ${ws.name}` : ''
     return [
       <button key={id} ref={faceRef(`agent:${id}`)} type="button" tabIndex={out ? -1 : undefined} aria-hidden={out || undefined}
-        className={`zv-gf agent ${why}${motionOf(agentStack, id)}${card?.kind === 'agent' && card.id === id ? ' open' : ''}`}
-        aria-label={`${a.name}, ${word}`} title={`${a.name} · ${word}`} onClick={(e) => tapAgent(id, e.currentTarget)}>
+        className={`zv-gf agent ${why}${ws ? ' away' : ''}${motionOf(agentStack, id)}${card?.kind === 'agent' && card.id === id ? ' open' : ''}`}
+        aria-label={`${a.name}, ${word}${where}`} title={`${a.name} · ${word}${ws ? ` · ${ws.name}` : ''}`} onClick={(e) => tapAgent(id, e.currentTarget)}>
         <InkAvatar id={a.id} preset={a.preset} orch={a.orch} status={a.status} />
         {why === 'waiting' && <span className="zv-gf-dot" aria-hidden="true" />}
+        {ws && <span className="zv-gf-ws" aria-hidden="true">{badgeOf(ws)}</span>}
       </button>
     ]
   })
   const itemFaces = itemStack.order.flatMap((id) => {
     const view = viewOf(id)
     if (!view) return []
+    const ws = itemAway(id) ? wsOf(entryOf(id)?.workspaceId ?? '') : null
     const by = view.owners.map((o) => agents.get(o)?.name).filter((n): n is string => !!n)
-    const label = `${view.kind === 'browser' ? 'Browser' : 'Note'}: ${view.title}${by.length ? `, made by ${by.join(', ')}` : ''}, new`
+    const label = `${kindWord(view.kind)}: ${view.title}${by.length ? `, made by ${by.join(', ')}` : ''}${ws ? `, in ${ws.name}` : ''}, new`
     const out = itemStack.leaving.has(id)
     return [
       <button key={id} ref={faceRef(`item:${id}`)} type="button" tabIndex={out ? -1 : undefined} aria-hidden={out || undefined}
-        className={`zv-gf item ${view.kind}${motionOf(itemStack, id)}${card?.kind === 'item' && card.id === id ? ' open' : ''}`}
+        className={`zv-gf item ${view.kind}${ws ? ' away' : ''}${motionOf(itemStack, id)}${card?.kind === 'item' && card.id === id ? ' open' : ''}`}
         aria-label={label} title={label} onClick={() => tapItem(id)}>
         <span className={`zv-th ${view.kind}`} aria-hidden="true">
           <Page item={view} words={false} />
         </span>
+        {ws && <span className="zv-gf-ws" aria-hidden="true">{badgeOf(ws)}</span>}
       </button>
     ]
   })
@@ -270,32 +336,46 @@ export function BarGroups({ workspaceId, nodes, rows, agents, attachIndex, side,
     )
   }
 
-  const cardAgent = card?.kind === 'agent' ? agents.get(card.id) ?? null : null
-  const cardNode = card?.kind === 'item' ? nodeOf.get(card.id) ?? null : null
+  const now = Date.now()
+  const cardAgent = card?.kind === 'agent' ? viewOfAgent(card.id) : null
+  const cardNode = card?.kind === 'item' && card.away !== true ? (nodeOf.get(card.id) ?? null) : null
   const cardItem = cardNode ? itemFaceOf(cardNode, owners.get(cardNode.id) ?? []) : null
+  const awayItem = card?.kind === 'item' && card.away === true ? viewOf(card.id) : null
+  const awayEntry = card ? entryOf(card.id) : undefined
+  const closeAnd = (fn: () => void) => (): void => {
+    barCard.close()
+    fn()
+  }
   return (
     <>
       <div className="zv-groups" role="group" aria-label="Artifacts or agents">
         {BAR_SIDES.map(group)}
       </div>
-      {cardAgent && (
+      {cardAgent && card?.away !== true && (
         <BarAgentCard
           key={`agent:${cardAgent.id}`}
           agent={cardAgent}
           items={(attachIndex.get(cardAgent.id) ?? []).flatMap((at) => itemViewOf(at.node, [cardAgent.id]) ?? [])}
           anchor={faces.current.get(`agent:${cardAgent.id}`) ?? null}
-          onOpen={() => {
-            barCard.close()
-            onAgentFull(cardAgent.id)
-          }}
+          onOpen={closeAnd(() => onAgentFull(cardAgent.id))}
           onItem={(itemId) => {
             barCard.close()
             onItemFull(itemId)
           }}
-          onDelete={onDelete ? () => {
-            barCard.close()
-            onDelete(cardAgent.id)
-          } : undefined}
+          onDelete={onDelete ? closeAnd(() => onDelete(cardAgent.id)) : undefined}
+          onOutside={onOutside}
+          onClose={barCard.close}
+        />
+      )}
+      {cardAgent && card?.away === true && (
+        <BarAwayCard
+          key={`away-agent:${cardAgent.id}`}
+          face={<InkAvatar id={cardAgent.id} preset={cardAgent.preset} orch={cardAgent.orch} status={cardAgent.status} />}
+          title={cardAgent.name}
+          where={wsOf(rowById.get(cardAgent.id)?.workspaceId ?? '').name}
+          line={`${cardAgent.word} · ${cardAgent.line}`}
+          anchor={faces.current.get(`agent:${cardAgent.id}`) ?? null}
+          onOpen={closeAnd(() => goTo(rowById.get(cardAgent.id)?.workspaceId, cardAgent.id, onAgentFull))}
           onOutside={onOutside}
           onClose={barCard.close}
         />
@@ -305,16 +385,27 @@ export function BarGroups({ workspaceId, nodes, rows, agents, attachIndex, side,
           key={`item:${cardItem.id}`}
           item={cardItem}
           crew={crewFaces}
-          since={sinceWord(since.current, Date.now())}
+          since={sinceWord(entryOf(cardItem.id)?.at ?? null, now)}
           anchor={faces.current.get(`item:${cardItem.id}`) ?? null}
-          onOpen={() => {
-            barCard.close()
-            onItemFull(cardItem.id)
-          }}
+          onOpen={closeAnd(() => onItemFull(cardItem.id))}
           onAgent={(agentId) => {
             barCard.close()
             onAgentFull(agentId)
           }}
+          onOutside={onOutside}
+          onClose={barCard.close}
+        />
+      )}
+      {awayItem && awayEntry && (
+        <BarAwayCard
+          key={`away-item:${awayItem.id}`}
+          face={<span className={`zv-th ${awayItem.kind}`}><Page item={awayItem} words={false} /></span>}
+          title={awayItem.title}
+          where={wsOf(awayEntry.workspaceId).name}
+          line={`${kindWord(awayItem.kind)} an agent changed`}
+          since={sinceWord(awayEntry.at, now)}
+          anchor={faces.current.get(`item:${awayItem.id}`) ?? null}
+          onOpen={closeAnd(() => goTo(awayEntry.workspaceId, awayItem.id, onItemFull))}
           onOutside={onOutside}
           onClose={barCard.close}
         />
