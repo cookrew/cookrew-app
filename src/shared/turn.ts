@@ -481,9 +481,12 @@ const MAX_PROMPT_BUFFER = 2000
 /**
  * Terminal input escape sequences: CSI with optional private prefix
  * (cursor keys, bracketed paste markers, SGR mouse reports like
- * `\x1b[<0;39;37M`) and SS3 (application-mode cursor keys).
+ * `\x1b[<0;39;37M`) and SS3 (application-mode cursor keys). The full CSI
+ * shape (parameter bytes, then intermediate bytes, then a final byte): a
+ * terminal's reply to a mode query (DECRPM, `\x1b[?1016;2$y`) carries a `$`,
+ * and without it the reply landed in the prompt buffer as `[?1016;2$y`.
  */
-const CSI_RE = /\x1b(?:\[[<>=?]?[0-9;]*[@-~]|O[@-~])/g
+const CSI_RE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|O[@-~])/g
 
 /**
  * OSC sequences (window title, color set/query). Under tmux, a GUI xterm
