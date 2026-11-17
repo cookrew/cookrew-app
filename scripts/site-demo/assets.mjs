@@ -44,9 +44,9 @@ function frame(name, src, { box = null, dsf = 1, max = 2880, phone = null } = {}
 // Desktop stops: 1024×640 at ×6 (walk.mjs prefix h, DSF=6). Boxes frame the subject, not the window.
 frame('demo-agents', `${raw}/h-agents.png`, { box: [295, 180, 430, 270], dsf: 6 })
 frame('demo-workspaces', `${raw}/h-workspaces.png`, { box: [215, 135, 590, 370], dsf: 6 })
-frame('demo-docs-crew', `${raw}/h-docs.png`, { box: [235, 140, 320, 300], dsf: 6 })
+frame('demo-docs-crew', `${raw}/h-docs.png`, { box: [225, 140, 340, 300], dsf: 6 })
 frame('demo-hitl-desk', `${raw}/h-hitl.png`, { box: [0, 60, 700, 520], dsf: 6, phone: { box: [25, 375, 430, 200] } })
-frame('demo-artifacts', `${raw}/h-artifacts.png`, { box: [215, 110, 585, 450], dsf: 6, phone: { box: [250, 240, 520, 160] } })
+frame('demo-artifacts', `${raw}/h-artifacts.png`, { box: [215, 110, 585, 450], dsf: 6, phone: { box: [250, 240, 520, 305] } })
 frame('demo-browser-card', `${raw}/h-browser.png`, { box: [60, 50, 910, 540], dsf: 6, phone: { box: [70, 60, 450, 500] } })
 frame('demo-board', `${raw}/h-board.png`, { box: [445, 50, 570, 475], dsf: 6, phone: { box: [450, 110, 410, 410] } })
 // The devices stop; on a phone, the same stop as the renderer draws it at 390 px (p-devices, ×3).
@@ -64,11 +64,11 @@ frame('demo-watch', `${raw}/watch-strip.png`, { phone: { src: `${raw}/watch-phon
 // The composites (compose.mjs).
 frame('demo-hero-devices', `${raw}/hero.png`, { phone: { src: `${raw}/hero-phone.png` } })
 frame('demo-ops-cards', `${raw}/ops.png`, { phone: { src: `${raw}/ops-phone-stack.png` } })
-// The canvas clip (clip.mjs: a screencast sends CSS-size frames, so 1024×640 whatever the scale), its poster (the first beat), and for a phone a still of that beat cropped to the tiles.
+// The canvas clip (clip.mjs: a screencast sends CSS-size frames, so 1024×640 whatever the scale) and its poster: the browser
+// card beat (14 s), a view no other figure on the canvas page shows. Phones are not shown the clip (a 1024 px movie is
+// unreadable at 390, and a still would not be the twenty seconds its caption describes).
 copyFileSync(`${raw}/canvas.mp4`, `${dest}/demo-canvas.mp4`)
-ff(['-ss', '0.6', '-i', `${raw}/canvas.mp4`, '-frames:v', '1', '-q:v', '4', `${dest}/demo-canvas.jpg`])
-ff(['-ss', '0.6', '-i', `${raw}/canvas.mp4`, '-frames:v', '1', '-update', '1', `${raw}/canvas-first.png`])
-frame('demo-canvas-still', `${raw}/canvas-first.png`, { box: [215, 135, 590, 370], dsf: 1, max: 1170 })
+ff(['-ss', '14', '-i', `${raw}/canvas.mp4`, '-frames:v', '1', '-q:v', '3', `${dest}/demo-canvas.jpg`])
 const [cw, ch] = size(`${dest}/demo-canvas.mp4`)
 sizes['demo-canvas.mp4'] = { width: cw, height: ch, twins: [] }
 

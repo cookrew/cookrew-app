@@ -81,7 +81,7 @@ export const DEMO = {
   hitlDesk: demo('demo-hitl-desk.jpg', 'Planner’s card with the permission prompt Claude Code asked, mirrored as rows to pick',
     'Clicked Planner: its card opened, and the permission prompt Claude Code is waiting on, an edit to CHANGELOG.md, came up as rows to pick, 1 to 3, or Esc.'),
   artifacts: demo('demo-artifacts.jpg', 'The artifacts stop: a phone screen card, a computer screen card, a browser card and a note',
-    'Clicked artifacts: the phone simulator, the main display and the release-notes page, each used by Checker, and the checklist note Planner keeps. Their thumbnails are the demo’s flat placeholders, not screens.'),
+    'Clicked artifacts: the phone simulator, the main display and the release-notes page, each used by Checker, and under them the checklist note Planner keeps. Their thumbnails are the demo’s flat placeholders, not screens.'),
   board: demo('demo-board.jpg', 'The BOARD: every agent of Release Room with its harness, its last prompt and its state',
     'Pressed the count beside search: the BOARD lists every agent with its harness (OpenCode, Pi, Claude Code, Codex), its workspace, what you last asked it and where it stands: done, needs you, working.'),
   devices: demo('demo-devices.jpg', 'The devices stop: Studio Mac and Build Server, each drawn as a laptop with its workspaces on the screen',

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildStaticSite } from '../registry/src/site-static'
+import { SITE_STYLE } from '../registry/src/site-shell'
 import { PILLARS, ROADMAP, STATUS, llmsText } from '../registry/src/site-content'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -193,8 +194,11 @@ describe('the pictures say what they are (2026-11-17)', () => {
       expect(body).toContain(`<source media="${PHONE_MEDIA}" srcset="`)
       expect(body).toContain(DEMO[key].file.replace(/\.jpg$/, '-phone.jpg'))
     }
+    // The clip is not shown on a phone (no still in its place under a caption about twenty seconds).
     const canvas = pages().get('features/canvas.html') ?? ''
-    expect(canvas).toContain(`class="on-phone" src="`)
+    expect(canvas).not.toContain('demo-canvas-still')
+    expect(canvas).toContain(`media="not all and ${PHONE_MEDIA}"`)
+    expect(SITE_STYLE).toMatch(/@media \(max-width:640px\)\{[^}]*\.feature-shots figure\.clip\{display:none\}/)
   })
 
   it('a pillar shows its pictures, each with the sentence of what it is not when one is needed; the drawing is a diagram', () => {
@@ -220,6 +224,5 @@ describe('the pictures say what they are (2026-11-17)', () => {
     }
     expect(existsSync(path.join(dir, CANVAS_CLIP.file))).toBe(true)
     expect(existsSync(path.join(dir, CANVAS_CLIP.poster))).toBe(true)
-    expect(existsSync(path.join(dir, CANVAS_CLIP.still))).toBe(true)
   })
 })

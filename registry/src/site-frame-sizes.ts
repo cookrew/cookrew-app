@@ -17,7 +17,7 @@ export const FRAME_SIZES: Readonly<Record<string, { width: number; height: numbe
     ]
   },
   "demo-docs-crew.jpg": {
-    "width": 1920,
+    "width": 2040,
     "height": 1800,
     "twins": [
       1440,
@@ -45,7 +45,7 @@ export const FRAME_SIZES: Readonly<Record<string, { width: number; height: numbe
     ],
     "phone": {
       "width": 1170,
-      "height": 360
+      "height": 686
     }
   },
   "demo-browser-card.jpg": {
@@ -152,11 +152,6 @@ export const FRAME_SIZES: Readonly<Record<string, { width: number; height: numbe
       "width": 1170,
       "height": 3108
     }
-  },
-  "demo-canvas-still.jpg": {
-    "width": 590,
-    "height": 370,
-    "twins": []
   },
   "demo-canvas.mp4": {
     "width": 1024,

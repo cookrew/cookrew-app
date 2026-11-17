@@ -16,8 +16,6 @@ export const CANVAS_CLIP = {
   /** A screencast sends CSS-size frames, so the clip is 1024×640 whatever the device scale: it is shown at most that wide. */
   width: FRAME_SIZES['demo-canvas.mp4']!.width,
   height: FRAME_SIZES['demo-canvas.mp4']!.height,
-  /** For a phone: the clip's first beat, cropped to the workspace tiles (a 1024 px movie is unreadable at 390). */
-  still: 'demo-canvas-still.jpg',
   label:
     'Twenty seconds of the current Cookrew interface on demo data: two workspaces, one workspace with four agents on four harnesses, an agent’s question as rows to pick, the artifacts, a browser card, and back out',
   caption:
@@ -26,10 +24,10 @@ export const CANVAS_CLIP = {
 
 /**
  * The clip as a figure. No script: <video autoplay muted loop playsinline> needs none, and a reader whose browser
- * refuses autoplay sees the poster. On a phone the still stands in its place (CSS: .clip .on-phone).
+ * refuses autoplay sees the poster (the browser-card beat). A phone is not shown it: a 1024 px movie is unreadable at
+ * 390, the source's media keeps the file from loading there, and CSS hides the figure (.feature-shots figure.clip).
  */
 export function clipFigure(): string {
   const clip = CANVAS_CLIP
-  const still = FRAME_SIZES[clip.still]!
-  return `<figure class="shot clip illustration" data-source="illustration"><video class="off-phone" autoplay muted loop playsinline preload="metadata" poster="${esc(`${SITE_FRAMES}${clip.poster}`)}" width="${clip.width}" height="${clip.height}" aria-label="${esc(clip.label)}"><source src="${SITE_FRAMES}${clip.file}" type="video/mp4" media="not all and ${PHONE_MEDIA}"></video><img class="on-phone" src="${SITE_FRAMES}${clip.still}" width="${still.width}" height="${still.height}" loading="lazy" decoding="async" alt="The workspaces stop from the clip’s first beat: Release Room and Docs Site"><figcaption><span class="rec src-illustration">${esc(SOURCE_CHIP.illustration)}</span><span>${esc(clip.caption)}</span></figcaption></figure>`
+  return `<figure class="shot clip illustration" data-source="illustration"><video autoplay muted loop playsinline preload="metadata" poster="${esc(`${SITE_FRAMES}${clip.poster}`)}" width="${clip.width}" height="${clip.height}" aria-label="${esc(clip.label)}"><source src="${SITE_FRAMES}${clip.file}" type="video/mp4" media="not all and ${PHONE_MEDIA}"></video><figcaption><span class="rec src-illustration">${esc(SOURCE_CHIP.illustration)}</span><span>${esc(clip.caption)}</span></figcaption></figure>`
 }

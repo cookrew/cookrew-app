@@ -511,14 +511,13 @@ figure.shot.illustration,figure.shot.composite{background:var(--cream-md)}
 .feature-shots.pair{grid-template-columns:repeat(2,minmax(0,420px));justify-content:center}
 .feature-shots figure.clip{max-width:1024px;width:100%;justify-self:center}
 .feature-shots figure.narrow{max-width:var(--max);width:100%;justify-self:center}
-.clip .on-phone{display:none}
 /* A phone takes each figure's own framing (<picture> source, site-frames.ts PHONE_MEDIA), edge to edge, the chip one small line. */
 @media (max-width:640px){
-.clip .off-phone{display:none}.clip .on-phone{display:block;width:100%;height:auto}
+.feature-shots figure.clip{display:none}
 .feature-shots.pair{grid-template-columns:minmax(0,1fr)}
-figure.shot,.feature-shots figure.clip{margin-inline:calc(50% - 50vw);width:auto;max-width:none;border-left:0;border-right:0}
+figure.shot,.feature-shots figure.narrow{margin-inline:calc(50% - 50vw);width:auto;max-width:none;border-left:0;border-right:0}
 figure.shot figcaption{padding:8px 16px;font-size:12.5px;gap:4px 10px}
-figure.shot .rec.src-illustration,figure.shot .rec.src-composite{border:0;background:none;padding:0;font-size:7.5px}
+figure.shot .rec.src-illustration,figure.shot .rec.src-composite{border:0;background:none;padding:0;font-size:9px}
 }
 /* sections */
 section{padding:56px 0;border-bottom:1px solid var(--line-soft)}
