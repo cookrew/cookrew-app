@@ -29,7 +29,20 @@ extension CardStatus: Encodable {}
 public func alertTitle(_ event: WatchEvent) -> String? {
   switch event {
   case .needsYou(let name): return "\(name) needs you"
-  case .done(let name): return "\(name) is done"
+  // The same words the desktop and the phone use for an unread reply (main/notifier.ts).
+  case .done(let name): return "\(name) replied"
   case .sent, .refused: return nil
+  }
+}
+
+/**
+ * One alert per agent and machine on the wrist, as on the desktop and the
+ * phone: a newer moment of the same agent replaces the older alert instead of
+ * stacking under it. Keyed by name, which is what the alert carries.
+ */
+public func alertIdentifier(_ event: WatchEvent, machine: String) -> String {
+  switch event {
+  case .needsYou(let name), .done(let name): return "cookrew.agent|\(machine)|\(name)"
+  case .sent, .refused: return "cookrew.tap|\(machine)"
   }
 }
