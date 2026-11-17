@@ -54,6 +54,8 @@ const REGISTERED: Record<string, readonly string[]> = {
   'zoom/bar-seen.ts': ['bar seen'],
   'zoom/hitl-artifacts.ts': ['hitl artifacts'],
   'zoom/gauge-store.ts': ['machine gauges'],
+  // What the HITL bar read of the account's other machines (phase 6): through the machine in scope's keys.
+  'zoom/remote-hitl.ts': ['hitl machines'],
   'zoom/remote-machine-store.ts': ['inside another machine'],
   'zoom/simple-fix.ts': ['simple fixes'],
   'zoom/use-zoom-fleet.ts': ['zoom fleet'],
@@ -67,7 +69,7 @@ const REGISTERED: Record<string, readonly string[]> = {
  * stand, it gets the ones it always had, not ones made anew for a machine
  * that is being left.
  */
-const STOPPED_FIRST = ['data plane', 'hitl artifacts', 'machine api', 'machine gauges', 'machine session', 'reply voice', 'rtc link', 'zoom fleet']
+const STOPPED_FIRST = ['data plane', 'hitl artifacts', 'hitl machines', 'machine api', 'machine gauges', 'machine session', 'reply voice', 'rtc link', 'zoom fleet']
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
@@ -269,6 +271,30 @@ describe('entering another machine lets go of', () => {
     expect(arrival.heldForArrival({ type: 'workspace.created' }, 1_001)).toBe(true)
     scope.enterMachine(B)
     expect(arrival.heldForArrival({ type: 'workspace.created' }, 1_001)).toBe(false)
+  })
+
+  it("the other machines' seen books stay under their own ids; the one in scope is its live book", async () => {
+    const seen = await import('../src/renderer/src/zoom/bar-seen')
+    // From A, B's book is another machine's: written under B's own key.
+    seen.machineSeen.cutoff(B, 10)
+    seen.machineSeen.mark(B, 'n1', 20)
+    expect(localStorage.getItem(seen.bookKeyFor(B))).toContain('"n1":20')
+    // A's own goes to the live book.
+    seen.machineSeen.mark(A, 'm1', 5)
+    expect(seen.barSeen.get().seen.m1).toBe(5)
+    scope.enterMachine(B)
+    // B in scope: its live book is the one written as another machine's, and A's is read from A's key.
+    expect(seen.barSeen.get()).toEqual({ cutoff: 10, seen: { n1: 20 } })
+    expect(seen.machineSeen.get(B)).toBe(seen.barSeen.get())
+    expect(seen.machineSeen.get(A).seen.m1).toBe(5)
+  })
+
+  it("what the bar read of the other machines, read through the last machine's keys", async () => {
+    const hitl = await import('../src/renderer/src/zoom/remote-hitl')
+    const before = hitl.remoteArtifactFeedNow()
+    scope.enterMachine(B)
+    expect(hitl.remoteArtifactFeedNow()).not.toBe(before)
+    expect(before.get().size).toBe(0)
   })
 
   it('a fix in progress, the presets asked for and the pictures read', async () => {

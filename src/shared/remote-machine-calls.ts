@@ -20,6 +20,10 @@ export interface RemoteMachineCall {
 }
 
 const ID = '[A-Za-z0-9_-]{1,128}'
+/** An activity log type ('note.created'): lower-case, dotted, as main/event-log.ts names them. */
+const EVENT_TYPE = '[a-z][a-z0-9_.-]{0,63}'
+/** One parameter of a log read: a type, up to 16 types, a start time, a limit. Nothing else (no workspace, no until). */
+const EVENT_PARAM = `(type=${EVENT_TYPE}|types=${EVENT_TYPE}(,${EVENT_TYPE}){0,15}|since=\\d{1,16}|limit=\\d{1,4})`
 const ALLOWED: readonly { method: 'GET' | 'POST'; pattern: RegExp; binary?: true }[] = [
   // The tiles alone (?cards=0), or a crew with at most one card's whole reply (&full=): watch-routes.ts · cardsShapeOf.
   { method: 'GET', pattern: new RegExp(`^api/watch/cards(\\?cards=0|\\?workspace=${ID}(&full=${ID})?)?$`) },
@@ -30,7 +34,9 @@ const ALLOWED: readonly { method: 'GET' | 'POST'; pattern: RegExp; binary?: true
   { method: 'GET', pattern: new RegExp(`^api/watch/item/${ID}$`) },
   { method: 'POST', pattern: new RegExp(`^api/watch/item/${ID}/input$`) },
   // Control of a screen card on it, taken and given back as a phone does (use-source-routes.ts), in the workspace it is in.
-  { method: 'POST', pattern: new RegExp(`^api/use/sources/control\\?seat=${ID}$`) }
+  { method: 'POST', pattern: new RegExp(`^api/use/sources/control\\?seat=${ID}$`) },
+  // Its activity log, by type (the HITL bar's ARTIFACTS, phase 6: zoom/remote-hitl.ts): at most four parameters.
+  { method: 'GET', pattern: new RegExp(`^api/events/query\\?${EVENT_PARAM}(&${EVENT_PARAM}){0,3}$`) }
 ]
 
 /** The call, if it is one a machine may make on another; null for anything else. */

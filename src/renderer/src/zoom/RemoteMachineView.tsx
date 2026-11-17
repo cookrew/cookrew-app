@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import { ENTRY_MS, entryFrom } from './remote-entry'
 import { artifactsOf } from './remote-machine'
 import { remotePlace, remoteSeen, type RemotePlace } from './remote-machine-store'
+import { remoteOpen } from './remote-open'
 import { RemoteCardView, Thumb } from './RemoteCardView'
 import { RemoteItemView } from './RemoteItemView'
 import { RemoteCrew, RemoteWorkspaces } from './RemoteStops'
@@ -55,6 +56,13 @@ export function RemoteMachineView(): React.JSX.Element | null {
     remoteSeen.note({ cards: cards?.cards ?? null, front: frontTile ? { id: frontTile.id, name: frontTile.name } : null, refresh })
   }, [cards, frontTile?.id, frontTile?.name, refresh])
   useEffect(() => () => remoteSeen.forget(), [])
+  // A face opened from the bar (remote-open.ts): on to its agent once this read holds it, never before.
+  const machineId = machine?.id ?? null
+  const workspaceId = place.workspace?.id ?? null
+  const agentId = place.agent?.id ?? null
+  useEffect(() => {
+    remoteOpen.settle({ machineId, workspaceId, agentId }, cards?.cards ?? null)
+  }, [cards, machineId, workspaceId, agentId])
   if (!machine) return null
 
   const card = place.agent ? (cards?.cards.find((one) => one.id === place.agent?.id) ?? null) : null
