@@ -12,6 +12,31 @@ const now = Date.now()
 const ago = (min: number): number => now - min * 60_000
 
 export const RELEASE = 'demo-ws'
+
+const agent = (id: string, name: string, harness: 'claude' | 'codex', orch: boolean, phase: 'thinking' | 'idle', task: string, reply: string | null) =>
+  ({ id, name, harness, model: null, orch, phase, phaseSource: 'live', phaseSince: ago(4), task, reply, status: null, turns: 3, attachments: [] })
+/** Build Server's own answer: one workspace, two agents. */
+const BUILD_SERVER = {
+  v: 1,
+  rev: 1,
+  at: now,
+  machine: { name: 'Build Server', appVersion: '0.6.15', profile: { kind: 'server', model: null, label: 'Linux server', vendor: null, os: 'linux', osVersion: null, arch: 'x64', cpus: null, memoryGb: null, evidence: [] } },
+  focusedWorkspaceId: 'demo-nightly',
+  workspaces: [
+    {
+      id: 'demo-nightly',
+      name: 'Nightly Builds',
+      icon: null,
+      state: 'focused',
+      agents: [
+        agent('nb-builder', 'Builder', 'codex', true, 'thinking', 'Run the nightly build and the test suite', null),
+        agent('nb-triage', 'Triage', 'claude', false, 'idle', 'Sort last night’s failures', 'Two flaky tests, both in the upload path; notes in the issue.')
+      ],
+      loose: [],
+      counts: { agents: 2, notes: 0, browsers: 0 }
+    }
+  ]
+}
 export let DOCS = ''
 
 const term = (id: string, name: string, preset: string, command: string, x: number, y: number, orch = false) => ({
@@ -120,7 +145,7 @@ export async function seed(api: Api, options: { page: string }): Promise<void> {
     { kind: 'browser', id: 'rr-phone', name: 'iPhone 17 Pro', url: 'window://Simulator?id=103', position: { x: 2240, y: 640 }, size: { width: 420, height: 720 } }
   ]
   for (const n of nodes) await api.addNode(n)
-  for (const [a, b] of [['rr-planner', 'rr-reviewer'], ['rr-planner', 'rr-checker'], ['rr-planner', 'rr-notes'], ['rr-reviewer', 'rr-checker'], ['rr-planner', 'rr-note'], ['rr-checker', 'rr-browser']]) await api.connectNodes(a, b)
+  for (const [a, b] of [['rr-planner', 'rr-reviewer'], ['rr-planner', 'rr-checker'], ['rr-planner', 'rr-notes'], ['rr-reviewer', 'rr-checker'], ['rr-planner', 'rr-note'], ['rr-checker', 'rr-browser'], ['rr-checker', 'rr-screen'], ['rr-checker', 'rr-phone']]) await api.connectNodes(a, b)
 
   const docs = await api.createWorkspace('Docs Site', '~/docs-site')
   DOCS = docs.id
@@ -142,6 +167,8 @@ export async function seed(api: Api, options: { page: string }): Promise<void> {
     terminalRoute: (id: string) =>
       Promise.resolve({ route: ROUTES[id] ?? 'direct', effective: ROUTES[id] ?? null, appliesOn: 'now', live: null, turn: null, offline: false, note: null, gateway: 'online', routable: true }),
     zoomFleetMachines: () => Promise.resolve(machines),
+    // The account's second machine, read as a signed-in desktop reads it (its own fleet snapshot), not the no-account page.
+    machineFleetOf: (id: string) => Promise.resolve(id === 'demo-build' ? BUILD_SERVER : null),
     machineName: () => Promise.resolve('Studio Mac'),
     listActivity: () => Promise.resolve(ACTIVITY),
     onTerminalActivity: () => () => undefined,

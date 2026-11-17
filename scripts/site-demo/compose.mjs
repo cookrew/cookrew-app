@@ -1,7 +1,8 @@
 // node scripts/site-demo/compose.mjs — the two COMPOSITES the site labels as such, built from renders already in
 // $SHOOT_DIR. Nothing is painted into a render: each one is placed whole inside a plain frame on paper.
-//   hero.png  the same request on three devices: the desktop renderer (d-hitl), the renderer at phone width
-//             (p-2-card) and the watch app's own view (watch/w45-01), all on Planner's CHANGELOG question.
+//   hero.png  the same request on three devices: the desktop renderer (d-peek: the question opened from the dock, over
+//             the four agents), the renderer at phone width (p-2-card) and the watch app's own view (watch/w45-01), all
+//             on Planner's CHANGELOG question.
 //   ops.png   the three operation cards (ops-computer on top, ops-browser and ops-phone below).
 import { execFileSync } from 'node:child_process'
 import { tab, sleep } from './cdp.mjs'
@@ -30,7 +31,7 @@ html,body{margin:0;width:2800px;height:1750px;background:#ebe3d3;overflow:hidden
 const t = await tab()
 await t.size(2800, 1750, { dsf: 1 })
 await t.go('about:blank'); await sleep(300)
-const html = HERO.replace('__DESK__', dataUrl(`${SHOOT}/d-hitl.png`)).replace('__PHONE__', dataUrl(`${SHOOT}/p-2-card.png`)).replace('__WATCH__', dataUrl(`${SHOOT}/watch/w45-01.png`))
+const html = HERO.replace('__DESK__', dataUrl(`${SHOOT}/d-peek.png`)).replace('__PHONE__', dataUrl(`${SHOOT}/p-2-card.png`)).replace('__WATCH__', dataUrl(`${SHOOT}/watch/w45-01.png`))
 await t.value(`(() => { document.open(); document.write(${JSON.stringify(html)}); document.close(); return 'ok' })()`)
 await sleep(1500)
 console.log('hero', await t.shot(`${SHOOT}/hero.png`))

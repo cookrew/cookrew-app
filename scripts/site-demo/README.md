@@ -7,7 +7,8 @@ No workspace, machine, account, path or session of anybody's is in it.
 The cast: workspace **Release Room** (Planner on Claude Code, the orch, waiting on a permission prompt to edit
 CHANGELOG.md; Reviewer on Codex, working; Checker on OpenCode, replied; Notes on Pi, resting; a note, a browser card on
 `pages/release-notes.html` served as `http://notes.example/`, a computer and a phone screen card) and **Docs Site**
-(Writer, Editor). Machines: Studio Mac (this one) and Build Server. The Routing panel reads a cleaned copy of
+(Writer, Editor). Machines: Studio Mac (this one) and Build Server, read through its own fleet snapshot (Nightly Builds:
+Builder, Triage). Checker is wired to the browser card and both screen cards. The Routing panel reads a cleaned copy of
 shared/route-fixture.ts (no email, generic group names, no MCP servers).
 
 1. `node scripts/site-demo/serve.mjs` (renderer on the demo api + `fixture/seed.ts`, port 5397; restart it after
@@ -15,7 +16,7 @@ shared/route-fixture.ts (no email, generic group names, no MCP servers).
 2. A headless Chrome with `--remote-debugging-port=9334`, its own `--user-data-dir`, `--no-proxy-server` and
    `"--host-resolver-rules=MAP notes.example 127.0.0.1:5398"`. Never the Cookrew app.
 3. Stills: `node scripts/site-demo/walk.mjs <prefix> <w> <h> <mobile 0|1> light '<steps>'` — desktop `d` at 1440×900
-   (d-devices, d-workspaces, d-agents, d-hitl, d-artifacts), phone `p` at 390×844 (p-1-crew, p-2-card), Routing `r`
+   (d-devices, d-workspaces, d-agents, d-peek: the question from the dock, d-hitl, d-artifacts), phone `p` at 390×844 (p-1-crew, p-2-card), Routing `r`
    (r-routing). The operation cards: `node scripts/site-demo/ops.mjs`. The canvas clip: `node scripts/site-demo/clip.mjs
    $SHOOT_DIR/canvas.mp4`.
 4. Watch: copy `watch/` elsewhere, `python3 -I scripts/site-demo/watch-neutral.py <copy>/Sources/watch-shots/Shots.swift`,

@@ -54,9 +54,9 @@ const demo = (file: string, width: number, height: number, alt: string, caption:
 
 export const DEMO = {
   hero: demo('demo-hero-devices.jpg', 1400, 876, 'The same question from Planner on three devices: the desktop app, the app at phone width, and an Apple Watch',
-    'One agent, three screens: Planner (Claude Code) waits on an edit to CHANGELOG.md, drawn by the desktop renderer, by the same renderer at phone width, and by the watch app’s own view. Three renders on demo data set side by side in plain frames; not a photograph of devices.', 'composite'),
-  devices: demo('demo-devices.jpg', 1400, 876, 'The devices stop: Studio Mac drawn as a laptop with its two workspaces on the screen, and Build Server beside it',
-    'Clicked the empty paper: the view stepped out to the devices stop, Studio Mac with Release Room and Docs Site on its screen, and the account’s second machine, Build Server, beside it.'),
+    'One agent, three screens: Planner (Claude Code) waits on an edit to CHANGELOG.md, drawn by the desktop renderer (the question opened from the dock, over Release Room’s four agents on four harnesses), by the same renderer at phone width, and by the watch app’s own view. Three renders on demo data set side by side in plain frames; not a photograph of devices.', 'composite'),
+  devices: demo('demo-devices.jpg', 1400, 876, 'The devices stop: Studio Mac with its two workspaces on the screen, and Build Server with its one',
+    'Pressed devices in the dock: Studio Mac with Release Room and Docs Site on its screen, and the account’s second machine, Build Server, with Nightly Builds and its two agents.'),
   workspaces: demo('demo-workspaces.jpg', 1400, 876, 'The workspaces stop: Release Room and Docs Site, each with its agents’ faces and what needs you',
     'The workspaces stop: Release Room with four agents on four harnesses and Docs Site with two, each tile counting what needs you.'),
   agents: demo('demo-agents.jpg', 1400, 876, 'One workspace, four agents on four harnesses: Planner waiting on you, Reviewer working, Checker replied, Notes resting',
@@ -75,7 +75,7 @@ export const DEMO = {
   hitlPhone: demo('demo-hitl-phone.jpg', 700, 1514, 'Planner’s question as rows to tap, at phone width',
     'Planner’s question at phone width (390 px): the same rows to tap, with the reply box under them.', 'illustration', 400),
   watch: demo('demo-watch.jpg', 1400, 556, 'Three Apple Watch screens: Checker’s reply, Release Room’s agents, and the account’s machines',
-    'Three watch screens drawn by the watch app’s own views on demo data: Checker’s reply with a box to answer it, Release Room’s agents with what needs you at the foot, and the account’s machines, Studio Mac online and Build Server offline.', 'composite')
+    'Three watch screens drawn by the watch app’s own views on demo data: Checker’s reply with a box to answer it, Release Room’s agents with what needs you at the foot, and the account’s two machines, both online.', 'composite')
 } as const satisfies Record<string, Frame>
 
 export type DemoKey = keyof typeof DEMO

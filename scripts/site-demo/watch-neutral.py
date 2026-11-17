@@ -37,7 +37,7 @@ pairs = [
     ('Text("Hold on a word, then drag to select it. Tap ⧉ to copy.")', 'Text("Export a report as CSV from any table.")'),
     ('NoteBody(name: "plan", content: "**Watch baseline**\\n\\nCards first, then the box.\\nCrown walks the cards.")', 'NoteBody(name: "release-checklist", content: "**release-checklist**\\n\\nChangelog drafted.\\nAPI diff reviewed.")'),
     ('DeviceRow(id: "m1", name: "MacBook Pro", online: true, workspaces: 3', 'DeviceRow(id: "m1", name: "Studio Mac", online: true, workspaces: 2'),
-    ('DeviceRow(id: "m2", name: "Studio"', 'DeviceRow(id: "m2", name: "Build Server"'),
+    ('DeviceRow(id: "m2", name: "Studio", online: false', 'DeviceRow(id: "m2", name: "Build Server", online: true'),
     ('MachineWorkspace(id: "w", name: "Cookrew Dev"), MachineWorkspace(id: "g", name: "GOAT Team"), MachineWorkspace(id: "p", name: "Playground")', 'MachineWorkspace(id: "w", name: "Release Room"), MachineWorkspace(id: "g", name: "Docs Site"), MachineWorkspace(id: "p", name: "Sandbox")'),
     ('titled("Cookrew Dev"', 'titled("Release Room"'),
     ('titled("MacBook Pro"', 'titled("Studio Mac"'),
