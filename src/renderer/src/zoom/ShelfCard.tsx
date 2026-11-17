@@ -76,26 +76,18 @@ export function eatNextClick(): void {
 /** The card's words live in the agent's draft store already (quick-reply.tsx): nothing more to keep. */
 const KEEP_DRAFT = (): void => undefined
 
-/** A press on a face or a coin: the click that follows decides (open another card, or the full view). */
-const AGENT_PARTS = '.zv-m .zv-av, .zv-m .zv-nm, .zv-lk'
+/**
+ * A press on a face or a coin: the click that follows decides (open another card, or the full view).
+ * The devices stop's faces and a workspace card's too (DevicesAgents.tsx, WorkspaceTile.tsx).
+ */
+const AGENT_PARTS = '.zv-m .zv-av, .zv-m .zv-nm, .zv-lk, .da-face, .dm-head'
 
-export function ShelfCard({ agent, items, anchor, onOpen, onItem, onDelete, onDraft, onOutside, onClose }: {
-  agent: AgentView
-  items: readonly ItemView[]
-  /** The face or coin it opened from. */
-  anchor: HTMLElement | null
-  onOpen: () => void
-  onItem: (id: string) => void
-  onDelete?: () => void
-  onDraft?: (text: string) => void
-  /** Whether a press there is on the artifacts' page (its click is eaten), not the bar or the header. */
-  onOutside: (target: EventTarget | null) => boolean
-  onClose: () => void
-}): React.JSX.Element {
-  const box = useRef<HTMLDivElement>(null)
+/**
+ * A floating card's place by the face it opened from (shelfCardSpot), at the card stop's scale,
+ * following the face a moment (the painter may still be settling it) and on every resize.
+ */
+export function useFloatSpot(box: React.RefObject<HTMLElement>, anchor: HTMLElement | null, scale: number, key: string): { left: number; top: number } | null {
   const [spot, setSpot] = useState<{ left: number; top: number } | null>(null)
-  const size = useCardScale()
-
   useLayoutEffect(() => {
     const place = (): void => {
       const el = box.current
@@ -104,7 +96,7 @@ export function ShelfCard({ agent, items, anchor, onOpen, onItem, onDelete, onDr
       // Drawn at the card stop's scale (AgentCard.tsx · cardScaleStyle): placed by the size it is seen at,
       // its remove mark (hanging past the corner) on screen too.
       const over = markOverhang(el)
-      const card = { width: el.offsetWidth * size.scale + over.right, height: el.offsetHeight * size.scale }
+      const card = { width: el.offsetWidth * scale + over.right, height: el.offsetHeight * scale }
       const band = stageBand()
       const next = shelfCardSpot(r, card, { width: window.innerWidth, height: window.innerHeight }, { top: band.top + over.top, bottom: band.bottom })
       setSpot((at) => (at && at.left === next.left && at.top === next.top ? at : next))
@@ -132,27 +124,57 @@ export function ShelfCard({ agent, items, anchor, onOpen, onItem, onDelete, onDr
       ro?.disconnect()
       window.removeEventListener('resize', again)
     }
-  }, [anchor, agent.id, size.scale])
+  }, [anchor, key, scale]) // eslint-disable-line react-hooks/exhaustive-deps
+  return spot
+}
 
+/**
+ * A press outside closes a floating card, unless `keeps` says its words keep it; on the page under it
+ * (`onOutside`) the click that press ends in is eaten, so nothing under the card takes it too.
+ */
+export function useOutsidePress(box: React.RefObject<HTMLElement>, keeps: () => boolean, onOutside: (target: EventTarget | null) => boolean, onClose: () => void): void {
+  const now = useRef({ keeps, onOutside, onClose })
+  now.current = { keeps, onOutside, onClose }
   useEffect(() => {
     const onDown = (e: PointerEvent): void => {
       // A plain press only: a right or middle button is not a tap outside.
       if (e.button !== 0) return
       const t = e.target as Element | null
-      // The draft is the agent's own (prompt-draft.ts), typed here or before: it keeps the card.
-      if (!t || box.current?.contains(t) || t.closest?.(AGENT_PARTS) || getDraft(draftKey(agent.id)).trim()) return
-      if (onOutside(t)) eatNextClick()
-      onClose()
+      if (!t || box.current?.contains(t) || t.closest?.(AGENT_PARTS) || now.current.keeps()) return
+      if (now.current.onOutside(t)) eatNextClick()
+      now.current.onClose()
     }
     // Capture: the scene's own handlers must not hide the press from us.
     document.addEventListener('pointerdown', onDown, true)
     return () => document.removeEventListener('pointerdown', onDown, true)
-  }, [agent.id, onClose, onOutside])
+  }, [box])
+}
+
+export function ShelfCard({ agent, items, anchor, onOpen, onItem, onDelete, onDraft, onOutside, onClose, className = '' }: {
+  agent: AgentView
+  items: readonly ItemView[]
+  /** The face or coin it opened from. */
+  anchor: HTMLElement | null
+  onOpen: () => void
+  onItem: (id: string) => void
+  onDelete?: () => void
+  onDraft?: (text: string) => void
+  /** Whether a press there is on the artifacts' page (its click is eaten), not the bar or the header. */
+  onOutside: (target: EventTarget | null) => boolean
+  onClose: () => void
+  /** More classes for the card: what popped it (zoom.css · .zv-pick-card). */
+  className?: string
+}): React.JSX.Element {
+  const box = useRef<HTMLDivElement>(null)
+  const size = useCardScale()
+  const spot = useFloatSpot(box, anchor, size.scale, agent.id)
+  // The draft is the agent's own (prompt-draft.ts), typed here or before: it keeps the card.
+  useOutsidePress(box, () => getDraft(draftKey(agent.id)).trim() !== '', onOutside, onClose)
 
   return createPortal(
     <div
       ref={box}
-      className={`cr-pet-card ag-ink ag-card zv-shelf-card${agent.phase === 'waiting' ? ' needs' : ''}`}
+      className={`cr-pet-card ag-ink ag-card zv-shelf-card${agent.phase === 'waiting' ? ' needs' : ''}${className ? ` ${className}` : ''}`}
       role="dialog"
       aria-label={`${agent.name}'s card`}
       style={{ ...cardScaleStyle(size), ...(spot ? { left: spot.left, top: spot.top } : { left: 0, top: 0, visibility: 'hidden' }) }}

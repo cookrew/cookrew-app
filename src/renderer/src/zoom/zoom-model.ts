@@ -13,7 +13,7 @@ import { activeBrowserTab, type CanvasNode, type Connection, type WorkspaceMeta 
 import type { AttachmentIndex } from '../terminal-attachments'
 import { hostOf, screenAspectOf, tintOf } from './zoom-layout'
 import { DECK_SHOWN } from './fleet-compose'
-import { deckView, itemInitial, machineViewOf } from './machine-view'
+import { deckView, itemInitial, machineViewOf, seatedView } from './machine-view'
 import type { FrameModel, LinkModel, TieModel } from './zoom-frame'
 import { inkStatusOfRow, statusWord, type InkStatus } from './ink-status'
 import type { LaunchFailure } from '../../../shared/launch-failure'
@@ -211,7 +211,7 @@ export interface ZoomInput {
     os?: string | null
     /** Its display in points, as its own feed tells it: the screen it is drawn with. */
     display?: { w: number; h: number } | null
-    workspaces: readonly { id: string; name: string; agents: readonly { harness: string; phase: string }[]; counts: { agents: number; waiting: number; browsers?: number; notes?: number } | null; deck?: readonly DeckSource[] }[]
+    workspaces: readonly { id: string; name: string; agents: readonly SeatedAgent[]; counts: { agents: number; waiting: number; browsers?: number; notes?: number } | null; deck?: readonly DeckSource[] }[]
   }[]
 }
 
@@ -225,12 +225,6 @@ export interface SeatedAgent {
   reply?: string | null
   orch?: boolean
   attachments?: readonly { kind: 'browser' | 'note' }[]
-}
-function seatedView(agent: SeatedAgent): AgentView | null {
-  if (!agent.id) return null
-  const phase = agent.phase as AgentPhase
-  const status = inkStatusOfRow(phase, false)
-  return { id: agent.id, name: agent.name ?? agent.id, preset: agent.harness, orch: !!agent.orch, phase, status, word: statusWord(status), line: agent.reply || agent.task || 'Nothing said yet.', browsers: agent.attachments?.filter((item) => item.kind === 'browser').length ?? 0, notes: agent.attachments?.filter((item) => item.kind === 'note').length ?? 0, turn: null }
 }
 const waitingIn = (phases: readonly string[]): number => phases.filter((p) => p === 'waiting').length
 

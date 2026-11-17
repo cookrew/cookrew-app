@@ -34,7 +34,7 @@
   transition: opacity 160ms ease;
 }
 
-.dc-canvas[data-opening] .dc-machine[data-opening] .zv-om-tile {
+.dc-canvas[data-opening] .dc-machine[data-opening] .da-scroll {
   pointer-events: none;
 }
 

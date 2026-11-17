@@ -147,20 +147,37 @@ describe('another machine of the account, on the devices stop', () => {
   const tile: MarkView = { id: 'z', name: 'Home lab', presets: ['claude', 'codex'], waiting: true, waitingCount: 1, browsers: 2, notes: 1, deck: [] }
   const live: MachineView = { id: 'm2', name: 'Mac mini', local: false, online: true, detail: 'live', workspaces: [{ id: 'z', name: 'Home lab', presets: [], waiting: true }], marks: [tile], agents: 3, waiting: 1 }
   const draw = (machine: MachineView, say: string | null, caption = '1 workspace · 3 agents · 1 waiting'): string =>
-    renderToStaticMarkup(<MachineFrame machine={machine} frame={{ w: 520, h: 330 }} narrow={false} wordK={1.2} titleK={1.4} say={say} caption={caption} gauge={null} bind={bind} onOpen={() => undefined} onOpenWorkspace={() => undefined} />)
+    renderToStaticMarkup(<MachineFrame machine={machine} frame={{ w: 520, h: 330 }} agentK={1.5} say={say} caption={caption} gauge={null} bind={bind} onOpen={() => undefined} onOpenWorkspace={() => undefined} onPick={() => undefined} />)
+  const seated = (id: string, name: string, status: AgentView['status']): AgentView => ({ id, name, preset: 'claude', orch: false, phase: status === 'waiting' ? 'waiting' : 'quiet', status, word: status, line: '', browsers: 0, notes: 0, turn: null })
 
-  // EVERY DEVICE ON ONE CANVAS (owner 2026-11-11, screenshot 5): the same frame as this machine's,
-  // its own workspace tiles on its screen, in the same tile this machine's are drawn with.
-  it('is this machine’s frame, its screen holding its own workspace tiles, its name under it', () => {
+  // EVERY DEVICE ON ONE CANVAS (owner 2026-11-11, screenshot 5): the same frame as this machine's.
+  // ITS AGENTS ONLY (owner 2026-11-17): each workspace its name and its faces, no deck, no screenshots.
+  it('is this machine’s frame, its screen holding its own workspaces’ agents, its name under it', () => {
     const html = draw(live, null)
     expect(html).toContain('zv-machine zv-other')
     expect(html).toContain('zv-machine-deck')
-    expect(html).toContain('zv-mark')
+    expect(html).toContain('da-ws')
+    expect(html).not.toContain('zv-mark')
+    expect(html).not.toContain('dm-fan')
     expect(html).toContain('Home lab')
     expect(html).toContain('Mac mini')
     expect(html).toContain('1 workspace · 3 agents · 1 waiting')
     expect(html).toContain('data-read="true"')
     expect(html).toContain('width:520px')
+  })
+
+  it('draws a face per agent at a workspace card’s own size, scaled into the frame, who waits first, each a spot the keys stand on', () => {
+    const html = draw({ ...live, marks: [{ ...tile, agents: [seated('a1', 'Atlas', 'idle'), seated('a2', 'Bolt', 'waiting')] }] }, null)
+    expect(html).toContain('transform:scale(1.5000)')
+    expect(html).toContain('width="36"')
+    expect(html.indexOf('data-pick="m2|a2"')).toBeLessThan(html.indexOf('data-pick="m2|a1"'))
+    expect(html).toContain('aria-label="Bolt, waiting, in Home lab"')
+  })
+
+  it('a face the feed names no one for is drawn, not stood on', () => {
+    const html = draw(live, null)
+    expect(html).toContain('da-face still')
+    expect(html).not.toContain('data-pick=')
   })
 
   it('one that is read and has no workspaces is still read: a lit, empty screen, not a dark one with nothing to do', () => {

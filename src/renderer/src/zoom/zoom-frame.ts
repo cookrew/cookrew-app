@@ -135,6 +135,8 @@ export interface FrameEls {
   /** The shelf's seal with the whole count, after its last face shown (ZoomView). */
   shelfMore?: Put | null
   machine: Put
+  /** This machine's screen at the devices stop, its agents only (ZoomView · DevicesAgents); absent where none is drawn. */
+  localAgents?: Put | null
 }
 
 export interface FrameState {
@@ -429,6 +431,9 @@ function paintDeviceWords(L: Layout, els: FrameEls, d: { live: boolean; zIn: num
 /** The title's foot over the first row of tiles on a phone, in px: centred on the per-row pill (zoom.css · .zv-cols). */
 const TITLE_LIFT_PX = 12
 
+/** Between these zooms the devices stop's agents-only screen hands this machine's frame over to its tiles (paint). */
+export const AGENTS_ONLY = [-1.85, -1.45] as const
+
 /** Between these zooms the tile has left (the device layer's fade, paint): what it stood for comes only then, or two sets of words stand on each other. */
 const TILE_GONE = [-0.3, -0.05] as const
 
@@ -515,7 +520,11 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   const Ox = lerp(aOx, w / 2, pk)
   const Oy = lerp(aOy, iOy, pk)
   put(els.scene, `translate(${f1(Ox)}px, ${f1(Oy)}px) scale(${f4(S)})`)
-  const deviceSeen = (1 - ramp(zIn, -0.4, -0.05)) * (1 - pc)
+  // AT THE DEVICES STOP A SCREEN SHOWS ITS AGENTS ONLY (DevicesAgents.tsx; owner, 2026-11-17): this
+  // machine's tiles come in its frame only as the dive into it begins, the agents going as they come.
+  const agentsOnly = 1 - ramp(zIn, AGENTS_ONLY[0], AGENTS_ONLY[1])
+  put(els.localAgents, null, agentsOnly)
+  const deviceSeen = (1 - ramp(zIn, -0.4, -0.05)) * (1 - pc) * (1 - agentsOnly)
   put(els.device, `translate(${f1(dOx)}px, ${f1(dOy)}px) scale(${f4(dS)})`, deviceSeen)
   // Out at the devices the tiles are a picture on the machine's screen: the doors must not take its click.
   const doors = zIn < -1.05 || deviceSeen < 0.05 ? 'none' : ''

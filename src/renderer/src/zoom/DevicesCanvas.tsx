@@ -1,8 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { CrIcon } from '../icons'
 import { MachineFrame } from './MachineFrame'
-import { deviceWords } from './zoom-camera'
-import { DEFAULT_SCREEN_ASPECT, deviceOf, fitScale, machineFrameOf, machinesAt, screenAspectOf, type Pos } from './zoom-layout'
+import { DEFAULT_SCREEN_ASPECT, fitScale, machineFrameOf, machinesAt, type Pos } from './zoom-layout'
 import type { MachineView } from './zoom-model'
 import './zoom.css'
 import './devices-canvas.css'
@@ -107,15 +106,13 @@ export function DevicesCanvas({ machines, onEnter, gaugeOf = NO_GAUGE, openingId
         <div className="dc-world" style={{ transform: `translate(${place.x.toFixed(1)}px, ${place.y.toFixed(1)}px) scale(${place.s.toFixed(4)})` }}>
           {machines.map((m, i) => {
             const at = place.at[i] ?? { x: 0, y: 0 }
-            const words = deviceWords(deviceOf(m.view.marks.map((one) => one.id), narrow, screenAspectOf(m.view.display ?? null)), size.w, size.h, narrow)
             return (
               <div key={m.view.id} className="dc-machine" data-standing={m.standing} data-opening={m.view.id === openingId || undefined} style={{ transform: `translate(${at.x - place.frame.w / 2}px, ${at.y - place.frame.h / 2}px)` }}>
                 <MachineFrame
                   machine={m.view}
                   frame={place.frame}
-                  narrow={narrow}
-                  wordK={words.markK}
-                  titleK={words.titleK}
+                  // A workspace card's px drawn 1:1 on screen: its faces the size they are in a card (DevicesAgents.tsx).
+                  agentK={1 / place.s}
                   say={m.say}
                   caption={m.caption}
                   gauge={m.say === null ? gaugeOf(m.view) : null}

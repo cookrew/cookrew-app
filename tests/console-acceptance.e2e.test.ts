@@ -258,7 +258,7 @@ suite.each([
       frame: !!tile.querySelector('.zv-machine') && !!tile.querySelector('.zv-machine-deck'),
       say: (tile.querySelector('.zv-om-blank') || { innerText: '' }).innerText,
       disabled: tile.querySelector('.zv-machine-open').disabled,
-      chips: tile.querySelectorAll('.zv-om-tile').length
+      chips: tile.querySelectorAll('.da-ws').length
     }))`)
     expect(tiles.map((tile) => tile.name).sort()).toEqual(['Attic Mac', 'Road Laptop', 'Studio Mac'])
     expect(tiles.every((tile) => tile.frame)).toBe(true)

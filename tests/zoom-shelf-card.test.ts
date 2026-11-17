@@ -57,6 +57,7 @@ describe('what keeps the card open (review, 2026-11-04)', () => {
   })
   it('only a plain press is a tap outside; an IME, an overlay, a name being renamed or the who-picker keeps its Escape', () => {
     expect(card).toContain('if (e.button !== 0) return')
-    expect(view).toMatch(/shelfCardOpen\.current && !e\.isComposing && !\(e\.target as Element \| null\)\?\.closest\?\.\('\.cmd, \.cr-board-search, \.cr-board-pop, \.cr-name-input, \.pf-who'\)/)
+    // The keys' popped card (agent-keys.ts) closes on the same terms.
+    expect(view).toMatch(/\(shelfCardOpen\.current \|\| pickOpen\.current\) && !e\.isComposing && !\(e\.target as Element \| null\)\?\.closest\?\.\('\.cmd, \.cr-board-search, \.cr-board-pop, \.cr-name-input, \.pf-who'\)/)
   })
 })

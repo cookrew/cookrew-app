@@ -1,36 +1,28 @@
 import { memo } from 'react'
-import { WorkspaceTile } from './WorkspaceTile'
-import { deviceOnScreen, screenAspectOf, screenFit, SWS } from './zoom-layout'
+import { DevicesAgents } from './DevicesAgents'
+import type { PickSpot } from './agent-keys'
 import type { Bind } from './page-parts'
 import type { MachineView } from './zoom-model'
 
 /**
- * ANOTHER MACHINE, DRAWN AS THIS ONE IS (owner 2026-11-11, screenshot 5: "所有
- * device统一用图5形式"). The same frame as this machine's (zoom.css ·
- * .zv-machine), the same base, and on its screen its own workspace tiles laid
- * out by the same geometry (zoom-layout.ts · deviceOf) at the same scale this
- * machine's are drawn at on the devices stop, so the two cannot look unalike.
+ * ANOTHER MACHINE, DRAWN AS THIS ONE IS (owner 2026-11-11, screenshot 5: every
+ * device in this one form). The same frame as this machine's (zoom.css ·
+ * .zv-machine), the same base, and on its screen its own workspaces: since
+ * 2026-11-17 their agents only, at the workspace card's own face size
+ * (DevicesAgents.tsx), as this machine's screen shows its own.
  *
- * Its tiles are a picture of that machine, not this one's painter's: they sit
- * still inside the frame and ride the devices camera with it. A tap on the frame
- * goes into that machine; a tap on one of its tiles goes into that workspace.
- * One that cannot be read has a blank screen and says the one thing to do
- * (`say`, machine-why.ts) on it.
+ * A tap on the frame goes into that machine; on a workspace's name, into that
+ * workspace; on a face, that agent's card pops (`onPick`), or, where no card
+ * can pop, into its workspace. One that cannot be read has a blank screen and
+ * says the one thing to do (`say`, machine-why.ts) on it.
  */
-
-
-/** Its tiles' refs go nowhere: the painter draws this machine's tiles, not these. */
-const NO_BIND: Bind = () => () => undefined
 
 export interface MachineFrameProps {
   machine: MachineView
   /** This machine's frame in the devices layer's units: every machine is drawn the same size. */
   frame: { w: number; h: number }
-  narrow: boolean
-  /** The words on a tile, held as this machine's are (zoom-frame.ts · deviceWords · markK). */
-  wordK: number
-  /** The machine's name over its tiles, held as this machine's is (deviceWords · titleK). */
-  titleK: number
+  /** A workspace card's px in the frame's units: its faces as big on screen as on the workspaces stop (DevicesAgents.tsx). */
+  agentK: number
   /** What stands in the way of reading it, as the one thing to do; null when its screen lights. */
   say: string | null
   /** Under its name: how many workspaces and agents, or why not. */
@@ -41,43 +33,23 @@ export interface MachineFrameProps {
   openable?: boolean
   /** Beside its name: how this page reaches it (the console's path word). */
   badge?: React.ReactNode
+  /** The agent the keys stand on, when it is on this machine (agent-keys.ts · pickKey). */
+  picked?: string | null
+  /** A face pressed: that agent's card pops from it. Absent where none can (the console): a face goes into its workspace. */
+  onPick?: (spot: PickSpot, face: HTMLElement) => void
   bind: Bind
   onOpen: () => void
   onOpenWorkspace: (workspaceId: string) => void
 }
 
 
-export const MachineFrame = memo(function MachineFrame({ machine, frame, narrow, wordK, titleK, say, caption, gauge, openable = true, badge = null, bind, onOpen, onOpenWorkspace }: MachineFrameProps): React.JSX.Element {
+export const MachineFrame = memo(function MachineFrame({ machine, frame, agentK, say, caption, gauge, openable = true, badge = null, picked = null, onPick, bind, onOpen, onOpenWorkspace }: MachineFrameProps): React.JSX.Element {
   const lit = say === null
-  // As its desktop shows it, filling its screen, on a phone too (owner, 2026-11-16, 2026-11-17).
-  const device = deviceOnScreen(machine.marks.map((m) => m.id), screenAspectOf(machine.display ?? null))
-  const k = screenFit(device, frame)
-  const screen: React.CSSProperties = {
-    transform: `translate(${frame.w / 2}px, ${frame.h / 2}px) scale(${k}) translate(0px, ${-device.box.cy}px)`,
-    ['--zv-k' as string]: wordK.toFixed(3),
-    ['--zv-title-k' as string]: titleK.toFixed(3),
-    ['--zv-tile-top' as string]: `${Math.round(device.tile.top)}px`,
-    ['--zv-tile-h' as string]: `${Math.round(device.tile.h)}px`
-  }
   return (
     <div ref={bind(`machinecard:${machine.id}`)} className={`zv-machine zv-other${machine.online ? '' : ' off'}`} data-read={lit} style={{ width: frame.w, height: frame.h }}>
       <button type="button" className="zv-machine-open" aria-label={lit ? `Open ${machine.name}` : `${machine.name}: ${say}`} title={lit ? undefined : (say ?? undefined)} disabled={!openable} onClick={onOpen} />
       {lit ? (
-        <div className="zv-om-screen" style={screen}>
-          <div className="zv-om-title" style={{ transform: `translate(${device.left}px, ${device.titleBottom}px) translateY(-100%)` }}>
-            <b>{machine.name}</b>
-            <span>{machine.marks.length} {machine.marks.length === 1 ? 'workspace' : 'workspaces'}</span>
-          </div>
-          {machine.marks.map((mark) => {
-            const at = device.at[mark.id]
-            return at ? (
-              <div key={mark.id} className="zv-om-tile" style={{ transform: `translate(${at.x}px, ${at.y}px) scale(${SWS})` }}>
-                <WorkspaceTile mark={mark} bind={NO_BIND} onOpen={() => onOpenWorkspace(mark.id)} />
-              </div>
-            ) : null
-          })}
-          {machine.marks.length === 0 && <p className="zv-om-say">no workspaces</p>}
-        </div>
+        <DevicesAgents machine={machine.id} name={machine.name} marks={machine.marks} frame={frame} k={agentK} picked={picked} onPick={onPick} onOpenWorkspace={onOpenWorkspace} onOpen={openable ? onOpen : undefined} />
       ) : (
         <p className="zv-om-say zv-om-blank">{say}</p>
       )}
