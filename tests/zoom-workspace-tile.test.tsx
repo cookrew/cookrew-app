@@ -10,7 +10,8 @@ import { deviceCam, deviceWords, SWS } from '../src/renderer/src/zoom/zoom-frame
 import { BENCH, deviceOf, DECK_POSE, fanOf, stackOf, TILE, TILE_DRAWN_W, tileOf, TILE_SPLIT } from '../src/renderer/src/zoom/zoom-layout'
 import { deckOf } from '../src/renderer/src/zoom/use-zoom-fleet'
 import { deckDepth, sameTile, WorkspaceTile } from '../src/renderer/src/zoom/WorkspaceTile'
-import { buildZoomModel, type MarkView } from '../src/renderer/src/zoom/zoom-model'
+import { buildZoomModel, type AgentView, type MarkView } from '../src/renderer/src/zoom/zoom-model'
+import { byStatus, type InkStatus } from '../src/renderer/src/zoom/ink-status'
 import { modelOf, paintAt } from './zoom-qa-helpers'
 
 const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `w${i}`)
@@ -281,6 +282,24 @@ describe('the agents group, one form', () => {
   it('says no "+N" on the shelf or in the agents\u2019 column', () => {
     expect(read('zoom/ZoomView.tsx')).not.toMatch(/more agents`/)
     expect(read('zoom/ZoomView.tsx')).not.toContain('turnShelf')
+  })
+})
+
+// Owner, 2026-11-17: "workspace card的agents没有按状态排序，三端修复": who needs the owner first, as the watch walks them.
+describe("a tile's agents, by state", () => {
+  const view = (id: string, status: InkStatus, preset = 'Claude Code'): AgentView => ({ id, name: id, preset, orch: false, phase: 'quiet', status, word: status, line: '', browsers: 0, notes: 0, turn: null })
+  it('stand waiting, failed, an unread reply, working, resting, offline, in their order within each', () => {
+    const order = byStatus([view('off', 'offline'), view('rest1', 'idle'), view('work', 'working'), view('wait', 'waiting'), view('rest2', 'idle'), view('read', 'done'), view('fail', 'failed')]).map((a) => a.id)
+    expect(order).toEqual(['wait', 'fail', 'read', 'work', 'rest1', 'rest2', 'off'])
+  })
+  it('draws each face with its own agent’s logo once sorted', () => {
+    const agents = [view('a', 'idle', 'Claude Code'), view('b', 'waiting', 'Codex')]
+    const html = renderToStaticMarkup(<WorkspaceTile mark={mark({ presets: ['Claude Code', 'Codex'], agents })} bind={bind} onOpen={() => undefined} onOpenItems={() => undefined} />)
+    const heads = [...html.matchAll(/class="dm-head"[^>]*aria-label="([^"]+)"/g)].map((m) => m[1])
+    expect(heads).toEqual(['b', 'a'])
+    const byHead = html.split('class="dm-head"').slice(1)
+    expect(byHead[0]).toMatch(/codex|openai/i)
+    expect(byHead[1]).not.toMatch(/codex|openai/i)
   })
 })
 

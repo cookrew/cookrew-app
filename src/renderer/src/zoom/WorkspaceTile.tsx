@@ -1,7 +1,8 @@
-import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { InkAvatar } from './InkAvatar'
 import { GroupFace, GroupSeal, GROUP_STEP, groupFade } from './agents-group'
 import { Counts } from './page-parts'
+import { byStatus } from './ink-status'
 import type { AgentView, ItemView, MarkView } from './zoom-model'
 import { sameProps } from './same-props'
 import './workspace-tile.css'
@@ -165,7 +166,8 @@ export const sameTile = (a: TileProps, b: TileProps): boolean =>
   sameProps({ ...a, mark: { ...a.mark, deck: [], agents: undefined } }, { ...b, mark: { ...b.mark, deck: [], agents: undefined } })
 
 export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, bind, onOpen, onOpenItems }: TileProps): React.JSX.Element {
-  const agents = mark.agents ?? []
+  // In the order the owner reads a crew: who needs them first (ink-status.ts · byStatus).
+  const agents = useMemo(() => byStatus(mark.agents ?? []), [mark.agents])
   const [mode, setMode] = useState<Mode>('bag')
   const [openFan, setOpenFan] = useState(false)
   const linger = useRef<number | null>(null)
@@ -216,7 +218,7 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
               const distance = index - row.pos
               if (distance < -1.5 || distance > 14) return null
               const agent = agents[index]
-              return <button key={agent?.id ?? `${mark.id}:${index}`} type="button" className="dm-head" style={{ transform: `translate(${(12 + distance * GROUP_STEP + (mode === 'agent' ? Math.max(0, Math.min(1, distance)) * 176 : 0)).toFixed(1)}px, -50%)`, opacity: groupFade(distance) }} aria-label={agent?.name ?? `Agent ${index + 1}`} onClick={(event) => { event.stopPropagation(); if (agent) selectAgent(agent); else onOpen() }}><GroupFace id={agent?.id ?? `${mark.id}:${index}`} preset={preset} status={agent?.status} /></button>
+              return <button key={agent?.id ?? `${mark.id}:${index}`} type="button" className="dm-head" style={{ transform: `translate(${(12 + distance * GROUP_STEP + (mode === 'agent' ? Math.max(0, Math.min(1, distance)) * 176 : 0)).toFixed(1)}px, -50%)`, opacity: groupFade(distance) }} aria-label={agent?.name ?? `Agent ${index + 1}`} onClick={(event) => { event.stopPropagation(); if (agent) selectAgent(agent); else onOpen() }}><GroupFace id={agent?.id ?? `${mark.id}:${index}`} preset={agent?.preset ?? preset} status={agent?.status} /></button>
             })}
             <span className="dm-count agents"><GroupSeal count={mark.presets.length} /></span>
           </div>

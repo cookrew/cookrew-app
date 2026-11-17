@@ -33,3 +33,14 @@ const WORD_OF: Record<InkStatus, string> = { idle: 'resting', working: 'working'
 export const statusWord = (status: InkStatus): string => WORD_OF[status]
 
 export const cornerOf = (status: InkStatus): CornerMark | null => (status === 'done' ? 'tick' : status === 'offline' ? 'zee' : null)
+
+/**
+ * WHO STANDS FIRST IN A GROUP (owner, 2026-11-17: "workspace card的agents没有按状态排序，三端修复"):
+ * what needs the owner first, as the watch's crown walks them (main/watch-cards.ts · RANK):
+ * waiting, failed, an unread reply, working, resting, offline. Stable within a state.
+ */
+export const STATUS_RANK: Record<InkStatus, number> = { waiting: 0, failed: 1, done: 2, working: 3, idle: 4, offline: 5 }
+
+export function byStatus<T extends { readonly status: InkStatus }>(agents: readonly T[]): T[] {
+  return agents.map((agent, index) => ({ agent, index })).sort((a, b) => STATUS_RANK[a.agent.status] - STATUS_RANK[b.agent.status] || a.index - b.index).map((entry) => entry.agent)
+}
