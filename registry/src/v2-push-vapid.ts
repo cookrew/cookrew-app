@@ -1,4 +1,6 @@
 import { createECDH, createPrivateKey, sign, type KeyObject } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import { InFlight, Limiter, TokenBucket } from './v2-limiter'
 import { bytesOf, isP256Point } from './v2-push-check'
 
@@ -122,6 +124,56 @@ export function readVapidEnv(env: NodeJS.ProcessEnv, note: (message: string) => 
   const checked = vapidOf(keys)
   if (typeof checked === 'string') {
     note(`push: ${checked}; push is off`)
+    return undefined
+  }
+  return keys
+}
+
+/** The key file in the registry's data directory, beside token-key.jwk. */
+export const VAPID_KEY_FILE = 'vapid-key.json'
+
+/**
+ * THE KEY, MADE ONCE AND KEPT (owner, 2026-11-17: no key to hand-make). The
+ * environment wins when it names one. Otherwise the data directory's file is
+ * read, and on first start made: a fresh P-256 pair, written 0600 and never
+ * overwritten (a new pair would unsubscribe every phone), so a file that cannot
+ * be read turns push off and says so, never what it held.
+ */
+export function loadVapidKeys(env: NodeJS.ProcessEnv, dataDir: string, note: (message: string) => void = () => undefined): VapidKeys | undefined {
+  if (unpadded(env[VAPID_PUBLIC_ENV]) !== '' || unpadded(env[VAPID_PRIVATE_ENV]) !== '') return readVapidEnv(env, note)
+  const subject = (env[VAPID_SUBJECT_ENV] ?? '').trim() || DEFAULT_SUBJECT
+  const file = path.join(dataDir, VAPID_KEY_FILE)
+  if (!existsSync(file)) {
+    const pair = createECDH('prime256v1')
+    pair.generateKeys()
+    const made = { publicKey: pair.getPublicKey().toString('base64url'), privateKey: pair.getPrivateKey().toString('base64url') }
+    try {
+      mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+      // 'wx': a second process starting at the same moment keeps the first one's key.
+      writeFileSync(file, `${JSON.stringify(made)}\n`, { mode: 0o600, flag: 'wx' })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        note(`push: ${file} could not be written; push is off`)
+        return undefined
+      }
+    }
+  }
+  let stored: unknown
+  try {
+    stored = JSON.parse(readFileSync(file, 'utf8'))
+  } catch {
+    note(`push: ${file} cannot be read; push is off (it is kept: a new key would unsubscribe every phone)`)
+    return undefined
+  }
+  const record = (stored ?? {}) as { publicKey?: unknown; privateKey?: unknown }
+  if (typeof record.publicKey !== 'string' || typeof record.privateKey !== 'string') {
+    note(`push: ${file} holds no key pair; push is off`)
+    return undefined
+  }
+  const keys: VapidKeys = { publicKey: record.publicKey, privateKey: record.privateKey, subject }
+  const checked = vapidOf(keys)
+  if (typeof checked === 'string') {
+    note(`push: ${file}: the stored pair is not valid; push is off`)
     return undefined
   }
   return keys
