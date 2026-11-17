@@ -9,6 +9,7 @@
  * device IS its group, and the device view IS the machine's screen.
  */
 import { clamp01, derive, ease, lerp, ramp, type ZoomDir } from './zoom-path'
+import { coinDock, DOCK_EDGE } from './coin-dock'
 import { GROUP_FACE } from './agents-group'
 import { crewOf, deviceOf, deviceOnScreen, fitScale, machineFrameOf, machinesAt, screenFit, shelfRow, stackOf, thumbsOf, DECK_POSE, type Box, type Pos, NEW_POSE } from './zoom-layout'
 import { near, pinned, SCENE_CSS, SCENE_TYPE, sceneWords, SHELF_NAME_S, UNDER_FACE, type RestScales, type SceneWords } from './scene-words'
@@ -33,9 +34,13 @@ export interface LinkModel {
   key: string
   agent: string
   item: string
-  /** Its place among the agent's items, and among the item's agents. */
+  /** Its place among the agent's items, and among the coins docked on the item (zoom-model.ts). */
   k: number
   j: number
+  /** How many coins dock on its item (coin-dock.ts · coinDock). */
+  of: number
+  /** Its agent's place among all the item's owners: its face in the item page's "used by" row (full-poses.ts · usedBy). */
+  u: number
 }
 export interface TieModel {
   key: string
@@ -813,11 +818,14 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const home = L.thumbs.at[l.item] ?? { x: 0, y: 0 }
     const homeY = tc.Oy + (home.y + 46) * iS
     const docks = l.item in L.thumbs.at && homeY > -COIN_ROOM && homeY < h + COIN_ROOM
-    const k1 = docks ? ease(ramp(P, 0.06 + l.j * 0.03, 0.46)) : 0
+    // Its place in the row along the thumbnail's bottom, which never leaves the thumbnail (coin-dock.ts).
+    const dock = coinDock(l.j, l.of)
+    const lag = Math.min(l.j, 8) * 0.03
+    const k1 = docks ? ease(ramp(P, 0.06 + lag, 0.46)) : 0
     const k2 = docks ? ease(ramp(P, 0.5, 0.94)) : 0
-    const flip = docks ? ease(ramp(P, 0.12 + l.j * 0.03, 0.48)) : 0
-    const B = { x: home.x + 84 - 16 - l.j * 21, y: home.y + 46 }
-    const x = lerp(lerp(A.x, G.x + 84 * gs - 16 - l.j * 21, k1), B.x, k2)
+    const flip = docks ? ease(ramp(P, 0.12 + lag, 0.48)) : 0
+    const B = { x: home.x + dock.dx, y: home.y + 46 }
+    const x = lerp(lerp(A.x, G.x + 84 * gs - 16 - (DOCK_EDGE - dock.dx), k1), B.x, k2)
     const y = lerp(lerp(A.y, G.y + 46 * gs, k1), B.y, k2)
     const focusedAgent = l.agent === st.focus
     // The open card's thumbnails go to the browsers-and-notes column, and hand over to it.
@@ -826,8 +834,8 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const seen = docks ? lerp(A.o, 1, ramp(P, 0, 0.3)) : A.o * (1 - ramp(P, 0, 0.25))
     // The newest's thumbnail beside the stack, as its caption: out of the tile's deck, which stands for it at the workspaces stop.
     const newIn = l.key === model.newest ? ramp(zIn, TILE_GONE[0], TILE_GONE[1]) : 1
-    // The focused item's agents: from under its thumbnail to the page's "used by".
-    const usedAt = st.dir === 'items' && l.item === st.focusItem && docks && iz > 0 ? local(FV.usedBy(l.j).x, FV.usedBy(l.j).y) : null
+    // The focused item's agents: from under its thumbnail to their own faces in the page's "used by".
+    const usedAt = st.dir === 'items' && l.item === st.focusItem && docks && iz > 0 ? local(FV.usedBy(l.u).x, FV.usedBy(l.u).y) : null
     const cellAt = cell ? local(cell.x, cell.y) : usedAt
     const ls = lerp(lerp(A.s, 1, k1), 1.2, k2)
     const go = usedAt ? ease(ramp(I, 0, 0.85)) : into
@@ -835,10 +843,12 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const ly = cellAt ? lerp(y, cellAt.y, go) : y
     const lsTo = cell ? cell.w / (70 * S) : 20 / (22 * S)
     const lFade = usedAt ? (1 - ramp(I, 0.86, 0.99)) * (1 - ramp(z, 2, 2.25)) : fade
+    // A coin past what the row shows fades under the last one as it docks, and stays hidden on the way to the page.
+    const dockFade = dock.shown ? 1 : 1 - k2
     const nodeK = cellAt ? lerp(ls, lsTo, go) : ls
     const thx = lerp(A.thsx, 22 / 70, k1)
     const thy = lerp(A.thsy, 22 / 46, k1)
-    put(el.node, `translate(${f1(lx)}px, ${f1(ly)}px) scale(${f4(nodeK)})`, seen * lFade * newIn)
+    put(el.node, `translate(${f1(lx)}px, ${f1(ly)}px) scale(${f4(nodeK)})`, seen * lFade * newIn * dockFade)
     put(el.th, `scale(${f4(thx)}, ${f4(thy)})`, A.th * (1 - ramp(P, 0, 0.25)))
     // Its words are set for the open card (--zv-k-card): a phone shows them only at that size.
     if (live) wordsSeen(el.th, near(S * nodeK * Math.min(thx, thy), kc) * (1 - ramp(P, 0, 0.1)))
