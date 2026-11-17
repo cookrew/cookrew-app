@@ -2,7 +2,7 @@ import { describe, expect, it, afterEach } from 'vitest'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { generateKeyPairSync } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
@@ -11,6 +11,11 @@ import {
   startStripeCheckout,
   stripePaymentHeader
 } from '../src/main/served-admission'
+import { PrivacyCache } from '../src/main/file-privacy'
+import { originTag } from '../resources/caller-keys.mjs'
+import { ACE_ALLOWED, ace, acl, descriptor } from './support/security-descriptor'
+
+const SID = 'S-1-5-21-1111111111-2222222222-3333333333-1001'
 
 /**
  * THE CALLER'S SIDE OF THE GATE, over a real socket.
@@ -55,6 +60,11 @@ function door(
           typeof payment === 'string' ? payment : undefined,
           parsed
         )
+        // 0: the answer is lost on the way back, as when a connection drops.
+        if (status === 0) {
+          request.socket.destroy()
+          return
+        }
         if (status === 200 && path === '/line') {
           response.writeHead(200, { 'content-type': 'text/event-stream' })
           response.write(': ok\n\n')
@@ -286,5 +296,213 @@ describe('one account, however you reach the door', () => {
       publicKey.export({ format: 'jwk' })
     )
     rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+describe('a new account’s key is kept BEFORE the door binds it (a bound key that is lost is a lost account)', () => {
+  type Verdict = 'bind' | 'refuse' | 'lose' | 'busy'
+  /**
+   * A TOFU door: the first key to assert a name owns it. Per attempt it may
+   * bind (or accept the bound key), REFUSE (401), LOSE the answer after
+   * binding, or be BUSY (503, binding nothing).
+   */
+  const tofuDoor = async (answerAssert: (attempt: number) => Verdict = () => 'bind') => {
+    const asserts: Array<{ pendingOnDisk: number; jwk: string }> = []
+    let bound: string | null = null
+    let dir = ''
+    const pendings = (): string[] => readdirSync(dir).filter((name) => name.startsWith('svc-team.json.pending-'))
+    const opened = await door((path, _payment, body) => {
+      if (path === '/crew') return { status: 200, body: { serviceId: 'svc-team' } }
+      if (path === '/api/call/challenge') return { status: 200, body: { challenge: 'nonce' } }
+      if (path === '/api/call/assert') {
+        const jwk = JSON.stringify((body as { jwk?: unknown })?.jwk ?? null)
+        asserts.push({ pendingOnDisk: pendings().length, jwk })
+        const verdict = answerAssert(asserts.length)
+        if (verdict === 'refuse') return { status: 401, body: {} }
+        if (verdict === 'busy') return { status: 503, body: {} }
+        bound ??= jwk
+        if (jwk !== bound) return { status: 401, body: {} }
+        return verdict === 'lose' ? { status: 0 } : { status: 200, body: { token: 'tok' } }
+      }
+      return { status: 404 }
+    })
+    dir = mkdtempSync(path.join(tmpdir(), 'caller-keys-'))
+    const canonical = path.join(dir, 'svc-team.json')
+    const store = { sub: 'ana', candidates: () => [canonical], canonical: () => canonical }
+    const filed = (): string | null => (existsSync(canonical) ? JSON.stringify(JSON.parse(readFileSync(canonical, 'utf8')).pub) : null)
+    return { opened, dir, canonical, store, asserts, pendings, filed, bound: () => bound }
+  }
+
+  it('is written and proven private before the first assert, then filed under the door', async () => {
+    const rig = await tofuDoor()
+    open = rig.opened
+    expect(await signInToDoor(rig.opened.target, rig.store)).toBe('tok')
+    expect(rig.asserts.map((a) => a.pendingOnDisk)).toEqual([1])
+    expect(rig.filed()).toBe(rig.bound())
+    expect(rig.pendings()).toEqual([])
+    rmSync(rig.dir, { recursive: true, force: true })
+  })
+
+  it('a refused new key is KEPT, and offered again rather than replaced: one key per door, ever', async () => {
+    const rig = await tofuDoor(() => 'refuse')
+    open = rig.opened
+    await expect(signInToDoor(rig.opened.target, rig.store)).rejects.toThrow(/already belongs to another key/)
+    expect(rig.pendings()).toHaveLength(1)
+    await expect(signInToDoor(rig.opened.target, rig.store)).rejects.toThrow(/refused/)
+    expect(rig.pendings()).toHaveLength(1)
+    expect(new Set(rig.asserts.map((a) => a.jwk)).size).toBe(1)
+    expect(existsSync(rig.canonical)).toBe(false)
+    rmSync(rig.dir, { recursive: true, force: true })
+  })
+
+  it('a door that is busy (5xx) has refused nothing: the key stays, and is the one used next time', async () => {
+    const rig = await tofuDoor((attempt) => (attempt === 1 ? 'busy' : 'bind'))
+    open = rig.opened
+    await expect(signInToDoor(rig.opened.target, rig.store)).rejects.toThrow(/503/)
+    expect(rig.pendings()).toHaveLength(1)
+    expect(await signInToDoor(rig.opened.target, rig.store)).toBe('tok')
+    // The same key both times: nothing was minted over it.
+    expect(new Set(rig.asserts.map((a) => a.jwk)).size).toBe(1)
+    expect(rig.filed()).toBe(rig.bound())
+    expect(rig.pendings()).toEqual([])
+    rmSync(rig.dir, { recursive: true, force: true })
+  })
+
+  it('a kept key that meets a busy door is NOT replaced by a fresh one', async () => {
+    const rig = await tofuDoor((attempt) => (attempt === 1 ? 'lose' : attempt === 2 ? 'busy' : 'bind'))
+    open = rig.opened
+    await expect(signInToDoor(rig.opened.target, rig.store)).rejects.toThrow()
+    await expect(signInToDoor(rig.opened.target, rig.store)).rejects.toThrow(/503/)
+    expect(rig.pendings()).toHaveLength(1)
+    expect(await signInToDoor(rig.opened.target, rig.store)).toBe('tok')
+    expect(new Set(rig.asserts.map((a) => a.jwk)).size).toBe(1)
+    expect(rig.filed()).toBe(rig.bound())
+    rmSync(rig.dir, { recursive: true, force: true })
+  })
+
+  it('never reaches the door when it cannot be proven private: nothing is bound, nothing is kept', async () => {
+    const rig = await tofuDoor()
+    open = rig.opened
+    const OPEN_LIST = descriptor({ owner: SID, dacl: acl([ace(ACE_ALLOWED, SID), ace(ACE_ALLOWED, 'S-1-1-0')]) })
+    const privacy = {
+      platform: 'win32' as const,
+      cache: new PrivacyCache(),
+      windows: {
+        readFolder: async () => ({ userSid: SID, descriptor: descriptor({ owner: SID, dacl: acl([ace(ACE_ALLOWED, SID)]) }) }),
+        createPrivate: async (file: string, data: Buffer) => {
+          writeFileSync(file, data, { flag: 'wx' })
+          return { userSid: SID, descriptor: OPEN_LIST }
+        },
+        read: async () => ({ userSid: SID, descriptor: OPEN_LIST })
+      }
+    }
+    await expect(signInToDoor(rig.opened.target, { ...rig.store, privacy })).rejects.toThrow(/was not written/)
+    expect(rig.asserts).toEqual([])
+    expect(readdirSync(rig.dir)).toEqual([])
+    rmSync(rig.dir, { recursive: true, force: true })
+  })
+
+  it('is KEPT when the answer is lost (the door may have bound it), and opens the account next time', async () => {
+    const rig = await tofuDoor((attempt) => (attempt === 1 ? 'lose' : 'bind'))
+    open = rig.opened
+    await expect(signInToDoor(rig.opened.target, rig.store)).rejects.toThrow()
+    expect(rig.pendings()).toHaveLength(1)
+    // The door bound that key; a fresh mint would be refused. The kept one is tried, and filed.
+    expect(await signInToDoor(rig.opened.target, rig.store)).toBe('tok')
+    expect(rig.filed()).toBe(rig.bound())
+    expect(rig.pendings()).toEqual([])
+    rmSync(rig.dir, { recursive: true, force: true })
+  })
+
+  it('offers EVERY kept key: the one the door binds is filed, and the others are set aside, never deleted', async () => {
+    const rig = await tofuDoor()
+    open = rig.opened
+    const tag = originTag(new URL(rig.opened.target.origin).origin)
+    const keep = (suffix: string): string => {
+      const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+      const raw = JSON.stringify({ pub: publicKey.export({ format: 'jwk' }), priv: privateKey.export({ format: 'jwk' }) })
+      writeFileSync(path.join(rig.dir, `svc-team.json.pending-${tag}-${suffix}`), raw, { mode: 0o600 })
+      return JSON.stringify(publicKey.export({ format: 'jwk' }))
+    }
+    const first = keep('aaaaaaaaaaaa')
+    const second = keep('bbbbbbbbbbbb')
+    expect(await signInToDoor(rig.opened.target, rig.store)).toBe('tok')
+    // Whichever the door met first owns the name and is filed; the other is set aside in retired/.
+    expect([first, second]).toContain(rig.bound())
+    expect(rig.filed()).toBe(rig.bound())
+    expect(rig.pendings()).toEqual([])
+    expect(readdirSync(path.join(rig.dir, 'retired'))).toHaveLength(1)
+    rmSync(rig.dir, { recursive: true, force: true })
+  })
+
+  it('a kept key the door may hold survives a forced 401 (a 401 is any failure, not "someone else’s")', async () => {
+    const rig = await tofuDoor((attempt) => (attempt === 1 ? 'lose' : attempt === 2 ? 'refuse' : 'bind'))
+    open = rig.opened
+    await expect(signInToDoor(rig.opened.target, rig.store)).rejects.toThrow()
+    // The kept key meets a forced 401: refused, kept, and no fresh key is made over it.
+    await expect(signInToDoor(rig.opened.target, rig.store)).rejects.toThrow(/refused/)
+    expect(rig.pendings()).toHaveLength(1)
+    expect(await signInToDoor(rig.opened.target, rig.store)).toBe('tok')
+    expect(new Set(rig.asserts.map((a) => a.jwk)).size).toBe(1)
+    expect(rig.filed()).toBe(rig.bound())
+    rmSync(rig.dir, { recursive: true, force: true })
+  })
+
+  it('(c) a door that answers the filed key 401 and binds a new one leaves the filed key untouched, and keeps both', async () => {
+    // A door claiming another door's serviceId: the filed key of the real account is refused, a fresh one taken.
+    const rig = await tofuDoor((attempt) => (attempt === 1 ? 'refuse' : 'bind'))
+    open = rig.opened
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+    const mine = JSON.stringify({ pub: publicKey.export({ format: 'jwk' }), priv: privateKey.export({ format: 'jwk' }) })
+    writeFileSync(rig.canonical, mine, { mode: 0o600 })
+    expect(await signInToDoor(rig.opened.target, rig.store)).toBe('tok')
+    expect(readFileSync(rig.canonical, 'utf8')).toBe(mine)
+    expect(rig.pendings()).toHaveLength(1)
+    rmSync(rig.dir, { recursive: true, force: true })
+  })
+
+  it('another door’s key whose name merely starts like a kept key is never offered here, or removed', async () => {
+    const rig = await tofuDoor()
+    open = rig.opened
+    // The canonical key of a door whose serviceId is `svc-team.json.pending-y`.
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+    const theirs = path.join(rig.dir, 'svc-team.json.pending-y.json')
+    writeFileSync(theirs, JSON.stringify({ pub: publicKey.export({ format: 'jwk' }), priv: privateKey.export({ format: 'jwk' }) }), { mode: 0o600 })
+    expect(await signInToDoor(rig.opened.target, rig.store)).toBe('tok')
+    expect(rig.asserts.map((a) => a.jwk)).not.toContain(JSON.stringify(publicKey.export({ format: 'jwk' })))
+    expect(existsSync(theirs)).toBe(true)
+    rmSync(rig.dir, { recursive: true, force: true })
+  })
+
+  it('two sign-ins at once to one door bind ONE key, and that is the key filed', async () => {
+    const rig = await tofuDoor()
+    open = rig.opened
+    // Each minted key is held until a second one is being made too (or 200 ms
+    // pass): without one sign-in per door at a time, both reach the door
+    // together, one is bound, and the other sign-in is refused.
+    let minting = 0
+    const PRIVATE_LIST = descriptor({ owner: SID, dacl: acl([ace(ACE_ALLOWED, SID)]), protectedDacl: true })
+    const privacy = {
+      platform: 'win32' as const,
+      cache: new PrivacyCache(),
+      windows: {
+        readFolder: async () => ({ userSid: SID, descriptor: PRIVATE_LIST }),
+        read: async () => ({ userSid: SID, descriptor: PRIVATE_LIST }),
+        createPrivate: async (file: string, data: Buffer) => {
+          minting += 1
+          for (let waited = 0; minting < 2 && waited < 200; waited += 10) await new Promise((resolve) => setTimeout(resolve, 10))
+          writeFileSync(file, data, { flag: 'wx' })
+          return { userSid: SID, descriptor: PRIVATE_LIST }
+        }
+      }
+    }
+    const store = { ...rig.store, privacy }
+    const both = await Promise.all([signInToDoor(rig.opened.target, store), signInToDoor(rig.opened.target, store)])
+    expect(minting).toBe(1)
+    expect(both).toEqual(['tok', 'tok'])
+    expect(new Set(rig.asserts.map((a) => a.jwk)).size).toBe(1)
+    expect(rig.filed()).toBe(rig.bound())
+    expect(rig.pendings()).toEqual([])
+    rmSync(rig.dir, { recursive: true, force: true })
   })
 })
