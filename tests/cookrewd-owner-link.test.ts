@@ -1,4 +1,6 @@
+import path from 'node:path'
 import { PassThrough } from 'node:stream'
+import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { decodeLine, encodeFrame, EVENT_BACKLOG, MAX_IN_FLIGHT, MAX_LINE, readOwnerFrame, startOwnerLink, type OwnerDispatch } from '../src/main/daemon/owner-link'
 import { inspectorProblems } from '../src/main/daemon/no-inspector'
@@ -224,11 +226,15 @@ describe('the owner window in the shim', () => {
   it('hands handlers an event that passes main\'s own owner checks', async () => {
     const { BrowserWindow, ipcMain, ownerDispatch } = await load()
     const main = new BrowserWindow({ webPreferences: { preload: '/app/out/preload/index.cjs' } })
-    await main.loadFile('/app/out/renderer/index.html')
+    // Main's ownerPageUrl() is pathToFileURL of an absolute path on this host:
+    // file:///app/... here, file:///D:/app/... on Windows, where a rooted path
+    // takes the current drive.
+    const page = path.resolve('/app/out/renderer/index.html')
+    await main.loadFile(page)
     let checked: boolean | null = null
     ipcMain.handle('launch-settings:status', (event: unknown) => {
       const e = event as { sender: unknown; senderFrame: { parent: unknown; url?: string } }
-      checked = isOwnerSender(e.sender, e.senderFrame, main.webContents) && isOwnerPage(e.senderFrame.url, 'file:///app/out/renderer/index.html')
+      checked = isOwnerSender(e.sender, e.senderFrame, main.webContents) && isOwnerPage(e.senderFrame.url, pathToFileURL(page).href)
       return { ok: true }
     })
     await expect(ownerDispatch.invoke('launch-settings:status', [])).resolves.toEqual({ ok: true })

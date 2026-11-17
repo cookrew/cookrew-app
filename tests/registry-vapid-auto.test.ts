@@ -4,11 +4,12 @@
 // directory (a persistent volume in production, beside token-key.jwk), and
 // read back on every start after. The environment still wins when it is set.
 import { createECDH } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadVapidKeys, VAPID_KEY_FILE, vapidOf, vapidPairOf } from '../registry/src/v2-push-vapid'
+import { expectMode } from './support/file-mode'
 
 const dir = (): string => mkdtempSync(path.join(tmpdir(), 'cookrew-vapid-'))
 
@@ -19,7 +20,7 @@ describe('the VAPID key on first start and after', () => {
     expect(keys).toBeDefined()
     expect(typeof vapidOf(keys!)).not.toBe('string')
     expect(keys!.subject).toBe('https://cookrew.dev')
-    expect(statSync(path.join(data, VAPID_KEY_FILE)).mode & 0o777).toBe(0o600)
+    expectMode(path.join(data, VAPID_KEY_FILE), 0o600)
   })
 
   it('the same key on every start after', () => {
