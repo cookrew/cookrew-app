@@ -253,6 +253,14 @@
   padding: 4px 0 6px;
 }
 
+/* Notifications, in the menu: what this browser can do, when there is no button to press. */
+.cd-acct-menu .cd-push-says {
+  max-width: 240px;
+  padding: 2px 0 4px;
+  color: var(--sumi-ink-soft);
+  font-size: 13px;
+}
+
 /* "Opening Studio Mac…": over the canvas, above the bar at its foot (zoom.css · .zv-controls, z-index 44). */
 .cd-canvas .cd-opening {
   position: absolute;

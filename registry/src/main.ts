@@ -62,6 +62,7 @@ import { Pulse } from './pulse'
 import { FunnelCounts } from './funnel-counts'
 import { createV2 } from './v2-routes'
 import { readOAuthEnv } from './v2-oauth-providers'
+import { readVapidEnv } from './v2-push-vapid'
 import { readHostOrigins } from './auth-origin'
 import { AcmeClient, LETSENCRYPT_STAGING } from './acme-client'
 import { createNames, type NamesFeature } from './names'
@@ -224,6 +225,9 @@ if (!origins.ok) {
   console.error(`refusing to start: ${origins.reason}`)
   process.exit(1)
 }
+// PHONE PUSH: COOKREW_VAPID_PUBLIC_KEY, COOKREW_VAPID_PRIVATE_KEY (and COOKREW_VAPID_SUBJECT).
+// Half a pair or a bad key turns push off and names the variable, never its value.
+const vapid = readVapidEnv(process.env, (message) => console.error(message))
 const v2 = createV2(DATA, {
   origin: resolved.config.origin,
   // Operational lines only (a seat cap reached, an auth request opened): never
@@ -237,7 +241,9 @@ const v2 = createV2(DATA, {
   trustedProxies: flag('funnel-proxies', process.env.FUNNEL_PROXIES ?? '').split(',').filter(Boolean),
   // Third-party sign-in. Environment only, never a flag: a flag is readable in
   // `ps`. No pair means no button and nothing else changes.
-  oauth: readOAuthEnv(process.env, (message) => console.error(message))
+  oauth: readOAuthEnv(process.env, (message) => console.error(message)),
+  // Phone push (HITL phase 4). Environment only, for the same reason. Neither key set: push is off.
+  ...(vapid === undefined ? {} : { push: vapid })
 })
 
 /**

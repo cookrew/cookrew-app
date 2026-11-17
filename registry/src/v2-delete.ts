@@ -55,6 +55,7 @@ export async function deleteAccount(ctx: V2Context, signed: Signed): Promise<voi
     v2.factors.store.forget(username)
     v2.seats.closeAccount(username)
     v2.events.forget(username)
+    v2.pushSubscriptions.forget(username)
     ctx.accountGone?.(account)
     v2.accounts.close(username)
   } catch (error) {

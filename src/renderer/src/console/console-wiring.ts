@@ -21,13 +21,14 @@ import { codeKeyForBase, tokenKeyForBase } from '../pairing-scope'
 import { takeSeat } from '../device-seat'
 import { readConsoleConfig, type ConsoleConfig } from './console-config'
 import { browserDeviceStore, consoleDevice, type ConsoleDevice } from './device-key'
-import { SESSION_KEY, createConsoleSession, type ConsoleSession, type RegistryCall } from './console-session'
+import { SESSION_KEY, createConsoleSession, type ConsoleSession, type KeyValue, type RegistryCall } from './console-session'
 import { createConsoleGate, type ConsoleGate } from './console-gate'
 import { createConsoleDevices, type ConsoleDevices } from './console-devices'
 import { browserHistoryPort, createConsoleRouter, type ConsoleRouter } from './console-router'
 import { createConsoleRuntime, type ConsoleRuntime, type DoorAnswer } from './console-runtime'
 import { createMachinePaths, type MachinePaths } from './machine-paths'
 import { forgetHandedCode, landHandedCode, takeHandedCode } from './handed-code'
+import { createConsolePush, isIos, pushLabel, routeOfOpenMessage, type ConsolePush, type PushManagerLike } from './console-push'
 
 export interface ConsoleParts {
   readonly config: ConsoleConfig
@@ -37,6 +38,8 @@ export interface ConsoleParts {
   readonly router: ConsoleRouter
   readonly runtime: ConsoleRuntime
   readonly paths: MachinePaths
+  /** This browser's notifications (HITL phase 4). */
+  readonly push: ConsolePush
 }
 
 const TOKEN_PREFIX = 'cr_token:'
@@ -76,6 +79,8 @@ const tolerant = (held: Storage | null): Pick<Storage, 'getItem' | 'setItem' | '
 })
 
 const REGISTRY_ANSWER_MS = 20_000
+/** How long a press waits for the worker to be active before saying this browser cannot subscribe. */
+const WORKER_READY_MS = 5_000
 
 function registryAt(origin: string): RegistryCall {
   return async (method, path, body, headers = {}) => {
@@ -102,6 +107,42 @@ function registryAt(origin: string): RegistryCall {
   }
 }
 
+/** The active worker's push manager, or null: none registered (a page served without one), or not active in time. */
+function workerPushManager(win: Window): () => Promise<PushManagerLike | null> {
+  return async () => {
+    const workers = win.navigator.serviceWorker as ServiceWorkerContainer | undefined
+    if (workers === undefined) return null
+    const late = new Promise<null>((resolve) => win.setTimeout(() => resolve(null), WORKER_READY_MS))
+    const ready = await Promise.race([workers.ready, late])
+    return ready?.pushManager ?? null
+  }
+}
+
+/** This browser's notifications, asked of the registry with this page's session. */
+function consolePush(win: Window, registry: RegistryCall, session: ConsoleSession, kept: KeyValue): ConsolePush {
+  const standalone = (win.navigator as Navigator & { standalone?: boolean }).standalone === true || win.matchMedia?.('(display-mode: standalone), (display-mode: fullscreen)').matches === true
+  const notifications = (win as Window & { Notification?: typeof Notification }).Notification
+  return createConsolePush({
+    call: async (method, path, body) => {
+      const token = await session.fresh()
+      if (token === null) return { status: 401, body: null }
+      return registry(method, path, body, { authorization: `Bearer ${token}` })
+    },
+    env: {
+      notification: notifications !== undefined,
+      serviceWorker: 'serviceWorker' in win.navigator,
+      pushManager: 'PushManager' in win,
+      ios: isIos(win.navigator.userAgent, win.navigator.maxTouchPoints),
+      standalone
+    },
+    permission: () => notifications?.permission ?? 'denied',
+    requestPermission: () => (notifications === undefined ? Promise.resolve('denied') : notifications.requestPermission()),
+    pushManager: workerPushManager(win),
+    kept,
+    label: pushLabel(win.navigator.userAgent, win.navigator.maxTouchPoints)
+  })
+}
+
 function build(config: ConsoleConfig, win: Window): ConsoleParts {
   const local = storage(() => win.localStorage)
   const kept = tolerant(local)
@@ -117,8 +158,9 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
   }
 
   const keys = browserDeviceStore()
+  const registry = registryAt(config.apiOrigin)
   const session = createConsoleSession({
-    registry: registryAt(config.apiOrigin),
+    registry,
     authOrigin: config.authOrigin,
     device,
     forgetDevice: async () => {
@@ -263,12 +305,24 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
     session.reread()
   })
 
+  // NOTIFICATIONS FOLLOW THE SIGN-IN: signed out, this browser lets go of its subscription, so the
+  // next person to sign in here is told nothing of the last one's agents.
+  const push = consolePush(win, registry, session, kept)
+  session.subscribe(() => {
+    if (session.get().status === 'signed-out') void push.forget()
+  })
+  // A press on a notification while this page is open: the worker brings it forward and says where to go.
+  win.navigator.serviceWorker?.addEventListener('message', (event: MessageEvent) => {
+    const route = routeOfOpenMessage(event.data)
+    if (route !== null) router.go(route)
+  })
+
   // A page that slept past its token's end renews on the way back, before anything asks with the dead one.
   win.document.addEventListener('visibilitychange', () => {
     if (win.document.visibilityState === 'visible') void session.fresh()
   })
 
-  return { config, session, gate, devices, router, runtime, paths }
+  return { config, session, gate, devices, router, runtime, paths, push }
 }
 
 const config = typeof document === 'undefined' ? null : readConsoleConfig(document)

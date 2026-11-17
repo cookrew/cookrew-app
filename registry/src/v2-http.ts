@@ -21,6 +21,8 @@ import { createProviders, type OAuthConfig, type OAuthProvider } from './v2-oaut
 import type { ProviderId } from '../../src/shared/oauth'
 import { HELLO_SKEW_MS } from './hello-verify'
 import { AuthRequests, type AuthRequest } from './auth-requests'
+import { createPush, type PushFeature, type PushOptions } from './v2-push-vapid'
+import { V2PushSubscriptions } from './v2-push-store'
 
 /**
  * IDENTITY v2 — THE PLUMBING EVERY /v2 ROUTE SHARES.
@@ -142,6 +144,13 @@ export interface V2Identity {
    * run; then nothing is routed by this name.
    */
   apiOrigin: string | null
+  /**
+   * PHONE PUSH (HITL phase 4): the VAPID key and the outbound post. Null when
+   * the deployment named no key, and every /v2/me/push route answers push_off.
+   */
+  push: PushFeature | null
+  /** Which browsers each account asked to be told. Kept with push off too, so a delete still takes them. */
+  pushSubscriptions: V2PushSubscriptions
 }
 
 export interface V2Options {
@@ -183,6 +192,8 @@ export interface V2Options {
    * Only ever narrowed: a suite proving that a stolen session is refused sets 0.
    */
   freshWindowMs?: number
+  /** The VAPID key pair and subject (environment only, v2-push-vapid.ts). Absent: push is off. */
+  push?: PushOptions
 }
 
 /**
@@ -234,6 +245,8 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
     now: options.now ?? Date.now,
     consoleOrigin: options.consoleOrigin ?? null,
     apiOrigin: options.apiOrigin ?? null,
+    push: createPush(options.push, options.now),
+    pushSubscriptions: new V2PushSubscriptions(base, options.now),
     auth:
       options.authOrigin === undefined
         ? null
