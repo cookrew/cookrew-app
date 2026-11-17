@@ -234,10 +234,14 @@ describe.skipIf(!ready)('the remote canvas boot asks for each thing once', () =>
 
   it('sends one beacon at boot, and after it only on the beacon clock', () => {
     const beacons = recorded().filter((r) => requestKind(r.path) === 'beacon')
-    // Several clock periods were watched: the clock was seen to tick, not just the boot's beacon.
-    expect(beacons.length).toBeGreaterThanOrEqual(2)
-    const gaps = beacons.slice(1).map((r, i) => r.at - beacons[i].at)
-    // A little under the clock: a timer runs late, never this early.
+    // Several clock periods were watched: the clock was seen to tick twice, not just the boot's beacon.
+    expect(beacons.length).toBeGreaterThanOrEqual(3)
+    // Between the clock's own beacons only. The boot beacon and the clock start
+    // together, but the boot one queues behind the boot's other requests for a
+    // free connection, so it can ARRIVE well after it was sent (2117 ms before
+    // the first tick on the macOS runner, PR #124). A timer runs late, never
+    // early; a second clock or a beacon off the clock still lands short here.
+    const gaps = beacons.slice(2).map((r, i) => r.at - beacons[i + 1].at)
     expect(gaps.filter((gap) => gap < BEACON_CLOCK_MS * 0.8)).toEqual([])
     // And no more than the clock allows over the recording.
     expect(beacons.length).toBeLessThanOrEqual(2 + Math.floor((recordedUntil - beacons[0].at) / (BEACON_CLOCK_MS * 0.8)))
