@@ -196,6 +196,12 @@ export interface FleetWorkspace {
    * running (an embed shows them as title + address, not live).
    */
   state: 'focused' | 'background'
+  /**
+   * A served (marketplace) session's workspace: a customer's. Another machine's
+   * HITL bar leaves it out (zoom/remote-hitl.ts). Present only when true, and
+   * absent from a desktop older than this field.
+   */
+  served?: true
   /** Creation order. Views never reorder by status: attention is a highlight, not a sort. */
   agents: FleetAgent[]
   /** Notes and browsers wired to no agent: the workspace's tray. */

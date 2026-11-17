@@ -92,25 +92,41 @@ const load = (): SeenBook => {
 }
 
 let book: SeenBook | null = null
+/** The other machines' books (phase 6: zoom/remote-hitl.ts), by machine id, as read from or written to their keys. */
+const others = new Map<string, SeenBook>()
+/** Bumped at every write to any book: what a reader of several books keys its memo on. */
+let version = 0
 const listeners = new Set<() => void>()
+
+const store = (key: string, next: SeenBook): void => {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(next))
+  } catch {
+    // Private mode or a full store: this session still remembers.
+  }
+}
+
+const told = (): void => {
+  version += 1
+  for (const listener of listeners) listener()
+}
 
 function set(next: SeenBook): void {
   if (next === book) return
   book = next
-  try {
-    window.localStorage.setItem(keyNow(), JSON.stringify(next))
-  } catch {
-    // Private mode or a full store: this session still remembers.
-  }
-  for (const listener of listeners) listener()
+  store(keyNow(), next)
+  told()
 }
 
 const current = (): SeenBook => (book ??= load())
 
-// Another machine, another book: read again from its own key.
+// Another machine, another book: read again from its own key. The other
+// machines' are read again too: the one entered is now the live book, and two
+// copies of one book must never both be written.
 registerScopeState('bar seen', () => {
   book = null
-  for (const listener of listeners) listener()
+  others.clear()
+  told()
 })
 
 /** The one book the app reads and writes (BarGroups.tsx, hitl-artifacts.ts). */
@@ -123,6 +139,54 @@ export const barSeen = {
   mark: (id: string, at: number): void => set(markSeen(current(), id, at)),
   cutoff: (at: number): void => set(withCutoff(current(), at)),
   prune: (keep: (id: string) => boolean): void => set(pruneBook(current(), keep))
+}
+
+const idOf = (machineId: string): string => machineId.toLowerCase()
+/** The machine this page's live book is: its book is that one, never a second copy. */
+const inScope = (machineId: string): boolean => machineScope().machineId === idOf(machineId)
+
+const otherBook = (machineId: string): SeenBook => {
+  const id = idOf(machineId)
+  const held = others.get(id)
+  if (held) return held
+  let read = EMPTY_BOOK
+  try {
+    read = loadBook(window.localStorage, bookKeyFor(id))
+  } catch {
+    // No storage: an empty book, kept for this session.
+  }
+  others.set(id, read)
+  return read
+}
+
+const setOther = (machineId: string, next: SeenBook): void => {
+  const id = idOf(machineId)
+  if (others.get(id) === next) return
+  others.set(id, next)
+  store(bookKeyFor(id), next)
+  told()
+}
+
+const editBook = (machineId: string, edit: (at: SeenBook) => SeenBook): void => {
+  if (inScope(machineId)) set(edit(current()))
+  else setOther(machineId, edit(otherBook(machineId)))
+}
+
+/**
+ * ANOTHER MACHINE'S BOOK, BY ITS ID (phase 6: the bar holds what an agent
+ * changed on the account's other machines). Its times are that machine's clock
+ * and its ids its cards, so it is kept under that machine's own key
+ * (bookKeyFor), the same key a console inside that machine keeps; the machine
+ * in scope is the live book itself.
+ */
+export const machineSeen = {
+  get: (machineId: string): SeenBook => (inScope(machineId) ? current() : otherBook(machineId)),
+  mark: (machineId: string, id: string, at: number): void => editBook(machineId, (held) => markSeen(held, id, at)),
+  cutoff: (machineId: string, at: number): void => editBook(machineId, (held) => withCutoff(held, at)),
+  prune: (machineId: string, keep: (id: string) => boolean): void => editBook(machineId, (held) => pruneBook(held, keep)),
+  subscribe: barSeen.subscribe,
+  /** Changes with any write to any book. */
+  version: (): number => version
 }
 
 export function useSeenBook(): SeenBook {
