@@ -517,7 +517,7 @@ figure.shot.illustration,figure.shot.composite{background:var(--cream-md)}
 .feature-shots.pair{grid-template-columns:minmax(0,1fr)}
 figure.shot,.feature-shots figure.narrow{margin-inline:calc(50% - 50vw);width:auto;max-width:none;border-left:0;border-right:0}
 figure.shot figcaption{padding:8px 16px;font-size:12.5px;gap:4px 10px}
-figure.shot .rec.src-illustration,figure.shot .rec.src-composite{border:0;background:none;padding:0;font-size:9px}
+figure.shot .rec.src-illustration,figure.shot .rec.src-composite{border:0;background:none;padding:0;font-size:9px;letter-spacing:.02em}
 }
 /* sections */
 section{padding:56px 0;border-bottom:1px solid var(--line-soft)}
