@@ -20,6 +20,11 @@ describe('canUpdateItself', () => {
     expect(await canUpdateItself(facts({ describeSignature: async () => 'Signature=adhoc\nTeamIdentifier=not set' }))).toBe(false)
   })
 
+  it('a build re-signed with a development identity cannot: no release meets its requirement', async () => {
+    const development = 'Authority=Apple Development: someone@example.com (VMLA3CJPN8)\nTeamIdentifier=NT8ZMJPJMR'
+    expect(await canUpdateItself(facts({ describeSignature: async () => development }))).toBe(false)
+  })
+
   it('asks about the bundle, not the binary inside it', async () => {
     const describeSignature = vi.fn(async () => 'Authority=x')
     await canUpdateItself(facts({ describeSignature }))
