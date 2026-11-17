@@ -247,7 +247,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const narrow = size.w < 760
   const [crewCols, setCrewCols] = useCrewCols(narrow)
   const [tileSize, setTileSize] = useTileSize()
-  // THE DEVICES STOP PICTURES EVERY MACHINE AS ITS DESKTOP SHOWS IT (owner, 2026-11-16): two to a row,
+  // THE DEVICES STOP PICTURES EVERY MACHINE AS ITS DESKTOP SHOWS IT (owner, 2026-11-16), filling its screen (2026-11-17: zoom-layout.ts · screenCols),
   // whatever this screen is. Read off the stop aimed at. At the workspaces stop the grid takes as many as the screen holds.
   const deviceDesk = zoom.v < -1.5
   const frame = useMemo(

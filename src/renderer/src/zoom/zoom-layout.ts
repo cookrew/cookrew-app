@@ -471,6 +471,29 @@ export function deviceOf(
 }
 
 /**
+ * A MACHINE'S SCREEN ON THE DEVICES STOP, FILLED (owner, 2026-11-17: "平铺占满屏中屏"): its workspaces
+ * laid as its desktop would, as many to a row as make the tiles largest on a screen of `aspect`.
+ * Two to a row drew eight as a strip down the middle of a 16:10 Mac.
+ */
+export function screenCols(count: number, aspect = DEFAULT_SCREEN_ASPECT): number {
+  const ids = Array.from({ length: Math.max(1, count) }, (_, i) => `s${i}`)
+  let best = 1
+  let width = Infinity
+  for (let c = 1; c <= ids.length; c++) {
+    const w = deviceOf(ids, false, aspect, c).screen.w
+    if (w < width - 1e-6) {
+      width = w
+      best = c
+    }
+  }
+  return best
+}
+
+/** A machine as its desktop shows it, filling its screen (screenCols). */
+export const deviceOnScreen = (ids: readonly string[], aspect = DEFAULT_SCREEN_ASPECT, size?: number): ReturnType<typeof deviceOf> =>
+  deviceOf(ids, false, aspect, screenCols(ids.length, aspect), size)
+
+/**
  * EVERY DEVICE ON ONE CANVAS (owner 2026-11-11: "所有device统一用图5形式"). Every
  * machine of the account is the same frame as this one, its own workspace tiles
  * on its screen (ZoomParts · MachineFrame), standing in one row with this machine

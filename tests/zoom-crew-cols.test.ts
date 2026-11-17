@@ -3,7 +3,7 @@
 // pick is remembered per form factor, and anything else stored falls back to
 // the form factor's own default (2 on a phone, 5 on a desk).
 import { describe, expect, it } from 'vitest'
-import { crewOf, CREW_COLS, defaultCrewCols, defaultDeviceCols, deviceOf, DEVICE_COLS, SWS, TILE, TILE_DRAWN_W, TILE_SIZES, gridColsFor, screenGridCols } from '../src/renderer/src/zoom/zoom-layout'
+import { crewOf, CREW_COLS, defaultCrewCols, defaultDeviceCols, deviceOf, DEVICE_COLS, SWS, TILE, TILE_DRAWN_W, TILE_SIZES, gridColsFor, screenCols, screenGridCols } from '../src/renderer/src/zoom/zoom-layout'
 import { crewColsOf, crewColsKey, perRowChoices, perRowKey, tileSizeOf } from '../src/renderer/src/zoom/crew-cols'
 import { deviceOfModel, layoutOf, type FrameModel } from '../src/renderer/src/zoom/zoom-frame'
 import { deviceCam } from '../src/renderer/src/zoom/zoom-camera'
@@ -191,9 +191,12 @@ describe('the workspaces grid, as many to a row as the screen holds', () => {
     expect(type(d, 1440, 851, false)).toBeCloseTo(1, 6)
   })
 
-  it('the devices stop lays the machine as its desktop does, two to a row, whatever the screen', () => {
-    const d = deviceOfModel(model({ workspaces: ids(5), fitCols: 2, deviceDesk: true }), true)
-    expect(rowsOf(d.at)).toEqual([2, 2, 1])
-    expect(d.box).toEqual(deviceOf(ids(5), false, undefined, 2).box)
+  it('the devices stop fills each machine’s screen with its workspaces, whatever this screen (owner, 2026-11-17: 平铺占满屏中屏)', () => {
+    const d = deviceOfModel(model({ workspaces: ids(8), fitCols: 2, deviceDesk: true }), true)
+    expect(rowsOf(d.at)).toEqual([4, 4])
+    // No other count draws the tiles larger on a 16:10 screen.
+    for (let c = 1; c <= 8; c++) expect(deviceOf(ids(8), false, undefined, c).screen.w).toBeGreaterThanOrEqual(d.screen.w - 1e-6)
+    expect(screenCols(1)).toBe(1)
+    expect(screenCols(2)).toBe(2)
   })
 })
