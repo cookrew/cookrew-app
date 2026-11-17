@@ -93,7 +93,7 @@ export const DEMO = {
   browserCard: demo('demo-browser-card.jpg', 'A browser card open on a release-notes page, used by Checker',
     'Clicked Release notes: the browser card opened on the page Checker checked, a local demo page, with the agent that uses it named at the top right.'),
   docsCrew: demo('demo-docs-crew.jpg', 'A second workspace, Docs Site: Writer waiting on you, Editor done',
-    'Clicked Docs Site, the second workspace on the same machine: Writer on Claude Code waiting on you, Editor on Codex done.', 'illustration', 720)
+    'Clicked Docs Site, the second workspace on the same machine: Writer on Claude Code waiting on you, Editor on Codex done (cropped to the two agents).', 'illustration', 360)
 } as const satisfies Record<string, Frame>
 
 export type DemoKey = keyof typeof DEMO

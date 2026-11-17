@@ -44,7 +44,9 @@ function frame(name, src, { box = null, dsf = 1, max = 2880, phone = null } = {}
 // Desktop stops: 1024×640 at ×6 (walk.mjs prefix h, DSF=6). Boxes frame the subject, not the window.
 frame('demo-agents', `${raw}/h-agents.png`, { box: [295, 180, 430, 270], dsf: 6 })
 frame('demo-workspaces', `${raw}/h-workspaces.png`, { box: [215, 135, 590, 370], dsf: 6 })
-frame('demo-docs-crew', `${raw}/h-docs.png`, { box: [225, 140, 340, 300], dsf: 6 })
+// Docs Site's stop is L-shaped (its header top left, the two faces stacked to the right): the crop is the faces, at ×8 so
+// the narrow column is still over 1170 px; the caption names the workspace.
+frame('demo-docs-crew', `${raw}/h8-docs.png`, { box: [420, 185, 185, 260], dsf: 8 })
 frame('demo-hitl-desk', `${raw}/h-hitl.png`, { box: [0, 60, 700, 520], dsf: 6, phone: { box: [25, 375, 430, 200] } })
 frame('demo-artifacts', `${raw}/h-artifacts.png`, { box: [215, 110, 585, 450], dsf: 6, phone: { box: [250, 240, 520, 305] } })
 frame('demo-browser-card', `${raw}/h-browser.png`, { box: [60, 50, 910, 540], dsf: 6, phone: { box: [70, 60, 450, 500] } })
