@@ -55,8 +55,10 @@ export const ARTIFACT_TYPES: readonly string[] = Object.keys(KIND_OF)
 const GONE_TYPES: ReadonlySet<string> = new Set(['note.deleted', 'browser.closed'])
 const WORKSPACE_GONE = 'workspace.deleted'
 /** What ends a card's place in the group: read back to the oldest change the boot holds. */
-const ENDING_TYPES: readonly string[] = [...GONE_TYPES, WORKSPACE_GONE]
+export const ENDING_TYPES: readonly string[] = [...GONE_TYPES, WORKSPACE_GONE]
 const AGENTS: ReadonlySet<string> = new Set(['agent', 'orch'])
+/** Is this a change of a card (not its end): what a first read starts the seen book at. */
+export const isArtifactChange = (type: string): boolean => KIND_OF[type] !== undefined
 /** Past this many deletions remembered, the oldest are forgotten. */
 const GONE_KEPT = 2000
 

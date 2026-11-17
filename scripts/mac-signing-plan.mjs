@@ -6,7 +6,9 @@
 // covered by tests/mac-signing-plan.test.ts.
 //
 //   nothing set        unsigned, job stays green, loud warning
-//   certificate only   signed, loud warning: Gatekeeper still refuses it
+//   certificate only   signed, loud warning: Gatekeeper still refuses it. Still
+//                      worth it: grants follow the team requirement
+//                      (electron-builder.yml), so updates keep them.
 //   certificate + one  signed and notarized
 //   complete
 //   login
@@ -30,7 +32,7 @@ const APPLE_ID = ['APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID']
 const SECRETS_TABLE = `
 | Secret | What it holds |
 | --- | --- |
-| \`CSC_LINK\` | Base64 of the **Developer ID Application** certificate exported as .p12 (\`base64 -i cert.p12\`) |
+| \`CSC_LINK\` | Base64 of the Dots Crafts team certificate exported as .p12 (\`base64 -i cert.p12\`): **Developer ID Application**, or Apple Development until there is one |
 | \`CSC_KEY_PASSWORD\` | The password of that .p12 |
 
 And one of these two sets, to notarize.
