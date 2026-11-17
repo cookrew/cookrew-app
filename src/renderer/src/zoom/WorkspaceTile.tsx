@@ -11,8 +11,8 @@ const WorkspaceTileShot = lazy(() => import('./WorkspaceTileShot').then((module)
 type Bind = (key: string) => (el: HTMLElement | null) => void
 type TileProps = { mark: MarkView; open?: boolean; bind: Bind; onOpen: (agentId?: string) => void; onOpenItems?: (itemId?: string) => void }
 type Mode = 'bag' | 'agent'
-const DWELL_MS = 800
-const LINGER_MS = 2500
+/** How long an opened fan stays once the pointer leaves or the finger lifts (owner, 2026-11-17: 1 s). */
+const LINGER_MS = 1000
 /** An agent's face in the row, and the room each takes: an agent card's type wants a face to match (owner 2026-11-16). */
 const HEAD_PX = 36
 const HEAD_STEP = 42
@@ -170,7 +170,6 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
   const agents = mark.agents ?? []
   const [mode, setMode] = useState<Mode>('bag')
   const [openFan, setOpenFan] = useState(false)
-  const dwell = useRef<number | null>(null)
   const linger = useRef<number | null>(null)
   const touching = useRef(false)
   const openedBy = useRef<'mouse' | 'touch'>('touch')
@@ -183,8 +182,8 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
   const selected = agents[at] ?? null
   const clearTimer = (timer: { current: number | null }): void => { if (timer.current !== null) window.clearTimeout(timer.current); timer.current = null }
   const closeSoon = (): void => { clearTimer(linger); linger.current = window.setTimeout(() => { linger.current = null; setOpenFan(false) }, LINGER_MS) }
-  const showFan = (by: 'mouse' | 'touch'): void => { if (items.length === 0) return; clearTimer(dwell); clearTimer(linger); openedBy.current = by; setOpenFan(true) }
-  const selectAgent = (agent: AgentView): void => { clearTimer(dwell); clearTimer(linger); setOpenFan(false); row.go(Math.max(0, agents.findIndex((entry) => entry.id === agent.id))); setMode('agent') }
+  const showFan = (by: 'mouse' | 'touch'): void => { if (items.length === 0) return; clearTimer(linger); openedBy.current = by; setOpenFan(true) }
+  const selectAgent = (agent: AgentView): void => { clearTimer(linger); setOpenFan(false); row.go(Math.max(0, agents.findIndex((entry) => entry.id === agent.id))); setMode('agent') }
   const front = items[clamp(artifacts.index, 0, Math.max(0, items.length - 1))] ?? null
   const tied = front ? agents.filter((agent) => front.owners.includes(agent.id)) : []
   const cardItems = selected ? items.filter((item) => item.owners.includes(selected.id)) : []
@@ -193,8 +192,8 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
   const itemsDoor = known && total > 0 && onOpenItems
 
   useEffect(() => { if (openFan && openedBy.current === 'touch' && !touching.current) closeSoon() }, [artifacts.index, openFan])
-  useEffect(() => () => { clearTimer(dwell); clearTimer(linger) }, [])
-  useEffect(() => { setMode('bag'); setOpenFan(false); row.go(0); clearTimer(dwell); clearTimer(linger) }, [mark.id])
+  useEffect(() => () => { clearTimer(linger) }, [])
+  useEffect(() => { setMode('bag'); setOpenFan(false); row.go(0); clearTimer(linger) }, [mark.id])
 
   return (
     <div ref={bind(open ? 'openMark' : `mark:${mark.id}`)} className="zv-mark" data-open={open || undefined} data-waiting={mark.waitingCount > 0 || undefined}>
@@ -215,8 +214,8 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
         </div>
         <div className="dm-folder"><div className="dm-folder-view" /><div className={`dm-ov-layer${mode === 'agent' ? ' on' : ''}`} onClick={() => setMode('bag')}>{mode === 'agent' && selected && <EmbeddedCard agent={selected} items={cardItems} onOpen={() => onOpen(selected.id)} onItem={showItem} />}</div><div className="dm-pocket" onClick={() => { if (itemsDoor) onOpenItems?.(front?.id) }}><span className="dm-title">{front?.title ?? ''}</span><span className="dm-count items">{items.length > 0 && <em>{artifacts.index + 1}/{items.length}</em>}{(mark.browsers ?? 0) > 0 && <span>▭{mark.browsers}</span>}{(mark.notes ?? 0) > 0 && <span>▤{mark.notes}</span>}</span></div></div>
         <div className={`dm-fan${artifacts.dragging ? ' dragging' : ''}${openFan ? ' open' : ''}`}
-          onPointerEnter={(event) => { if (event.pointerType !== 'mouse') return; clearTimer(linger); clearTimer(dwell); openedBy.current = 'mouse'; if (!openFan && items.length > 0) dwell.current = window.setTimeout(() => showFan('mouse'), DWELL_MS) }}
-          onPointerLeave={(event) => { if (event.pointerType !== 'mouse') return; clearTimer(dwell); if (openFan && openedBy.current === 'mouse') closeSoon() }}
+          onPointerEnter={(event) => { if (event.pointerType !== 'mouse') return; clearTimer(linger); openedBy.current = 'mouse' }}
+          onPointerLeave={(event) => { if (event.pointerType !== 'mouse') return; if (openFan && openedBy.current === 'mouse') closeSoon() }}
           onPointerDown={(event) => { if (event.pointerType !== 'mouse') { touching.current = true; clearTimer(linger) }; artifacts.handlers.onPointerDown(event) }}
           onPointerMove={artifacts.handlers.onPointerMove}
           onPointerUp={(event) => { artifacts.handlers.onPointerUp(event); if (event.pointerType !== 'mouse') { touching.current = false; if (openFan) closeSoon() } }}
