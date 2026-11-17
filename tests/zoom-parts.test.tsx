@@ -188,13 +188,14 @@ describe('another machine of the account, on the devices stop', () => {
 describe('the zoom is driven by clicks, not the wheel (owner, 2026-10-31)', () => {
   const source = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
   // The wheel scrolls the thumbnails (owner, 2026-11-02): it is the page's and a list's, never the zoom's.
-  // The shelf over them turns pages by its "+N" chip (owner, 2026-11-03), not by a sideways wheel.
+  // A sideways wheel over the shelf only scrolls it along (owner, 2026-11-17: the agents group swipes).
   it('has no wheel zoom at all: the one wheel listener only scrolls, and lets a ctrl-pinch go', () => {
     expect(source.match(/addEventListener\('wheel'/g)).toHaveLength(1)
     const wheel = source.slice(source.indexOf('onWheel.current = (e) => {'), source.indexOf("addEventListener('wheel'"))
     expect(wheel).toContain('if (e.ctrlKey) return')
     expect(wheel).toContain('scrollBy(dy)')
-    expect(wheel).not.toContain('shelf')
+    expect(wheel).toMatch(/if \(!overShelf\(e\.clientX, e\.clientY\)\) return/)
+    expect(wheel).toContain('scrollShelf(shelfRef.current + dx / GROUP_STEP)')
     expect(wheel).not.toMatch(/\.go\(|jumpTo|stepBack|stepOut|focusAgent|focusItem/)
   })
 
@@ -239,8 +240,8 @@ describe('the shelf’s faces lie over each other without moving their nodes', (
     expect(view).toContain('{model.agents.map((a) => <AgentNode')
     expect(view).not.toContain('shelfAgents')
   })
-  it('stacks a shelf page by z-index, under the waiting dots', () => {
-    expect(motion).toMatch(/shelfPage\(layout\.thumbs\.shelf/)
+  it('ranks the shelf’s row by z-index, under the waiting dots', () => {
+    expect(motion).toMatch(/layout\.thumbs\.shelf\.order/)
     expect(motion).toMatch(/rank !== undefined \? 10 \+ rank/)
     expect(Number(motion.match(/const SHELF_RANKS = (\d+)/)?.[1]) + 12).toBeLessThan(44)
   })

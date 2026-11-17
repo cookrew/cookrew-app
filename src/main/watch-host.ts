@@ -50,10 +50,10 @@ export function createWatchHost(deps: WatchHostDeps): WatchHost {
       // A card nobody has opened has no Chrome yet: looking at it starts one,
       // as a phone opening it does. The next poll has its picture. A thumbnail
       // only peeks: a card's row of them must not start a Chrome each.
-      if (!peek) {
-        await deps.browser(browserId).catch(() => null)
-        await deps.thumbViewed(browserId)
-      }
+      if (!peek) await deps.browser(browserId).catch(() => null)
+      // A peek starts no browser, but a running one is photographed for it: the wrist's
+      // tiles used to read only what some other screen had asked for (2026-11-16).
+      await deps.thumbViewed(browserId)
       const thumb = deps.thumb(browserId)
       if (!thumb) return null
       const key = `${browserId}@${width}`

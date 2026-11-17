@@ -6,7 +6,7 @@
  * its form factor's default (zoom-layout.ts · defaultCrewCols, defaultDeviceCols).
  */
 import { useCallback, useSyncExternalStore } from 'react'
-import { CREW_COLS } from './zoom-layout'
+import { CREW_COLS, DEVICE_COLS, TILE_SIZES } from './zoom-layout'
 
 /** The views that lay their things in rows the owner can pick. */
 export type PerRowView = 'crew' | 'device'
@@ -14,18 +14,23 @@ export type PerRowView = 'crew' | 'device'
 export const perRowKey = (view: PerRowView, narrow: boolean): string => `cookrew.zoom.${view}Cols.${narrow ? 'phone' : 'desk'}`
 export const crewColsKey = (narrow: boolean): string => perRowKey('crew', narrow)
 
-/** A stored value as a pick: one of the form factor's choices (the same for every view), or null. */
-export function crewColsOf(stored: string | null, narrow: boolean): number | null {
+/** The picks a view offers on a form factor: the crew's 3–5, the device's 1 or 2. */
+export const perRowChoices = (view: PerRowView, narrow: boolean): readonly number[] => {
+  const table = view === 'device' ? DEVICE_COLS : CREW_COLS
+  return narrow ? table.narrow : table.wide
+}
+
+/** A stored value as a pick: one of the view's choices on this form factor, or null. */
+export function crewColsOf(stored: string | null, narrow: boolean, view: PerRowView = 'crew'): number | null {
   const n = Number(stored)
-  const choices: readonly number[] = narrow ? CREW_COLS.narrow : CREW_COLS.wide
-  return stored !== null && choices.includes(n) ? n : null
+  return stored !== null && perRowChoices(view, narrow).includes(n) ? n : null
 }
 
 const listeners = new Set<() => void>()
 
 function read(view: PerRowView, narrow: boolean): number | null {
   try {
-    return crewColsOf(window.localStorage.getItem(perRowKey(view, narrow)), narrow)
+    return crewColsOf(window.localStorage.getItem(perRowKey(view, narrow)), narrow, view)
   } catch {
     return null
   }
@@ -54,3 +59,33 @@ export function usePerRow(view: PerRowView, narrow: boolean): [number | null, (c
 }
 
 export const useCrewCols = (narrow: boolean): [number | null, (cols: number) => void] => usePerRow('crew', narrow)
+
+/** A workspace tile's type (zoom-layout.ts · TILE_SIZES), remembered on this device. */
+export const TILE_SIZE_KEY = 'cookrew.zoom.tileSize'
+
+export function tileSizeOf(stored: string | null): number | null {
+  const n = Number(stored)
+  return stored !== null && (TILE_SIZES as readonly number[]).includes(n) ? n : null
+}
+
+function readTileSize(): number | null {
+  try {
+    return tileSizeOf(window.localStorage.getItem(TILE_SIZE_KEY))
+  } catch {
+    return null
+  }
+}
+
+export function useTileSize(): [number | null, (size: number) => void] {
+  const size = useSyncExternalStore(subscribe, readTileSize, () => null)
+  const set = useCallback((next: number) => {
+    try {
+      window.localStorage.setItem(TILE_SIZE_KEY, String(next))
+    } catch {
+      // Storage refused (private mode): the pick lasts as long as nothing re-reads it.
+    }
+    for (const fn of listeners) fn()
+  }, [])
+  return [size, set]
+}
+

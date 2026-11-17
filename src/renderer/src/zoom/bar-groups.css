@@ -379,13 +379,15 @@
 /* A group's card stands above the bar (BarCards.tsx), arriving from below. */
 .zv-bar-card {
   transform-origin: bottom center;
+  /* An agent's card is the card stop's size (AgentCard.tsx · cardScaleStyle); a menu or an artifact 1:1. */
+  transform: scale(var(--zv-card-s, 1));
   animation: zv-bar-card-in 150ms ease-out both;
 }
 
 @keyframes zv-bar-card-in {
   from {
     opacity: 0;
-    transform: translateY(6px) scale(0.96);
+    transform: translateY(6px) scale(calc(0.96 * var(--zv-card-s, 1)));
   }
 }
 

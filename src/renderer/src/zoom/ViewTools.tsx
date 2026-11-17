@@ -1,7 +1,7 @@
 import { cookrew } from '../api'
 import { CrIcon } from '../icons'
 import { openSourcePicker } from '../use/source-picker-store'
-import { CREW_COLS } from './zoom-layout'
+import { perRowChoices } from './crew-cols'
 
 /**
  * THE VIEW'S TOOLBAR (owner 2026-11-12: "remote desktop takes too much room:
@@ -40,6 +40,13 @@ export interface PerRow {
   readonly onPick: (n: number) => void
 }
 
+/** A workspace tile's type (zoom-layout.ts · TILE_SIZES): the picks, the one in use, and its setter. */
+export interface TileSizePick {
+  readonly sizes: readonly number[]
+  readonly size: number
+  readonly onPick: (size: number) => void
+}
+
 const GRID = (
   <svg className="zv-cols-glyph" viewBox="0 0 12 12" aria-hidden="true">
     <rect x="1" y="1" width="4" height="4" rx="1" />
@@ -50,22 +57,32 @@ const GRID = (
 )
 
 /** The bar itself; nothing at all when it would hold nothing. */
-export function ViewTools({ perRow = null }: { perRow?: PerRow | null }): React.JSX.Element | null {
+export function ViewTools({ perRow = null, tileSize = null }: { perRow?: PerRow | null; tileSize?: TileSizePick | null }): React.JSX.Element | null {
   const desk = canShareScreen()
-  if (!perRow && !desk) return null
+  if (!perRow && !tileSize && !desk) return null
   return (
     <div className="zv-view-tools" role="toolbar" aria-label="View tools">
       {perRow && (
         <span className="zv-view-cols" role="group" aria-label={`${perRow.what === 'agents' ? 'Agents' : 'Workspaces'} per row`} title="Per row">
           {GRID}
-          {(perRow.narrow ? CREW_COLS.narrow : CREW_COLS.wide).map((n) => (
+          {perRowChoices(perRow.what === 'agents' ? 'crew' : 'device', perRow.narrow).map((n) => (
             <button key={n} type="button" className="zv-fv-arts-btn" aria-pressed={perRow.cols === n} onClick={() => perRow.onPick(n)} aria-label={`${n} ${perRow.what} per row`}>
               {n}
             </button>
           ))}
         </span>
       )}
-      {perRow && desk && <i className="zv-view-sep" aria-hidden="true" />}
+      {perRow && tileSize && <i className="zv-view-sep" aria-hidden="true" />}
+      {tileSize && (
+        <span className="zv-view-cols zv-view-size" role="group" aria-label="Workspace text size" title="Text size">
+          {tileSize.sizes.map((size, index) => (
+            <button key={size} type="button" className="zv-fv-arts-btn" aria-pressed={tileSize.size === size} onClick={() => tileSize.onPick(size)} aria-label={`Text size ${Math.round(size * 100)}%`} style={{ fontSize: `${11 + index * 2.5}px` }}>
+              A
+            </button>
+          ))}
+        </span>
+      )}
+      {(perRow || tileSize) && desk && <i className="zv-view-sep" aria-hidden="true" />}
       <RemoteDeskButton />
     </div>
   )

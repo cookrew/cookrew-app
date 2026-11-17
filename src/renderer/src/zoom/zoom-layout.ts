@@ -11,7 +11,7 @@
  *             agents step up into a shelf above them, one row in the
  *             troop's form, a page at a time
  */
-import { stripPage } from '../pets/pet-dock'
+import { GROUP_FACE, GROUP_SEAL_GAP, GROUP_STEP, groupFade, groupFits } from './agents-group'
 
 export interface Pos {
   x: number
@@ -49,7 +49,8 @@ export const SWS = 0.62
  * mark's units (the group's own, drawn at SWS on the device), around the
  * group's centre, so the open workspace's real faces stand in its tile.
  */
-export const TILE = { left: -112, top: -174, w: 430, h: 318 } as const
+/** As tall as an agent card is for its width (260 x 244; owner, 2026-11-16): workspace-tile.css draws it 260 x 294: the card itself under the name and the crew row. */
+export const TILE = { left: -112, top: -174, w: 430, h: 486 } as const
 /** A tile's words on screen at a phone's picks, in px: its name's line over the bench, its counts' under it, and only a margin where it has no counts. */
 const TILE_HEAD_PX = { name: 28, caption: 21 }
 const TILE_FOOT_PX = { counts: 26, none: 8 }
@@ -265,10 +266,10 @@ export interface Thumbs {
   /** The grid's row pitch in scene px: the view mounts only the rows on screen (ZoomView). */
   rowH: number
   /**
-   * The shelf, one row in the troop's form (shelfPage): who stands on it in
-   * order, its first face's x and its y, and how many faces a page holds.
+   * The shelf, one row in the agents group's form (shelfRow): who stands on it
+   * in order, its left edge, its width and its y, in scene px.
    */
-  shelf: { order: string[]; left: number; y: number; per: number }
+  shelf: { order: string[]; left: number; span: number; y: number }
   /** Where the shelf's band is anchored: the workspace's label stands above it (zoom-frame.ts · paint). */
   shelfY: number
   box: Box
@@ -276,28 +277,8 @@ export interface Thumbs {
 
 /** A thumbnail's width (zoom.css · .zv-ip > .zv-th, 168x108). */
 const THUMB_W = 168
-/** A face on the shelf, in scene px: zoom.css · .zv-av, 64px drawn at the shelf's 0.5. */
-export const SHELF_FACE = 32
-/**
- * THE SHELF IS THE AGENTS' GROUP (owner, 2026-11-03: "the agents over the
- * artifacts in the agents group's form"): each face lies over the one before
- * it as the troop's do (pets.css · STACKED: 16 of a 28 px face seen), and the
- * "+N" chip stands after the last, the troop's gap away.
- */
-export const SHELF_STEP = Math.round((SHELF_FACE * 16) / 28)
-export const SHELF_MORE_GAP = 8
 /** The faces stand lower than the band's anchor, where their names stood: the label's counts above them stay clear. */
 const SHELF_DROP = 30
-
-/**
- * How many faces a page of the shelf holds across `span` scene px: all of
- * them when they fit, else as many as leave room for the "+N" chip (owner,
- * 2026-11-03: "more agents a page, four is too few").
- */
-export function shelfPer(count: number, span: number): number {
-  const fit = (room: number): number => Math.max(1, Math.floor((room - SHELF_FACE) / SHELF_STEP) + 1)
-  return count <= fit(span) ? Math.max(1, count) : fit(span - SHELF_MORE_GAP - SHELF_FACE)
-}
 
 export function thumbsOf(items: readonly CrewItem[], agents: readonly CrewAgent[], narrow: boolean): Thumbs {
   const order = [...items].sort((a, b) => b.owners.length - a.owners.length).map((i) => i.id)
@@ -323,32 +304,44 @@ export function thumbsOf(items: readonly CrewItem[], agents: readonly CrewAgent[
     order,
     at,
     rowH,
-    shelf: { order: [...linked, ...loose].map((a) => a.id), left: -span / 2 + SHELF_FACE / 2, y: shelfY + SHELF_DROP, per: shelfPer(agents.length, span) },
+    shelf: { order: [...linked, ...loose].map((a) => a.id), left: -span / 2, span, y: shelfY + SHELF_DROP },
     shelfY,
-    // The box is the grid's: a long shelf turns pages (shelfPage), it never widens the view.
+    // The box is the grid's: a long shelf scrolls along (shelfRow), it never widens the view.
     box: { w: narrow ? 400 : 820, h: gridH + 520, cy: (shelfY - 80 + gridH + 160) / 2 }
   }
 }
 
-/** One page of the shelf: each shown face's x, and the "+N" chip (null when every face fits). */
-export interface ShelfPage {
+/** The shelf at one scroll: each face's x and how much of it shows, where the seal stands, how many fit, how far it scrolls. */
+export interface ShelfRow {
   x: Record<string, number>
-  more: { x: number; rest: number; last: boolean } | null
+  o: Record<string, number>
+  /** The seal's left edge, in scene px. */
+  seal: number
+  per: number
+  max: number
 }
 
 /**
- * A PAGE OF THE SHELF, as the troop's strip turns one (pets/pet-dock.ts ·
- * stripPage): the same row, the next `per` faces, the chip saying how many
- * are still behind it, and "–" on the last page, back to the first. `page`
- * counts taps on the chip and wraps.
+ * THE SHELF IS THE AGENTS GROUP (agents-group.tsx; owner, 2026-11-17: "所有的
+ * agents group统一样式"): faces at 36 px on screen a gap apart, a swipe along
+ * the row (`scroll`, in faces) instead of "+N" pages, fading out at its ends,
+ * the seal with the whole count after the last shown. `k` is a screen px in
+ * scene px (1 over the thumbnails' camera scale): the row keeps its size on
+ * screen whatever the camera draws the grid at.
  */
-export function shelfPage(shelf: Thumbs['shelf'], page: number): ShelfPage {
-  const { start, end, rest, last } = stripPage(shelf.order.length, shelf.per, page)
+export function shelfRow(shelf: Thumbs['shelf'], scroll: number, k: number): ShelfRow {
+  const n = shelf.order.length
+  const per = Math.max(1, Math.min(n, groupFits(shelf.span / k)))
+  const max = Math.max(0, n - per)
+  const at = Math.min(max, Math.max(0, scroll))
   const x: Record<string, number> = {}
-  shelf.order.slice(start, end).forEach((id, k) => (x[id] = shelf.left + k * SHELF_STEP))
-  if (shelf.order.length <= Math.max(1, shelf.per)) return { x, more: null }
-  const lastX = shelf.left + (end - start - 1) * SHELF_STEP
-  return { x, more: { x: lastX + SHELF_FACE + SHELF_MORE_GAP, rest, last } }
+  const o: Record<string, number> = {}
+  shelf.order.forEach((id, i) => {
+    const d = i - at
+    x[id] = shelf.left + k * (GROUP_FACE / 2 + d * GROUP_STEP)
+    o[id] = groupFade(d, per)
+  })
+  return { x, o, seal: shelf.left + k * (GROUP_FACE + (Math.min(n, per) - 1) * GROUP_STEP + GROUP_SEAL_GAP), per, max }
 }
 
 /** A machine's screen when its display is not known: a MacBook's 16:10. */
@@ -371,12 +364,25 @@ export function screenOf(box: Box, aspect: number): Box {
 }
 
 /**
- * Workspaces per row on the device: the same pick as the crew's (owner,
- * 2026-11-01: "per row 3 4 5 at the workspaces view too"), remembered apart
- * from it. Unpicked, the device keeps its old 2 on a phone and 3 on a desk.
+ * Workspaces per row on the device: 1 or 2 only (owner, 2026-11-16: a tile is
+ * drawn at an agent card's own type, and three across left it too small to
+ * read). Unpicked, a desk shows 2 and a phone 1.
  */
-export const DEVICE_COLS = CREW_COLS
-export const defaultDeviceCols = (narrow: boolean): number => (narrow ? 2 : 3)
+export const DEVICE_COLS = { wide: [1, 2], narrow: [1, 2] } as const
+export const defaultDeviceCols = (narrow: boolean): number => (narrow ? 1 : 2)
+
+/** workspace-tile.css draws a tile this many px across, then scales it to TILE.w. */
+export const TILE_DRAWN_W = 260
+/**
+ * A TILE'S TYPE, AS PICKED (owner, 2026-11-16: "bigger icons and words, and a
+ * setting; the frame sized after the agent card, to hold its type"). 1 draws a
+ * tile's px 1:1 on screen, so the agent card inside it reads as it does in the
+ * agents view; the larger picks grow the frame with its words.
+ */
+export const TILE_SIZES = [1, 1.15, 1.3] as const
+export const DEFAULT_TILE_SIZE = 1
+/** The device camera's scale that draws a tile's px at `size` on screen: the most it zooms in, room allowing. */
+export const tileFaceS = (size: number): number => (size * TILE_DRAWN_W) / (SWS * TILE.w)
 
 /** The device's title stands this far over the first row of tiles, and has this room above it (device units). */
 const TITLE_GAP = 14
@@ -384,6 +390,33 @@ const TITLE_ROOM = { wide: 64, narrow: 46 }
 const TILE_GAP = { wide: 32, narrow: 24 }
 const FOOT = { wide: 12, narrow: 0 }
 const SIDE = { wide: 60, narrow: 0 }
+
+/**
+ * THE WORKSPACES GRID BY THE SCREEN (owner, 2026-11-17: "取消feed，仅保留grid，按照屏幕大小平铺"):
+ * the most to a row whose tiles, the row filling the screen's width, still stand at `size`
+ * (an agent card's own type at 1). A phone holds one, a desk four or five, a wide screen more.
+ * The camera fits a full row to the width (zoom-camera.ts · deviceCam), less 16px a side.
+ */
+export function gridColsFor(w: number, narrow: boolean, size: number = DEFAULT_TILE_SIZE): number {
+  const form = narrow ? 'narrow' : 'wide'
+  let best = 1
+  for (let c = 2; c <= GRID_MAX_COLS; c++) {
+    const boxW = c * SWS * TILE.w + (c - 1) * TILE_GAP[form] + SIDE[form]
+    if (((w - 32) / boxW) * SWS * TILE.w / TILE_DRAWN_W < size) break
+    best = c
+  }
+  return best
+}
+/**
+ * THE GRID'S DEFAULT (owner, 2026-11-17: "手机上竖屏默认用2 per row，电脑上或横屏默认铺满，参考小红书的手机版和网页版"):
+ * a phone held upright two to a row, as a photo-note app's home; a desk or a phone on its side
+ * as many as the screen holds, as its web page does. Either way a full row fills the width.
+ */
+export const screenGridCols = (w: number, h: number, narrow: boolean, size: number = DEFAULT_TILE_SIZE): number =>
+  narrow && h > w ? 2 : gridColsFor(w, narrow, size)
+const GRID_MAX_COLS = 8
+/** A full row is drawn this much past its type at most: the width a column short of the next leaves. */
+const FILL_MAX = 2
 
 /**
  * The device: a tile per workspace, `cols` to a row (the pick, else the
@@ -396,9 +429,13 @@ export function deviceOf(
   ids: readonly string[],
   narrow: boolean,
   aspect = DEFAULT_SCREEN_ASPECT,
-  picked?: number
-): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number; gridTop: number; gridH: number; rowH: number; left: number; tile: { top: number; h: number } } {
-  const pick = picked ?? defaultDeviceCols(narrow)
+  picked?: number,
+  size: number = DEFAULT_TILE_SIZE,
+  fitCols?: number
+): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number; gridTop: number; gridH: number; rowH: number; left: number; tile: { top: number; h: number }; face: number; fill: boolean } {
+  // Laid by the screen (fitCols, unpicked: zoom-layout.ts · screenGridCols), its full rows filling the width.
+  const fits = picked === undefined && fitCols !== undefined ? fitCols : null
+  const pick = picked ?? fits ?? defaultDeviceCols(narrow)
   const cols = Math.max(1, Math.min(pick, ids.length))
   const form = narrow ? 'narrow' : 'wide'
   const tile = tileOf(narrow, cols)
@@ -420,8 +457,33 @@ export function deviceOf(
   const top = titleBottom - TITLE_ROOM[form]
   const bottom = -gridTop + FOOT[form]
   const box = { w: gridW + SIDE[form], h: bottom - top, cy: (top + bottom) / 2 }
-  return { at, box, screen: screenOf(box, aspect), titleBottom, dx, gridTop, gridH, rowH: dy, left, tile }
+  // A full row fills the screen's width (each tile at least its type); fewer stand at their type.
+  const fill = fits !== null && ids.length >= fits
+  return { at, box, screen: screenOf(box, aspect), titleBottom, dx, gridTop, gridH, rowH: dy, left, tile, face: fill ? tileFaceS(size * FILL_MAX) : tileFaceS(size), fill }
 }
+
+/**
+ * A MACHINE'S SCREEN ON THE DEVICES STOP, FILLED (owner, 2026-11-17: "平铺占满屏中屏"): its workspaces
+ * laid as its desktop would, as many to a row as make the tiles largest on a screen of `aspect`.
+ * Two to a row drew eight as a strip down the middle of a 16:10 Mac.
+ */
+export function screenCols(count: number, aspect = DEFAULT_SCREEN_ASPECT): number {
+  const ids = Array.from({ length: Math.max(1, count) }, (_, i) => `s${i}`)
+  let best = 1
+  let width = Infinity
+  for (let c = 1; c <= ids.length; c++) {
+    const w = deviceOf(ids, false, aspect, c).screen.w
+    if (w < width - 1e-6) {
+      width = w
+      best = c
+    }
+  }
+  return best
+}
+
+/** A machine as its desktop shows it, filling its screen (screenCols). */
+export const deviceOnScreen = (ids: readonly string[], aspect = DEFAULT_SCREEN_ASPECT, size?: number): ReturnType<typeof deviceOf> =>
+  deviceOf(ids, false, aspect, screenCols(ids.length, aspect), size)
 
 /**
  * EVERY DEVICE ON ONE CANVAS (owner 2026-11-11: "所有device统一用图5形式"). Every

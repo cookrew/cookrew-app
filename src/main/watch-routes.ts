@@ -26,6 +26,7 @@ import { crewRows, itemOf, itemsOfAgent, MAX_CREW, rowsOfWorkspace, watchCards, 
 import type { WatchPairing } from './watch-pairing'
 import type { ViewerWho } from '../shared/remote-access'
 import { createScreenLeases, type LeasedScreen } from './screen-lease'
+import type { ViewportMetrics } from '../shared/cast-viewport'
 
 /** A frame as wide as the widest watch at 2x; a phone's is not needed on a wrist. */
 export const FRAME_WIDTH_DEFAULT = 416
@@ -102,6 +103,44 @@ export interface WatchHost {
 }
 
 let host: WatchHost | null = null
+
+/**
+ * A PAGE AT A WATCH'S SIZE (owner, 2026-11-17: "artifact视图点击直接全屏且渲染手表版本大小，支持点击支持输入"):
+ * a wrist that asks for a page with its glass's size (vw, vh) is a viewer of that browser, as a
+ * phone is (browser-viewport.ts): the page lays out as a phone's, as narrow as Chrome's viewer
+ * floor (VIEWPORT_MIN, the width a watch's own browser lays a page out at), at the glass's
+ * shape. Its taps and words land on that page (browserInputOf reads the viewport). Unasked for
+ * a while, the wrist lets go and the page goes back to whoever else is on it.
+ */
+export const WATCH_PAGE_WIDTH = 320
+export const WATCH_VIEW_IDLE_MS = 20_000
+
+export function watchViewport(vw: number, vh: number): ViewportMetrics | null {
+  if (!Number.isFinite(vw) || !Number.isFinite(vh) || vw <= 0 || vh <= 0) return null
+  const tall = Math.min(2.5, Math.max(0.4, vh / vw))
+  return { width: WATCH_PAGE_WIDTH, height: Math.round(WATCH_PAGE_WIDTH * tall), mobile: true, scale: 1.5 }
+}
+
+type ViewportViewer = Pick<BrowserInstance, 'registerViewportViewer' | 'claimViewport' | 'offerViewport' | 'releaseViewport' | 'unregisterViewportViewer'>
+const watchViews = new Map<string, { instance: ViewportViewer; timer: ReturnType<typeof setTimeout> }>()
+
+/** The wrist is on this page at this size: it holds the page's viewport until it has not asked for a while. */
+export function holdWatchView(id: string, instance: ViewportViewer, metrics: ViewportMetrics, idleMs = WATCH_VIEW_IDLE_MS): void {
+  const viewer = `watch:${id}`
+  const known = watchViews.get(id)
+  if (known) clearTimeout(known.timer)
+  if (known && known.instance !== instance) known.instance.unregisterViewportViewer(viewer)
+  if (!known || known.instance !== instance) instance.registerViewportViewer(viewer)
+  // In another viewer's cool-down the claim waits; the offer stands, and the next look claims it.
+  if (!instance.claimViewport(viewer, metrics)) instance.offerViewport(viewer, metrics)
+  const timer = setTimeout(() => {
+    watchViews.delete(id)
+    instance.releaseViewport(viewer)
+    instance.unregisterViewportViewer(viewer)
+  }, idleMs)
+  timer.unref?.()
+  watchViews.set(id, { instance, timer })
+}
 
 /** Screens another machine of the account is on, by its own name (screen-lease.ts). */
 const screenLeases = createScreenLeases()
@@ -584,7 +623,14 @@ export async function handleWatchRoutes(ctx: WatchRequest): Promise<boolean> {
     }
     const asked = Number(ctx.url.searchParams.get('w'))
     const width = Number.isFinite(asked) && asked > 0 ? Math.min(FRAME_WIDTH_MAX, Math.max(FRAME_WIDTH_MIN, Math.round(asked))) : FRAME_WIDTH_DEFAULT
-    const frame = await current.frame(id, width, ctx.url.searchParams.get('peek') === '1')
+    const peek = ctx.url.searchParams.get('peek') === '1'
+    // A wrist on the page, saying its glass: the page lays out at a watch's size. A computer's screen keeps its own.
+    const glass = peek ? null : watchViewport(Number(ctx.url.searchParams.get('vw')), Number(ctx.url.searchParams.get('vh')))
+    if (glass) {
+      const instance = await current.browser(id)
+      if (instance && !instance.needsViewer) holdWatchView(id, instance, glass)
+    }
+    const frame = await current.frame(id, width, peek)
     if (!frame) respondJson(response, 404, { error: 'No picture yet' })
     else respondTagged(ctx, frame.type, frame.data)
     return true

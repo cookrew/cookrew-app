@@ -33,7 +33,9 @@ on:
 # so a red run leaves a draft that went nowhere. Publishing IS shipping: every
 # running app with updates on picks it up within six hours.
 #
-# To cut a release, from main: `npm version <x.y.z> && git push --follow-tags`.
+# To cut a release: bump the version on dev, merge dev into main with a merge
+# commit, and tag THAT merge commit `v<x.y.z>`. verify refuses any other tag
+# (release-gate.mjs branch): not on main, not a merge, or not a merge of dev.
 # A tag with a suffix (v0.5.0-beta.1) publishes as a prerelease, which no updater
 # offers.
 permissions:
@@ -46,6 +48,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - run: node scripts/release-gate.mjs branch "$GITHUB_REF_NAME"
 
       - uses: actions/setup-node@v4
         with:
@@ -147,13 +153,42 @@ jobs:
         # the six-hour default.
         timeout-minutes: 60
         run: |
+          KEYCHAIN="$RUNNER_TEMP/cookrew-signing.keychain-db"
+          P12="$RUNNER_TEMP/cookrew-signing.p12"
+          APPLE_API_KEY=""
+          trap 'rm -f "$APPLE_API_KEY" "$P12"; security delete-keychain "$KEYCHAIN" 2>/dev/null || true' EXIT
+
+          # electron-builder 25 would import CSC_LINK into a keychain it locks
+          # with a random password, then pass the .p12's password to
+          # set-key-partition-list, which macOS 15 refuses (run 44096006620).
+          # So the keychain is built here, and electron-builder gets only the
+          # keychain and the identity's hash (a name starting "Developer ID
+          # Application:" would be refused).
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          (umask 077 && printf '%s' "$CSC_LINK" | base64 --decode > "$P12")
+          security import "$P12" -k "$KEYCHAIN" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+          rm -f "$P12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          SEARCH=()
+          while IFS= read -r line; do SEARCH+=("$(printf '%s' "$line" | sed 's/^[[:space:]]*"//; s/"$//')"); done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$KEYCHAIN" "${SEARCH[@]}"
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk 'NR==1{print $2}')
+          if [ -z "$IDENTITY" ]; then echo "::error::CSC_LINK holds no valid code-signing identity"; exit 1; fi
+          export CSC_KEYCHAIN="$KEYCHAIN"
+          export CSC_NAME="$IDENTITY"
+          unset CSC_LINK CSC_KEY_PASSWORD KEYCHAIN_PASSWORD
+
           if [ "$NOTARIZE_WITH" = api-key ]; then
             # electron-builder tries an Apple ID first and wants APPLE_API_KEY
             # as a path to the .p8, not the key's text.
             unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD
             export APPLE_API_KEY="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY_ID.p8"
-            trap 'rm -f "$APPLE_API_KEY"' EXIT
             (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" > "$APPLE_API_KEY")
+          else
+            unset APPLE_API_KEY
           fi
           unset APPLE_API_KEY_P8
           # Forced here and only here: with a bad certificate this run goes red

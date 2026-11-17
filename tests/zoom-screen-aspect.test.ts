@@ -83,7 +83,7 @@ describe('the devices stop', () => {
   })
 
   it('frames the whole screen, wider than the view', () => {
-    const L = layoutOf(frame(screenAspectOf(MBP16)), false)
+    const L = layoutOf({ ...frame(screenAspectOf(MBP16)), workspaces: ids(3) }, false)
     expect(L.devicesBox.w).toBeGreaterThan(L.device.screen.w * 0.5)
     expect(L.device.screen.w).toBeGreaterThan(L.device.box.w)
   })

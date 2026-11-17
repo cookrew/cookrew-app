@@ -7,10 +7,11 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { deviceCam, deviceWords, SWS } from '../src/renderer/src/zoom/zoom-frame'
-import { BENCH, deviceOf, DECK_POSE, fanOf, stackOf, TILE, tileOf, TILE_SPLIT } from '../src/renderer/src/zoom/zoom-layout'
+import { BENCH, deviceOf, DECK_POSE, fanOf, stackOf, TILE, TILE_DRAWN_W, tileOf, TILE_SPLIT } from '../src/renderer/src/zoom/zoom-layout'
 import { deckOf } from '../src/renderer/src/zoom/use-zoom-fleet'
 import { deckDepth, sameTile, WorkspaceTile } from '../src/renderer/src/zoom/WorkspaceTile'
-import { buildZoomModel, type MarkView } from '../src/renderer/src/zoom/zoom-model'
+import { buildZoomModel, type AgentView, type MarkView } from '../src/renderer/src/zoom/zoom-model'
+import { byStatus, type InkStatus } from '../src/renderer/src/zoom/ink-status'
 import { modelOf, paintAt } from './zoom-qa-helpers'
 
 const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `w${i}`)
@@ -96,8 +97,8 @@ describe('the phone camera at the workspaces stop', () => {
   })
 
   it('does not scroll what fits', () => {
-    expect(deviceCam(deviceOf(ids(8), true), 360, 724, true).panMax).toBe(0)
-    expect(deviceCam(deviceOf(ids(8), false), 1440, 828, false).panMax).toBe(0)
+    expect(deviceCam(deviceOf(ids(1), true), 360, 724, true).panMax).toBe(0)
+    expect(deviceCam(deviceOf(ids(2), false), 1440, 828, false).panMax).toBe(0)
   })
 
   it('scrolls a desk of many rows, past three, instead of shrinking', () => {
@@ -107,12 +108,12 @@ describe('the phone camera at the workspaces stop', () => {
     expect(many.panMax).toBeGreaterThan(0)
   })
 
-  it('fills the width', () => {
+  it('draws a tile at an agent card’s own size, inside the width (owner, 2026-11-16: the tile fits the card)', () => {
     for (const [w, h] of PHONES) {
       const d = deviceOf(ids(8), true)
       const list = tiles(d)
       const width = (Math.max(...list.map((t) => t.right)) - Math.min(...list.map((t) => t.left))) * deviceCam(d, w, h, true).S
-      expect(width).toBeGreaterThanOrEqual(w - 40)
+      expect(width).toBeCloseTo(TILE_DRAWN_W, 0)
       expect(width).toBeLessThanOrEqual(w - 24)
     }
   })
@@ -203,8 +204,9 @@ describe('a tile', () => {
 
   it('never shows a made-up zero: no feed, no artifacts door', () => {
     const html = render(mark({ browsers: null, notes: null }))
-    expect(html).not.toContain('artifacts')
-    expect(html).not.toContain('zv-deck')
+    expect(html).not.toContain('zv-door items')
+    expect(html).not.toContain('▭')
+    expect(html).not.toContain('▤')
   })
 
   it('says when a workspace is known to hold nothing, and opens no door on it', () => {
@@ -212,7 +214,7 @@ describe('a tile', () => {
     expect(html).toContain('no artifacts')
     expect(html).not.toContain('zv-door items')
     expect(html).toContain('zv-door agents whole')
-    expect(render(mark({ presets: [] }))).toContain('no agents')
+    expect(render(mark({ presets: [] })).match(/title="0 agents"/)).not.toBeNull()
   })
 
   it('puts the first agent on top of the fan, as the open crew does', () => {
@@ -226,20 +228,20 @@ describe('a tile', () => {
   })
 
   it('marks a split too long for a snug tile, which then says the total', () => {
-    expect(render(mark({ browsers: 230, notes: 91 }))).not.toContain('data-long')
-    expect(render(mark({ browsers: 230, notes: 191 }))).toContain('data-long')
+    expect(render(mark({ browsers: 230, notes: 191 }))).toContain('▭230')
+    expect(render(mark({ browsers: 230, notes: 191 }))).toContain('▤191')
   })
 
   it('counts who is waiting', () => {
-    expect(render(mark({ waiting: true, waitingCount: 3 }))).toContain('3 waiting')
-    expect(render(mark())).not.toContain('zv-tile-wait')
+    expect(render(mark({ waiting: true, waitingCount: 3 }))).toContain('class="dm-wait">3')
+    expect(render(mark())).not.toContain('dm-wait')
   })
 
   it('draws the tile row for both open and other workspaces', () => {
     const html = render(mark(), true)
     expect(html).toContain('data-open="true"')
-    expect(html).toContain('zv-workspace-agent')
-    expect(render(mark())).toContain('zv-av')
+    expect(html).toContain('dm-head')
+    expect(render(mark())).toContain('dm-crew')
   })
 
   // Owner, 2026-11-04: "the circle round the agents can go". The faces stand on the tile by themselves.
@@ -249,6 +251,55 @@ describe('a tile', () => {
     const view = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
     expect(view).not.toContain("bind('ring')")
     expect(readFileSync('src/renderer/src/zoom/zoom-frame.ts', 'utf8')).not.toContain('els.ring')
+  })
+})
+
+// Owner, 2026-11-17: "agent点击后，鼠标移开后正文内容也只显示一秒", and after 0.6.18 "鼠标点击agent逻辑没有变化，
+// 没有改成读1秒恢复": the second starts when the mouse leaves the AGENT (its row of faces, its card), not the tile.
+describe("a clicked agent's card", () => {
+  const tile = readFileSync('src/renderer/src/zoom/WorkspaceTile.tsx', 'utf8')
+  it('goes back a second after the mouse leaves the agent, not the tile', () => {
+    expect(tile).toMatch(/const LINGER_MS = 1000/)
+    expect(tile).toMatch(/<section className=/)
+    expect(tile).toMatch(/className=\{`dm-row[^>]*onPointerEnter=\{holdCard\} onPointerLeave=\{leaveCard\}/)
+    expect(tile).toMatch(/className=\{`dm-ov-layer[^>]*onPointerEnter=\{holdCard\} onPointerLeave=\{leaveCard\}/)
+  })
+  it('stays while its reply box holds the focus', () => {
+    expect(tile).toMatch(/if \(!card\?\.contains\(document\.activeElement\)\) setMode\('bag'\)/)
+  })
+})
+
+// Owner, 2026-11-17: "所有的agents group统一样式": the tile's row, the artifacts' shelf and the desktop's column are one form.
+describe('the agents group, one form', () => {
+  const read = (file: string): string => readFileSync(`src/renderer/src/${file}`, 'utf8')
+  it('draws its faces and its seal from one component everywhere', () => {
+    expect(read('zoom/WorkspaceTile.tsx')).toMatch(/<GroupSeal count=\{mark\.presets\.length\} \/>/)
+    expect(read('zoom/ZoomView.tsx')).toMatch(/<GroupSeal count=\{model\.agents\.length\} \/>/)
+    expect(read('pets/PetTroop.tsx')).toMatch(/<GroupSeal count=\{total \?\? members\.length \+ more\.length\} \/>/)
+    expect(read('pets/AgentPets.tsx')).toMatch(/<GroupFace /)
+    expect(read('pets/AgentPets.tsx')).toMatch(/\n      group\n/)
+  })
+  it('says no "+N" on the shelf or in the agents\u2019 column', () => {
+    expect(read('zoom/ZoomView.tsx')).not.toMatch(/more agents`/)
+    expect(read('zoom/ZoomView.tsx')).not.toContain('turnShelf')
+  })
+})
+
+// Owner, 2026-11-17: "workspace card的agents没有按状态排序，三端修复": who needs the owner first, as the watch walks them.
+describe("a tile's agents, by state", () => {
+  const view = (id: string, status: InkStatus, preset = 'Claude Code'): AgentView => ({ id, name: id, preset, orch: false, phase: 'quiet', status, word: status, line: '', browsers: 0, notes: 0, turn: null })
+  it('stand waiting, failed, an unread reply, working, resting, offline, in their order within each', () => {
+    const order = byStatus([view('off', 'offline'), view('rest1', 'idle'), view('work', 'working'), view('wait', 'waiting'), view('rest2', 'idle'), view('read', 'done'), view('fail', 'failed')]).map((a) => a.id)
+    expect(order).toEqual(['wait', 'fail', 'read', 'work', 'rest1', 'rest2', 'off'])
+  })
+  it('draws each face with its own agent’s logo once sorted', () => {
+    const agents = [view('a', 'idle', 'Claude Code'), view('b', 'waiting', 'Codex')]
+    const html = renderToStaticMarkup(<WorkspaceTile mark={mark({ presets: ['Claude Code', 'Codex'], agents })} bind={bind} onOpen={() => undefined} onOpenItems={() => undefined} />)
+    const heads = [...html.matchAll(/class="dm-head"[^>]*aria-label="([^"]+)"/g)].map((m) => m[1])
+    expect(heads).toEqual(['b', 'a'])
+    const byHead = html.split('class="dm-head"').slice(1)
+    expect(byHead[0]).toMatch(/codex|openai/i)
+    expect(byHead[1]).not.toMatch(/codex|openai/i)
   })
 })
 

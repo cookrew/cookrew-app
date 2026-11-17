@@ -268,8 +268,32 @@ describe('release.yml', () => {
     expect(signedStep.run).toContain('-c.npmRebuild=false')
   })
 
-  it('removes the .p8 when the signed step ends, however it ends', () => {
-    expect(signedStep.run).toMatch(/trap 'rm -f "\$APPLE_API_KEY"' EXIT/)
+  // One trap: a second `trap … EXIT` silently replaces the first.
+  it('removes the .p8, the .p12 and the keychain when the signed step ends, however it ends', () => {
+    const traps = signedStep.run?.match(/trap '[^']*' EXIT/g) ?? []
+    expect(traps).toHaveLength(1)
+    expect(traps[0]).toContain('"$APPLE_API_KEY"')
+    expect(traps[0]).toContain('"$P12"')
+    expect(traps[0]).toContain('security delete-keychain "$KEYCHAIN"')
+  })
+
+  // electron-builder 25 imports CSC_LINK into a keychain whose password it
+  // randomises, then runs set-key-partition-list with the .p12's password in
+  // its place. macOS 15 runners refuse that (run 44096006620). So the step
+  // builds the keychain itself and hands over only the keychain and a hash.
+  it('imports the certificate into its own keychain and never hands electron-builder CSC_LINK', () => {
+    const run = signedStep.run ?? ''
+    expect(run).toContain('security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"')
+    expect(run).toContain('security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"')
+    expect(run).toMatch(/export CSC_KEYCHAIN="\$KEYCHAIN"/)
+    // A hash, not a name: a name starting "Developer ID Application:" is refused.
+    expect(run).toContain(`IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk 'NR==1{print $2}')`)
+    expect(run).toContain('export CSC_NAME="$IDENTITY"')
+    // An empty name would fall through to electron-builder's own discovery.
+    expect(run).toMatch(/if \[ -z "\$IDENTITY" \]; then .*exit 1; fi/)
+    const unset = run.indexOf('unset CSC_LINK CSC_KEY_PASSWORD')
+    expect(unset).toBeGreaterThan(-1)
+    expect(unset).toBeLessThan(run.indexOf('npx electron-builder --mac'))
   })
 
   // build-cr-listen.mjs exits 0 when clang fails and a missing extraResource is

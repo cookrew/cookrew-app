@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AgentCard } from './AgentCard'
+import { AgentCard, cardScaleStyle, markOverhang, useCardScale } from './AgentCard'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
 import type { AgentView, ItemView } from './zoom-model'
 import '../pets/pets.css'
@@ -94,13 +94,19 @@ export function ShelfCard({ agent, items, anchor, onOpen, onItem, onDelete, onDr
 }): React.JSX.Element {
   const box = useRef<HTMLDivElement>(null)
   const [spot, setSpot] = useState<{ left: number; top: number } | null>(null)
+  const size = useCardScale()
 
   useLayoutEffect(() => {
     const place = (): void => {
       const el = box.current
       if (!el || !anchor) return
       const r = anchor.getBoundingClientRect()
-      const next = shelfCardSpot(r, { width: el.offsetWidth, height: el.offsetHeight }, { width: window.innerWidth, height: window.innerHeight }, stageBand())
+      // Drawn at the card stop's scale (AgentCard.tsx · cardScaleStyle): placed by the size it is seen at,
+      // its remove mark (hanging past the corner) on screen too.
+      const over = markOverhang(el)
+      const card = { width: el.offsetWidth * size.scale + over.right, height: el.offsetHeight * size.scale }
+      const band = stageBand()
+      const next = shelfCardSpot(r, card, { width: window.innerWidth, height: window.innerHeight }, { top: band.top + over.top, bottom: band.bottom })
       setSpot((at) => (at && at.left === next.left && at.top === next.top ? at : next))
     }
     // The painter may still be settling the face it opened from (a tap mid-zoom),
@@ -126,7 +132,7 @@ export function ShelfCard({ agent, items, anchor, onOpen, onItem, onDelete, onDr
       ro?.disconnect()
       window.removeEventListener('resize', again)
     }
-  }, [anchor, agent.id])
+  }, [anchor, agent.id, size.scale])
 
   useEffect(() => {
     const onDown = (e: PointerEvent): void => {
@@ -149,7 +155,7 @@ export function ShelfCard({ agent, items, anchor, onOpen, onItem, onDelete, onDr
       className={`cr-pet-card ag-ink ag-card zv-shelf-card${agent.phase === 'waiting' ? ' needs' : ''}`}
       role="dialog"
       aria-label={`${agent.name}'s card`}
-      style={spot ? { left: spot.left, top: spot.top } : { left: 0, top: 0, visibility: 'hidden' }}
+      style={{ ...cardScaleStyle(size), ...(spot ? { left: spot.left, top: spot.top } : { left: 0, top: 0, visibility: 'hidden' }) }}
     >
       <AgentCard
         agent={agent}
