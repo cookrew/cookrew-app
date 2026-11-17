@@ -131,11 +131,25 @@ describe.skipIf(!ready)('the remote canvas boot asks for each thing once', () =>
 
   afterAll(async () => {
     cdp?.close()
-    browser?.child.kill('SIGKILL')
-    // A killed Chrome can still be flushing its profile for a moment, and a
-    // bare rmSync then fails the whole file with ENOTEMPTY (seen on CI
-    // 2026-11-15): node retries those errors when asked to.
-    if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    const child = browser?.child
+    if (child) {
+      const exited = new Promise((resolve) => {
+        if (child.exitCode !== null || child.signalCode !== null) resolve(undefined)
+        child.once('exit', () => resolve(undefined))
+        setTimeout(resolve, 3000)
+      })
+      child.kill('SIGKILL')
+      await exited
+    }
+    // Chrome's helper processes can still be flushing the profile after the
+    // browser itself has exited (ENOTEMPTY on the macOS runner, 2026-11-15 and
+    // PR #124, with every gate in the file passed). A profile left in tmp is
+    // nothing; a teardown that throws fails the gates that just passed.
+    try {
+      if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 })
+    } catch {
+      // leave it to tmp
+    }
     await companion?.close()
   })
 
