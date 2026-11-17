@@ -39,7 +39,7 @@ describe('the legal pages, once published', () => {
       const html = page(name)
       expect(html, name).not.toMatch(/<script\b(?![^>]*type="application\/ld\+json")|<form\b|<iframe\b/i)
       for (const [, link] of html.matchAll(/\shref="(\/[^"#?]*)[^"]*"/g)) {
-        expect(link === '/' || files.has(`${link.slice(1)}.html`) || files.has(link.slice(1)) || rules.includes(link), `${name} links ${link}`).toBe(true)
+        expect(link === '/' || (link.endsWith('/') && files.has(`${link.slice(1)}index.html`)) || files.has(`${link.slice(1)}.html`) || files.has(link.slice(1)) || rules.includes(link), `${name} links ${link}`).toBe(true)
       }
     }
   })

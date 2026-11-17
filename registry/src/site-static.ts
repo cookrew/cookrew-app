@@ -34,6 +34,7 @@
  */
 import { ASSETS } from './assets-bundle'
 import { FEATURES, GITHUB_REPO, llmsText } from './site-content'
+import { withLang } from './site-lang'
 import { featurePage } from './site-features'
 import { staticHomePage } from './site-home'
 import { privacyPage, termsPage } from './site-legal'
@@ -194,10 +195,16 @@ export function buildStaticSite(input: StaticSiteInput): Map<string, string | Ui
       files.set(path, rendered.body)
       policies.add(rendered.headers['content-security-policy'] ?? '')
     }
-    put(htmlAt('/'), staticHomePage({ release, commits: believedCommits(input.commits), console }))
-    for (const feature of FEATURES) {
-      const rendered = featurePage(feature.slug)
-      if (rendered) put(htmlAt(`/features/${feature.slug}`), rendered)
+    // The front page and the feature pages in English at /, and in Chinese at /zh/ (site-lang.ts).
+    for (const lang of ['en', 'zh'] as const) {
+      const at = (path: string): string => (lang === 'en' ? htmlAt(path) : path === '/' ? 'zh/index.html' : `zh/${htmlAt(path)}`)
+      withLang(lang, () => {
+        put(at('/'), staticHomePage({ release, commits: believedCommits(input.commits), console }))
+        for (const feature of FEATURES) {
+          const rendered = featurePage(feature.slug)
+          if (rendered) put(at(`/features/${feature.slug}`), rendered)
+        }
+      })
     }
     if (LEGAL_PUBLISHED) {
       put(htmlAt('/privacy'), privacyPage())
