@@ -9,7 +9,7 @@
  * device IS its group, and the device view IS the machine's screen.
  */
 import { clamp01, derive, ease, lerp, ramp, type ZoomDir } from './zoom-path'
-import { crewOf, deviceOf, fitScale, machineFrameOf, machinesAt, screenFit, shelfPage, stackOf, thumbsOf, DECK_POSE, SHELF_FACE, type Box, type Pos, NEW_POSE } from './zoom-layout'
+import { crewOf, deviceOf, deviceOnScreen, fitScale, machineFrameOf, machinesAt, screenFit, shelfPage, stackOf, thumbsOf, DECK_POSE, SHELF_FACE, type Box, type Pos, NEW_POSE } from './zoom-layout'
 import { near, pinned, SCENE_CSS, SCENE_TYPE, sceneWords, SHELF_NAME_S, UNDER_FACE, type RestScales, type SceneWords } from './scene-words'
 import { fullPoses } from './full-poses'
 /* The cameras, the card stop's label and the words' scales: zoom-camera.ts. */
@@ -68,7 +68,7 @@ export interface FrameModel {
 
 /** The device as this model lays it: one place for the painter and the view's own placement, so the two never differ. */
 export function deviceOfModel(model: FrameModel, narrow: boolean): ReturnType<typeof deviceOf> {
-  if (model.deviceDesk) return deviceOf(model.workspaces, false, model.screenAspect, 2, model.tileSize)
+  if (model.deviceDesk) return deviceOnScreen(model.workspaces, model.screenAspect, model.tileSize)
   return deviceOf(model.workspaces, narrow, model.screenAspect, model.deviceCols, model.tileSize, model.fitCols)
 }
 
