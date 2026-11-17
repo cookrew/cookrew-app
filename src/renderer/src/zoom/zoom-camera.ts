@@ -144,8 +144,6 @@ const DESK_MARGIN = 16
  */
 export const PHONE_HEAD = 56
 const PHONE_SIDE = 16
-/** The rows a desk frames before the grid scrolls instead of shrinking: one, as a tile is drawn at an agent card's type. */
-const DESK_DEVICE_ROWS = 1
 export function deviceCam(device: Device, w: number, h: number, narrow: boolean, pan = 0): { S: number; Oy: number; panMax: number } {
   const { box } = device
   if (narrow) {
@@ -153,11 +151,10 @@ export function deviceCam(device: Device, w: number, h: number, narrow: boolean,
     const panMax = Math.max(0, PHONE_HEAD + device.gridH * S + PHONE_MARGIN - (h - PHONE_BAR))
     return { S, Oy: PHONE_HEAD - device.gridTop * S - Math.min(Math.max(pan, 0), panMax), panMax }
   }
-  // A row's worth, the same whether there is one row or thirty; up to the tile's own type (zoom-layout.ts · tileFaceS).
-  const rows = (DESK_DEVICE_ROWS - 1) * device.rowH + SWS * device.tile.h
-  const framed = box.h - device.gridH + Math.min(device.gridH, rows)
-  const S = Math.min(device.face, (w - 32) / box.w, (h - DESK_BAR - 32) / framed)
-  const panMax = framed < box.h ? Math.max(0, DESK_MARGIN + box.h * S - (h - DESK_BAR)) : 0
+  // Up to the tile's own type (zoom-layout.ts · tileFaceS), or a full row as wide as the window; never shrunk to the height:
+  // what is taller scrolls (owner, 2026-11-17: a phone on its side drew its tiles at 0.6).
+  const S = Math.min(device.face, (w - 32) / box.w)
+  const panMax = Math.max(0, DESK_MARGIN + box.h * S - (h - DESK_BAR))
   if (panMax === 0) return { S, Oy: (h - DESK_BAR) / 2 - box.cy * S, panMax }
   return { S, Oy: DESK_MARGIN - (box.cy - box.h / 2) * S - Math.min(Math.max(pan, 0), panMax), panMax }
 }

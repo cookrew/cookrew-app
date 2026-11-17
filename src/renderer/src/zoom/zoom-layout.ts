@@ -415,6 +415,13 @@ export function gridColsFor(w: number, narrow: boolean, size: number = DEFAULT_T
   }
   return best
 }
+/**
+ * THE GRID'S DEFAULT (owner, 2026-11-17: "手机上竖屏默认用2 per row，电脑上或横屏默认铺满，参考小红书的手机版和网页版"):
+ * a phone held upright two to a row, as a photo-note app's home; a desk or a phone on its side
+ * as many as the screen holds, as its web page does. Either way a full row fills the width.
+ */
+export const screenGridCols = (w: number, h: number, narrow: boolean, size: number = DEFAULT_TILE_SIZE): number =>
+  narrow && h > w ? 2 : gridColsFor(w, narrow, size)
 const GRID_MAX_COLS = 8
 /** A full row is drawn this much past its type at most: the width a column short of the next leaves. */
 const FILL_MAX = 2
@@ -432,10 +439,10 @@ export function deviceOf(
   aspect = DEFAULT_SCREEN_ASPECT,
   picked?: number,
   size: number = DEFAULT_TILE_SIZE,
-  fitW?: number
-): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number; gridTop: number; gridH: number; rowH: number; left: number; tile: { top: number; h: number }; face: number } {
-  // Laid by the screen (fitW, unpicked): as many to a row as the screen holds at the tile's type.
-  const fits = picked === undefined && fitW !== undefined ? gridColsFor(fitW, narrow, size) : null
+  fitCols?: number
+): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number; gridTop: number; gridH: number; rowH: number; left: number; tile: { top: number; h: number }; face: number; fill: boolean } {
+  // Laid by the screen (fitCols, unpicked: zoom-layout.ts · screenGridCols), its full rows filling the width.
+  const fits = picked === undefined && fitCols !== undefined ? fitCols : null
   const pick = picked ?? fits ?? defaultDeviceCols(narrow)
   const cols = Math.max(1, Math.min(pick, ids.length))
   const form = narrow ? 'narrow' : 'wide'
@@ -460,7 +467,7 @@ export function deviceOf(
   const box = { w: gridW + SIDE[form], h: bottom - top, cy: (top + bottom) / 2 }
   // A full row fills the screen's width (each tile at least its type); fewer stand at their type.
   const fill = fits !== null && ids.length >= fits
-  return { at, box, screen: screenOf(box, aspect), titleBottom, dx, gridTop, gridH, rowH: dy, left, tile, face: fill ? tileFaceS(size * FILL_MAX) : tileFaceS(size) }
+  return { at, box, screen: screenOf(box, aspect), titleBottom, dx, gridTop, gridH, rowH: dy, left, tile, face: fill ? tileFaceS(size * FILL_MAX) : tileFaceS(size), fill }
 }
 
 /**

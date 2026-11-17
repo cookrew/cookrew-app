@@ -60,8 +60,8 @@ export interface FrameModel {
   deviceCols?: number
   /** A workspace tile's type, as the owner picked it (crew-cols.ts · useTileSize); absent, an agent card's own. */
   tileSize?: number
-  /** The window's width, px: the workspaces grid takes as many to a row as it holds (zoom-layout.ts · gridColsFor). */
-  fitW?: number
+  /** Workspaces to a row as the screen lays them (zoom-layout.ts · screenGridCols); a full row fills the width. */
+  fitCols?: number
   /** Laid out as a desk's, whatever the screen: the devices stop pictures every machine as its desktop shows it (owner, 2026-11-16). */
   deviceDesk?: boolean
 }
@@ -69,7 +69,7 @@ export interface FrameModel {
 /** The device as this model lays it: one place for the painter and the view's own placement, so the two never differ. */
 export function deviceOfModel(model: FrameModel, narrow: boolean): ReturnType<typeof deviceOf> {
   if (model.deviceDesk) return deviceOf(model.workspaces, false, model.screenAspect, 2, model.tileSize)
-  return deviceOf(model.workspaces, narrow, model.screenAspect, model.deviceCols, model.tileSize, model.fitW)
+  return deviceOf(model.workspaces, narrow, model.screenAspect, model.deviceCols, model.tileSize, model.fitCols)
 }
 
 type Put = HTMLElement & { _t?: string; _o?: number; _l?: number; _h?: string; _d?: number }

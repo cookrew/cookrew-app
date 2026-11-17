@@ -3,7 +3,7 @@
 // pick is remembered per form factor, and anything else stored falls back to
 // the form factor's own default (2 on a phone, 5 on a desk).
 import { describe, expect, it } from 'vitest'
-import { crewOf, CREW_COLS, defaultCrewCols, defaultDeviceCols, deviceOf, DEVICE_COLS, SWS, TILE, TILE_DRAWN_W, TILE_SIZES, gridColsFor } from '../src/renderer/src/zoom/zoom-layout'
+import { crewOf, CREW_COLS, defaultCrewCols, defaultDeviceCols, deviceOf, DEVICE_COLS, SWS, TILE, TILE_DRAWN_W, TILE_SIZES, gridColsFor, screenGridCols } from '../src/renderer/src/zoom/zoom-layout'
 import { crewColsOf, crewColsKey, perRowChoices, perRowKey, tileSizeOf } from '../src/renderer/src/zoom/crew-cols'
 import { deviceOfModel, layoutOf, type FrameModel } from '../src/renderer/src/zoom/zoom-frame'
 import { deviceCam } from '../src/renderer/src/zoom/zoom-camera'
@@ -166,30 +166,33 @@ describe('the workspaces grid, as many to a row as the screen holds', () => {
   const model = (over: Partial<FrameModel>): FrameModel => ({ agents: [], items: [], links: [], ties: [], workspaces: ids(9), otherMachines: 0, active: 'w0', newest: null, ...over })
   const type = (d: ReturnType<typeof deviceOf>, w: number, h: number, narrow: boolean): number => deviceCam(d, w, h, narrow).S * SWS * (TILE.w / TILE_DRAWN_W)
 
-  it('a phone holds one, a desk four, a wide screen more, a larger type fewer', () => {
-    expect(gridColsFor(390, true)).toBe(1)
+  it('a phone upright two to a row; a desk four, a wide screen more, a phone on its side as many as fit; a larger type fewer', () => {
+    expect(screenGridCols(390, 795, true)).toBe(2)
+    expect(screenGridCols(844, 390, false)).toBe(gridColsFor(844, false))
+    expect(screenGridCols(844, 390, false)).toBeGreaterThanOrEqual(2)
+    expect(screenGridCols(1440, 851, false)).toBe(4)
     expect(gridColsFor(1440, false)).toBe(4)
     expect(gridColsFor(2560, false)).toBeGreaterThan(4)
     expect(gridColsFor(1440, false, 1.3)).toBeLessThan(4)
   })
 
-  it('a full row fills the width, every tile at least an agent card’s type', () => {
-    for (const [w, h, narrow] of [[390, 795, true], [1440, 851, false], [2560, 1400, false]] as const) {
-      const d = deviceOfModel(model({ fitW: w }), narrow)
-      expect(rowsOf(d.at)[0]).toBe(gridColsFor(w, narrow))
-      expect(type(d, w, h, narrow)).toBeGreaterThanOrEqual(1 - 1e-9)
+  it('a full row fills the width; on a desk or a phone on its side every tile at least an agent card’s type', () => {
+    for (const [w, h, narrow] of [[390, 795, true], [844, 390, false], [1440, 851, false], [2560, 1400, false]] as const) {
+      const d = deviceOfModel(model({ fitCols: screenGridCols(w, h, narrow) }), narrow)
+      expect(rowsOf(d.at)[0]).toBe(screenGridCols(w, h, narrow))
+      if (!(narrow && h > w)) expect(type(d, w, h, narrow)).toBeGreaterThanOrEqual(1 - 1e-9)
       expect(d.box.w * deviceCam(d, w, h, narrow).S).toBeCloseTo(w - 32, 6)
     }
   })
 
   it('fewer than a row stand at their own type, not stretched', () => {
-    const d = deviceOfModel(model({ fitW: 1440, workspaces: ids(2) }), false)
+    const d = deviceOfModel(model({ fitCols: screenGridCols(1440, 851, false), workspaces: ids(2) }), false)
     expect(rowsOf(d.at)).toEqual([2])
     expect(type(d, 1440, 851, false)).toBeCloseTo(1, 6)
   })
 
   it('the devices stop lays the machine as its desktop does, two to a row, whatever the screen', () => {
-    const d = deviceOfModel(model({ workspaces: ids(5), fitW: 390, deviceDesk: true }), true)
+    const d = deviceOfModel(model({ workspaces: ids(5), fitCols: 2, deviceDesk: true }), true)
     expect(rowsOf(d.at)).toEqual([2, 2, 1])
     expect(d.box).toEqual(deviceOf(ids(5), false, undefined, 2).box)
   })

@@ -18,7 +18,7 @@ import { hostPlatform } from '../../../shared/machine-words'
 import { MachineTrustRow, useMachineTrust } from './MachineTrustRow'
 import { ShelfCard } from './ShelfCard'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
-import { DEFAULT_TILE_SIZE, defaultCrewCols, machineFrameOf, machinesAt, shelfPage, TILE_SIZES } from './zoom-layout'
+import { DEFAULT_TILE_SIZE, defaultCrewCols, machineFrameOf, machinesAt, screenGridCols, shelfPage, TILE_SIZES } from './zoom-layout'
 import { useCrewCols, useTileSize } from './crew-cols'
 import { ViewTools, type PerRow, type TileSizePick } from './ViewTools'
 import { deviceOfModel, deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from './zoom-frame'
@@ -251,8 +251,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // whatever this screen is. Read off the stop aimed at. At the workspaces stop the grid takes as many as the screen holds.
   const deviceDesk = zoom.v < -1.5
   const frame = useMemo(
-    () => ({ ...model.frame, crewCols: crewCols ?? undefined, tileSize: tileSize ?? undefined, fitW: size.w, deviceDesk }),
-    [model.frame, crewCols, tileSize, size.w, deviceDesk]
+    () => ({ ...model.frame, crewCols: crewCols ?? undefined, tileSize: tileSize ?? undefined, fitCols: screenGridCols(size.w, size.h, narrow, tileSize ?? DEFAULT_TILE_SIZE), deviceDesk }),
+    [model.frame, crewCols, tileSize, size.w, size.h, narrow, deviceDesk]
   )
   const device = useMemo(() => deviceOfModel(frame, narrow), [frame, narrow])
   const motion = useZoomMotion(frame, collect, root, pan)
