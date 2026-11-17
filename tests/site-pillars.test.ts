@@ -182,6 +182,8 @@ describe('the pictures say what they are (2026-11-17)', () => {
     expect(body).toMatch(/<input type="radio" name="th" id="th-auto" checked>.*id="th-day".*id="th-night"/s)
     expect(SITE_STYLE).toContain(':root:has(#th-night:checked) .v-night{display:block}')
     expect(SITE_STYLE).toContain(':root:not(:has(#th-day:checked)) .v-night{display:block}')
+    // By day the twin is hidden by a rule that outranks figure.shot picture/video{display:block}, or both would show.
+    expect(SITE_STYLE).toContain('figure.shot .v-night{display:none}')
   })
 
   it('every picture is in one section of one page, never two (2026-11-17, second round)', () => {

@@ -512,7 +512,7 @@ ul.claims{list-style:none;margin:0;padding:0;border-top:1px solid var(--hair);di
 figure.shot{margin:0;border:1px solid var(--hair);box-shadow:var(--lift);background:var(--phos-bg);overflow:hidden}
 figure.shot picture{display:block}
 /* a picture's night twin (site-frames.ts): shown at night, the day one hidden */
-.v-night{display:none}
+figure.shot .v-night{display:none}
 @media (prefers-color-scheme:dark){.v-day{display:none}.v-night{display:block}}
 /* the language and the theme, in the header */
 .prefs{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
