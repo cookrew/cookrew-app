@@ -11,7 +11,7 @@
  *             agents step up into a shelf above them, one row in the
  *             troop's form, a page at a time
  */
-import { stripPage } from '../pets/pet-dock'
+import { GROUP_FACE, GROUP_SEAL_GAP, GROUP_STEP, groupFade, groupFits } from './agents-group'
 
 export interface Pos {
   x: number
@@ -266,10 +266,10 @@ export interface Thumbs {
   /** The grid's row pitch in scene px: the view mounts only the rows on screen (ZoomView). */
   rowH: number
   /**
-   * The shelf, one row in the troop's form (shelfPage): who stands on it in
-   * order, its first face's x and its y, and how many faces a page holds.
+   * The shelf, one row in the agents group's form (shelfRow): who stands on it
+   * in order, its left edge, its width and its y, in scene px.
    */
-  shelf: { order: string[]; left: number; y: number; per: number }
+  shelf: { order: string[]; left: number; span: number; y: number }
   /** Where the shelf's band is anchored: the workspace's label stands above it (zoom-frame.ts · paint). */
   shelfY: number
   box: Box
@@ -277,28 +277,8 @@ export interface Thumbs {
 
 /** A thumbnail's width (zoom.css · .zv-ip > .zv-th, 168x108). */
 const THUMB_W = 168
-/** A face on the shelf, in scene px: zoom.css · .zv-av, 64px drawn at the shelf's 0.5. */
-export const SHELF_FACE = 32
-/**
- * THE SHELF IS THE AGENTS' GROUP (owner, 2026-11-03: "the agents over the
- * artifacts in the agents group's form"): each face lies over the one before
- * it as the troop's do (pets.css · STACKED: 16 of a 28 px face seen), and the
- * "+N" chip stands after the last, the troop's gap away.
- */
-export const SHELF_STEP = Math.round((SHELF_FACE * 16) / 28)
-export const SHELF_MORE_GAP = 8
 /** The faces stand lower than the band's anchor, where their names stood: the label's counts above them stay clear. */
 const SHELF_DROP = 30
-
-/**
- * How many faces a page of the shelf holds across `span` scene px: all of
- * them when they fit, else as many as leave room for the "+N" chip (owner,
- * 2026-11-03: "more agents a page, four is too few").
- */
-export function shelfPer(count: number, span: number): number {
-  const fit = (room: number): number => Math.max(1, Math.floor((room - SHELF_FACE) / SHELF_STEP) + 1)
-  return count <= fit(span) ? Math.max(1, count) : fit(span - SHELF_MORE_GAP - SHELF_FACE)
-}
 
 export function thumbsOf(items: readonly CrewItem[], agents: readonly CrewAgent[], narrow: boolean): Thumbs {
   const order = [...items].sort((a, b) => b.owners.length - a.owners.length).map((i) => i.id)
@@ -324,32 +304,44 @@ export function thumbsOf(items: readonly CrewItem[], agents: readonly CrewAgent[
     order,
     at,
     rowH,
-    shelf: { order: [...linked, ...loose].map((a) => a.id), left: -span / 2 + SHELF_FACE / 2, y: shelfY + SHELF_DROP, per: shelfPer(agents.length, span) },
+    shelf: { order: [...linked, ...loose].map((a) => a.id), left: -span / 2, span, y: shelfY + SHELF_DROP },
     shelfY,
-    // The box is the grid's: a long shelf turns pages (shelfPage), it never widens the view.
+    // The box is the grid's: a long shelf scrolls along (shelfRow), it never widens the view.
     box: { w: narrow ? 400 : 820, h: gridH + 520, cy: (shelfY - 80 + gridH + 160) / 2 }
   }
 }
 
-/** One page of the shelf: each shown face's x, and the "+N" chip (null when every face fits). */
-export interface ShelfPage {
+/** The shelf at one scroll: each face's x and how much of it shows, where the seal stands, how many fit, how far it scrolls. */
+export interface ShelfRow {
   x: Record<string, number>
-  more: { x: number; rest: number; last: boolean } | null
+  o: Record<string, number>
+  /** The seal's left edge, in scene px. */
+  seal: number
+  per: number
+  max: number
 }
 
 /**
- * A PAGE OF THE SHELF, as the troop's strip turns one (pets/pet-dock.ts ·
- * stripPage): the same row, the next `per` faces, the chip saying how many
- * are still behind it, and "–" on the last page, back to the first. `page`
- * counts taps on the chip and wraps.
+ * THE SHELF IS THE AGENTS GROUP (agents-group.tsx; owner, 2026-11-17: "所有的
+ * agents group统一样式"): faces at 36 px on screen a gap apart, a swipe along
+ * the row (`scroll`, in faces) instead of "+N" pages, fading out at its ends,
+ * the seal with the whole count after the last shown. `k` is a screen px in
+ * scene px (1 over the thumbnails' camera scale): the row keeps its size on
+ * screen whatever the camera draws the grid at.
  */
-export function shelfPage(shelf: Thumbs['shelf'], page: number): ShelfPage {
-  const { start, end, rest, last } = stripPage(shelf.order.length, shelf.per, page)
+export function shelfRow(shelf: Thumbs['shelf'], scroll: number, k: number): ShelfRow {
+  const n = shelf.order.length
+  const per = Math.max(1, Math.min(n, groupFits(shelf.span / k)))
+  const max = Math.max(0, n - per)
+  const at = Math.min(max, Math.max(0, scroll))
   const x: Record<string, number> = {}
-  shelf.order.slice(start, end).forEach((id, k) => (x[id] = shelf.left + k * SHELF_STEP))
-  if (shelf.order.length <= Math.max(1, shelf.per)) return { x, more: null }
-  const lastX = shelf.left + (end - start - 1) * SHELF_STEP
-  return { x, more: { x: lastX + SHELF_FACE + SHELF_MORE_GAP, rest, last } }
+  const o: Record<string, number> = {}
+  shelf.order.forEach((id, i) => {
+    const d = i - at
+    x[id] = shelf.left + k * (GROUP_FACE / 2 + d * GROUP_STEP)
+    o[id] = groupFade(d, per)
+  })
+  return { x, o, seal: shelf.left + k * (GROUP_FACE + (Math.min(n, per) - 1) * GROUP_STEP + GROUP_SEAL_GAP), per, max }
 }
 
 /** A machine's screen when its display is not known: a MacBook's 16:10. */

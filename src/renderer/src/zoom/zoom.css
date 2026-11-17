@@ -1307,22 +1307,21 @@
    the agents group's form): a face's size and ring after the page's last
    face, as the troop's "+N" (pets.css · .cr-pet.more); it turns the page, and
    says "–" on the last one. The painter places it and shows it. */
+/* The shelf's seal (agents-group.tsx · GroupSeal): the whole count after the
+   last face shown, drawn at its own size on screen (zoom-frame.ts scales it
+   by the camera's inverse about its top-left). */
 .zv-shelf-more {
   position: absolute;
   left: 0;
   top: 0;
   z-index: 12;
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
+  display: block;
+  height: 18px;
   padding: 0;
-  border: 1px solid var(--zv-hair-2);
-  border-radius: 50%;
-  background: var(--zv-paper);
-  box-shadow: 0 2px 6px var(--zv-shadow-sm);
-  color: var(--zv-ink-soft);
-  font: 700 10px/1 var(--font-mono);
+  border: 0;
+  background: none;
+  line-height: 0;
+  transform-origin: 0 0;
   cursor: pointer;
   will-change: transform, opacity;
 }
@@ -1383,10 +1382,8 @@
     color: var(--zv-ink);
   }
 
-  .zv-shelf-more:hover {
-    box-shadow:
-      0 0 0 2px var(--zv-paper),
-      0 0 0 3.5px var(--zv-seal);
+  .zv-shelf-more:hover .ag-seal {
+    filter: brightness(1.12);
   }
 
   .zv-grp button.zv-seal:hover {

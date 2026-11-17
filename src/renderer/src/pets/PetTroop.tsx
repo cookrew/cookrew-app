@@ -4,7 +4,8 @@ import { cardPlacement, clampSpot, nameTagSpot, petClick, petHome, readSpot, typ
 import { CONTENT_FRAMES, MORPH_EASE, MORPH_MS, morphFrames } from './pet-morph'
 import { CARD_PARTS, FACE_PARTS, FULL_PARTS, findParts, pageZoomEnv, waitFor, zoomStep } from './pet-zoom'
 import { FLOOR_PARTS, stageFloorNow } from './stage-floor'
-import { dockedSpot, nearDock, PHONE_PX, rowSpot, sheetBox, sheetOf, stripFaces, stripPage, type Box } from './pet-dock'
+import { dockedSpot, nearDock, PHONE_PX, rowSpot, sheetBox, sheetOf, stripFaces, stripPage, stripRoom, type Box } from './pet-dock'
+import { GroupSeal, GROUP_GAP, GROUP_STEP, groupFade } from '../zoom/agents-group'
 import './pets.css'
 
 /**
@@ -119,7 +120,9 @@ export function PetTroop({
   cardClass,
   cardLabel = () => '',
   renderCard,
-  dockable = false
+  dockable = false,
+  group = false,
+  total
 }: {
   side: 'left' | 'right'
   /** Where it remembers its spot and whether it is tucked. */
@@ -136,6 +139,15 @@ export function PetTroop({
   renderCard?: (id: string, controls: CardControls) => React.ReactNode
   /** A full view is up: the troop may attach to its panel (pet-dock.ts). */
   dockable?: boolean
+  /**
+   * THE AGENTS GROUP'S FORM (zoom/agents-group.tsx; owner, 2026-11-17: "所有的agents group统一样式
+   * … 桌面端右侧边，仅改竖排列"): everyone in one strip that scrolls (a column; a phone's strip, a
+   * row), faces at 36 px a gap apart, fading out at its ends, and the seal with the whole count
+   * after them; no "+N". The agents' troop only: the browsers and notes keep theirs.
+   */
+  group?: boolean
+  /** The whole count the group's seal says (the workspace's agents, the one a full view shows too); its faces' count when not given. */
+  total?: number
 }): React.JSX.Element | null {
   const spotKey = `${storageKey}.spot`
   const tuckedKey = `${storageKey}.tucked`
@@ -178,7 +190,40 @@ export function PetTroop({
   const strip = docked && window.innerWidth <= PHONE_PX
   // The strip pages through everyone, as many a page as its row holds (stripFaces); floating, the troop keeps its few.
   const paged = stripPage(members.length + more.length, strip ? Math.max(members.length, stripFaces(side, window.innerWidth)) : members.length, page)
-  const shown = tucked ? members.slice(0, 1) : strip ? [...members, ...more].slice(paged.start, paged.end) : expanded ? [...members, ...more] : members
+  const shown = tucked ? members.slice(0, 1) : group || expanded ? [...members, ...more] : strip ? [...members, ...more].slice(paged.start, paged.end) : members
+  const groupRef = useRef<HTMLDivElement>(null)
+  /** The group's faces fade out past either end of its strip as it scrolls (agents-group.tsx · groupFade). */
+  const fadeGroup = useCallback((): void => {
+    const el = groupRef.current
+    if (!el) return
+    const row = getComputedStyle(el).flexDirection === 'row'
+    const scroll = row ? el.scrollLeft : el.scrollTop
+    const room = row ? el.clientWidth : el.clientHeight
+    const fits = (row ? el.scrollWidth : el.scrollHeight) <= room + 1
+    const per = Math.max(1, Math.floor((room + GROUP_GAP) / GROUP_STEP))
+    ;[...el.children].forEach((face, i) => {
+      const fade = fits ? 1 : groupFade(i - scroll / GROUP_STEP, per)
+      ;(face as HTMLElement).style.setProperty('--ag-fade', String(Math.round(fade * 100) / 100))
+    })
+  }, [])
+  /** A strip longer than its room ends on a whole face: the seal stands a gap after the last one shown, not after an empty end. */
+  const sizeGroup = useCallback((): void => {
+    const el = groupRef.current
+    if (!el) return
+    const row = getComputedStyle(el).flexDirection === 'row'
+    const key = row ? 'width' : 'height'
+    el.style[key] = ''
+    const room = row ? el.clientWidth : el.clientHeight
+    const whole = (row ? el.scrollWidth : el.scrollHeight) > room + 1 ? Math.max(1, Math.floor((room + GROUP_GAP) / GROUP_STEP)) * GROUP_STEP - GROUP_GAP : 0
+    if (whole > 0) el.style[key] = `${whole}px`
+    fadeGroup()
+  }, [fadeGroup])
+  useLayoutEffect(() => {
+    if (!group) return
+    sizeGroup()
+    window.addEventListener('resize', sizeGroup)
+    return () => window.removeEventListener('resize', sizeGroup)
+  })
   const shownKey = shown.map((member) => member.id).join(' ')
   useEffect(() => {
     onShown?.(shownKey ? shownKey.split(' ') : [])
@@ -351,6 +396,8 @@ export function PetTroop({
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
     if (event.button !== 0) return
+    // A finger on the group's strip swipes it along; the grip still moves the troop.
+    if (group && event.pointerType !== 'mouse' && groupRef.current?.contains(event.target as Node)) return
     drag.current = { x: event.clientX, y: event.clientY, spot, moved: false, id: event.pointerId }
   }
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -497,11 +544,43 @@ export function PetTroop({
     </button>
   )
 
+  const face = (member: TroopMember): React.JSX.Element => (
+    <button
+      key={member.id}
+      ref={(el) => {
+        if (el) petRefs.current.set(member.id, el)
+        else petRefs.current.delete(member.id)
+      }}
+      type="button"
+      className={`cr-pet ${member.className}${openId === member.id ? ' open' : ''}${hoverId === member.id && !tucked ? ' named' : ''}`}
+      aria-label={member.label}
+      aria-expanded={openId === member.id}
+      onPointerEnter={(event) => {
+        if (event.pointerType !== 'mouse' || tucked || drag.current?.moved) return
+        nameFace(member.id, event.currentTarget)
+      }}
+      onPointerLeave={() => setHoverId((at) => (at === member.id ? null : at))}
+      // The keyboard names a face as a pointer does; Enter is its click.
+      onFocus={(event) => !tucked && event.currentTarget.matches(':focus-visible') && nameFace(member.id, event.currentTarget)}
+      onBlur={() => setHoverId((at) => (at === member.id ? null : at))}
+      onClick={() => clickPet(member.id)}
+    >
+      {member.face}
+      {!tucked && (
+        // Pinned to the screen (position: fixed) so neither the troop's scroll nor its edge cuts it.
+        <span className="cr-pet-name" aria-hidden="true" style={hoverId === member.id && tagSpot ? { position: 'fixed', ...tagSpot } : undefined}>
+          {member.name}
+        </span>
+      )}
+      {tucked && hidden > 0 && <span className="cr-pet-count">{hidden + 1}</span>}
+    </button>
+  )
+
   return createPortal(
     <>
       <div
         ref={troopRef}
-        className={`cr-pets ag-ink ${side}${tucked ? ' tucked' : ''}${expanded && !strip ? ' expanded' : ''}${docked ? ' docked' : ''}${near ? ' snap' : ''}`}
+        className={`cr-pets ag-ink ${side}${group ? ' group' : ''}${tucked ? ' tucked' : ''}${expanded && !strip ? ' expanded' : ''}${docked ? ' docked' : ''}${near ? ' snap' : ''}`}
         style={
           docked && dockAt
             ? { left: dockAt.left, top: dockAt.top }
@@ -520,38 +599,15 @@ export function PetTroop({
         }}
       >
         {grip}
-        {shown.map((member) => (
-          <button
-            key={member.id}
-            ref={(el) => {
-              if (el) petRefs.current.set(member.id, el)
-              else petRefs.current.delete(member.id)
-            }}
-            type="button"
-            className={`cr-pet ${member.className}${openId === member.id ? ' open' : ''}${hoverId === member.id && !tucked ? ' named' : ''}`}
-            aria-label={member.label}
-            aria-expanded={openId === member.id}
-            onPointerEnter={(event) => {
-              if (event.pointerType !== 'mouse' || tucked || drag.current?.moved) return
-              nameFace(member.id, event.currentTarget)
-            }}
-            onPointerLeave={() => setHoverId((at) => (at === member.id ? null : at))}
-            // The keyboard names a face as a pointer does; Enter is its click.
-            onFocus={(event) => !tucked && event.currentTarget.matches(':focus-visible') && nameFace(member.id, event.currentTarget)}
-            onBlur={() => setHoverId((at) => (at === member.id ? null : at))}
-            onClick={() => clickPet(member.id)}
-          >
-            {member.face}
-            {!tucked && (
-              // Pinned to the screen (position: fixed) so neither the troop's scroll nor its edge cuts it.
-              <span className="cr-pet-name" aria-hidden="true" style={hoverId === member.id && tagSpot ? { position: 'fixed', ...tagSpot } : undefined}>
-                {member.name}
-              </span>
-            )}
-            {tucked && hidden > 0 && <span className="cr-pet-count">{hidden + 1}</span>}
-          </button>
-        ))}
-        {!tucked && more.length > 0 && (
+        {group ? (
+          <div className="cr-pets-group" ref={groupRef} onScroll={fadeGroup} style={strip ? { maxWidth: stripRoom(side, window.innerWidth) } : undefined}>
+            {shown.map(face)}
+          </div>
+        ) : (
+          shown.map(face)
+        )}
+        {group && !tucked && <GroupSeal count={total ?? members.length + more.length} />}
+        {!group && !tucked && more.length > 0 && (
           strip ? (
             <button type="button" className="cr-pet more" title={paged.last ? 'Back to the first' : `${paged.rest} more`} onClick={toggleMore}>
               {paged.last ? '–' : `+${paged.rest}`}
