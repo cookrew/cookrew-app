@@ -222,18 +222,6 @@ export const FRAME_SIZES: Readonly<Record<string, { width: number; height: numbe
       "height": 1300
     }
   },
-  "demo-board-night.jpg": {
-    "width": 2880,
-    "height": 2400,
-    "twins": [
-      1440,
-      800
-    ],
-    "phone": {
-      "width": 1170,
-      "height": 1170
-    }
-  },
   "demo-docs-crew-night.jpg": {
     "width": 1480,
     "height": 2080,
@@ -241,18 +229,6 @@ export const FRAME_SIZES: Readonly<Record<string, { width: number; height: numbe
       1440,
       800
     ]
-  },
-  "demo-routing-night.jpg": {
-    "width": 2880,
-    "height": 1768,
-    "twins": [
-      1440,
-      800
-    ],
-    "phone": {
-      "width": 1170,
-      "height": 980
-    }
   },
   "demo-crew-phone-night.jpg": {
     "width": 1170,

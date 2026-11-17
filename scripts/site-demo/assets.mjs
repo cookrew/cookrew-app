@@ -25,9 +25,14 @@ const cut = (src, box, dsf, out) => {
 }
 const jpg = (src, file, width) => ff(['-i', src, '-vf', `scale=${width}:-2:flags=lanczos`, '-q:v', width > 1500 ? '4' : '3', `${dest}/${file}`])
 
+/** No night twin: the app's night palette draws a chip in these unreadable (the routing banner's "wired by" chip, the
+ *  board's workspace filter; 2026-11-18), so at night the site shows their day render. Drop one when the app is fixed. */
+const DAY_ONLY = new Set(['demo-routing', 'demo-board'])
+
 /** Every frame, from one directory; `tail` is '' for the day set and '-night' for the night one. */
 function frames(raw, tail) {
   function frame(name, src, { box = null, dsf = 1, max = 2880, phone = null } = {}) {
+    if (tail && DAY_ONLY.has(name)) return
     const file = `${name}${tail}`
     const master = cut(src, box, dsf, `${raw}/m-${name}.png`)
     const width = even(Math.min(size(master)[0], max))

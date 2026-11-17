@@ -76,9 +76,10 @@ describe('the pillars say where every claim stands', () => {
     expect(borrowed[0].text).toMatch(/12 November 2026/)
   })
 
-  it('the watch is beta and the cross-workspace bar is in dev, never shipped', () => {
+  it('the watch is beta; the cross-workspace bar shipped in 0.6.20, the bar across machines is in dev', () => {
     for (const c of claims.filter((c) => /watch|wrist/i.test(`${c.title} ${c.text}`))) expect(c.status, c.title).toBe('beta')
-    for (const c of claims.filter((c) => /one bar/i.test(c.title))) expect(c.status, c.title).toBe('in-dev')
+    for (const c of claims.filter((c) => /one bar/i.test(c.title))) expect(c.status, c.title).toBe('shipped')
+    for (const c of claims.filter((c) => /^The bar on all your machines/.test(c.title))) expect(c.status, c.title).toBe('in-dev')
   })
 
   it('the roadmap labels every phase, and anything not built is planned', () => {
@@ -175,7 +176,8 @@ describe('the pictures say what they are (2026-11-17)', () => {
   })
 
   it('every picture has its night twin, shown at night or when the reader picks night', () => {
-    for (const [key, frame] of Object.entries(DEMO)) expect(frame.night, key).toBeDefined()
+    // Routing and the BOARD have none: the app's night palette draws a chip in each unreadable (scripts/site-demo/assets.mjs DAY_ONLY).
+    for (const [key, frame] of Object.entries(DEMO)) expect(frame.night, key)[['routing', 'board'].includes(key) ? 'toBeUndefined' : 'toBeDefined']()
     const body = home()
     expect(body).toContain('<picture class="v-day">')
     expect(body).toContain('<picture class="v-night">')
