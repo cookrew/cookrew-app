@@ -1,13 +1,17 @@
+import { mkdirSync } from 'node:fs'
+import path from 'node:path'
+import { signInAtHome } from '../../resources/caller-keys.mjs'
 import {
   callerKeyCandidates,
+  callerKeyFile,
   callerSub,
   mintCallerKey,
   readCallerKey,
-  saveCallerKey,
   signChallenge,
   writeKeyFile,
   type CallerKey
 } from './caller-identity'
+import { promotePrivateFile, sweepStaleTemps, type FilePrivacyDeps } from './file-privacy'
 import type { PaymentRequirements } from './x402-rail'
 import { teamPath } from './door-seats'
 import { checkoutSessionOf, isStripeCheckoutUrl } from '../shared/stripe-checkout'
@@ -108,8 +112,35 @@ export interface CallerKeyStore {
   candidates?: (serviceId: string) => string[]
   /** The one file a winning key is promoted to. */
   canonical?: (serviceId: string) => string
+  /** How a key file's privacy is proven (file-privacy.ts); this host by default. */
+  privacy?: FilePrivacyDeps
 }
 
+
+/**
+ * One sign-in per door at a time. Two at once (the gate sheet and a card can
+ * both ask) would each mint a key for the one name; the door binds whichever
+ * arrives first, and the other's file-move could leave the bound key behind.
+ */
+const doorTurns = new Map<string, Promise<unknown>>()
+async function oneAtATime<T>(door: string, run: () => Promise<T>): Promise<T> {
+  const mine = (doorTurns.get(door) ?? Promise.resolve()).catch(() => undefined).then(run)
+  const settled = mine.catch(() => undefined)
+  doorTurns.set(door, settled)
+  try {
+    return await mine
+  } finally {
+    if (doorTurns.get(door) === settled) doorTurns.delete(door)
+  }
+}
+
+
+/**
+ * SIGN IN AT A DOOR WITH THIS DEVICE'S OWN KEY. Which key is tried, kept, made
+ * or let go is the walk shared with the card (resources/caller-keys.mjs, its
+ * six invariants); what is here is this app's own I/O: keys read and written
+ * only once PROVEN private (file-privacy.ts), and filed without replacing.
+ */
 export async function signInToDoor(
   target: ServeTargetRef,
   store: CallerKeyStore = {}
@@ -119,59 +150,54 @@ export async function signInToDoor(
   const serviceId = (face.body as { serviceId?: string } | null)?.serviceId ?? ''
   if (serviceId.length === 0) throw new Error('this door did not say who it is')
 
-  /** One attempt with one key. A fresh challenge each time — they are spent. */
-  const attempt = async (key: CallerKey): Promise<string | null> => {
-    const challenge = await api(target, '/api/call/challenge')
-    if (challenge.status !== 200) {
-      throw new Error(`this door is not answering (${challenge.status})`)
-    }
-    const nonce = (challenge.body as { challenge?: string } | null)?.challenge ?? ''
-    const asserted = await api(target, '/api/call/assert', {
-      body: {
-        sub,
-        challenge: nonce,
-        signature: signChallenge(key, serviceId, sub, nonce),
-        jwk: key.jwk
-      }
-    })
-    return asserted.status === 200 ? (asserted.body as { token: string }).token : null
-  }
-
   // EVERY KEY THIS DEVICE HOLDS FOR THIS DOOR, newest naming scheme first.
   // The account is bound at the door to (serviceId, sub), but keys used to be
   // filed by ADDRESS — so the same account can have a key under the loopback
   // name and another under the LAN name, only one of which the door knows.
-  // Trying them is the caller's own disk answering "which of my keys is this
-  // account?", and the one that works is promoted to the canonical file so the
-  // question is never asked twice.
   const candidates =
     store.candidates?.(serviceId) ?? callerKeyCandidates(target.origin, target.slug, serviceId)
   const canonical = store.canonical?.(serviceId) ?? candidates[0]
-  const promote = (raw: { pub: unknown; priv: unknown }): void =>
-    store.canonical ? writeKeyFile(canonical, raw) : saveCallerKey(serviceId, raw)
-  for (const file of candidates) {
-    const key = readCallerKey(file)
-    if (!key) continue
-    const token = await attempt(key)
-    if (token === null) continue
-    if (file !== canonical) {
-      promote({ pub: key.jwk, priv: key.priv.export({ format: 'jwk' }) })
-    }
-    return token
-  }
+  // Where the account's key is filed; a new key waits beside it until bound.
+  const home = store.canonical ? canonical : callerKeyFile(serviceId)
+  const privacy = store.privacy ?? {}
 
-  // No key we hold is this account — so either we have never signed in here,
-  // or the name belongs to someone else's key. Minting IS the sign-up; the
-  // door refuses it if the name is taken, which is the honest answer.
-  const minted = mintCallerKey()
-  const token = await attempt(minted)
-  if (token === null) {
-    throw new Error(
-      'sign-in refused — this name already belongs to another key at this door'
-    )
-  }
-  promote(minted.raw)
-  return token
+  return oneAtATime(path.resolve(home), async () => {
+    mkdirSync(path.dirname(home), { recursive: true, mode: 0o700 })
+    sweepStaleTemps(path.dirname(home))
+    return signInAtHome<CallerKey, { pub: unknown; priv: unknown }>({
+      home,
+      // The quota a door is counted under: its URL origin, or a relayed door's name.
+      origin: target.slug.startsWith('@') ? target.slug : new URL(target.origin).origin,
+      others: candidates.filter((file) => path.resolve(file) !== path.resolve(home)),
+      readKey: async (file) => {
+        const key = await readCallerKey(file, privacy)
+        return key ? { key, raw: { pub: key.jwk, priv: key.priv.export({ format: 'jwk' }) } } : null
+      },
+      // A fresh challenge each time: they are spent.
+      challenge: async () => {
+        const challenge = await api(target, '/api/call/challenge')
+        if (challenge.status !== 200) throw new Error(`this door is not answering (${challenge.status})`)
+        return (challenge.body as { challenge?: string } | null)?.challenge ?? ''
+      },
+      // A token; null ONLY for a 401; any other answer, a lost one included,
+      // refused nothing and rejects.
+      assert: async (key, nonce) => {
+        const asserted = await api(target, '/api/call/assert', {
+          body: { sub, challenge: nonce, signature: signChallenge(key, serviceId, sub, nonce), jwk: key.jwk }
+        })
+        if (asserted.status === 200) return (asserted.body as { token: string }).token
+        if (asserted.status === 401) return null
+        throw new Error(`this door could not sign anyone in just now (${asserted.status}); try again`)
+      },
+      mint: () => {
+        const minted = mintCallerKey()
+        return { key: minted, raw: minted.raw }
+      },
+      savePending: (file, raw) => writeKeyFile(file, raw, privacy),
+      promote: (from, to) => promotePrivateFile(from, to, privacy),
+      report: (message) => console.error(`Signing in to ${target.slug}: ${message}`)
+    })
+  })
 }
 
 /** Read the rails out of a 402 body, newest terms first. */

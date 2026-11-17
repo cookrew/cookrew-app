@@ -57,6 +57,8 @@ async function ownerApp(access: 'account' | 'paid', priceUsd?: string): Promise<
   const base = mkdtempSync(path.join(tmpdir(), 'e2e-owner-'))
   dirs.push(base)
   const issuer = new CallCredentialService({ base })
+  // Proven private before anything signs: async on Windows (file-privacy.ts).
+  await issuer.prepare()
   const callers = new ServedCallers()
   const served = new ServedTemplates({ orchOf: () => 'Conductor' })
   served.serve({

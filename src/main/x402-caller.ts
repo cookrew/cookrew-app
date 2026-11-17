@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto'
-import { readFileSync, statSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { isAddress } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { parseX402Terms, type X402Terms } from '../shared/x402-terms'
-import { openToOthers } from './file-privacy'
+import { checkFilePrivacy, filePrivacy, type FilePrivacy } from './file-privacy'
 import type { PaymentRequirements } from './x402-rail'
 
 /**
@@ -50,17 +50,37 @@ function readEnvFile(file: string): Map<string, string> {
 
 export class X402CallerError extends Error {}
 
-/** The private key, refused unless the file is private to this user. */
+/**
+ * The private key, refused unless the file is private to this user. Never
+ * waits: on Windows a file not yet proven reads as still being checked
+ * (file-privacy.ts); `signingKey` below waits for the proof instead.
+ */
 function callerPrivateKey(): `0x${string}` {
   const file = CALLER_ENV()
-  let mode: number
+  let privacy: FilePrivacy
   try {
-    mode = statSync(file).mode
+    privacy = filePrivacy(file)
   } catch {
     throw new X402CallerError('no wallet is set up on this device')
   }
-  if (openToOthers(mode)) {
-    throw new X402CallerError(`${file} must be private — run chmod 600 on it`)
+  return keyOf(file, privacy)
+}
+
+/** The key for a signature, once its file is PROVEN private (it may wait for Windows' answer). */
+async function signingKey(): Promise<`0x${string}`> {
+  const file = CALLER_ENV()
+  let privacy: FilePrivacy
+  try {
+    privacy = await checkFilePrivacy(file)
+  } catch {
+    throw new X402CallerError('no wallet is set up on this device')
+  }
+  return keyOf(file, privacy)
+}
+
+function keyOf(file: string, privacy: FilePrivacy): `0x${string}` {
+  if (privacy.open) {
+    throw new X402CallerError(`${file} must be private: ${privacy.why} — ${privacy.fix}`)
   }
   const key = readEnvFile(file).get('X402_CALLER_PRIVATE_KEY')
   if (typeof key !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(key)) {
@@ -113,7 +133,7 @@ export async function buildX402Payment(requirements: PaymentRequirements): Promi
     throw new X402CallerError('this quote is malformed — nothing was signed')
   }
 
-  const account = privateKeyToAccount(callerPrivateKey())
+  const account = privateKeyToAccount(await signingKey())
   const now = Math.floor(Date.now() / 1000)
   const authorization = {
     from: account.address,

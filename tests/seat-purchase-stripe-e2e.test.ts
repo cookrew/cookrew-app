@@ -120,6 +120,8 @@ async function ownerApp(config: StripeConfig): Promise<string> {
   const base = mkdtempSync(path.join(tmpdir(), 'stripe-e2e-owner-'))
   dirs.push(base)
   const issuer = new CallCredentialService({ base })
+  // Proven private before anything signs: async on Windows (file-privacy.ts).
+  await issuer.prepare()
   const callers = new ServedCallers()
   const doorCallers = new DoorCallers()
   const served = new ServedTemplates({ orchOf: () => 'Conductor' })

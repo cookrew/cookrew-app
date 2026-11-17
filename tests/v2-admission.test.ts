@@ -92,9 +92,11 @@ describe('v2 admission — the assert, the 403 and the legacy paths', () => {
     throw new Error('not reached by sign-in')
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     base = mkdtempSync(path.join(tmpdir(), 'v2-admission-'))
     issuer = new CallCredentialService({ base })
+    // Proven private before anything signs: async on Windows (file-privacy.ts).
+    await issuer.prepare()
     callers = new ServedCallers()
     seated = []
     paid = []
@@ -317,9 +319,11 @@ describe('the 402, and the moment it is paid', () => {
   let paid: DoorPayment[]
   let deps: ServedEndpointDeps
 
-  beforeEach(() => {
+  beforeEach(async () => {
     base = mkdtempSync(path.join(tmpdir(), 'v2-admission-pay-'))
     issuer = new CallCredentialService({ base })
+    // Proven private before anything signs: async on Windows (file-privacy.ts).
+    await issuer.prepare()
     paid = []
     deps = {
       issuer,

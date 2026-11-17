@@ -80,6 +80,9 @@ extraResources:
   # Both of them load it from beside themselves: what another machine may print into a pane.
   - from: resources/line-guard.mjs
     to: line-guard.mjs
+  # The card's own sign-in keeps its keys by the same walk as the app.
+  - from: resources/caller-keys.mjs
+    to: caller-keys.mjs
   # The dock icon main sets at launch.
   - from: resources/icon.png
     to: icon.png
