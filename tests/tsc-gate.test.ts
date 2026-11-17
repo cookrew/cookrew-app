@@ -34,6 +34,10 @@ function rig() {
   return { gate, slots, tsc, other, vitest, env }
 }
 
+/** Ended by SIGKILL: POSIX reports the signal; Windows terminates with exit code 1 and no signal. */
+const killedHard = ({ code, signal }: { code: number | null; signal: NodeJS.Signals | null }): boolean =>
+  signal === 'SIGKILL' || (process.platform === 'win32' && signal === null && code === 1)
+
 /** A slot held by this live test process, the same way a real run holds one. */
 const holdSlot = (dir: string) => writeFileSync(path.join(dir, `${Date.now() - 1000}-${process.pid}`), '')
 
@@ -179,9 +183,38 @@ describe('a pool worker through the preload', () => {
     await new Promise((resolve) => setTimeout(resolve, 300))
     const started = Date.now()
     child.disconnect()
-    const signal = await new Promise((resolve) => child.once('exit', (_code, sig) => resolve(sig)))
-    expect(signal).toBe('SIGKILL')
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+      child.once('exit', (code, signal) => resolve({ code, signal }))
+    )
+    expect(killedHard(exit)).toBe(true)
     expect(Date.now() - started).toBeLessThan(5000)
+  })
+
+  // Windows names a path with backslashes: an entry matched on '/' alone made
+  // the preload do nothing when a Windows node loaded it (windows-2022,
+  // PR #125). A POSIX file name may hold a backslash, so the same argv[1] shape
+  // is tried here; on Windows the vitest and pool-worker tests above run on
+  // real backslash paths.
+  it.skipIf(process.platform === 'win32')('knows its entries when the path is written with backslashes', async () => {
+    const r = rig()
+    const root = path.dirname(r.tsc)
+    // CommonJS: ESM refuses a module path that holds a backslash.
+    const vitest = path.join(root, 'win\\node_modules\\vitest\\vitest')
+    writeFileSync(vitest, readFileSync(r.vitest, 'utf8').replace("import os from 'node:os'", "const os = require('node:os')"))
+    const out = spawnSync(process.execPath, [vitest], { env: r.env(), encoding: 'utf8', timeout: 5000 })
+    expect(JSON.parse(out.stdout).forks).not.toBeNull()
+    const worker = path.join(root, 'win\\node_modules\\tinypool\\dist\\entry\\process.js')
+    writeFileSync(worker, "process.on('message', () => {})\nsetTimeout(() => {}, 30000)\n")
+    const child = fork(worker, [], { env: r.env({ CI: '1' }) })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    child.disconnect()
+    expect(await new Promise((resolve) => child.once('exit', (_code, signal) => resolve(signal)))).toBe('SIGKILL')
+    const tsc = path.join(root, 'win\\node_modules\\typescript\\bin\\tsc')
+    writeFileSync(tsc, "process.stdout.write('ran')\n")
+    holdSlot(r.slots)
+    const held = spawnSync(process.execPath, [tsc], { env: r.env({ COOKREW_TSC_MAX_WAIT_MS: '300', COOKREW_TSC_POLL_MS: '20' }), encoding: 'utf8', timeout: 5000 })
+    expect(held.stdout).toBe('ran')
+    expect(held.stderr).toContain('tsc-gate')
   })
 
   it('never touches a fork that is not a pool worker', async () => {

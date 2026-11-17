@@ -46,12 +46,12 @@ export const TSC_GATE_SOURCE = String.raw`'use strict'
 ;(() => {
   try {
     const entry = process.argv[1] || ''
-    if (/(?:^|\/)tinypool\/dist\/entry\/process\.js$/.test(entry)) {
+    if (/(?:^|[\\/])tinypool[\\/]dist[\\/]entry[\\/]process\.js$/.test(entry)) {
       if (process.send) process.once('disconnect', () => process.kill(process.pid, 'SIGKILL'))
       return
     }
-    const vitest = /(?:^|\/)vitest(?:\.mjs)?$/.test(entry)
-    if (!vitest && !/(?:^|\/)_?tsc(?:\.js)?$/.test(entry)) return
+    const vitest = /(?:^|[\\/])vitest(?:\.mjs)?$/.test(entry)
+    if (!vitest && !/(?:^|[\\/])_?tsc(?:\.js)?$/.test(entry)) return
     const env = process.env
     if (env.CI) return
     if (!require('node:worker_threads').isMainThread) return
