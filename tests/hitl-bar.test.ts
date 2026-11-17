@@ -5,11 +5,15 @@
 // the event log the main process writes (phase 1). The owner's own edits never
 // count; a served workspace is a customer's and never counts; a face from
 // another workspace opens a read-only card, and the second tap jumps there.
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path, { join } from 'node:path'
+import { EventLog, type CookrewEvent, type EventQuery } from '../src/main/event-log'
 import { describe, expect, it, vi } from 'vitest'
 import {
   ARTIFACT_TYPES,
+  BOOT_LIMIT,
+  ENDING_TYPES,
   artifactInbox,
   asLogEvent,
   createArtifactFeed,
@@ -163,8 +167,14 @@ describe('the seen book v2: what time each card was last looked at', () => {
 describe('the feed: the log read once at boot, then followed', () => {
   function fakeApi(rows: Record<string, LogEvent[]>) {
     let live: ((raw: unknown) => void) | null = null
+    // The REAL log answers (event-log.ts), the rows appended in time order:
+    // the feed is tested against the query it will meet, not a copy of it.
+    const log = new EventLog(path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-hitl-feed-')), 'events.jsonl'), { flushMs: 60_000 })
+    // The feed's LogEvent reads `actor` as any string; the log's own type is the union it writes.
+    for (const e of Object.values(rows).flat().sort((a, b) => a.timestamp - b.timestamp)) log.append(e as CookrewEvent)
+    log.flush()
     const api = {
-      queryEvents: vi.fn((q?: unknown) => Promise.resolve(rows[(q as { type: string }).type] ?? [])),
+      queryEvents: vi.fn((q?: unknown) => Promise.resolve(log.query((q ?? {}) as EventQuery))),
       onEvent: vi.fn((cb: (raw: unknown) => void) => {
         live = cb
         return () => undefined
@@ -174,15 +184,33 @@ describe('the feed: the log read once at boot, then followed', () => {
   }
   const flush = () => new Promise((r) => setTimeout(r, 0))
 
-  it('asks for each artifact type with a limit, folds them, and sets the starting point at the newest', async () => {
+  it('asks for every artifact type in ONE read with a limit, folds them, and sets the starting point at the newest', async () => {
     const { api } = fakeApi({ 'note.created': [ev('note.created', 'n', 10)], 'browser.navigated': [ev('browser.navigated', 'b', 40, { actor: 'user' })] })
     const cutoffs: number[] = []
     const feed = createArtifactFeed(api, (at) => void cutoffs.push(at))
     feed.start()
     await flush()
-    for (const type of ARTIFACT_TYPES) expect(api.queryEvents).toHaveBeenCalledWith(expect.objectContaining({ type, limit: expect.any(Number) }))
+    // One round trip, not one per type: through the relay each is an exchange of the phone's boot.
+    expect(api.queryEvents).toHaveBeenNthCalledWith(1, { types: [...ARTIFACT_TYPES], limitPerType: BOOT_LIMIT })
     expect(cutoffs).toEqual([40])
     expect(entries(feed.get()).map((e) => e.id)).toEqual(['n'])
+  })
+
+  // The semantics the per-type reads had, kept in one read (limitPerType): the
+  // newest BOOT_LIMIT of EACH type. A type that floods the log fills its own
+  // share and no other's — an agent rewriting notes all day cannot push an
+  // older, unseen page change out of the bar.
+  it('keeps BOOT_LIMIT of each type: a flood of one type evicts no change of another', async () => {
+    const flood = Array.from({ length: BOOT_LIMIT * ARTIFACT_TYPES.length }, (_, i) => ev('note.updated', `n${i}`, 1000 + i))
+    const { api } = fakeApi({ 'note.updated': flood, 'browser.navigated': [ev('browser.navigated', 'old-page', 10)] })
+    const feed = createArtifactFeed(api, () => undefined)
+    feed.start()
+    await flush()
+    const ids = entries(feed.get()).map((e) => e.id)
+    expect(ids).toContain('old-page')
+    expect(ids.filter((id) => id.startsWith('n'))).toHaveLength(BOOT_LIMIT)
+    // And the endings are read back to the oldest change held, the quiet type's.
+    expect(api.queryEvents).toHaveBeenNthCalledWith(2, { types: [...ENDING_TYPES], since: 10 })
   })
 
   it('an empty log starts at zero: everything from now on is new', async () => {
@@ -224,16 +252,22 @@ describe('the feed: the log read once at boot, then followed', () => {
     expect(retries).toHaveLength(1)
   })
 
-  it('reads the deletions with no limit back to the oldest change it holds; none when there is no change', async () => {
-    const { api } = fakeApi({ 'note.created': [ev('note.created', 'n', 30), ev('note.created', 'm', 12)] })
-    createArtifactFeed(api, () => undefined).start()
+  it('reads the endings in one read with no limit back to the oldest change it holds; none when there is no change', async () => {
+    const { api } = fakeApi({
+      'note.created': [ev('note.created', 'n', 30), ev('note.created', 'm', 12)],
+      'note.deleted': [ev('note.deleted', 'm', 20), ev('note.deleted', 'old', 5)]
+    })
+    const feed = createArtifactFeed(api, () => undefined)
+    feed.start()
     await flush()
-    expect(api.queryEvents).toHaveBeenCalledWith({ type: 'browser.closed', since: 12 })
-    expect(api.queryEvents).toHaveBeenCalledWith({ type: 'workspace.deleted', since: 12 })
+    expect(api.queryEvents).toHaveBeenCalledTimes(2)
+    expect(api.queryEvents).toHaveBeenNthCalledWith(2, { types: [...ENDING_TYPES], since: 12 })
+    // The ending it read back is applied: m was deleted after its change.
+    expect(entries(feed.get()).map((e) => e.id)).toEqual(['n'])
     const empty = fakeApi({})
     createArtifactFeed(empty.api, () => undefined).start()
     await flush()
-    expect(empty.api.queryEvents).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'note.deleted' }))
+    expect(empty.api.queryEvents).toHaveBeenCalledTimes(1)
   })
 
   it('says when the boot has landed: before it, a missing card is unknown, not gone', async () => {

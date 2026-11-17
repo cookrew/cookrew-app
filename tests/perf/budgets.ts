@@ -221,8 +221,12 @@ export const LATENCY = {
  *              teams, activity, tuning, skin, and SEVEN log reads: the HITL
  *              bar read /api/events/query once per type, 4 + 3
  *
+ * Since lowered, each by its own change, measured the same way:
+ *   33  the HITL bar's log reads in two (/api/events/query · types +
+ *       limitPerType: still the newest 200 of EACH type): API 23 -> 18
+ *
  * What brings it back toward 24, each its own change: the log reads in two
- * (-5), the lazy chunks and the mark in the entry and its stylesheet (-4),
+ * (-5, done above), the lazy chunks and the mark in the entry and its stylesheet (-4),
  * then the boot's small lists in one read (route, listen, terminal-session,
  * tuning, skin, presets, roles, teams, capabilities, agents: up to -9).
  * The budget is what the boot asks for, not a margin over it: one request
@@ -235,9 +239,9 @@ export const REMOTE_OPEN = {
    * thumbnails excluded, the first beacon counted (perf-remote-open.mjs ·
    * bootCharged). Was 24 (2026-09-08), unenforced from 2026-10-30.
    */
-  maxBootRequests: 38,
+  maxBootRequests: 33,
   /** Of them, /api/ requests (the first beacon included). */
-  maxBootApiRequests: 23,
+  maxBootApiRequests: 18,
   /** Of them, the page and its files. */
   maxBootStaticRequests: 15,
   maxWorkspaceFetches: 1,
@@ -260,7 +264,7 @@ export const REMOTE_OPEN = {
    * last boot request answered) would not need the 2 s; it needs a signal the
    * app does not send today.
    */
-  maxLogReads: 7,
+  maxLogReads: 2,
   maxThirdPartyRequests: 0
 } as const
 

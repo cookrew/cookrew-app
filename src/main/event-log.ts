@@ -58,6 +58,13 @@ export interface EventQuery {
   until?: number
   /** Newest-last cap applied after filtering. */
   limit?: number
+  /**
+   * The newest N of EACH event type, applied after filtering and before
+   * `limit`: one busy type cannot crowd another out of a read of several.
+   * Read as `limit` is: zero or less is nothing, a fraction rounds down,
+   * NaN and +Infinity are no cap.
+   */
+  limitPerType?: number
 }
 
 interface EventLogOptions {
@@ -223,6 +230,32 @@ function newestMatches(sources: readonly Source[], query: EventQuery, limit: num
 }
 
 /**
+ * The newest `perType` matches of each type, oldest first. With an exact
+ * `types` list (and no prefix `type`) the walk stops once every listed type is
+ * full; otherwise it reads to the oldest row, as an unlimited query does.
+ */
+function newestPerType(sources: readonly Source[], query: EventQuery, perType: number): CookrewEvent[] {
+  const taken = new Map<string, number>()
+  const listed = query.type === undefined && query.types !== undefined ? new Set(query.types) : null
+  let full = 0
+  const collected: CookrewEvent[] = []
+  for (let s = sources.length - 1; s >= 0; s -= 1) {
+    const source = sources[s]
+    for (let i = lengthOf(source) - 1; i >= 0; i -= 1) {
+      if (listed !== null && full >= listed.size) return collected.reverse()
+      const event = eventAt(source, i)
+      if (!event || !matches(event, query)) continue
+      const n = taken.get(event.type) ?? 0
+      if (n >= perType) continue
+      taken.set(event.type, n + 1)
+      if (n + 1 === perType) full += 1
+      collected.push(event)
+    }
+  }
+  return collected.reverse()
+}
+
+/**
  * Emits 'event' with each appended CookrewEvent (renderer + mobile SSE
  * broadcast hook) in append order, before the batched write lands.
  */
@@ -355,8 +388,17 @@ export class EventLog extends EventEmitter {
     // NaN and +Infinity never trimmed anything (the old `length > limit`
     // test is false for both), so they are no limit here; every other value,
     // -Infinity included, trims exactly as the old tail slice did.
-    const { limit } = query
-    if (limit !== undefined && !Number.isNaN(limit) && limit !== Infinity) {
+    const { limit, limitPerType } = query
+    const capped = limit !== undefined && !Number.isNaN(limit) && limit !== Infinity
+    // As `limit` reads it: NaN and +Infinity are no cap; zero or less is
+    // nothing; a fraction rounds down — never an unbounded read by accident.
+    if (limitPerType !== undefined && !Number.isNaN(limitPerType) && limitPerType !== Infinity) {
+      const perType = Math.floor(limitPerType)
+      if (perType <= 0) return []
+      const each = newestPerType(sources, query, perType)
+      return capped ? each.slice(Math.max(0, each.length - Math.max(0, limit))) : each
+    }
+    if (capped) {
       return newestMatches(sources, query, limit)
     }
     return everyEvent(sources).filter((e) => matches(e, query))

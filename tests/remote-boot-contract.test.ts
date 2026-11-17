@@ -222,6 +222,29 @@ describe('remote-api at boot', () => {
     await expect(api.getWorkspace()).resolves.toEqual({ ok: true })
   })
 
+  // The HITL bar's boot read asks for several types at once (hitl-artifacts.ts):
+  // dropped on the way, the companion would answer every type unfiltered.
+  it('sends a typed log read as one types= list the companion parses back', async () => {
+    const urls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        urls.push(String(url))
+        return jsonResponse(200, { events: [] })
+      })
+    )
+    const { createRemoteApi } = await import('../src/renderer/src/remote-api')
+    const { parseEventQuery } = await import('../src/main/mobile-api')
+    const api = createRemoteApi()
+    await api.queryEvents?.({ types: ['note.created', 'browser.navigated'], limitPerType: 200, limit: 800 })
+    const sent = urls.filter((url) => url.includes('/api/events/query'))
+    expect(sent).toHaveLength(1)
+    const query = parseEventQuery(new URL(sent[0], 'http://companion.local').searchParams)
+    expect(query.types).toEqual(['note.created', 'browser.navigated'])
+    expect(query.limitPerType).toBe(200)
+    expect(query.limit).toBe(800)
+  })
+
   it('says boot=<nonce> on the first stream connect only', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, {})))
     const { createRemoteApi } = await import('../src/renderer/src/remote-api')

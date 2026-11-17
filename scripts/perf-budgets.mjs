@@ -88,7 +88,7 @@ export const BUDGETS = {
     // warn at the CI gate's measured boot (tests/perf/budgets.ts · REMOTE_OPEN,
     // every request named there; it moves with that ledger): a standing warn
     // at the old 24 would hide real growth up to the fail line.
-    bootRequests: { warn: 38, fail: 40 },
+    bootRequests: { warn: 33, fail: 40 },
     thirdPartyRequests: { fail: 0 },
     interactiveMs: { warn: 3000, fail: 6000 },
     firstCardMs: { warn: 2000, fail: 4000 },

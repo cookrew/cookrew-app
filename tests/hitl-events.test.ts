@@ -280,6 +280,10 @@ describe("the phone's event query", () => {
     const q = parseEventQuery(new URLSearchParams('types=agent.waiting,turn.completed&since=100&limit=50'))
     expect(q).toMatchObject({ types: ['agent.waiting', 'turn.completed'], since: 100, limit: 50 })
   })
+  it('reads a per-type limit, and drops one that is not a positive count', () => {
+    expect(parseEventQuery(new URLSearchParams('types=a,b&limitPerType=200')).limitPerType).toBe(200)
+    for (const bad of ['0', '-3', 'x', '']) expect(parseEventQuery(new URLSearchParams(`limitPerType=${bad}`)).limitPerType).toBeUndefined()
+  })
   it('drops empty and oversized entries, and caps how many', () => {
     const many = Array.from({ length: 80 }, (_, i) => `t${i}`).join(',')
     expect(parseEventQuery(new URLSearchParams(`types=${many}`)).types).toHaveLength(32)

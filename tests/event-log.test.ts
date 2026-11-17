@@ -101,6 +101,72 @@ describe('EventLog', () => {
     expect(log.query({ limit: 1 })[0].type).toBe('workspace.switched') // newest kept
   })
 
+  // limitPerType: the newest N of EACH type, so one busy type cannot crowd
+  // another out of a read of several (the HITL bar's boot, hitl-artifacts.ts).
+  it('keeps the newest N of each type apart: a flood of one type evicts no other', () => {
+    const { log } = makeLog()
+    log.append(event({ type: 'browser.navigated', entityId: 'old-page', timestamp: 10 }))
+    for (let i = 0; i < 50; i += 1) log.append(event({ type: 'note.updated', entityId: `n${i}`, timestamp: 100 + i }))
+    log.append(event({ type: 'browser.navigated', entityId: 'new-page', timestamp: 500 }))
+    log.append(event({ type: 'terminal.created', entityId: 'unlisted', timestamp: 600 }))
+    log.flush()
+    const rows = log.query({ types: ['note.updated', 'browser.navigated'], limitPerType: 3 })
+    // Oldest first, as every query answers; three notes, and BOTH browser rows.
+    expect(rows.map((e) => e.entityId)).toEqual(['old-page', 'n47', 'n48', 'n49', 'new-page'])
+  })
+
+  // THE EQUIVALENCE the HITL boot read rests on (hitl-artifacts.ts): one read
+  // with limitPerType N returns exactly the rows of one `limit: N` read per
+  // type, and so the same oldest row. Random logs, rotated across files.
+  it('equals one limit read per type, row for row, on random logs across rotated files', () => {
+    const types = ['note.created', 'note.updated', 'browser.created', 'browser.navigated']
+    let seed = 7
+    const random = (): number => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
+    for (let round = 0; round < 8; round += 1) {
+      const { log } = makeLog({ maxBytes: 4 * 1024, keepFiles: 6 })
+      const total = 40 + Math.floor(random() * 160)
+      for (let i = 0; i < total; i += 1) {
+        // Skewed: one type floods, as an agent rewriting notes does.
+        const type = random() < 0.7 ? 'note.updated' : types[Math.floor(random() * types.length)]
+        log.append(event({ type, entityId: `e${round}-${i}`, timestamp: 1000 + i, workspaceId: random() < 0.5 ? 'ws-a' : 'ws-b' }))
+        if (i % 25 === 0) log.flush()
+      }
+      log.flush()
+      for (const perType of [1, 3, 10]) {
+        for (const filter of [{}, { workspaceId: 'ws-a' }, { since: 1000 + Math.floor(total / 3) }]) {
+          const joint = log.query({ ...filter, types, limitPerType: perType })
+          const apart = types.flatMap((type) => log.query({ ...filter, type, limit: perType }))
+          expect(new Set(joint.map((e) => e.entityId))).toEqual(new Set(apart.map((e) => e.entityId)))
+          expect(joint).toHaveLength(apart.length)
+          const oldest = (rows: CookrewEvent[]): number => Math.min(...rows.map((e) => e.timestamp))
+          if (apart.length > 0) expect(oldest(joint)).toBe(oldest(apart))
+        }
+      }
+    }
+  })
+
+  it('a per-type limit of zero or less reads nothing, and a fraction rounds down, as limit does', () => {
+    const { log } = makeLog()
+    for (let i = 0; i < 4; i += 1) log.append(event({ type: 'note.created', entityId: `c${i}`, timestamp: 10 + i }))
+    log.flush()
+    for (const none of [0, -2, -Infinity]) expect(log.query({ types: ['note.created'], limitPerType: none })).toEqual([])
+    expect(log.query({ types: ['note.created'], limitPerType: 2.7 }).map((e) => e.entityId)).toEqual(['c2', 'c3'])
+    expect(log.query({ types: ['note.created'], limitPerType: Number.NaN })).toHaveLength(4)
+  })
+
+  it('applies limitPerType before limit, and with the other filters', () => {
+    const { log } = makeLog()
+    for (let i = 0; i < 5; i += 1) {
+      log.append(event({ type: 'note.created', entityId: `c${i}`, timestamp: 10 + i }))
+      log.append(event({ type: 'note.deleted', entityId: `d${i}`, timestamp: 20 + i, workspaceId: i % 2 === 0 ? 'ws-a' : 'ws-b' }))
+    }
+    log.flush()
+    // Two of each (c3 d3 c4 d4, in the log's order), then the newest three of those.
+    expect(log.query({ types: ['note.created', 'note.deleted'], limitPerType: 2, limit: 3 }).map((e) => e.entityId)).toEqual(['d3', 'c4', 'd4'])
+    expect(log.query({ types: ['note.deleted'], limitPerType: 2, workspaceId: 'ws-a' }).map((e) => e.entityId)).toEqual(['d2', 'd4'])
+    expect(log.query({ types: ['note.created'], limitPerType: 2, since: 14 }).map((e) => e.entityId)).toEqual(['c4'])
+  })
+
   it('counts by type for metrics', () => {
     const { log } = makeLog()
     log.append(event())
