@@ -8,16 +8,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WorkspaceStore } from '../src/main/store'
 
 describe('a note in a background workspace', () => {
-  const cleanup: Array<() => void> = []
-  afterEach(() => {
-    for (const run of cleanup.splice(0)) run()
+  const cleanup: Array<() => Promise<void>> = []
+  afterEach(async () => {
+    for (const run of cleanup.splice(0)) await run()
   })
   const start = (): { store: WorkspaceStore; noteId: string; dir: string; home: string; other: string } => {
     const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-note-bg-'))
     const store = new WorkspaceStore(dir)
-    // The store writes behind the test: flushed first, or a late file makes the delete ENOTEMPTY.
-    cleanup.push(() => {
+    // The store writes behind the test: its state flushed and its note mirrors settled first, or a late mkdir makes the delete ENOTEMPTY.
+    cleanup.push(async () => {
       store.flush()
+      await store.noteFilesSettled()
       rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     })
     const home = store.list().activeId

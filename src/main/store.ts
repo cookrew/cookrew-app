@@ -1514,6 +1514,11 @@ export class WorkspaceStore extends EventEmitter {
     return next
   }
 
+  /** Every queued .md mirror written (or given up): whoever deletes the folder waits on this, or a late mkdir refills it. */
+  async noteFilesSettled(): Promise<void> {
+    while (this.noteFiles.size > 0) await Promise.all([...this.noteFiles.values()])
+  }
+
   private persistNoteFile(note: NoteNodeData, workspaceId = this.here): Promise<void> {
     const dir = this.notesDirOf(workspaceId)
     return this.queueNoteFile(note.id, async () => {
