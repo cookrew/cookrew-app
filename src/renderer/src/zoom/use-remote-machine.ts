@@ -36,7 +36,8 @@ export async function callRemote(machineId: string, method: 'GET' | 'POST', rout
 /** Can this surface go inside another machine at all. */
 export const canEnterMachines = (): boolean => typeof cookrew().callMachine === 'function'
 
-const lastSeen = new Map<string, RemoteCards>()
+/** What was last read for a machine and workspace, and when it landed (this page's clock). */
+const lastSeen = new Map<string, { readonly cards: RemoteCards; readonly at: number }>()
 const seenKey = (machineId: string, workspaceId: string | null): string => `${machineId}|${workspaceId ?? ''}`
 
 /**
@@ -76,9 +77,22 @@ function usePoll(read: (() => Promise<void>) | null, everyMs: number): () => voi
   return useCallback(() => void once(), [once])
 }
 
+/** Which machine and workspace the cards on show were read for, and when that read landed. */
+export interface RemoteCardsFor {
+  readonly machineId: string
+  readonly workspaceId: string | null
+  readonly at: number
+}
+
 export interface RemoteCardsState {
   /** What was last read: kept when the machine stops answering. */
   readonly cards: RemoteCards | null
+  /**
+   * What `cards` was read for, and when: right after a change of machine or
+   * workspace, `cards` is still the last key's, or an earlier visit's kept copy
+   * (remote-open.ts settles only on a read of its own key, landed after it asked).
+   */
+  readonly readFor: RemoteCardsFor | null
   /** False once a read got no answer, until one does. */
   readonly answering: boolean
   /** Read now: after something was sent. */
@@ -101,24 +115,30 @@ export function cardsRoute(workspaceId: string | null, openCard: string | null):
 /** The machine's tiles (no workspace), or one workspace's whole crew, with the open card's whole reply. */
 export function useRemoteCards(machineId: string | null, workspaceId: string | null, openCard: string | null = null): RemoteCardsState {
   const key = machineId ? seenKey(machineId, workspaceId) : null
-  const [cards, setCards] = useState<RemoteCards | null>(() => (key ? (lastSeen.get(key) ?? null) : null))
+  const held = (): { cards: RemoteCards; readFor: RemoteCardsFor } | null => {
+    const kept = key && machineId ? lastSeen.get(key) : undefined
+    return kept && machineId ? { cards: kept.cards, readFor: { machineId, workspaceId, at: kept.at } } : null
+  }
+  const [shown, setShown] = useState<{ cards: RemoteCards; readFor: RemoteCardsFor } | null>(held)
   const [answering, setAnswering] = useState(true)
   useEffect(() => {
-    setCards(key ? (lastSeen.get(key) ?? null) : null)
+    setShown(held())
     setAnswering(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
   const read = useCallback(async (): Promise<void> => {
     if (!machineId || !key) return
     const answer = await callRemote(machineId, 'GET', cardsRoute(workspaceId, openCard))
     const read = answer.status === 200 && 'body' in answer ? parseRemoteCards(answer.body) : null
     if (read) {
-      lastSeen.set(key, read)
-      setCards(read)
+      const at = Date.now()
+      lastSeen.set(key, { cards: read, at })
+      setShown({ cards: read, readFor: { machineId, workspaceId, at } })
     }
     setAnswering(read !== null || (answered(answer) && answer.status !== 401))
   }, [machineId, workspaceId, openCard, key])
   const refresh = usePoll(machineId ? read : null, REMOTE_CARDS_MS)
-  return { cards, answering, refresh }
+  return { cards: shown?.cards ?? null, readFor: shown?.readFor ?? null, answering, refresh }
 }
 
 /** A browser's picture on the other machine, as a data URL; the last one stays while a new one comes. */

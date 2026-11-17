@@ -345,6 +345,59 @@ describe('the zoom fleet store', () => {
     expect(store.remoteReads().machines).toEqual([])
   })
 
+  it('lets go of a machine gone offline or unreadable: none of its rows stay for the bar, read or not (phase 6)', async () => {
+    let online = true
+    let readable = true
+    let drawn = true
+    const read = vi.fn(async (_id: string) => snapshot(4))
+    const { api, feed } = fakeApi({ read, machines: async () => ({ ok: true, machines: [machine(ME, 'Studio', true), machine(OTHER, 'Laptop', false, { online })] }) })
+    const store = createZoomFleetStore(() => api, {
+      refreshMs: 10_000,
+      readable: () => readable,
+      remoteWanted: { now: () => drawn, watch: () => () => undefined }
+    })
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.remoteReads().machines.map((m) => m.id)).toEqual([OTHER])
+    // The last other machine goes offline while it is read: what it said last is let go of.
+    online = false
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(store.remoteReads().machines).toEqual([])
+    expect(store.get().machines.find((m) => m.id === OTHER)?.detail).toBe('listed')
+    // Back, read again; then too old for the floor while nothing reads it: not named for the bar either.
+    online = true
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(store.remoteReads().machines.map((m) => m.id)).toEqual([OTHER])
+    drawn = false
+    readable = false
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(store.remoteReads().machines).toEqual([])
+  })
+
+  it('says after each read of the other machines which answered: the HITL log reads ride that clock (phase 6)', async () => {
+    const read = vi.fn(async (_id: string) => snapshot(4))
+    const { api, feed } = fakeApi({ read, machines: async () => ({ ok: true, machines: [machine(ME, 'Studio', true), machine(OTHER, 'Laptop', false)] }) })
+    const store = createZoomFleetStore(() => api)
+    const rounds: string[][] = []
+    const off = store.onRemoteRound((ids) => void rounds.push([...ids]))
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(rounds).toEqual([[OTHER]])
+    // An unchanged answer is still a round: the log may have moved though the fleet did not.
+    await vi.advanceTimersByTimeAsync(REMOTE_READ_MS)
+    expect(rounds).toEqual([[OTHER], [OTHER]])
+    read.mockImplementation(async () => null as unknown as ReturnType<typeof snapshot>)
+    await vi.advanceTimersByTimeAsync(REMOTE_READ_MS)
+    expect(rounds.at(-1)).toEqual([])
+    off()
+    await vi.advanceTimersByTimeAsync(REMOTE_READ_MS)
+    expect(rounds).toHaveLength(3)
+  })
+
   it('the page’s own store reads the other machines only on the Devices side of the path (bytes 0.6.2)', () => {
     const source = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'zoom', 'use-zoom-fleet.ts'), 'utf8')
     expect(source).toContain('remoteWanted: devicesInSight')

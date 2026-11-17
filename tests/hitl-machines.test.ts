@@ -27,7 +27,7 @@ import {
   type RemoteMachineRead
 } from '../src/renderer/src/zoom/remote-hitl'
 import { createHitlWant } from '../src/renderer/src/zoom/remote-hitl-want'
-import { resolveRemoteTarget, type RemoteTarget } from '../src/renderer/src/zoom/remote-open'
+import { cardsFor, resolveRemoteTarget, type RemoteCardsRead, type RemoteTarget } from '../src/renderer/src/zoom/remote-open'
 import type { RemoteCard } from '../src/renderer/src/zoom/remote-machine'
 import { buildFleet, type FleetInput } from '../src/main/fleet/build'
 import type { WorkspaceMeta } from '../src/shared/model'
@@ -70,6 +70,15 @@ describe('the AGENTS of another machine', () => {
   it("a served workspace is a customer's: none of its agents are here", () => {
     const reads = [machine(MINI, 'Mac mini', [ws('w1', [agent('a', 'waiting', 1)], { served: true }), ws('w2', [agent('b', 'waiting', 1)])])]
     expect(remoteAgentsOf(reads).map((e) => e.agentId)).toEqual(['b'])
+  })
+
+  it('a workspace from a desktop older than the served mark is not served: its agents and artifacts are here', () => {
+    const older = ws('w1', [agent('a', 'waiting', 1)])
+    expect('served' in older).toBe(false)
+    const read = machine(MINI, 'Mac mini', [older])
+    expect(remoteAgentsOf([read]).map((e) => e.agentId)).toEqual(['a'])
+    const items = remoteItemsOf(read, eventsOf({ events: [ev('note.updated', 'n', 20)] }), { ...EMPTY_BOOK, cutoff: 0 })
+    expect(items.map((e) => e.id)).toEqual(['n'])
   })
 
   it('a phase with no time takes the snapshot time', () => {
@@ -146,24 +155,26 @@ describe("the read of another machine's log", () => {
     expect(remoteMachineCall('GET', REMOTE_EVENTS_ROUTE)).not.toBeNull()
   })
 
-  it('the allow-list takes type, types, since and limit, bounded, and nothing else', () => {
-    const ok = ['api/events/query?type=note.created&limit=200', 'api/events/query?type=note.deleted&since=1731700000000', 'api/events/query?types=note.created,browser.closed&since=5&limit=10']
-    for (const route of ok) expect(remoteMachineCall('GET', route), route).not.toBeNull()
+  it('the allow-list takes that one route and nothing else: no secret or account rows, no unbounded read, no counts walk', () => {
     const refused = [
       'api/events/query',
-      'api/events/query?workspaceId=w1',
-      'api/events/query?type=note.created&until=5',
-      'api/events/query?limit=12345',
-      'api/events/query?since=-1',
-      'api/events/query?type=Note%20created',
-      `api/events/query?type=${'a'.repeat(65)}`,
-      `api/events/query?types=${Array.from({ length: 17 }, () => 'a').join(',')}`,
-      'api/events/query?type=a&type=b&type=c&type=d&type=e',
-      'api/events/query/../fleet',
-      'api/events?type=a'
+      'api/events/query?limit=9999',
+      'api/events/query?type=secret.read',
+      'api/events/query?type=account.login',
+      'api/events/query?types=secret.read,note.created&limit=300',
+      'api/events/query?type=note.created&limit=200',
+      'api/events/query?types=note.created,browser.closed&since=5&limit=10',
+      REMOTE_EVENTS_ROUTE.replace('limit=300', 'limit=301'),
+      REMOTE_EVENTS_ROUTE.replace('limit=300', 'limit=3000'),
+      `${REMOTE_EVENTS_ROUTE}&since=1`,
+      `${REMOTE_EVENTS_ROUTE}&workspaceId=w1`,
+      REMOTE_EVENTS_ROUTE.replace('note.created,', ''),
+      REMOTE_EVENTS_ROUTE.replace('note.created', 'note_created'),
+      `x${REMOTE_EVENTS_ROUTE}`,
+      'api/events/query/../fleet'
     ]
     for (const route of refused) expect(remoteMachineCall('GET', route), route).toBeNull()
-    expect(remoteMachineCall('POST', 'api/events/query?type=a')).toBeNull()
+    expect(remoteMachineCall('POST', REMOTE_EVENTS_ROUTE)).toBeNull()
   })
 })
 
@@ -174,102 +185,99 @@ describe('the feed of the other machines’ logs', () => {
   const setup = (answer: (machineId: string) => { status: number; body: unknown }) => {
     const call = vi.fn(async (machineId: string, _route: string) => answer(machineId))
     let machines: string[] = [MINI]
-    let hidden = false
-    let sightChanged: (() => void) | null = null
-    const want = createHitlWant()
+    let round: ((ids: readonly string[]) => void) | null = null
     const cutoffs: [string, number][] = []
     const books = new Map<string, SeenBook>()
     const feed = createRemoteArtifactFeed({
       call,
       machines: () => machines,
-      want,
-      sight: { hidden: () => hidden, watch: (cb) => ((sightChanged = cb), () => void (sightChanged = null)) },
+      rounds: (cb) => ((round = cb), () => void (round = null)),
       cutoffOf: (id) => books.get(id)?.cutoff ?? null,
       onCutoff: (id, at) => {
         cutoffs.push([id, at])
         books.set(id, { ...EMPTY_BOOK, cutoff: at })
       }
     })
-    return { call, feed, want, cutoffs, setMachines: (next: string[]) => (machines = next), hide: (next: boolean) => ((hidden = next), sightChanged?.()) }
+    /** The fleet store read the other machines (its own clock: only while a bar or the Devices side wants them, page seen). */
+    const tick = async (): Promise<void> => {
+      round?.(machines)
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    return { call, feed, cutoffs, tick, listening: () => round !== null, setMachines: (next: string[]) => (machines = next) }
   }
 
-  it('reads nothing until the bar wants it, then each machine on the slow clock, and stops when hidden', async () => {
-    const { call, feed, want, hide } = setup(() => ({ status: 200, body: { events: [] } }))
-    feed.subscribe(() => undefined)
+  it("reads on the fleet store's own rounds, no clock of its own, at most once per HITL_REMOTE_MS a machine", async () => {
+    const { call, feed, tick, listening } = setup(() => ({ status: 200, body: { events: [] } }))
+    expect(listening()).toBe(false)
+    const off = feed.subscribe(() => undefined)
     await vi.advanceTimersByTimeAsync(60_000)
     expect(call).not.toHaveBeenCalled()
-    const release = want.claim()
-    await vi.advanceTimersByTimeAsync(0)
+    await tick()
+    expect(call.mock.calls).toEqual([[MINI, REMOTE_EVENTS_ROUTE]])
+    // The Devices pace (5 s) does not make it read faster.
+    await vi.advanceTimersByTimeAsync(5_000)
+    await tick()
     expect(call).toHaveBeenCalledTimes(1)
-    expect(call.mock.calls[0]).toEqual([MINI, REMOTE_EVENTS_ROUTE])
-    await vi.advanceTimersByTimeAsync(HITL_REMOTE_MS * 2)
-    expect(call).toHaveBeenCalledTimes(3)
-    hide(true)
-    await vi.advanceTimersByTimeAsync(HITL_REMOTE_MS * 4)
-    expect(call).toHaveBeenCalledTimes(3)
-    hide(false)
-    await vi.advanceTimersByTimeAsync(0)
-    expect(call).toHaveBeenCalledTimes(4)
-    release()
-    await vi.advanceTimersByTimeAsync(HITL_REMOTE_MS * 4)
-    expect(call).toHaveBeenCalledTimes(4)
+    await vi.advanceTimersByTimeAsync(HITL_REMOTE_MS)
+    await tick()
+    expect(call).toHaveBeenCalledTimes(2)
+    // No bar: it hears no rounds.
+    off()
+    expect(listening()).toBe(false)
   })
 
   it("first sight of a machine starts its book at that machine's own newest change: no flood", async () => {
-    const { feed, want, cutoffs } = setup(() => ({ status: 200, body: { events: [ev('note.created', 'n', 40), ev('note.deleted', 'x', 99), ev('note.updated', 'n', 70)] } }))
+    const { feed, cutoffs, tick } = setup(() => ({ status: 200, body: { events: [ev('note.created', 'n', 40), ev('note.deleted', 'x', 99), ev('note.updated', 'n', 70)] } }))
     feed.subscribe(() => undefined)
-    want.claim()
-    await vi.advanceTimersByTimeAsync(0)
+    await tick()
     expect(cutoffs).toEqual([[MINI, 70]])
     await vi.advanceTimersByTimeAsync(HITL_REMOTE_MS)
+    await tick()
     expect(cutoffs).toHaveLength(1)
   })
 
-  it('an unchanged log is the same state (no re-render); a machine that stops answering or refuses leaves nothing behind', async () => {
+  it('an unchanged log is the same state (no re-render); one failed read keeps the last log; a machine gone from the fleet leaves nothing', async () => {
     let status = 200
-    const { feed, want, setMachines } = setup(() => ({ status, body: status === 200 ? { events: [ev('note.created', 'n', 40)] } : null }))
+    const { feed, tick, setMachines } = setup(() => ({ status, body: status === 200 ? { events: [ev('note.created', 'n', 40)] } : null }))
     const heard = vi.fn()
     feed.subscribe(heard)
-    want.claim()
-    await vi.advanceTimersByTimeAsync(0)
+    await tick()
     const first = feed.get()
     expect(first.get(MINI)?.entries.has('n')).toBe(true)
     const told = heard.mock.calls.length
     await vi.advanceTimersByTimeAsync(HITL_REMOTE_MS)
+    await tick()
     expect(feed.get()).toBe(first)
     expect(heard.mock.calls.length).toBe(told)
-    status = 401
-    await vi.advanceTimersByTimeAsync(HITL_REMOTE_MS)
-    expect(feed.get().has(MINI)).toBe(false)
-    status = 200
-    await vi.advanceTimersByTimeAsync(HITL_REMOTE_MS)
-    expect(feed.get().has(MINI)).toBe(true)
-    // Gone from the fleet's readable machines (offline, too old): dropped at once, asked nothing more.
+    for (const failed of [0, 401, 502]) {
+      status = failed
+      await vi.advanceTimersByTimeAsync(HITL_REMOTE_MS)
+      await tick()
+      expect(feed.get(), String(failed)).toBe(first)
+    }
+    // Gone from the fleet's readable machines (offline, too old, refused): dropped at once, asked nothing more.
     setMachines([])
     feed.machinesChanged()
     expect(feed.get().has(MINI)).toBe(false)
   })
 
-  it('a machine newly readable is read at once, not a slow tick later', async () => {
-    const { call, feed, want, setMachines } = setup(() => ({ status: 200, body: { events: [] } }))
+  it('a machine newly in a round is read at once, the others keep their pace', async () => {
+    const { call, feed, tick, setMachines } = setup(() => ({ status: 200, body: { events: [] } }))
     feed.subscribe(() => undefined)
-    want.claim()
-    await vi.advanceTimersByTimeAsync(0)
+    await tick()
     setMachines([MINI, ATTIC])
-    feed.machinesChanged()
-    await vi.advanceTimersByTimeAsync(0)
-    // Only the new one: the others keep their clock.
+    await tick()
     expect(call.mock.calls.map(([id]) => id)).toEqual([MINI, ATTIC])
   })
 
   it('stopped (another machine in scope), it drops what it read and asks nothing more', async () => {
-    const { call, feed, want } = setup(() => ({ status: 200, body: { events: [ev('note.created', 'n', 40)] } }))
+    const { call, feed, tick } = setup(() => ({ status: 200, body: { events: [ev('note.created', 'n', 40)] } }))
     feed.subscribe(() => undefined)
-    want.claim()
-    await vi.advanceTimersByTimeAsync(0)
+    await tick()
     feed.stop()
     expect(feed.get().size).toBe(0)
     await vi.advanceTimersByTimeAsync(HITL_REMOTE_MS * 3)
+    await tick()
     expect(call).toHaveBeenCalledTimes(1)
   })
 })
@@ -328,8 +336,39 @@ describe('opening a remote face: the machine first, the agent once its view has 
     expect(resolveRemoteTarget(item, place, [card('a', 'w1')], 1000 + 60_000)).toEqual({ step: 'items' })
   })
 
+  it("only a read of the target's own machine and workspace, landed after it was asked for, can settle it", () => {
+    const cards = [card('a', 'w1')]
+    const read = (over: Partial<RemoteCardsRead> = {}): RemoteCardsRead => ({ machineId: MINI, workspaceId: 'w1', at: 1100, cards, ...over })
+    expect(cardsFor(target(), read())).toBe(cards)
+    // The last key's state, or the cache of an earlier visit: not this read.
+    expect(cardsFor(target(), read({ at: 999 }))).toBeNull()
+    expect(cardsFor(target(), read({ workspaceId: 'w2' }))).toBeNull()
+    expect(cardsFor(target(), read({ machineId: ATTIC }))).toBeNull()
+    expect(cardsFor(target(), read({ workspaceId: null }))).toBeNull()
+    expect(cardsFor(target(), null)).toBeNull()
+  })
+
   it('times out on the machine: an agent never found is no target', () => {
     expect(resolveRemoteTarget(target(), place, [card('b', 'w1')], 1000 + 60_000)).toEqual({ step: 'drop' })
+  })
+})
+
+describe('a pending open goes with its machine', () => {
+  it('left, or another machine entered, nothing is opened there later', async () => {
+    const { remotePlace } = await import('../src/renderer/src/zoom/remote-machine-store')
+    const { remoteOpen } = await import('../src/renderer/src/zoom/remote-open')
+    const ask = { machineId: MINI, workspaceId: 'w1', kind: 'agent' as const, id: 'a', name: 'a', at: 0 }
+    remotePlace.enter({ id: MINI, name: 'Mac mini', os: null })
+    remoteOpen.request(ask)
+    remotePlace.workspace({ id: 'w1', name: 'w1' })
+    expect(remoteOpen.pending()).not.toBeNull()
+    remotePlace.leave()
+    expect(remoteOpen.pending()).toBeNull()
+    remotePlace.enter({ id: MINI, name: 'Mac mini', os: null })
+    remoteOpen.request(ask)
+    remotePlace.enter({ id: ATTIC, name: 'Attic', os: null })
+    expect(remoteOpen.pending()).toBeNull()
+    remotePlace.leave()
   })
 })
 
@@ -343,8 +382,9 @@ describe('the source contract', () => {
     expect(groups).toContain('useRemoteHitl()')
     expect(groups).toMatch(/kind: 'agent', id: [\s\S]{0,40}away: true/)
   })
-  it("the remote view settles a pending open from its own read", () => {
+  it("the remote view settles a pending open from its own read, named by the key it was read for", () => {
     expect(read('renderer/src/zoom/RemoteMachineView.tsx')).toContain('remoteOpen.settle(')
+    expect(read('renderer/src/zoom/RemoteMachineView.tsx')).toContain('readFor')
   })
 })
 

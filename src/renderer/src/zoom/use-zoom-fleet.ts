@@ -123,15 +123,25 @@ export interface ZoomFleetStore {
   resume: () => void
   /** The other machines as last read: the same object until a read or the account's list changes. */
   remoteReads: () => RemoteFleetReads
+  /**
+   * Told after each read of the other machines, with the ones that answered:
+   * the HITL bar's log reads ride this clock (remote-hitl.ts), so one machine
+   * is asked on one rhythm, not two.
+   */
+  onRemoteRound: (listener: (answered: readonly string[]) => void) => () => void
 }
 
 const NO_READS: RemoteFleetReads = Object.freeze({ machines: Object.freeze([]) as readonly RemoteFleetRead[] })
 
-/** The other machines that answered, by the account's name for them; never this one. */
-function readsOf(parts: Pick<FleetParts, 'account' | 'remote'>): RemoteFleetReads {
+/**
+ * The other machines that answered, by the account's name for them; never this
+ * one, and never one the account now lists offline or that may not be read: what
+ * it said last is no news of it now.
+ */
+function readsOf(parts: Pick<FleetParts, 'account' | 'remote'>, mayRead: (row: AccountMachine) => boolean): RemoteFleetReads {
   const rows = parts.account?.ok ? parts.account.machines : []
   const machines = rows.flatMap((row) => {
-    const snapshot = row.current ? undefined : parts.remote?.[row.id]
+    const snapshot = row.current || !row.online || !mayRead(row) ? undefined : parts.remote?.[row.id]
     return snapshot ? [{ id: row.id, name: (row.name || snapshot.machine.name).replace(/\.local$/i, ''), snapshot }] : []
   })
   return machines.length === 0 ? NO_READS : { machines }
@@ -162,7 +172,9 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
   let remoteTimer: ReturnType<typeof setInterval> | null = null
   /** The pace the other machines are read at now; null while they are not. */
   let remoteEvery: number | null = null
-  let reads: { account: FleetParts['account']; remote: FleetParts['remote']; value: RemoteFleetReads } | null = null
+  let reads: { account: FleetParts['account']; remote: FleetParts['remote']; readable: string; value: RemoteFleetReads } | null = null
+  const roundListeners = new Set<(answered: readonly string[]) => void>()
+  const mayRead = options.readable ?? ((): boolean => true)
   let remoteKey = ''
   let readingRemote = false
   let unwatch: (() => void) | null = null
@@ -291,8 +303,12 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
   /** The account's other machines, each read through the key this desktop holds for it. */
   const askRemote = async (): Promise<void> => {
     const read = api().machineFleetOf
-    const mayRead = options.readable ?? ((): boolean => true)
     const rows = state.account?.ok ? state.account.machines.filter((row) => !row.current && row.online && mayRead(row)) : []
+    // None left to read (the last went offline, or below the floor): what they said last is let go of.
+    if (rows.length === 0 && state.remote !== undefined && Object.keys(state.remote).length > 0) {
+      remoteKey = JSON.stringify({})
+      set({ remote: {} })
+    }
     if (!read || readingRemote || rows.length === 0) return
     const mine = turns
     readingRemote = true
@@ -302,9 +318,12 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
       if (mine !== turns) return
       const remote = Object.fromEntries(answers.filter((pair): pair is readonly [string, FleetSnapshot] => pair[1] !== null))
       const key = JSON.stringify(remote)
-      if (key === remoteKey) return
-      remoteKey = key
-      set({ remote })
+      if (key !== remoteKey) {
+        remoteKey = key
+        set({ remote })
+      }
+      const answered = Object.keys(remote)
+      for (const listener of roundListeners) listener(answered)
     } finally {
       if (mine === turns) readingRemote = false
     }
@@ -430,12 +449,19 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     },
     get: () => fleet,
     remoteReads: () => {
-      if (reads && reads.account === state.account && reads.remote === state.remote) return reads.value
-      const value = readsOf(state)
+      // Which may be read can change with no new answer (the floor is the scope's): it is part of the key.
+      const rows = state.account?.ok ? state.account.machines : []
+      const readable = rows.filter((row) => !row.current && row.online && mayRead(row)).map((row) => row.id).join(' ')
+      if (reads && reads.account === state.account && reads.remote === state.remote && reads.readable === readable) return reads.value
+      const value = readsOf(state, mayRead)
       // A new answer that names the same machines with the same snapshots is no change to the bar.
       const same = reads !== null && sameReads(reads.value, value)
-      reads = { account: state.account, remote: state.remote, value: same && reads ? reads.value : value }
+      reads = { account: state.account, remote: state.remote, readable, value: same && reads ? reads.value : value }
       return reads.value
+    },
+    onRemoteRound: (listener) => {
+      roundListeners.add(listener)
+      return () => void roundListeners.delete(listener)
     },
     turn: () => {
       closeFeed()

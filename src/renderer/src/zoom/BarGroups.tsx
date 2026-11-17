@@ -224,19 +224,28 @@ export function BarGroups({ workspaceId, nodes, rows, all, workspaces, agents, a
   // What each held face was when its card opened: still drawn, though no longer in the inbox.
   const lastAgent = useRef(new Map<string, AgentEntry>())
   for (const e of agentEntries) lastAgent.current.set(e.id, e)
-  // Another machine's faces, by key; as with this machine's, the last of each stays drawn while its card is open.
-  const lastRemoteAgent = useRef(new Map<string, RemoteAgentEntry>())
-  const lastRemoteItem = useRef(new Map<string, RemoteItemEntry>())
-  for (const e of remote.agents) lastRemoteAgent.current.set(e.key, e)
-  for (const e of remote.items) lastRemoteItem.current.set(e.key, e)
-  const remoteAgentOf = (key: string): RemoteAgentEntry | undefined => lastRemoteAgent.current.get(key)
-  const remoteItemOf = (key: string): RemoteItemEntry | undefined => lastRemoteItem.current.get(key)
+  // Another machine's faces, by key: what the inbox holds now, else the copy kept while its face is still
+  // drawn (its card open, or sliding out), as this machine's are. Kept after each render, never during one.
+  const remoteAgentNow = useMemo(() => new Map(remote.agents.map((e) => [e.key, e])), [remote.agents])
+  const remoteItemNow = useMemo(() => new Map(remote.items.map((e) => [e.key, e])), [remote.items])
+  const heldRemote = useRef<{ agents: ReadonlyMap<string, RemoteAgentEntry>; items: ReadonlyMap<string, RemoteItemEntry> }>({ agents: new Map(), items: new Map() })
+  const remoteAgentOf = (key: string): RemoteAgentEntry | undefined => remoteAgentNow.get(key) ?? heldRemote.current.agents.get(key)
+  const remoteItemOf = (key: string): RemoteItemEntry | undefined => remoteItemNow.get(key) ?? heldRemote.current.items.get(key)
 
   const size = groupSize(narrow)
   const agentPage = usePage(agentIds.length, size)
   const itemPage = usePage(itemIds.length, size)
   const agentStack = useStack(agentIds.slice(agentPage.start, agentPage.end))
   const itemStack = useStack(itemIds.slice(itemPage.start, itemPage.end))
+  // Only what a stack may still draw is kept: the rest of the copies go.
+  useEffect(() => {
+    const keep = (ids: readonly string[]) => <T,>(at: ReadonlyMap<string, T>, now: ReadonlyMap<string, T>): ReadonlyMap<string, T> =>
+      new Map([...at, ...now].filter(([key]) => ids.includes(key)))
+    heldRemote.current = {
+      agents: keep([...agentIds, ...agentStack.order])(heldRemote.current.agents, remoteAgentNow),
+      items: keep([...itemIds, ...itemStack.order])(heldRemote.current.items, remoteItemNow)
+    }
+  })
 
   // The open workspace's browsers want their pictures (thumb-wants.ts), as the troop's do.
   const shownBrowsers = itemStack.order.filter((id) => nodeOf.get(id)?.kind === 'browser').join(' ')

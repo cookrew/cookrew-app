@@ -1,5 +1,6 @@
+import { registerScopeState } from '../machine-scope'
 import type { RemoteCard } from './remote-machine'
-import { remotePlace, remoteSeen, type RemoteItemRef } from './remote-machine-store'
+import { remotePlace, type RemoteItemRef } from './remote-machine-store'
 import { callRemote } from './use-remote-machine'
 
 /**
@@ -40,6 +41,24 @@ export interface StandingAt {
   readonly workspaceId: string | null
   /** An agent the owner opened there meanwhile: their place stands. */
   readonly agentId?: string | null
+}
+
+/** The machine view's read: which machine and workspace it was for, when it landed, what it held. */
+export interface RemoteCardsRead {
+  readonly machineId: string
+  readonly workspaceId: string | null
+  readonly at: number
+  readonly cards: readonly RemoteCard[]
+}
+
+/**
+ * The cards that may settle this target: a read of its own machine and
+ * workspace that landed after it was asked for. Never the last key's state,
+ * nor a copy kept from an earlier visit. Pure.
+ */
+export function cardsFor(target: RemoteTarget, read: RemoteCardsRead | null): readonly RemoteCard[] | null {
+  if (!read || read.machineId !== target.machineId || read.workspaceId !== target.workspaceId || read.at < target.at) return null
+  return read.cards
 }
 
 /** Where the target stands in the machine's read, or why not yet. Pure. */
@@ -86,16 +105,16 @@ export const remoteOpen = {
   request(target: RemoteTarget): void {
     clear()
     pending = target
-    // Given up after the wait, on what the view last read: the machine stays, no wrong target.
+    // Given up after the wait with no read that held it: the machine stays (an artifact: its workspace's artifacts), no wrong target.
     timer = setTimeout(() => {
       timer = null
-      if (pending === target) remoteOpen.settle(standing(), remoteSeen.get().cards, target.at + REMOTE_OPEN_MS)
+      if (pending === target) apply(resolveRemoteTarget(target, standing(), null, target.at + REMOTE_OPEN_MS))
     }, REMOTE_OPEN_MS)
   },
   pending: (): RemoteTarget | null => pending,
-  /** The machine's view read its cards (RemoteMachineView.tsx): go on to the target if they hold it. */
-  settle(at: StandingAt, cards: readonly RemoteCard[] | null, now = Date.now()): void {
-    if (pending) apply(resolveRemoteTarget(pending, at, cards, now))
+  /** The machine's view read its cards (RemoteMachineView.tsx): go on to the target if that read holds it. */
+  settle(at: StandingAt, read: RemoteCardsRead | null, now = Date.now()): void {
+    if (pending) apply(resolveRemoteTarget(pending, at, cardsFor(pending, read), now))
   },
   clear
 }
@@ -136,3 +155,10 @@ export function openRemoteFace(face: RemoteFace, now = Date.now()): void {
 export function readRemoteReply(machineId: string, agentId: string): void {
   void callRemote(machineId, 'POST', `api/terminal/${encodeURIComponent(agentId)}/seen`)
 }
+
+// Waiting on one machine: left, or another entered, it is nobody's target any more.
+remotePlace.subscribe(() => {
+  if (pending && remotePlace.get().machine?.id !== pending.machineId) clear()
+})
+// Asked from the machine in scope, through its keys: a change of machine lets go of it.
+registerScopeState('remote open', () => remoteOpen.clear(), 'stop')
