@@ -15,6 +15,10 @@
  * registry gave it and the endpoint it was for, so the way off can take the
  * same row off, and so a subscription this page did not file reads as off.
  *
+ * THE OWNER SEES EVERY BROWSER THE ACCOUNT TELLS (security review M2): the
+ * menu lists them, label and date, each with a Remove. The registry answers
+ * that list without a key or an endpoint (GET /v2/me/push/subscriptions/mine).
+ *
  * Its parts are handed in (console-wiring.ts builds the real ones), so the
  * whole order of a press runs in a test with no browser.
  */
@@ -28,10 +32,21 @@ export const PUSH_KEPT_KEY = 'cr_push_subscription'
 
 export type PushStatus = 'checking' | 'hidden' | 'unsupported' | 'home-screen' | 'blocked' | 'off' | 'on' | 'busy'
 
+/** One browser the account tells, as the owner is shown it. */
+export interface PushRow {
+  readonly id: string
+  readonly label: string
+  readonly createdAt: number
+  /** This browser's own. */
+  readonly here: boolean
+}
+
 export interface PushState {
   readonly status: PushStatus
   /** One sentence about the last thing that did not work. */
   readonly line: string | null
+  /** Every browser the account tells; absent until read. */
+  readonly rows?: readonly PushRow[]
 }
 
 export interface PushEnv {
@@ -78,6 +93,8 @@ export interface ConsolePush {
   turnOff(): Promise<void>
   /** Signed out: this browser lets go of its subscription and keeps nothing (the registry's row then answers gone). */
   forget(): Promise<void>
+  /** Take one browser off the account. This browser's own is turning it off. */
+  remove(id: string): Promise<void>
 }
 
 // ── pure ────────────────────────────────────────────────────────────────────
@@ -145,6 +162,20 @@ export function routeOfOpenMessage(data: unknown): ConsoleRoute | null {
   return route.kind === 'auth-complete' ? null : route
 }
 
+/** "iPhone · Safari · this browser · since 2026-11-17". */
+export function pushRowLine(row: PushRow): string {
+  return [row.label || 'A browser', row.here ? 'this browser' : null, `since ${new Date(row.createdAt).toISOString().slice(0, 10)}`]
+    .filter((part) => part !== null)
+    .join(' · ')
+}
+
+const isRow = (value: unknown): value is PushRow => {
+  if (typeof value !== 'object' || value === null) return false
+  const row = value as Record<string, unknown>
+  return typeof row.id === 'string' && /^[A-Za-z0-9_-]{22}$/.test(row.id) && typeof row.label === 'string' && row.label.length <= 64 &&
+    typeof row.createdAt === 'number' && Number.isFinite(row.createdAt) && typeof row.here === 'boolean'
+}
+
 export interface PushWords {
   /** What the button does, or null when there is no button. */
   readonly action: 'on' | 'off' | null
@@ -191,7 +222,15 @@ export function createConsolePush(deps: PushDeps): ConsolePush {
   let key: Uint8Array<ArrayBuffer> | null = null
 
   const tell = (status: PushStatus, line: string | null = null): void => {
-    state = { status, line }
+    state = { status, line, ...(state.rows === undefined ? {} : { rows: state.rows }) }
+    for (const listener of listeners) listener()
+  }
+
+  /** The account's browsers, read again. Kept as they were when the registry does not answer. */
+  const loadRows = async (): Promise<void> => {
+    const answer = await deps.call('GET', '/v2/me/push/subscriptions/mine').catch(() => null)
+    if (answer?.status !== 200 || !Array.isArray(answer.body)) return
+    state = { ...state, rows: answer.body.filter(isRow).map(({ id, label, createdAt, here }) => ({ id, label, createdAt, here })) }
     for (const listener of listeners) listener()
   }
 
@@ -230,13 +269,20 @@ export function createConsolePush(deps: PushDeps): ConsolePush {
     tell(on ? 'on' : 'off')
   }
 
+  /** The list is the account's, whatever this browser can do, so it is read for every state but hidden. */
+  const checkAndList = async (): Promise<void> => {
+    await check()
+    if (state.status !== 'hidden') await loadRows()
+  }
+
   const file = async (subscription: PushSubscriptionLike): Promise<void> => {
     const json = subscription.toJSON()
     const answer = await deps.call('POST', '/v2/me/push/subscriptions', { endpoint: json.endpoint ?? subscription.endpoint, keys: json.keys ?? {}, label: deps.label })
     const id = (answer.body as { id?: unknown } | null)?.id
     if (answer.status === 201 && typeof id === 'string' && ID.test(id)) {
       deps.kept.setItem(PUSH_KEPT_KEY, JSON.stringify({ id, endpoint: subscription.endpoint }))
-      return tell('on')
+      tell('on')
+      return loadRows()
     }
     // Not filed: a subscription nobody will send to is one this browser should not hold.
     await subscription.unsubscribe().catch(() => false)
@@ -282,11 +328,20 @@ export function createConsolePush(deps: PushDeps): ConsolePush {
     if (filed !== null) await deps.call('DELETE', `/v2/me/push/subscriptions/${filed.id}`).catch(() => null)
     deps.kept.removeItem(PUSH_KEPT_KEY)
     tell('off')
+    await loadRows()
+  }
+
+  const remove = async (id: string): Promise<void> => {
+    if (readFiled()?.id === id) return turnOff()
+    await deps.call('DELETE', `/v2/me/push/subscriptions/${id}`).catch(() => null)
+    await loadRows()
   }
 
   const forget = async (): Promise<void> => {
     key = null
-    if (readFiled() === null) return
+    const filed = readFiled()
+    state = { status: state.status, line: state.line }
+    if (filed === null) return
     deps.kept.removeItem(PUSH_KEPT_KEY)
     await letGo()
     tell('checking')
@@ -298,9 +353,10 @@ export function createConsolePush(deps: PushDeps): ConsolePush {
       listeners.add(listener)
       return () => void listeners.delete(listener)
     },
-    check,
+    check: checkAndList,
     turnOn,
     turnOff,
-    forget
+    forget,
+    remove
   }
 }

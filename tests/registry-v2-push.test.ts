@@ -15,6 +15,7 @@ import { createV2, type V2Identity } from '../registry/src/v2-routes'
 import { readVapidEnv, vapidOf } from '../registry/src/v2-push-vapid'
 import { PUSH_PER_ACCOUNT, V2PushSubscriptions } from '../registry/src/v2-push-store'
 import { pushEndpointOk } from '../registry/src/v2-push-check'
+import { liveRows } from '../registry/src/v2-push-live'
 
 /**
  * PHONE BACKGROUND PUSH, THE REGISTRY'S HALF (HITL phase 4).
@@ -54,11 +55,12 @@ interface Sent {
   redirect: string | undefined
 }
 
-const service = { status: 201, throws: false, sent: [] as Sent[] }
+const service = { status: 201, throws: false, sent: [] as Sent[], hold: null as Promise<void> | null }
 
 const stubFetch = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
   const headers = Object.fromEntries(Object.entries((init?.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), v]))
   service.sent.push({ url: String(url), method: init?.method ?? 'GET', headers, body: Buffer.from(init?.body as Uint8Array), redirect: init?.redirect })
+  if (service.hold !== null) await service.hold
   if (service.throws) throw new TypeError('fetch failed')
   return new Response(null, { status: service.status })
 }
@@ -81,7 +83,7 @@ interface Site {
 }
 
 /** A split registry (0.6.0): the API on its own host, and the console's origin it lets call. */
-async function boot(push: boolean, extra: { sendsPerMinute?: number } = {}): Promise<Site> {
+async function boot(push: boolean, extra: { sendsPerMinute?: number; maxInFlight?: number; globalBurst?: number; globalPerSecond?: number } = {}): Promise<Site> {
   const dir = mkdtempSync(path.join(tmpdir(), 'v2-push-'))
   const port = await freePort()
   const api = `http://api.localhost:${port}`
@@ -168,9 +170,9 @@ async function desktopAccount(site: Site, username: string): Promise<Who> {
 }
 
 /** Another device on the same account, signed in directly: a console page, a phone, a desktop with no record. */
-function another(site: Site, username: string, kind: 'browser' | 'phone' | 'desktop', via?: 'console'): Who {
+function another(site: Site, username: string, kind: 'browser' | 'phone' | 'desktop' | 'watch', via?: 'console'): Who {
   const id = randomUUID()
-  const attached = site.v2.accounts.attachDevice(username, { id, kind, name: `Invented ${kind}`, jwk: jwkOf() })
+  const attached = site.v2.accounts.attachDevice(username, { id, kind, name: `Invented ${kind}`, jwk: jwkOf() }, kind === 'watch' ? { watch: true } : {})
   expect(attached.ok).toBe(true)
   const session = site.v2.accounts.startSession(username, id, via === undefined ? {} : { via })
   expect(session).not.toBeNull()
@@ -199,6 +201,14 @@ const send = (site: Site, who: Who, body: Record<string, unknown>) =>
 describe('which endpoints a subscription may name', () => {
   it('takes the four push services and refuses everything else', () => {
     for (const good of Object.values(ENDPOINTS)) expect(pushEndpointOk(good), good).toBe(true)
+    // What browsers hand out today: Chrome's newer /wp/ form, Firefox's v1, Edge's other WNS hosts.
+    for (const good of [
+      'https://fcm.googleapis.com/wp/fXk1R7Xu8Lw:APA91bE',
+      'https://updates.push.services.mozilla.com/wpush/v1/gAAAAABk',
+      'https://db5p.notify.windows.com/w/?token=BQYAAAB'
+    ]) {
+      expect(pushEndpointOk(good), good).toBe(true)
+    }
     for (const bad of [
       'http://fcm.googleapis.com/fcm/send/x',
       'https://evil.example/fcm/send/x',
@@ -212,8 +222,21 @@ describe('which endpoints a subscription may name', () => {
       'https://[::1]/x',
       'https://push.apple.com/x',
       'https://evilpush.apple.com/x',
-      'https://notify.windows.com/x',
-      'https://evilnotify.windows.com/x',
+      'https://notify.windows.com/w/?token=x',
+      'https://evilnotify.windows.com/w/?token=x',
+      // Exact hosts and the vendors' own path prefixes (L1).
+      'https://api.push.apple.com/3/device/x',
+      'https://other.web.push.apple.com/x',
+      'https://web.push.apple.com/',
+      'https://fcm.googleapis.com/x',
+      'https://fcm.googleapis.com/fcm/send/',
+      'https://fcm.googleapis.com/wp/',
+      'https://fcm.googleapis.com/v1/projects/x/messages:send',
+      'https://fcm.googleapis.com/fcm/send/../../v1/projects/x',
+      'https://updates.push.services.mozilla.com/x',
+      'https://updates.push.services.mozilla.com/wpush/',
+      'https://wns2-par02p.notify.windows.com/x',
+      'https://a.b.notify.windows.com/w/?token=x',
       'https://updates.push.services.mozilla.com.evil.example/x',
       `https://fcm.googleapis.com/${'a'.repeat(2048)}`,
       'not a url',
@@ -277,9 +300,9 @@ describe('the subscription store', () => {
     try {
       let now = 1_000
       const store = new V2PushSubscriptions(dir, () => now)
-      const first = store.put('mira', { endpoint: ENDPOINTS.google, ...browserKeys(), label: 'Pixel' })
+      const first = store.put('mira', { endpoint: ENDPOINTS.google, ...browserKeys(), label: 'Pixel', dev: 'd1', sid: 's1' })
       now += 1
-      store.put('otto', { endpoint: ENDPOINTS.apple, ...browserKeys(), label: '' })
+      store.put('otto', { endpoint: ENDPOINTS.apple, ...browserKeys(), label: '', dev: 'd2', sid: 's2' })
       expect(store.list('mira').map((s) => s.id)).toEqual([first.id])
       expect(store.list('otto')).toHaveLength(1)
       // Read back by a fresh store: it is on disk.
@@ -299,7 +322,7 @@ describe('the subscription store', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'push-store-'))
     try {
       const store = new V2PushSubscriptions(dir)
-      store.put('mira', { endpoint: ENDPOINTS.google, ...browserKeys(), label: '' })
+      store.put('mira', { endpoint: ENDPOINTS.google, ...browserKeys(), label: '', dev: 'd1', sid: 's1' })
       writeFileSync(path.join(dir, 'push-v2', 'mira.json'), '{"torn":')
       expect(store.list('mira')).toEqual([])
       expect(() => store.list('../etc/passwd')).toThrow()
@@ -661,5 +684,175 @@ describe('deleting the account', () => {
     expect(res.status, res.text).toBe(204)
     expect(existsSync(path.join(site.dir, 'push-v2', 'delacct.json'))).toBe(false)
     expect(site.v2.pushSubscriptions.list('delacct')).toEqual([])
+  })
+})
+
+// ── security review 2026-11-17 ─────────────────────────────────────────────
+
+describe('M1: only a desktop is a desktop', () => {
+  it('refuses a phone, a browser and a watch that file a desktop record of themselves', async () => {
+    await desktopAccount(site, 'mone')
+    const page = another(site, 'mone', 'browser', 'console')
+    const id = String((await subscribe(site, page, ENDPOINTS.apple)).body.id)
+    service.sent = []
+    for (const kind of ['phone', 'browser', 'watch'] as const) {
+      const who = another(site, 'mone', kind)
+      const filed = await site.call('PUT', `/v2/me/desktops/${who.id}`, { name: 'Not a Mac', workspaces: [] }, bearer(who.token))
+      expect(filed.status, kind).toBe(403)
+      expect(filed.body, kind).toMatchObject({ error: 'desktop_only' })
+      expect(site.v2.accounts.desktopFor(who.id), kind).toBeNull()
+      expect((await list(site, who)).status, kind).toBe(403)
+      expect((await send(site, who, { subscription: id })).status, kind).toBe(403)
+    }
+    expect(service.sent).toEqual([])
+  })
+
+  it('the account store files no desktop record for a device that is not a desktop', () => {
+    const phone = another(site, 'mone', 'phone')
+    expect(site.v2.accounts.putDesktop('mone', phone.id, { name: 'Not a Mac', workspaces: [] })).toMatchObject({ ok: false })
+  })
+
+  it('a desktop record a phone holds by other means opens neither the keys nor the send', async () => {
+    await desktopAccount(site, 'mtwo')
+    const page = another(site, 'mtwo', 'browser', 'console')
+    const id = String((await subscribe(site, page, ENDPOINTS.apple)).body.id)
+    const phone = another(site, 'mtwo', 'phone')
+    site.v2.accounts.amend('mtwo', (account) => ({
+      ...account,
+      desktops: [...account.desktops, { deviceId: phone.id, name: 'Smuggled', workspaces: [], reach: null, updatedAt: 1 }]
+    }))
+    expect((await list(site, phone)).body).toMatchObject({ error: 'desktop_only' })
+    expect((await send(site, phone, { subscription: id })).status).toBe(403)
+  })
+})
+
+describe('M2: a subscription lives as long as the sign-in that made it', () => {
+  async function made(username: string): Promise<{ mac: Who; page: Who; id: string }> {
+    const mac = await desktopAccount(site, username)
+    const page = another(site, username, 'browser', 'console')
+    const id = String((await subscribe(site, page, ENDPOINTS.apple)).body.id)
+    return { mac, page, id }
+  }
+
+  const sittingOf = (username: string, who: Who): string => {
+    const jti = JSON.parse(Buffer.from(who.token.split('.')[0], 'base64url').toString('utf8')).jti as string
+    const session = site.v2.accounts.session(username, jti)!
+    return session.sitting ?? session.jti
+  }
+
+  it('files the device and the sign-in it was made under', async () => {
+    const { page, id } = await made('mfile')
+    expect(site.v2.pushSubscriptions.list('mfile')).toEqual([expect.objectContaining({ id, dev: page.id, sid: sittingOf('mfile', page) })])
+  })
+
+  it('goes when that sign-in signs out', async () => {
+    const { page, id } = await made('mout')
+    const out = await site.call('DELETE', '/v2/sessions/current', undefined, { ...bearer(page.token), origin: site.console })
+    expect(out.status, out.text).toBeLessThan(300)
+    expect(site.v2.pushSubscriptions.list('mout').map((s) => s.id)).not.toContain(id)
+  })
+
+  it('goes when its device is revoked', async () => {
+    const { page } = await made('mrevoke')
+    expect(site.v2.accounts.revokeDevice('mrevoke', page.id)).toEqual({ ok: true })
+    expect(site.v2.pushSubscriptions.list('mrevoke')).toEqual([])
+  })
+
+  it('goes on "Not me", which ends every other sign-in', async () => {
+    const { mac } = await made('mnotme')
+    const keep = JSON.parse(Buffer.from(mac.token.split('.')[0], 'base64url').toString('utf8')).jti as string
+    expect(site.v2.accounts.endOtherSessions('mnotme', keep)).toBeGreaterThan(0)
+    expect(site.v2.pushSubscriptions.list('mnotme')).toEqual([])
+  })
+
+  it('goes on a password change made elsewhere', async () => {
+    const { mac } = await made('mreset')
+    const keep = JSON.parse(Buffer.from(mac.token.split('.')[0], 'base64url').toString('utf8')).jti as string
+    expect(await site.v2.accounts.changePassword('mreset', PASSWORD, 'a different long password', keep)).toEqual({ ok: true })
+    expect(site.v2.pushSubscriptions.list('mreset')).toEqual([])
+  })
+
+  it('stays across a renewal, which carries the sign-in forward', async () => {
+    const { page, id } = await made('mrenew')
+    const sitting = sittingOf('mrenew', page)
+    const renewed = site.v2.accounts.startSession('mrenew', page.id, { sitting, via: 'console' })!
+    site.v2.accounts.closeOtherSessionsForDevice('mrenew', page.id, renewed.jti)
+    expect(site.v2.pushSubscriptions.list('mrenew').map((s) => s.id)).toEqual([id])
+  })
+
+  it('a sign-in that ran out on the clock is not listed or sent to', () => {
+    const DAY = 24 * 60 * 60 * 1000
+    const now = 100 * DAY
+    const row = { id: 'A'.repeat(22), endpoint: ENDPOINTS.apple, p256dh: 'p', auth: 'a', label: '', createdAt: 0, dev: 'd1', sid: 's1' }
+    const device = { id: 'd1', kind: 'browser' as const, name: 'x', jwk: {}, addedAt: 0, lastSeenAt: 0 }
+    const live = { jti: 'j1', dev: 'd1', issuedAt: now - DAY, sitting: 's1', signedInAt: now - DAY, lastUsedAt: now - 1000 }
+    const account = { devices: [device], sessions: [live] }
+    expect(liveRows([row], account, now)).toEqual([row])
+    expect(liveRows([row], { ...account, sessions: [{ ...live, lastUsedAt: now - 8 * DAY }] }, now)).toEqual([])
+    expect(liveRows([row], { ...account, sessions: [{ ...live, dev: 'd2' }] }, now)).toEqual([])
+    expect(liveRows([row], { ...account, devices: [] }, now)).toEqual([])
+    expect(liveRows([row], { ...account, sessions: [{ ...live, sitting: undefined, jti: 's1' }] }, now)).toEqual([row])
+  })
+})
+
+describe('the owner sees what is subscribed: GET /v2/me/push/subscriptions/mine', () => {
+  it('lists label, date and id to the console, marks this browser’s own, and never a key or an endpoint', async () => {
+    await desktopAccount(site, 'seeall')
+    const page = another(site, 'seeall', 'browser', 'console')
+    const phone = another(site, 'seeall', 'phone')
+    const mine = String((await subscribe(site, page, ENDPOINTS.apple, browserKeys(), 'iPhone · Safari')).body.id)
+    const theirs = String((await subscribe(site, phone, ENDPOINTS.google, browserKeys(), 'Android · Chrome')).body.id)
+    const res = await site.call('GET', '/v2/me/push/subscriptions/mine', undefined, { ...bearer(page.token), origin: site.console })
+    expect(res.status, res.text).toBe(200)
+    expect(res.body).toEqual([
+      { id: mine, label: 'iPhone · Safari', createdAt: expect.any(Number), here: true },
+      { id: theirs, label: 'Android · Chrome', createdAt: expect.any(Number), here: false }
+    ])
+    expect(res.text).not.toMatch(/endpoint|p256dh|auth|apple\.com|googleapis/)
+    expect((await site.call('GET', '/v2/me/push/subscriptions/mine')).status).toBe(401)
+  })
+})
+
+describe('L2: what the registry posts, all accounts together', () => {
+  it('answers 503 with retry-after past the in-flight cap, and takes the next once one lands', async () => {
+    const tight = await boot(true, { maxInFlight: 1 })
+    let release: () => void = () => undefined
+    service.hold = new Promise<void>((resolve) => (release = resolve))
+    service.status = 201
+    try {
+      const mac = await desktopAccount(tight, 'flight')
+      const page = another(tight, 'flight', 'browser', 'console')
+      const id = String((await subscribe(tight, page, ENDPOINTS.apple)).body.id)
+      const first = send(tight, mac, { subscription: id })
+      for (let i = 0; i < 50 && service.sent.every((s) => s.url !== ENDPOINTS.apple); i += 1) await new Promise((r) => setTimeout(r, 10))
+      const second = await tight.call('POST', '/v2/me/push/send', { subscription: id, body: RECORD, ttl: 60, urgency: 'high' }, bearer(mac.token))
+      expect(second.status).toBe(503)
+      expect(second.body).toMatchObject({ error: 'push_busy' })
+      release()
+      expect((await first).status).toBe(202)
+      service.hold = null
+      expect((await send(tight, mac, { subscription: id })).status).toBe(202)
+    } finally {
+      service.hold = null
+      release()
+      await tight.close()
+    }
+  })
+
+  it('holds every account to one bucket', async () => {
+    const tight = await boot(true, { globalBurst: 2, globalPerSecond: 0.001 })
+    service.status = 201
+    try {
+      const sends: number[] = []
+      for (const name of ['bucketa', 'bucketb', 'bucketc']) {
+        const mac = await desktopAccount(tight, name)
+        const page = another(tight, name, 'browser', 'console')
+        const id = String((await subscribe(tight, page, ENDPOINTS.apple)).body.id)
+        sends.push((await send(tight, mac, { subscription: id })).status)
+      }
+      expect(sends).toEqual([202, 202, 503])
+    } finally {
+      await tight.close()
+    }
   })
 })

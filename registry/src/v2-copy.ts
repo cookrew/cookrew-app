@@ -64,6 +64,8 @@ export type V2Error =
   | 'desktop_only'
   | 'push_gone'
   | 'push_failed'
+  /** Every account together is sending more than the registry posts at once (review L2). */
+  | 'push_busy'
   /**
    * OURS, NOT THEIRS. A handler that raised owes the caller a status code all
    * the same: without one the request hangs until Node's own timeout, and a
@@ -109,9 +111,10 @@ const SENTENCES: Record<V2Error, string> = {
   server_error: 'Something went wrong at cookrew.dev, not on your machine. Try again in a moment.',
   push_off: 'Notifications are not turned on at this registry.',
   bad_push: 'That notification subscription or message is not one cookrew.dev can carry.',
-  desktop_only: 'Only a desktop signed in to this account sends notifications.',
+  desktop_only: 'Only a desktop signed in to this account can do that.',
   push_gone: 'That browser no longer takes notifications, so it was taken off the account.',
-  push_failed: 'The push service did not take the notification. Try again in a moment.'
+  push_failed: 'The push service did not take the notification. Try again in a moment.',
+  push_busy: 'cookrew.dev is sending more notifications than it can right now. Try again in a few seconds.'
 }
 
 /**

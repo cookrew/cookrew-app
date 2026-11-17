@@ -3,6 +3,7 @@ import { noContent, refuse, signedIn, v2Json, type Signed, type V2Context } from
 import { v2Error } from './v2-copy'
 import { pushEndpointOk, readSend, readSubscription, SUBSCRIPTION_ID, type PushSend } from './v2-push-check'
 import type { PushSubscriptionRecord } from './v2-push-store'
+import { liveRows } from './v2-push-live'
 import { vapidAuthorization, type PushFeature } from './v2-push-vapid'
 
 /**
@@ -11,6 +12,7 @@ import { vapidAuthorization, type PushFeature } from './v2-push-vapid'
  *   GET    /v2/me/push/key                the VAPID public key       console, desktop
  *   POST   /v2/me/push/subscriptions      file this browser          console, any device
  *   DELETE /v2/me/push/subscriptions/:id  take one off               console, any device
+ *   GET    /v2/me/push/subscriptions/mine label, date, id: the owner  console, any device
  *   GET    /v2/me/push/subscriptions      ids and keys, no endpoint  a DESKTOP of the account
  *   POST   /v2/me/push/send               post an encrypted record   a DESKTOP of the account
  *
@@ -20,6 +22,9 @@ import { vapidAuthorization, type PushFeature } from './v2-push-vapid'
  * waiting encrypts the message itself (RFC 8291), and this registry only signs
  * the VAPID header and carries the bytes. It never decrypts them and never
  * logs them, and the endpoint never leaves it.
+ *
+ * A row lives as long as the sign-in that filed it (v2-push-live.ts), and
+ * every read here sees only the live ones.
  */
 
 const SMALL_BODY = 16 * 1024
@@ -31,6 +36,7 @@ type PushRoute =
   | { kind: 'subscribe' }
   | { kind: 'unsubscribe'; id: string }
   | { kind: 'list' }
+  | { kind: 'mine' }
   | { kind: 'send' }
 
 function routeOf(method: string, tail: readonly string[]): PushRoute | null {
@@ -39,6 +45,7 @@ function routeOf(method: string, tail: readonly string[]): PushRoute | null {
   if (tail.length === 1 && first === 'send' && method === 'POST') return { kind: 'send' }
   if (tail.length === 1 && first === 'subscriptions' && method === 'GET') return { kind: 'list' }
   if (tail.length === 1 && first === 'subscriptions' && method === 'POST') return { kind: 'subscribe' }
+  if (tail.length === 2 && first === 'subscriptions' && second === 'mine' && method === 'GET') return { kind: 'mine' }
   if (tail.length === 2 && first === 'subscriptions' && method === 'DELETE') return { kind: 'unsubscribe', id: second }
   return null
 }
@@ -65,18 +72,29 @@ async function answer(ctx: V2Context, route: PushRoute): Promise<void> {
   if (push === null) return refuse(ctx.response, 404, 'push_off')
   if (route.kind === 'key') return v2Json(ctx.response, 200, { publicKey: push.vapid.publicKey })
   if (route.kind === 'subscribe') return subscribe(ctx, push, signed)
+  if (route.kind === 'mine') return listForOwner(ctx, signed)
   return unsubscribe(ctx, signed, route.id)
 }
 
+/** This account's rows whose sign-in is still on. */
+const liveOf = (ctx: V2Context, signed: Signed): PushSubscriptionRecord[] =>
+  liveRows(ctx.v2.pushSubscriptions.list(signed.account.username), signed.account, ctx.v2.now())
+
 /**
- * THE DESKTOP'S TWO ROUTES. A session of this account whose device files a
- * desktop record, and not a console page's: a phone or a browser signed in on
- * the account is not the machine that knows what its agents are waiting on.
+ * THE DESKTOP'S TWO ROUTES. A session of this account whose device IS a
+ * desktop and files a desktop record, and not a console page's: a phone or a
+ * browser signed in on the account is not the machine that knows what its
+ * agents are waiting on. The kind is checked as well as the record, so a
+ * record filed by any other way still opens nothing (review M1). A desktop
+ * need not be a trusted machine (`machine`): one joined by a code is the
+ * account's desktop all the same, and a password change would otherwise
+ * silence every Mac until it proved itself again.
  */
 async function asDesktop(ctx: V2Context, route: { kind: 'list' } | { kind: 'send' }): Promise<void> {
   const signed = signedIn(ctx.request, ctx.v2)
   if (signed === null) return refuse(ctx.response, 401, 'unauthenticated')
-  const isDesktop = signed.claims.via !== 'console' && signed.account.desktops.some((d) => d.deviceId === signed.claims.dev)
+  const isDesktop =
+    signed.claims.via !== 'console' && signed.device.kind === 'desktop' && signed.account.desktops.some((d) => d.deviceId === signed.claims.dev)
   if (!isDesktop) return refuse(ctx.response, 403, 'desktop_only')
   const push = ctx.v2.push
   if (push === null) return refuse(ctx.response, 404, 'push_off')
@@ -91,7 +109,10 @@ async function subscribe(ctx: V2Context, push: PushFeature, signed: Signed): Pro
   if (!body.ok && body.reason === 'too_large') return refuse(ctx.response, 413, 'malformed')
   const input = body.ok ? readSubscription(body.value) : null
   if (input === null) return refuse(ctx.response, 400, 'bad_push')
-  const filed = ctx.v2.pushSubscriptions.put(username, input)
+  const session = ctx.v2.accounts.session(username, signed.claims.jti)
+  const sid = session?.sitting ?? session?.jti
+  if (sid === undefined) return refuse(ctx.response, 401, 'unauthenticated')
+  const filed = ctx.v2.pushSubscriptions.put(username, { ...input, dev: signed.claims.dev, sid })
   v2Json(ctx.response, 201, { id: filed.id })
 }
 
@@ -103,7 +124,13 @@ function unsubscribe(ctx: V2Context, signed: Signed, id: string): void {
 
 function list(ctx: V2Context, signed: Signed): void {
   // Never the endpoint: a desktop encrypts to the keys, and the registry is the one that posts.
-  const rows = ctx.v2.pushSubscriptions.list(signed.account.username).map(({ id, p256dh, auth, label }) => ({ id, p256dh, auth, label }))
+  const rows = liveOf(ctx, signed).map(({ id, p256dh, auth, label }) => ({ id, p256dh, auth, label }))
+  v2Json(ctx.response, 200, rows)
+}
+
+/** What the owner is shown: which browsers are told, since when, and which one this is. Never a key or an endpoint. */
+function listForOwner(ctx: V2Context, signed: Signed): void {
+  const rows = liveOf(ctx, signed).map(({ id, label, createdAt, dev }) => ({ id, label, createdAt, here: dev === signed.claims.dev }))
   v2Json(ctx.response, 200, rows)
 }
 
@@ -114,9 +141,16 @@ async function send(ctx: V2Context, push: PushFeature, signed: Signed): Promise<
   if (!body.ok && body.reason === 'too_large') return refuse(ctx.response, 413, 'malformed')
   const message = body.ok ? readSend(body.value) : null
   if (message === null) return refuse(ctx.response, 400, 'bad_push')
-  const target = ctx.v2.pushSubscriptions.find(username, message.subscription)
-  if (target === null) return refuse(ctx.response, 404, 'not_found')
-  const outcome = await deliver(push, target, message, ctx.v2.now())
+  const target = liveOf(ctx, signed).find((row) => row.id === message.subscription)
+  if (target === undefined) return refuse(ctx.response, 404, 'not_found')
+  // EVERY ACCOUNT TOGETHER (review L2): a bucket, then a ceiling on posts under way.
+  if (!push.everyone.take() || !push.inFlight.enter()) return refuse(ctx.response, 503, 'push_busy', undefined, { 'retry-after': '5' })
+  let outcome: 'sent' | 'gone' | 'failed'
+  try {
+    outcome = await deliver(push, target, message, ctx.v2.now())
+  } finally {
+    push.inFlight.leave()
+  }
   if (outcome === 'sent') return v2Json(ctx.response, 202, { sent: true })
   if (outcome === 'failed') return refuse(ctx.response, 502, 'push_failed')
   // The browser let go of it (unsubscribed, uninstalled, signed out of the push service): so does the account.

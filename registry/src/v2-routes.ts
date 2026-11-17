@@ -775,6 +775,12 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
       refuse(response, 403, 'not_this_device')
       return
     }
+    // And only a desktop: a phone, a browser or a watch filing itself would be listed as a Mac and
+    // let into a desktop's routes (security review 2026-11-17, M1).
+    if (signed.device.kind !== 'desktop') {
+      refuse(response, 403, 'desktop_only')
+      return
+    }
     const body = await readJsonBody(ctx.request, SMALL_BODY)
     if (!body.ok) {
       refuse(response, body.reason === 'too_large' ? 413 : 400, 'malformed')

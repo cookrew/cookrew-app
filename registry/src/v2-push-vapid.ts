@@ -1,5 +1,5 @@
 import { createECDH, createPrivateKey, sign, type KeyObject } from 'node:crypto'
-import { Limiter } from './v2-limiter'
+import { InFlight, Limiter, TokenBucket } from './v2-limiter'
 import { bytesOf, isP256Point } from './v2-push-check'
 
 /**
@@ -28,6 +28,11 @@ export const DEFAULT_SUBJECT = 'https://cookrew.dev'
 export const JWT_LIFETIME_S = 12 * 60 * 60
 export const SENDS_PER_MINUTE = 120
 export const SUBSCRIBES_PER_MINUTE = 30
+/** Every account together (review L2): a burst of 300, then 20 a second. */
+export const GLOBAL_BURST = 300
+export const GLOBAL_PER_SECOND = 20
+/** Posts to push services under way at once, all accounts together. */
+export const MAX_IN_FLIGHT = 32
 
 export interface VapidKeys {
   /** base64url of the uncompressed P-256 point (65 bytes). */
@@ -50,6 +55,9 @@ export interface PushOptions extends VapidKeys {
   /** The outbound post, injected by tests. Defaults to the global fetch. */
   fetch?: PushFetch
   sendsPerMinute?: number
+  globalBurst?: number
+  globalPerSecond?: number
+  maxInFlight?: number
 }
 
 export interface PushFeature {
@@ -59,6 +67,10 @@ export interface PushFeature {
   sends: Limiter
   /** Subscription writes, per account. */
   writes: Limiter
+  /** Sends, every account together. */
+  everyone: TokenBucket
+  /** Posts under way now, every account together. */
+  inFlight: InFlight
 }
 
 const subjectOk = (subject: string): boolean => {
@@ -124,7 +136,9 @@ export function createPush(options: PushOptions | undefined, now?: () => number)
     vapid,
     fetch: options.fetch ?? ((url, init) => fetch(url, init)),
     sends: new Limiter(options.sendsPerMinute ?? SENDS_PER_MINUTE, 60_000, now),
-    writes: new Limiter(SUBSCRIBES_PER_MINUTE, 60_000, now)
+    writes: new Limiter(SUBSCRIBES_PER_MINUTE, 60_000, now),
+    everyone: new TokenBucket(options.globalBurst ?? GLOBAL_BURST, options.globalPerSecond ?? GLOBAL_PER_SECOND, now),
+    inFlight: new InFlight(options.maxInFlight ?? MAX_IN_FLIGHT)
   }
 }
 

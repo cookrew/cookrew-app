@@ -7,10 +7,11 @@ import { createPublicKey } from 'node:crypto'
  *
  *   · THE ENDPOINT IS WHERE THIS REGISTRY WILL POST. A browser names it, so a
  *     page that got into the console could name anything: an address inside the
- *     cluster, a loopback port, somebody's server. Only the four push services a
- *     browser actually hands out are taken, by exact host or by a suffix that
- *     needs a label in front of it, over https on the default port and with no
- *     userinfo. No IP literal can match any of them.
+ *     cluster, a loopback port, somebody's server, or another API on a push
+ *     vendor's own host. Only the four push services' Web Push endpoints are
+ *     taken, each by its host and the path prefix browsers are handed (checked
+ *     on the parsed, dot-segment-free path), over https on the default port and
+ *     with no userinfo. No IP literal can match any of them.
  *   · THE KEYS ARE WHAT A DESKTOP WILL ENCRYPT TO (RFC 8291). A p256dh that is
  *     not a point on P-256, or an auth secret of the wrong length, is refused
  *     here rather than failing later on a machine nobody is looking at.
@@ -19,11 +20,22 @@ import { createPublicKey } from 'node:crypto'
  *     service takes (4096 bytes, RFC 8030 section 7.2).
  */
 
-/** Exact hosts: Google (Chrome, Edge on Android, most of Android) and Mozilla. */
-const PUSH_HOSTS: readonly string[] = ['fcm.googleapis.com', 'updates.push.services.mozilla.com']
-/** Suffixes that need at least one label before them: Apple (web.push.apple.com) and Microsoft (wns2-*.notify.windows.com). */
-const PUSH_SUFFIXES: readonly string[] = ['.push.apple.com', '.notify.windows.com']
-const DNS_LABELS = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/
+/**
+ * Each service by what its browsers hand out (2026):
+ *   Apple (Safari, iOS 16.4+)   https://web.push.apple.com/<token>
+ *   Google (Chrome, Chromium)   https://fcm.googleapis.com/fcm/send/<token>, and /wp/<token> since 2023
+ *   Mozilla (Firefox)           https://updates.push.services.mozilla.com/wpush/v1|v2/<token>
+ *   Microsoft (Edge, Windows)   https://<one label>.notify.windows.com/w/?token=<token>
+ * A prefix needs something after it: the bare prefix is no subscription.
+ */
+const PUSH_EXACT: ReadonlyMap<string, readonly string[]> = new Map([
+  ['web.push.apple.com', ['/']],
+  ['fcm.googleapis.com', ['/fcm/send/', '/wp/']],
+  ['updates.push.services.mozilla.com', ['/wpush/']]
+])
+const WNS_SUFFIX = '.notify.windows.com'
+const WNS_PATH = '/w/'
+const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
 
 export const ENDPOINT_MAX = 2048
 export const LABEL_MAX = 64
@@ -63,13 +75,20 @@ export function pushEndpointOk(value: unknown): value is string {
     return false
   }
   if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.port !== '' || url.hash !== '') return false
-  return hostAllowed(url.hostname)
+  return pathsFor(url.hostname).some((prefix) => pathAfter(url, prefix))
 }
 
-function hostAllowed(host: string): boolean {
-  if (PUSH_HOSTS.includes(host)) return true
-  return PUSH_SUFFIXES.some((suffix) => host.endsWith(suffix) && DNS_LABELS.test(host.slice(0, -suffix.length)))
+/** The path prefixes this host's Web Push endpoints take; none for any other host. */
+function pathsFor(host: string): readonly string[] {
+  const exact = PUSH_EXACT.get(host)
+  if (exact !== undefined) return exact
+  const label = host.endsWith(WNS_SUFFIX) ? host.slice(0, -WNS_SUFFIX.length) : ''
+  return DNS_LABEL.test(label) ? [WNS_PATH] : []
 }
+
+/** The prefix, and a token after it (in the path, or for WNS in the query). */
+const pathAfter = (url: URL, prefix: string): boolean =>
+  url.pathname.startsWith(prefix) && (url.pathname.length > prefix.length || (prefix === WNS_PATH && url.search.length > 1))
 
 /** base64url, canonical and without padding, decoding to at most `max` bytes. Null for anything else. */
 export function bytesOf(value: unknown, max: number): Buffer | null {

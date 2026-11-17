@@ -203,7 +203,9 @@ export interface V2Options {
  * subtly wrong twice.
  */
 export function createV2(base: string, options: V2Options = {}): V2Identity {
-  const accounts = new V2Accounts(base, options.now)
+  const pushSubscriptions = new V2PushSubscriptions(base, options.now)
+  // A push subscription lives as long as the sign-in that filed it: it goes when that ends (v2-push-live.ts).
+  const accounts = new V2Accounts(base, options.now, (account) => pushSubscriptions.prune(account))
   const tokens = new V2Tokens(base, {
     revoked: () => new Set(accounts.revokedIds()),
     now: options.now
@@ -246,7 +248,7 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
     consoleOrigin: options.consoleOrigin ?? null,
     apiOrigin: options.apiOrigin ?? null,
     push: createPush(options.push, options.now),
-    pushSubscriptions: new V2PushSubscriptions(base, options.now),
+    pushSubscriptions,
     auth:
       options.authOrigin === undefined
         ? null

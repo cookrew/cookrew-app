@@ -10,6 +10,7 @@ import {
   isIos,
   keyBytes,
   pushLabel,
+  pushRowLine,
   pushSupport,
   pushWords,
   routeOfOpenMessage,
@@ -207,9 +208,9 @@ describe('turning on, from a press', () => {
     r.order.length = 0
     await push.turnOn()
     expect(r.order[0]).toBe('requestPermission')
-    expect(r.order).toEqual(['requestPermission', 'subscribe', 'POST /v2/me/push/subscriptions'])
+    expect(r.order).toEqual(['requestPermission', 'subscribe', 'POST /v2/me/push/subscriptions', 'GET /v2/me/push/subscriptions/mine'])
     expect(r.manager.subscribed).toEqual([{ userVisibleOnly: true, applicationServerKey: keyBytes(PUBLIC_KEY) }])
-    expect(r.calls.at(-1)).toEqual({
+    expect(r.calls.find((call) => call.method === 'POST')).toEqual({
       method: 'POST',
       path: '/v2/me/push/subscriptions',
       body: { endpoint: 'https://fcm.googleapis.com/fcm/send/new', keys: { p256dh: 'P256DH', auth: 'AUTH' }, label: 'Android · Chrome' }
@@ -280,7 +281,7 @@ describe('turning off', () => {
     r.answers.set('DELETE /v2/me/push/subscriptions/:id', { status: 204, body: null })
     r.order.length = 0
     await push.turnOff()
-    expect(r.order).toEqual(['unsubscribe https://fcm.googleapis.com/fcm/send/new', `DELETE /v2/me/push/subscriptions/${'S'.repeat(22)}`])
+    expect(r.order).toEqual(['unsubscribe https://fcm.googleapis.com/fcm/send/new', `DELETE /v2/me/push/subscriptions/${'S'.repeat(22)}`, 'GET /v2/me/push/subscriptions/mine'])
     expect(r.kept.has(PUSH_KEPT_KEY)).toBe(false)
     expect(push.get().status).toBe('off')
   })
@@ -307,6 +308,7 @@ describe('turning off', () => {
 
 const fixed = (state: PushState) => ({
   get: () => state,
+  remove: vi.fn(async () => undefined),
   subscribe: () => () => undefined,
   check: vi.fn(async () => undefined),
   turnOn: vi.fn(async () => undefined),
@@ -340,5 +342,60 @@ describe('the menu item', () => {
     expect(view).toMatch(/cd-acct-menu[\s\S]*<PushMenuItem push=\{push\} \/>[\s\S]*Sign out/)
     const wiring = readFileSync('src/renderer/src/console/console-wiring.ts', 'utf8')
     expect(wiring).toMatch(/serviceWorker[\s\S]*addEventListener\('message'[\s\S]*routeOfOpenMessage\(event\.data\)[\s\S]*router\.go\(/)
+  })
+})
+
+// ── the owner's list (security review 2026-11-17, M2) ──────────────────────
+
+const ROWS = [
+  { id: 'S'.repeat(22), label: 'Android · Chrome', createdAt: Date.UTC(2026, 10, 17), here: true },
+  { id: 'T'.repeat(22), label: 'iPhone · Safari', createdAt: Date.UTC(2026, 10, 3), here: false }
+]
+
+describe('which browsers the account tells', () => {
+  it('reads the list when it checks, and keeps only rows of the right shape', async () => {
+    const r = rig()
+    r.answers.set('GET /v2/me/push/subscriptions/mine', { status: 200, body: [...ROWS, { id: 'bad', label: 1 }, null] })
+    const push = createConsolePush(r.deps)
+    await push.check()
+    expect(push.get().rows).toEqual(ROWS)
+  })
+
+  it('takes another browser off at the registry, and reads the list again', async () => {
+    const r = rig()
+    r.answers.set('GET /v2/me/push/subscriptions/mine', { status: 200, body: ROWS })
+    r.answers.set('DELETE /v2/me/push/subscriptions/:id', { status: 204, body: null })
+    const push = createConsolePush(r.deps)
+    await push.check()
+    r.order.length = 0
+    await push.remove('T'.repeat(22))
+    expect(r.order).toEqual([`DELETE /v2/me/push/subscriptions/${'T'.repeat(22)}`, 'GET /v2/me/push/subscriptions/mine'])
+  })
+
+  it('taking this browser off is turning it off: unsubscribed here too', async () => {
+    const r = rig()
+    const push = createConsolePush(r.deps)
+    await push.turnOn()
+    r.answers.set('GET /v2/me/push/subscriptions/mine', { status: 200, body: ROWS })
+    r.answers.set('DELETE /v2/me/push/subscriptions/:id', { status: 204, body: null })
+    await push.check()
+    r.order.length = 0
+    await push.remove('S'.repeat(22))
+    expect(r.order[0]).toBe('unsubscribe https://fcm.googleapis.com/fcm/send/new')
+    expect(r.kept.has(PUSH_KEPT_KEY)).toBe(false)
+    expect(push.get().status).toBe('off')
+  })
+
+  it('says each row as a line: its label, whether it is this browser, since when', () => {
+    expect(pushRowLine(ROWS[0])).toBe('Android · Chrome · this browser · since 2026-11-17')
+    expect(pushRowLine(ROWS[1])).toBe('iPhone · Safari · since 2026-11-03')
+    expect(pushRowLine({ ...ROWS[1], label: '' })).toBe('A browser · since 2026-11-03')
+  })
+
+  it('draws the list with a Remove for each', () => {
+    const html = renderToStaticMarkup(createElement(PushMenuItem, { push: { ...fixed({ status: 'on', line: null, rows: ROWS }), remove: vi.fn(async () => undefined) } }))
+    expect(html).toContain('Android · Chrome · this browser · since 2026-11-17')
+    expect(html).toContain('iPhone · Safari · since 2026-11-03')
+    expect(html.match(/>Remove<\/button>/g)).toHaveLength(2)
   })
 })

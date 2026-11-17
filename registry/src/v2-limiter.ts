@@ -80,3 +80,52 @@ function normalise(address: string | undefined): string {
   if (value === '') return 'unknown'
   return value.startsWith('::ffff:') ? value.slice(7) : value
 }
+
+/**
+ * A TOKEN BUCKET, one for everybody: `burst` at once, `perSecond` after that.
+ * For a bound that is about this process rather than about any one caller
+ * (phone push, every account together: v2-push-routes.ts). In memory, like the
+ * limiter above, and for the same reason.
+ */
+export class TokenBucket {
+  private readonly burst: number
+  private readonly perSecond: number
+  private readonly now: () => number
+  private held: { tokens: number; at: number }
+
+  constructor(burst: number, perSecond: number, now: () => number = Date.now) {
+    this.burst = burst
+    this.perSecond = perSecond
+    this.now = now
+    this.held = { tokens: burst, at: now() }
+  }
+
+  /** True, and one token spent, when one is there. */
+  take(): boolean {
+    const at = this.now()
+    const tokens = Math.min(this.burst, this.held.tokens + (Math.max(0, at - this.held.at) / 1000) * this.perSecond)
+    const allowed = tokens >= 1
+    this.held = { tokens: allowed ? tokens - 1 : tokens, at }
+    return allowed
+  }
+}
+
+/** A count of things under way, with a ceiling: `enter` says no at the ceiling, `leave` gives one back. */
+export class InFlight {
+  private readonly max: number
+  private count = 0
+
+  constructor(max: number) {
+    this.max = max
+  }
+
+  enter(): boolean {
+    if (this.count >= this.max) return false
+    this.count += 1
+    return true
+  }
+
+  leave(): void {
+    this.count = Math.max(0, this.count - 1)
+  }
+}

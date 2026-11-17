@@ -46,6 +46,7 @@ const CONSOLE_ROUTES: readonly [method: string, path: RegExp][] = [
   // and sending stay a desktop's (v2-push-routes.ts).
   ['GET', /^\/v2\/me\/push\/key$/],
   ['POST', /^\/v2\/me\/push\/subscriptions$/],
+  ['GET', /^\/v2\/me\/push\/subscriptions\/mine$/],
   ['DELETE', /^\/v2\/me\/push\/subscriptions\/[A-Za-z0-9_-]{22}$/]
 ]
 

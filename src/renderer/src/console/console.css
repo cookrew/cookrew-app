@@ -261,6 +261,25 @@
   font-size: 13px;
 }
 
+/* Every browser the account tells, each with its Remove. */
+.cd-acct-menu .cd-push-rows {
+  display: grid;
+  gap: 4px;
+  max-width: 260px;
+  margin: 2px 0 6px;
+  padding: 0;
+  list-style: none;
+  color: var(--sumi-ink-soft);
+  font-size: 13px;
+}
+
+.cd-acct-menu .cd-push-rows li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 /* "Opening Studio Mac…": over the canvas, above the bar at its foot (zoom.css · .zv-controls, z-index 44). */
 .cd-canvas .cd-opening {
   position: absolute;

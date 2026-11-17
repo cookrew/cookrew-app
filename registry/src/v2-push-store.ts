@@ -2,6 +2,8 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { PushSubscriptionInput } from './v2-push-check'
+import type { V2Account } from './v2-accounts'
+import { liveRows } from './v2-push-live'
 
 /**
  * PHONE PUSH — WHICH BROWSERS AN ACCOUNT ASKED TO BE TOLD (HITL phase 4).
@@ -16,6 +18,9 @@ import type { PushSubscriptionInput } from './v2-push-check'
  * press, and a registry that would not start over them would cost everybody
  * every sign-in.
  *
+ * EACH ROW NAMES ITS DEVICE AND ITS SIGN-IN (`dev`, `sid`): it lives as long as
+ * they do (v2-push-live.ts), and `prune` takes off the rows that outlived them.
+ *
  * The endpoint is a capability (whoever holds it can post to that browser), so
  * it stays here: the desktop's list carries the keys and never the endpoint,
  * and no line of the log names one.
@@ -29,14 +34,21 @@ const USERNAME = /^[a-z0-9-]{1,64}$/
 export interface PushSubscriptionRecord extends PushSubscriptionInput {
   id: string
   createdAt: number
+  /** The device that filed it. */
+  dev: string
+  /** The sign-in it was filed under: the session's sitting, carried across renewals. */
+  sid: string
 }
+
+/** What a route files: the browser's subscription, and who filed it under which sign-in. */
+export type PushFiling = PushSubscriptionInput & Pick<PushSubscriptionRecord, 'dev' | 'sid'>
 
 const isText = (value: unknown): value is string => typeof value === 'string'
 
 const isSubscription = (value: unknown): value is PushSubscriptionRecord => {
   if (typeof value !== 'object' || value === null) return false
   const held = value as Record<string, unknown>
-  return [held.id, held.endpoint, held.p256dh, held.auth, held.label].every(isText) && typeof held.createdAt === 'number'
+  return [held.id, held.endpoint, held.p256dh, held.auth, held.label, held.dev, held.sid].every(isText) && typeof held.createdAt === 'number'
 }
 
 export class V2PushSubscriptions {
@@ -70,7 +82,7 @@ export class V2PushSubscriptions {
   }
 
   /** File a subscription. The same endpoint again is the same subscription, with what it says now. */
-  put(username: string, input: PushSubscriptionInput): PushSubscriptionRecord {
+  put(username: string, input: PushFiling): PushSubscriptionRecord {
     const held = this.list(username)
     const earlier = held.find((s) => s.endpoint === input.endpoint)
     const record: PushSubscriptionRecord = {
@@ -79,7 +91,9 @@ export class V2PushSubscriptions {
       p256dh: input.p256dh,
       auth: input.auth,
       label: input.label,
-      createdAt: earlier?.createdAt ?? this.now()
+      createdAt: earlier?.createdAt ?? this.now(),
+      dev: input.dev,
+      sid: input.sid
     }
     const kept = [...held.filter((s) => s.endpoint !== input.endpoint), record]
     this.write(username, kept.slice(-PUSH_PER_ACCOUNT))
@@ -92,6 +106,14 @@ export class V2PushSubscriptions {
     if (kept.length === held.length) return false
     this.write(username, kept)
     return true
+  }
+
+  /** Take off every row whose device or sign-in has ended. Nothing is read when the account has no file. */
+  prune(account: Pick<V2Account, 'username' | 'devices' | 'sessions'>): void {
+    if (!USERNAME.test(account.username) || !existsSync(this.fileOf(account.username))) return
+    const held = this.list(account.username)
+    const kept = liveRows(held, account, this.now())
+    if (kept.length !== held.length) this.write(account.username, kept)
   }
 
   /** The account is gone: its file goes with it. */
