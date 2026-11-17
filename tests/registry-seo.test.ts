@@ -79,8 +79,8 @@ describe('the feature and start pages', () => {
       expect(rendered!.body).toContain('"@type":"FAQPage"')
       expect(rendered!.body).toContain(`<link rel="canonical" href="https://cookrew.dev/features/${f.slug}">`)
       expect(rendered!.body).toContain('<meta name="description"')
-      // A picture says it is the current UI on demo data (site-frames.ts); a feature with none shows none.
-      if (f.frames.length > 0) expect(rendered!.body).toContain('Product UI on demo data · illustration')
+      // A picture says it is the current UI on demo data, or a composite of such renders (site-frames.ts); a feature with none shows none.
+      if (f.frames.length > 0) expect(rendered!.body).toMatch(/Product UI on demo data · illustration|Composite of product UI renders on demo data · illustration/)
       else expect(rendered!.body).not.toContain('<figure class="shot')
       expect(rendered!.body).not.toContain('● REC')
     }
