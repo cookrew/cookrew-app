@@ -24,7 +24,8 @@ export interface PaneEndDeps {
   /** Is the pane still there? Null when the backend could not say. */
   exists: () => MaybeAsync<boolean | null>
   alive: (pid: number) => MaybeAsync<boolean>
-  signal: (pid: number, signal: 'SIGTERM' | 'SIGKILL') => void
+  /** May read the process again first (terminal-pid.ts), so it may be async; awaited before the next poll. */
+  signal: (pid: number, signal: 'SIGTERM' | 'SIGKILL') => MaybeAsync<void>
   sleep?: (ms: number) => Promise<void>
   now?: () => number
 }
@@ -95,12 +96,12 @@ export async function endPane(deps: PaneEndDeps, timeoutMs = 5000): Promise<Pane
     if (running && elapsed >= timeoutMs * RETRY_AT && !termed) {
       termed = true
       signalled = true
-      deps.signal(pid, 'SIGTERM')
+      await asked(() => deps.signal(pid, 'SIGTERM'))
     }
     if (running && elapsed >= timeoutMs * SIGKILL_AT && !killed) {
       killed = true
       signalled = true
-      deps.signal(pid, 'SIGKILL')
+      await asked(() => deps.signal(pid, 'SIGKILL'))
     }
     // A signal sent at the deadline gets one look at what it did.
     if (elapsed >= timeoutMs && !signalled) return { ended: false, pid, reason: survivorReason(exists, pid, timeoutMs) }
