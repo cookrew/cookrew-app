@@ -12,7 +12,7 @@ import { Page } from './ZoomParts'
 import { agentViewOf, itemViewOf, type AgentView, type ItemView } from './zoom-model'
 import { BAR_SIDES, type ZoomDir } from './zoom-path'
 import { zoomStore } from './zoom-store'
-import { barSeen, useSeenBook } from './bar-seen'
+import { barSeen, machineSeen, useSeenBook } from './bar-seen'
 import { artifactInbox, useArtifacts, type ArtifactEntry } from './hitl-artifacts'
 import { badgeOf, inboxRows, secondTap, type WorkspaceFace } from './bar-reach'
 import { deckView } from './machine-view'
@@ -20,6 +20,9 @@ import { agentInbox, groupSize, sinceWord, withHeld, type AgentEntry } from './b
 import { barCard, useBarCard, type FaceBox } from './bar-pick'
 import { BarAgentCard, BarAwayCard, BarItemCard } from './BarCards'
 import { pageInView } from '../page-in-view'
+import { oneOrder, useRemoteHitl, type RemoteAgentEntry, type RemoteItemEntry } from './remote-hitl'
+import { openRemoteFace, readRemoteReply } from './remote-open'
+import { RemoteAgentCard, RemoteAgentFace, RemoteItemCard, RemoteItemFace } from './BarRemote'
 import './bar-groups.css'
 
 /**
@@ -44,6 +47,11 @@ import './bar-groups.css'
  * changes (hitl-artifacts.ts). A face from another workspace wears its mark
  * (bar-reach.ts) and opens a read-only card; the second tap, or Open, jumps
  * there (onJump · canvas-ui.ts jumpToNode).
+ *
+ * EVERY MACHINE (phase 6): what needs you on the account's other machines is in
+ * the same two groups, in one order with this machine's (remote-hitl.ts). Its
+ * faces wear their machine's mark too (BarRemote.tsx), open a read-only card,
+ * and the second tap, or Open, enters that machine (remote-open.ts).
  */
 
 const STACK_MS = 220
@@ -146,6 +154,7 @@ export function BarGroups({ workspaceId, nodes, rows, all, workspaces, agents, a
 }): React.JSX.Element {
   const book = useSeenBook()
   const artifacts = useArtifacts()
+  const remote = useRemoteHitl()
   const card = useBarCard()
   const zoom = useFullView()
   const owners = useMemo(() => ownersOf(attachIndex), [attachIndex])
@@ -200,17 +209,43 @@ export function BarGroups({ workspaceId, nodes, rows, all, workspaces, agents, a
   }, [fullItem, fullAt])
 
   const agentById = useMemo(() => new Map(agentEntries.map((e) => [e.id, e])), [agentEntries])
-  const agentIds = useHeld(useMemo(() => agentEntries.map((e) => e.id), [agentEntries]), card?.kind === 'agent' ? card.id : null)
-  const itemIds = useHeld(useMemo(() => itemEntries.map((e) => e.id), [itemEntries]), card?.kind === 'item' ? card.id : null)
+  // One order across this machine and the others: waiting first, then replies and news, newest first within.
+  const reachAt = useMemo(() => new Map(reach.map((r) => [r.id, r.lastActivityAt])), [reach])
+  const agentOrder = useMemo(
+    () => oneOrder([...agentEntries.map((e) => ({ key: e.id, why: e.why, at: reachAt.get(e.id) ?? 0 })), ...remote.agents]).map((e) => e.key),
+    [agentEntries, reachAt, remote.agents]
+  )
+  const itemOrder = useMemo(
+    () => oneOrder([...itemEntries.map((e) => ({ key: e.id, at: e.at })), ...remote.items].map((e) => ({ key: e.key, why: 'news' as const, at: e.at }))).map((e) => e.key),
+    [itemEntries, remote.items]
+  )
+  const agentIds = useHeld(agentOrder, card?.kind === 'agent' ? card.id : null)
+  const itemIds = useHeld(itemOrder, card?.kind === 'item' ? card.id : null)
   // What each held face was when its card opened: still drawn, though no longer in the inbox.
   const lastAgent = useRef(new Map<string, AgentEntry>())
   for (const e of agentEntries) lastAgent.current.set(e.id, e)
+  // Another machine's faces, by key: what the inbox holds now, else the copy kept while its face is still
+  // drawn (its card open, or sliding out), as this machine's are. Kept after each render, never during one.
+  const remoteAgentNow = useMemo(() => new Map(remote.agents.map((e) => [e.key, e])), [remote.agents])
+  const remoteItemNow = useMemo(() => new Map(remote.items.map((e) => [e.key, e])), [remote.items])
+  const heldRemote = useRef<{ agents: ReadonlyMap<string, RemoteAgentEntry>; items: ReadonlyMap<string, RemoteItemEntry> }>({ agents: new Map(), items: new Map() })
+  const remoteAgentOf = (key: string): RemoteAgentEntry | undefined => remoteAgentNow.get(key) ?? heldRemote.current.agents.get(key)
+  const remoteItemOf = (key: string): RemoteItemEntry | undefined => remoteItemNow.get(key) ?? heldRemote.current.items.get(key)
 
   const size = groupSize(narrow)
   const agentPage = usePage(agentIds.length, size)
   const itemPage = usePage(itemIds.length, size)
   const agentStack = useStack(agentIds.slice(agentPage.start, agentPage.end))
   const itemStack = useStack(itemIds.slice(itemPage.start, itemPage.end))
+  // Only what a stack may still draw is kept: the rest of the copies go.
+  useEffect(() => {
+    const keep = (ids: readonly string[]) => <T,>(at: ReadonlyMap<string, T>, now: ReadonlyMap<string, T>): ReadonlyMap<string, T> =>
+      new Map([...at, ...now].filter(([key]) => ids.includes(key)))
+    heldRemote.current = {
+      agents: keep([...agentIds, ...agentStack.order])(heldRemote.current.agents, remoteAgentNow),
+      items: keep([...itemIds, ...itemStack.order])(heldRemote.current.items, remoteItemNow)
+    }
+  })
 
   // The open workspace's browsers want their pictures (thumb-wants.ts), as the troop's do.
   const shownBrowsers = itemStack.order.filter((id) => nodeOf.get(id)?.kind === 'browser').join(' ')
@@ -230,15 +265,21 @@ export function BarGroups({ workspaceId, nodes, rows, all, workspaces, agents, a
   // The card closes when what it shows is gone, or the view leaves for a full view or another workspace.
   useEffect(() => {
     if (!card) return
-    const gone = card.kind === 'agent' ? !agents.has(card.id) && !rowById.has(card.id) : !nodeOf.has(card.id) && !artifacts.entries.has(card.id)
-    if (gone || zoom.full !== null) barCard.close()
-  }, [card, agents, rowById, nodeOf, artifacts, zoom.full])
+    const here = card.kind === 'agent' ? agents.has(card.id) || rowById.has(card.id) : nodeOf.has(card.id) || artifacts.entries.has(card.id)
+    // Another machine's stays while that machine still holds it, read or not.
+    if ((!here && !remote.known.has(card.id)) || zoom.full !== null) barCard.close()
+  }, [card, agents, rowById, nodeOf, artifacts, remote.known, zoom.full])
   useEffect(() => () => barCard.close(), [workspaceId])
   // An agent changing an artifact while its card is open: that change is seen too.
   const openItemAt = card?.kind === 'item' ? (entryOf(card.id)?.at ?? null) : null
   useEffect(() => {
     if (card?.kind === 'item' && openItemAt !== null) barSeen.mark(card.id, openItemAt)
   }, [card, openItemAt])
+  // Another machine's, in that machine's own book.
+  const openRemote = card?.kind === 'item' ? remote.items.find((e) => e.key === card.id) : undefined
+  useEffect(() => {
+    if (openRemote) machineSeen.mark(openRemote.machineId, openRemote.id, openRemote.at)
+  }, [openRemote])
 
   const faces = useRef(new Map<string, HTMLButtonElement>())
   const faceRef = (key: string) => (el: HTMLButtonElement | null): void => {
@@ -250,7 +291,24 @@ export function BarGroups({ workspaceId, nodes, rows, all, workspaces, agents, a
     if (itsWorkspace && secondTap(itsWorkspace, workspaceId) === 'jump') return onJump(itsWorkspace, id)
     full(id)
   }
+  /** Another machine's face: a read-only card, then into that machine. Never the box's. */
+  const tapRemote = (kind: 'agent' | 'item', e: RemoteAgentEntry | RemoteItemEntry, face: Parameters<typeof openRemoteFace>[0]): void => {
+    const open = barCard.get()
+    if (open?.kind === kind && open.id === e.key) {
+      barCard.close()
+      return openRemoteFace(face)
+    }
+    barCard.open(kind === 'agent' ? { kind: 'agent', id: e.key, away: true } : { kind: 'item', id: e.key, away: true })
+  }
+  const agentFace = (e: RemoteAgentEntry): Parameters<typeof openRemoteFace>[0] => ({ ...e, kind: 'agent', id: e.agentId, name: e.name })
+  const itemFace = (e: RemoteItemEntry): Parameters<typeof openRemoteFace>[0] => ({ ...e, kind: 'item', id: e.id, name: e.title, itemKind: e.kind })
   const tapAgent = (id: string, el: HTMLElement): void => {
+    const far = remoteAgentOf(id)
+    if (far) {
+      tapRemote('agent', far, agentFace(far))
+      if (far.why === 'reply' && barCard.get()?.id === id) readRemoteReply(far.machineId, far.agentId)
+      return
+    }
     const away = agentAway(id)
     const open = barCard.get()
     if (open?.kind === 'agent' && open.id === id) {
@@ -263,6 +321,12 @@ export function BarGroups({ workspaceId, nodes, rows, all, workspaces, agents, a
     if (agentById.get(id)?.why === 'reply') cookrew().turnSeen(id)
   }
   const tapItem = (id: string): void => {
+    const far = remoteItemOf(id)
+    if (far) {
+      tapRemote('item', far, itemFace(far))
+      if (barCard.get()?.id === id) machineSeen.mark(far.machineId, far.id, far.at)
+      return
+    }
     const open = barCard.get()
     const entry = entryOf(id)
     if (open?.kind === 'item' && open.id === id) {
@@ -278,7 +342,12 @@ export function BarGroups({ workspaceId, nodes, rows, all, workspaces, agents, a
   const motionOf = (stack: { entering: ReadonlySet<string>; leaving: ReadonlySet<string> }, id: string): string =>
     stack.leaving.has(id) ? ' out' : stack.entering.has(id) ? ' in' : ''
 
+  const isOpen = (kind: 'agent' | 'item', id: string): string => (card?.kind === kind && card.id === id ? ' open' : '')
   const agentFaces = agentStack.order.flatMap((id) => {
+    const far = remoteAgentOf(id)
+    if (far) {
+      return [<RemoteAgentFace key={id} entry={far} state={`${motionOf(agentStack, id)}${isOpen('agent', id)}`} out={agentStack.leaving.has(id)} faceRef={faceRef(`agent:${id}`)} onTap={(el) => tapAgent(id, el)} />]
+    }
     const a = viewOfAgent(id)
     const why = (agentById.get(id) ?? lastAgent.current.get(id))?.why ?? 'reply'
     if (!a) return []
@@ -297,6 +366,10 @@ export function BarGroups({ workspaceId, nodes, rows, all, workspaces, agents, a
     ]
   })
   const itemFaces = itemStack.order.flatMap((id) => {
+    const far = remoteItemOf(id)
+    if (far) {
+      return [<RemoteItemFace key={id} entry={far} state={`${motionOf(itemStack, id)}${isOpen('item', id)}`} out={itemStack.leaving.has(id)} faceRef={faceRef(`item:${id}`)} onTap={() => tapItem(id)} />]
+    }
     const view = viewOf(id)
     if (!view) return []
     const ws = itemAway(id) ? wsOf(entryOf(id)?.workspaceId ?? '') : null
@@ -318,7 +391,7 @@ export function BarGroups({ workspaceId, nodes, rows, all, workspaces, agents, a
   const group = (s: (typeof BAR_SIDES)[number]): React.JSX.Element => {
     const isAgents = s.dir === 'agents'
     const stack = isAgents ? agentFaces : itemFaces
-    const count = isAgents ? agentEntries.length : itemEntries.length
+    const count = isAgents ? agentOrder.length : itemOrder.length
     const turn = isAgents ? agentPage : itemPage
     const lit = side === s.dir
     return (
@@ -342,6 +415,8 @@ export function BarGroups({ workspaceId, nodes, rows, all, workspaces, agents, a
   const cardItem = cardNode ? itemFaceOf(cardNode, owners.get(cardNode.id) ?? []) : null
   const awayItem = card?.kind === 'item' && card.away === true ? viewOf(card.id) : null
   const awayEntry = card ? entryOf(card.id) : undefined
+  const farAgent = card?.kind === 'agent' ? remoteAgentOf(card.id) : undefined
+  const farItem = card?.kind === 'item' ? remoteItemOf(card.id) : undefined
   const closeAnd = (fn: () => void) => (): void => {
     barCard.close()
     fn()
@@ -409,6 +484,14 @@ export function BarGroups({ workspaceId, nodes, rows, all, workspaces, agents, a
           onOutside={onOutside}
           onClose={barCard.close}
         />
+      )}
+      {farAgent && (
+        <RemoteAgentCard key={`far-agent:${farAgent.key}`} entry={farAgent} anchor={faces.current.get(`agent:${farAgent.key}`) ?? null}
+          onOpen={closeAnd(() => openRemoteFace(agentFace(farAgent)))} onOutside={onOutside} onClose={barCard.close} />
+      )}
+      {farItem && (
+        <RemoteItemCard key={`far-item:${farItem.key}`} entry={farItem} now={now} anchor={faces.current.get(`item:${farItem.key}`) ?? null}
+          onOpen={closeAnd(() => openRemoteFace(itemFace(farItem)))} onOutside={onOutside} onClose={barCard.close} />
       )}
     </>
   )

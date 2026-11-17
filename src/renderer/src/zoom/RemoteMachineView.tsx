@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import { ENTRY_MS, entryFrom } from './remote-entry'
 import { artifactsOf } from './remote-machine'
 import { remotePlace, remoteSeen, type RemotePlace } from './remote-machine-store'
+import { remoteOpen } from './remote-open'
 import { RemoteCardView, Thumb } from './RemoteCardView'
 import { RemoteItemView } from './RemoteItemView'
 import { RemoteCrew, RemoteWorkspaces } from './RemoteStops'
@@ -27,7 +28,7 @@ const read = (): RemotePlace => remotePlace.get()
 export function RemoteMachineView(): React.JSX.Element | null {
   const place = useSyncExternalStore(remotePlace.subscribe, read, read)
   const machine = place.machine
-  const { cards, answering, refresh } = useRemoteCards(machine?.id ?? null, place.workspace?.id ?? null, place.agent?.id ?? null)
+  const { cards, readFor, answering, refresh } = useRemoteCards(machine?.id ?? null, place.workspace?.id ?? null, place.agent?.id ?? null)
   const stage = useRef<HTMLElement | null>(null)
   // ENTERED IN PLACE: the view opens out of the machine's own frame on the devices stop, from
   // where that frame stands. Once per machine entered, and not at all for someone who asked the
@@ -55,6 +56,14 @@ export function RemoteMachineView(): React.JSX.Element | null {
     remoteSeen.note({ cards: cards?.cards ?? null, front: frontTile ? { id: frontTile.id, name: frontTile.name } : null, refresh })
   }, [cards, frontTile?.id, frontTile?.name, refresh])
   useEffect(() => () => remoteSeen.forget(), [])
+  // A face opened from the bar (remote-open.ts): on to its agent once this read holds it, never before.
+  const machineId = machine?.id ?? null
+  const workspaceId = place.workspace?.id ?? null
+  const agentId = place.agent?.id ?? null
+  // Named by the key it was read for: right after entering, `cards` may still be the last key's or a kept copy.
+  useEffect(() => {
+    remoteOpen.settle({ machineId, workspaceId, agentId }, readFor && cards ? { ...readFor, cards: cards.cards } : null)
+  }, [cards, readFor, machineId, workspaceId, agentId])
   if (!machine) return null
 
   const card = place.agent ? (cards?.cards.find((one) => one.id === place.agent?.id) ?? null) : null

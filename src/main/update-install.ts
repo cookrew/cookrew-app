@@ -4,8 +4,8 @@ import type { UpdateInstaller } from './update-check'
 /**
  * WHETHER THIS BUILD CAN REPLACE ITSELF, AND THE SEAM ONTO electron-updater.
  *
- * A Mac installs an update only over a build signed with Developer ID, so an
- * ad hoc or development-signed build must not try. The portable Windows exe has no installer to run,
+ * A Mac installs an update only over a build signed with a real identity, so an
+ * ad hoc build must not try. The portable Windows exe has no installer to run,
  * and on Linux only an AppImage can swap itself. Everything else stays on the
  * release page (update-check.ts).
  */
@@ -28,10 +28,11 @@ async function macSigned(facts: InstallFacts): Promise<boolean> {
   const bundle = /^(.*\.app)\/Contents\/MacOS\//.exec(facts.execPath)?.[1]
   if (!bundle) return false
   const description = await facts.describeSignature(bundle).catch(() => '')
-  // Squirrel installs only a release that meets the running build's requirement,
-  // and releases are Developer ID builds: a copy re-signed with a development
-  // identity (to keep its privacy grants) must stay on the release page too.
-  return /^Authority=Developer ID Application:/m.test(description)
+  // Squirrel installs only a release that meets the running build's requirement.
+  // Releases are team-signed under a requirement naming only the team
+  // (electron-builder.yml), so any team identity, development or Developer ID,
+  // accepts the next one; an ad hoc build has no Authority and stays put.
+  return /^Authority=/m.test(description)
 }
 
 export async function canUpdateItself(facts: InstallFacts): Promise<boolean> {

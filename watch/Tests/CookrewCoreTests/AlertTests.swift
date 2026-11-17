@@ -27,8 +27,12 @@ struct AlertTests {
   @Test("what an alert says")
   func words() {
     #expect(alertTitle(.needsYou("Atlas")) == "Atlas needs you")
-    #expect(alertTitle(.done("Atlas")) == "Atlas is done")
+    #expect(alertTitle(.done("Atlas")) == "Atlas replied")
     #expect(alertTitle(.sent) == nil)
+    // One alert per agent and machine on the wrist: a newer one replaces the older (as on the desktop and phone).
+    #expect(alertIdentifier(.needsYou("Atlas"), machine: "m1") == alertIdentifier(.done("Atlas"), machine: "m1"))
+    #expect(alertIdentifier(.needsYou("Atlas"), machine: "m1") != alertIdentifier(.needsYou("Atlas"), machine: "m2"))
+    #expect(alertIdentifier(.needsYou("Atlas"), machine: "m1") != alertIdentifier(.needsYou("Iris"), machine: "m1"))
   }
 
   @Test("each machine is remembered on its own, and survives a relaunch")
