@@ -49,7 +49,8 @@ export const SWS = 0.62
  * mark's units (the group's own, drawn at SWS on the device), around the
  * group's centre, so the open workspace's real faces stand in its tile.
  */
-export const TILE = { left: -112, top: -174, w: 430, h: 318 } as const
+/** As tall as an agent card is for its width (260 x 244; owner, 2026-11-16): workspace-tile.css draws it 260 x 294: the card itself under the name and the crew row. */
+export const TILE = { left: -112, top: -174, w: 430, h: 486 } as const
 /** A tile's words on screen at a phone's picks, in px: its name's line over the bench, its counts' under it, and only a margin where it has no counts. */
 const TILE_HEAD_PX = { name: 28, caption: 21 }
 const TILE_FOOT_PX = { counts: 26, none: 8 }
@@ -371,12 +372,25 @@ export function screenOf(box: Box, aspect: number): Box {
 }
 
 /**
- * Workspaces per row on the device: the same pick as the crew's (owner,
- * 2026-11-01: "per row 3 4 5 at the workspaces view too"), remembered apart
- * from it. Unpicked, the device keeps its old 2 on a phone and 3 on a desk.
+ * Workspaces per row on the device: 1 or 2 only (owner, 2026-11-16: a tile is
+ * drawn at an agent card's own type, and three across left it too small to
+ * read). Unpicked, a desk shows 2 and a phone 1.
  */
-export const DEVICE_COLS = CREW_COLS
-export const defaultDeviceCols = (narrow: boolean): number => (narrow ? 2 : 3)
+export const DEVICE_COLS = { wide: [1, 2], narrow: [1, 2] } as const
+export const defaultDeviceCols = (narrow: boolean): number => (narrow ? 1 : 2)
+
+/** workspace-tile.css draws a tile this many px across, then scales it to TILE.w. */
+export const TILE_DRAWN_W = 260
+/**
+ * A TILE'S TYPE, AS PICKED (owner, 2026-11-16: "bigger icons and words, and a
+ * setting; the frame sized after the agent card, to hold its type"). 1 draws a
+ * tile's px 1:1 on screen, so the agent card inside it reads as it does in the
+ * agents view; the larger picks grow the frame with its words.
+ */
+export const TILE_SIZES = [1, 1.15, 1.3] as const
+export const DEFAULT_TILE_SIZE = 1
+/** The device camera's scale that draws a tile's px at `size` on screen: the most it zooms in, room allowing. */
+export const tileFaceS = (size: number): number => (size * TILE_DRAWN_W) / (SWS * TILE.w)
 
 /** The device's title stands this far over the first row of tiles, and has this room above it (device units). */
 const TITLE_GAP = 14
@@ -384,6 +398,33 @@ const TITLE_ROOM = { wide: 64, narrow: 46 }
 const TILE_GAP = { wide: 32, narrow: 24 }
 const FOOT = { wide: 12, narrow: 0 }
 const SIDE = { wide: 60, narrow: 0 }
+
+/**
+ * THE WORKSPACES GRID BY THE SCREEN (owner, 2026-11-17: "取消feed，仅保留grid，按照屏幕大小平铺"):
+ * the most to a row whose tiles, the row filling the screen's width, still stand at `size`
+ * (an agent card's own type at 1). A phone holds one, a desk four or five, a wide screen more.
+ * The camera fits a full row to the width (zoom-camera.ts · deviceCam), less 16px a side.
+ */
+export function gridColsFor(w: number, narrow: boolean, size: number = DEFAULT_TILE_SIZE): number {
+  const form = narrow ? 'narrow' : 'wide'
+  let best = 1
+  for (let c = 2; c <= GRID_MAX_COLS; c++) {
+    const boxW = c * SWS * TILE.w + (c - 1) * TILE_GAP[form] + SIDE[form]
+    if (((w - 32) / boxW) * SWS * TILE.w / TILE_DRAWN_W < size) break
+    best = c
+  }
+  return best
+}
+/**
+ * THE GRID'S DEFAULT (owner, 2026-11-17: "手机上竖屏默认用2 per row，电脑上或横屏默认铺满，参考小红书的手机版和网页版"):
+ * a phone held upright two to a row, as a photo-note app's home; a desk or a phone on its side
+ * as many as the screen holds, as its web page does. Either way a full row fills the width.
+ */
+export const screenGridCols = (w: number, h: number, narrow: boolean, size: number = DEFAULT_TILE_SIZE): number =>
+  narrow && h > w ? 2 : gridColsFor(w, narrow, size)
+const GRID_MAX_COLS = 8
+/** A full row is drawn this much past its type at most: the width a column short of the next leaves. */
+const FILL_MAX = 2
 
 /**
  * The device: a tile per workspace, `cols` to a row (the pick, else the
@@ -396,9 +437,13 @@ export function deviceOf(
   ids: readonly string[],
   narrow: boolean,
   aspect = DEFAULT_SCREEN_ASPECT,
-  picked?: number
-): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number; gridTop: number; gridH: number; rowH: number; left: number; tile: { top: number; h: number } } {
-  const pick = picked ?? defaultDeviceCols(narrow)
+  picked?: number,
+  size: number = DEFAULT_TILE_SIZE,
+  fitCols?: number
+): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number; gridTop: number; gridH: number; rowH: number; left: number; tile: { top: number; h: number }; face: number; fill: boolean } {
+  // Laid by the screen (fitCols, unpicked: zoom-layout.ts · screenGridCols), its full rows filling the width.
+  const fits = picked === undefined && fitCols !== undefined ? fitCols : null
+  const pick = picked ?? fits ?? defaultDeviceCols(narrow)
   const cols = Math.max(1, Math.min(pick, ids.length))
   const form = narrow ? 'narrow' : 'wide'
   const tile = tileOf(narrow, cols)
@@ -420,7 +465,9 @@ export function deviceOf(
   const top = titleBottom - TITLE_ROOM[form]
   const bottom = -gridTop + FOOT[form]
   const box = { w: gridW + SIDE[form], h: bottom - top, cy: (top + bottom) / 2 }
-  return { at, box, screen: screenOf(box, aspect), titleBottom, dx, gridTop, gridH, rowH: dy, left, tile }
+  // A full row fills the screen's width (each tile at least its type); fewer stand at their type.
+  const fill = fits !== null && ids.length >= fits
+  return { at, box, screen: screenOf(box, aspect), titleBottom, dx, gridTop, gridH, rowH: dy, left, tile, face: fill ? tileFaceS(size * FILL_MAX) : tileFaceS(size), fill }
 }
 
 /**

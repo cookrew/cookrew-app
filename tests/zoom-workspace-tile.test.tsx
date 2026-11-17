@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { deviceCam, deviceWords, SWS } from '../src/renderer/src/zoom/zoom-frame'
-import { BENCH, deviceOf, DECK_POSE, fanOf, stackOf, TILE, tileOf, TILE_SPLIT } from '../src/renderer/src/zoom/zoom-layout'
+import { BENCH, deviceOf, DECK_POSE, fanOf, stackOf, TILE, TILE_DRAWN_W, tileOf, TILE_SPLIT } from '../src/renderer/src/zoom/zoom-layout'
 import { deckOf } from '../src/renderer/src/zoom/use-zoom-fleet'
 import { deckDepth, sameTile, WorkspaceTile } from '../src/renderer/src/zoom/WorkspaceTile'
 import { buildZoomModel, type MarkView } from '../src/renderer/src/zoom/zoom-model'
@@ -96,8 +96,8 @@ describe('the phone camera at the workspaces stop', () => {
   })
 
   it('does not scroll what fits', () => {
-    expect(deviceCam(deviceOf(ids(8), true), 360, 724, true).panMax).toBe(0)
-    expect(deviceCam(deviceOf(ids(8), false), 1440, 828, false).panMax).toBe(0)
+    expect(deviceCam(deviceOf(ids(1), true), 360, 724, true).panMax).toBe(0)
+    expect(deviceCam(deviceOf(ids(2), false), 1440, 828, false).panMax).toBe(0)
   })
 
   it('scrolls a desk of many rows, past three, instead of shrinking', () => {
@@ -107,12 +107,12 @@ describe('the phone camera at the workspaces stop', () => {
     expect(many.panMax).toBeGreaterThan(0)
   })
 
-  it('fills the width', () => {
+  it('draws a tile at an agent card’s own size, inside the width (owner, 2026-11-16: the tile fits the card)', () => {
     for (const [w, h] of PHONES) {
       const d = deviceOf(ids(8), true)
       const list = tiles(d)
       const width = (Math.max(...list.map((t) => t.right)) - Math.min(...list.map((t) => t.left))) * deviceCam(d, w, h, true).S
-      expect(width).toBeGreaterThanOrEqual(w - 40)
+      expect(width).toBeCloseTo(TILE_DRAWN_W, 0)
       expect(width).toBeLessThanOrEqual(w - 24)
     }
   })

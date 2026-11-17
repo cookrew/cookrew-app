@@ -29,10 +29,10 @@ describe('the device stop on a desktop', () => {
     expect(words.titleMax * words.titleK).toBeLessThanOrEqual(device.box.w - 100 + 1e-6)
   })
 
-  it('keeps a size that already reads: nothing shrinks', () => {
+  it('keeps a size that already reads: nothing is drawn under its own px on screen, however far the camera comes in', () => {
     const words = deviceWords(deviceOf(ids(1), false), 2560, 1400, false)
-    expect(words.markK).toBeGreaterThanOrEqual(1)
-    expect(words.titleK).toBeGreaterThanOrEqual(1)
+    expect(words.markK * SWS * words.cam).toBeGreaterThanOrEqual(1 - 1e-9)
+    expect(words.titleK * words.cam).toBeGreaterThanOrEqual(1 - 1e-9)
   })
 })
 
