@@ -27,7 +27,7 @@ h1{position:absolute;left:60px;top:200px;width:560px;font-size:50px;line-height:
 p{position:absolute;left:62px;top:440px;width:540px;font-size:21px;line-height:1.5;color:#5d554a;margin:0}
 .foot{position:absolute;left:62px;bottom:38px;font:600 13px 'SF Mono',Menlo,monospace;letter-spacing:.16em;color:#8f5520}
 .foot::before{content:'';display:inline-block;width:22px;height:1px;background:currentColor;vertical-align:middle;margin-right:10px}
-.shot{position:absolute;right:-60px;top:70px;width:560px;border-radius:14px;overflow:hidden;background:#fbf8f1;box-shadow:0 1px 2px rgba(40,30,15,.08),0 18px 44px rgba(40,30,15,.16);border:1px solid rgba(29,26,22,.12)}
+.shot{position:absolute;right:48px;top:110px;width:500px;border-radius:14px;overflow:hidden;background:#fbf8f1;box-shadow:0 1px 2px rgba(40,30,15,.08),0 18px 44px rgba(40,30,15,.16);border:1px solid rgba(29,26,22,.12)}
 .shot img{display:block;width:100%}
 .shot .chip{display:block;padding:8px 14px;font:600 12px 'SF Mono',Menlo,monospace;letter-spacing:.06em;color:#5d554a;border-top:1px solid rgba(29,26,22,.12)}
 .ink-draw{stroke-dashoffset:0!important;animation:none!important}

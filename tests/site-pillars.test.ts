@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { buildStaticSite } from '../registry/src/site-static'
 import { PILLARS, ROADMAP, STATUS, llmsText } from '../registry/src/site-content'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { DEMO } from '../registry/src/site-frames'
+import { DEMO, PHONE_MEDIA } from '../registry/src/site-frames'
 import { CANVAS_CLIP } from '../registry/src/site-motion'
 
 /**
@@ -30,6 +30,18 @@ const home = (): string => {
 }
 
 const claims = PILLARS.flatMap((p) => p.claims)
+
+/** A baseline or progressive JPEG's width and height, from its SOF marker. */
+const jpegSize = (file: string): [number, number] => {
+  const b = readFileSync(file)
+  for (let i = 2; i < b.length; ) {
+    const marker = b[i + 1]!
+    const len = b.readUInt16BE(i + 2)
+    if (marker >= 0xc0 && marker <= 0xc2) return [b.readUInt16BE(i + 7), b.readUInt16BE(i + 5)]
+    i += 2 + len
+  }
+  throw new Error(`no size in ${file}`)
+}
 
 describe('the pillars say where every claim stands', () => {
   it('each claim is drawn with its own status label beside it', () => {
@@ -160,29 +172,54 @@ describe('the pictures say what they are (2026-11-17)', () => {
     expect(seen).toBeGreaterThan(5)
   })
 
-  it('the front page shows each picture once', () => {
-    const files = figures(home()).map((fig) => /src="[^"]*\/site\/([^"?]+)"/.exec(fig)?.[1])
-    expect(files.every(Boolean)).toBe(true)
-    expect(new Set(files).size).toBe(files.length)
+  it('every picture is in one section of one page, never two (2026-11-17, second round)', () => {
+    const seenIn = new Map<string, string>()
+    for (const [name, body] of pages()) {
+      for (const fig of figures(body)) {
+        const files = new Set([...fig.matchAll(/\/site\/(demo-[a-z-]+?)(?:-\d+|-phone)?\.(?:jpg|mp4)/g)].map((m) => m[1]))
+        for (const file of files) {
+          expect(seenIn.get(file), `${file} on ${name} and ${seenIn.get(file)}`).toBeUndefined()
+          seenIn.set(file, name)
+        }
+      }
+    }
+    expect(seenIn.size).toBeGreaterThan(12)
+  })
+
+  it('a figure whose desktop framing is too wide for a phone carries its own phone framing', () => {
+    const body = home()
+    for (const key of ['hero', 'routing', 'watch', 'ops'] as const) {
+      expect(DEMO[key].phone, key).toBeDefined()
+      expect(body).toContain(`<source media="${PHONE_MEDIA}" srcset="`)
+      expect(body).toContain(DEMO[key].file.replace(/\.jpg$/, '-phone.jpg'))
+    }
+    const canvas = pages().get('features/canvas.html') ?? ''
+    expect(canvas).toContain(`class="on-phone" src="`)
   })
 
   it('a pillar shows its pictures, each with the sentence of what it is not when one is needed; the drawing is a diagram', () => {
     const body = home()
     for (const p of PILLARS) for (const m of p.media) {
       expect(body).toContain(DEMO[m.key].file.replace(/\.jpg$/, '-800.jpg'))
+      expect(body).toContain(`/site/${DEMO[m.key].file} ${DEMO[m.key].width}w`)
       if (m.note) expect(body).toContain(m.note.replace(/&/g, '&amp;'))
     }
     expect(PILLARS.find((p) => p.id === 'everywhere')!.media.find((m) => m.key === 'watch')!.note).toMatch(/^Beta/)
     expect(body).toContain('Diagram, not a screenshot.')
   })
 
-  it('every picture the pages name is a file in the repository, with its small twin', () => {
+  it('every picture the pages name is a file in the repository, at the size the pages say, with its twins', () => {
     const dir = path.join(__dirname, '..', 'registry', 'assets', 'site')
     for (const frame of Object.values(DEMO)) {
       expect(existsSync(path.join(dir, frame.file)), frame.file).toBe(true)
-      expect(existsSync(path.join(dir, frame.file.replace(/\.jpg$/, '-800.jpg'))), frame.file).toBe(true)
+      for (const w of frame.twins) expect(existsSync(path.join(dir, frame.file.replace(/\.jpg$/, `-${w}.jpg`))), `${frame.file} ${w}`).toBe(true)
+      if (frame.phone) expect(existsSync(path.join(dir, frame.file.replace(/\.jpg$/, '-phone.jpg'))), frame.file).toBe(true)
+      expect(jpegSize(path.join(dir, frame.file)), frame.file).toEqual([frame.width, frame.height])
+      // Wide enough to be sharp where it is drawn: no crop is shipped narrower than the 1170 a phone screen at ×3 asks.
+      expect(frame.width, frame.file).toBeGreaterThanOrEqual(1170)
     }
     expect(existsSync(path.join(dir, CANVAS_CLIP.file))).toBe(true)
     expect(existsSync(path.join(dir, CANVAS_CLIP.poster))).toBe(true)
+    expect(existsSync(path.join(dir, CANVAS_CLIP.still))).toBe(true)
   })
 })

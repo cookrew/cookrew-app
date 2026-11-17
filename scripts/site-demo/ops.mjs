@@ -13,7 +13,7 @@ const PAGE = 'http://notes.example/release-notes.html'
 // 1. The pictures that go inside: a neutral desktop (pages/desktop.html: the same page and a build in a terminal)
 // at the stage's size, and the page at a phone's width.
 const pic = await tab()
-await pic.size(1288, 673, { dsf: 2 })
+await pic.size(1288, 673, { dsf: 2.5 })
 await pic.go('http://notes.example/desktop.html'); await sleep(1500)
 await pic.shot(`${SHOOT}/pic-desktop.png`)
 await pic.size(390, 844, { dsf: 3, mobile: true })
@@ -25,7 +25,8 @@ const dataUrl = (file) => `data:image/png;base64,${execFileSync('base64', ['-i',
 // 2. The cards, opened by their own buttons; the picture laid over the stage that says no screen stands behind it.
 const t = await tab()
 await t.send('Page.addScriptToEvaluateOnNewDocument', { source: "try { if (!sessionStorage.getItem('walked')) { localStorage.clear(); sessionStorage.setItem('walked', '1') } } catch {}" })
-await t.size(1440, 900, { dsf: 2 })
+// 1024×640 at 2.8125 = 2880×1800: the same frame as the stills, the cards' UI drawn larger in it.
+await t.size(1024, 640, { dsf: 2.8125 })
 const press = (css, text) => t.value(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(css)})].find((e) => (e.textContent || e.getAttribute('aria-label') || '').includes(${JSON.stringify(text ?? '')})); if (!el) return 'missing'; el.click(); return 'ok' })()`)
 const OVERLAY = `(src, fit, at) => {
   const words = [...document.querySelectorAll('body *')].find((e) => e.children.length === 0 && /is a screen on this Mac/.test(e.textContent || ''))

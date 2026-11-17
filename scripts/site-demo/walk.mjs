@@ -1,4 +1,4 @@
-// node walk.mjs <prefix> <w> <h> <mobile 0|1> <scheme> '<steps json>'
+// node walk.mjs <prefix> <w> <h> <mobile 0|1> <scheme> '<steps json>'   (DSF=<device scale>, default 2)
 // steps: ["click", css, text?] | ["key", "Escape"] | ["wait", ms] | ["shot", name] | ["eval", js] | ["at", x, y]
 import { mkdirSync } from 'node:fs'
 import { tab, sleep } from './cdp.mjs'
@@ -8,7 +8,7 @@ const [prefix, w, h, mobile, scheme, stepsJson] = process.argv.slice(2)
 const t = await tab()
 // Every walk starts as a fresh install: no remembered stop, theme or zoom from the last one.
 await t.send('Page.addScriptToEvaluateOnNewDocument', { source: "try { if (!sessionStorage.getItem('walked')) { localStorage.clear(); sessionStorage.setItem('walked', '1') } } catch {}" })
-await t.size(Number(w), Number(h), { mobile: mobile === '1', dsf: 2, scheme })
+await t.size(Number(w), Number(h), { mobile: mobile === '1', dsf: Number(process.env.DSF ?? 2), scheme })
 await t.go('http://127.0.0.1:5397/' + (process.env.Q ?? ''))
 await sleep(Number(process.env.BOOT ?? 4500))
 for (const step of JSON.parse(stepsJson)) {

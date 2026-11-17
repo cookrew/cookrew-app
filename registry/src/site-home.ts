@@ -32,11 +32,12 @@ const DESCRIPTION = DEFINITION.slice(0, 157).replace(/\s+\S*$/, '') + '…'
 
 /**
  * THE HERO (2026-11-17): one agent's question on three devices, a composite of
- * three renders on demo data (site-frames.ts DEMO.hero), labelled as such. The
- * twenty-second clip that stood here is on the canvas feature page.
+ * three renders on demo data (site-frames.ts DEMO.hero), labelled as such, the
+ * full width of the page under the headline (it was a 470 px column beside it).
+ * The twenty-second clip that stood here is on the canvas feature page.
  */
 function hero(): string {
-  return figure(DEMO.hero, { eager: true, sizes: '(max-width: 860px) 100vw, 50vw' })
+  return figure(DEMO.hero, { eager: true, sizes: '(max-width: 860px) 100vw, 940px' })
 }
 
 /** GET STARTED: the two steps, the crew builder, and the two questions people ask first. */
@@ -142,12 +143,12 @@ export function staticHomePage(input: StaticHomeInput): Page {
 <div class="home-body">
 <style>${BRAND_LOCKUP_CSS}</style>
 <div class="hero"><div class="wrap">
-<div>${BRAND_LOCKUP_HTML}<span class="tagline">OPEN SOURCE · ${FACTS.license} · ${FACTS.harnesses.slice(0, 4).join(' · ').toUpperCase()}</span>
-<h1>${esc(HEADLINE)}</h1>
-<p class="hero-sub">${esc(HEADLINE_SUB)}</p>
+<div class="hero-text"><div>${BRAND_LOCKUP_HTML}<span class="tagline">OPEN SOURCE · ${FACTS.license} · ${FACTS.harnesses.slice(0, 4).join(' · ').toUpperCase()}</span>
+<h1>${esc(HEADLINE)}</h1></div>
+<div><p class="hero-sub">${esc(HEADLINE_SUB)}</p>
 <p class="lede">${esc(ONE_LINE)} Follow and answer them from the desktop or any browser.</p>
-${staticHeroButtons(input.release, input.console)}</div>
-<div>${hero()}</div>
+${staticHeroButtons(input.release, input.console)}</div></div>
+${hero()}
 </div></div>
 
 <div class="wrap" style="padding:0">${staticDock()}</div>

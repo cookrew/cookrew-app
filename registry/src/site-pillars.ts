@@ -27,8 +27,16 @@ function claim(c: Claim): string {
   return `<li class="claim" data-status="${c.status}">${statusPill(c.status)}<div><b>${esc(c.title)}</b><p>${esc(c.text)}</p></div></li>`
 }
 
+/** The pillar's width on a 1440 desktop (the home body beside its contents list): what a full-width figure is drawn at. */
+const PILLAR_MEDIA_PX = 940
+
 function media(p: Pillar): string {
-  return p.media.map((m) => figure(DEMO[m.key], { note: m.note })).join('')
+  return p.media
+    .map((m) => {
+      const span = m.span ?? 12
+      return figure(DEMO[m.key], { note: m.note, cls: `span-${span}`, sizes: `(max-width: 860px) 100vw, ${Math.round((PILLAR_MEDIA_PX * span) / 12)}px` })
+    })
+    .join('')
 }
 
 /** The route as it is today, and the one hand-made experiment, as text in boxes: a diagram, never a screen. */

@@ -1,4 +1,5 @@
 import { SITE_FRAMES } from './site-shell'
+import { FRAME_SIZES } from './site-frame-sizes'
 
 /**
  * WHAT THE SITE SHOWS, AND WHAT EACH PICTURE IS (2026-11-17).
@@ -29,12 +30,14 @@ export interface Frame {
   file: string
   alt: string
   caption: string
+  /** The largest file's size (site-frame-sizes.ts, written by the script that crops the renders). */
   width: number
   height: number
-  /** Absent: a recording (the old frames' shape). */
-  source?: FrameSource
-  /** The width of the -800 twin when it is not 800 (a portrait's twin is narrower). */
-  smallWidth?: number
+  source: FrameSource
+  /** Narrower copies of the same crop: <file>-<width>.jpg. */
+  twins: readonly number[]
+  /** Its own framing for a phone screen (<file>-phone.jpg), when the desktop framing would be too small to read there. */
+  phone?: { width: number; height: number }
 }
 
 /** The words a figure wears for what it is, beside its caption. */
@@ -44,50 +47,72 @@ export const SOURCE_CHIP: Readonly<Record<FrameSource, string>> = {
   recording: '● REC'
 }
 
-export const sourceOf = (frame: Frame): FrameSource => frame.source ?? 'recording'
+export const sourceOf = (frame: Frame): FrameSource => frame.source
 
 /** Where the pictures were made, once, for every caption that needs to say it. */
 export const RENDERED = 'Rendered on 17 Nov 2026 from the app’s code on dev, on demo data.'
 
-const demo = (file: string, width: number, height: number, alt: string, caption: string, source: FrameSource = 'illustration', smallWidth?: number): Frame =>
-  ({ file, alt, caption, width, height, source, ...(smallWidth ? { smallWidth } : {}) })
+const demo = (file: string, alt: string, caption: string, source: FrameSource = 'illustration'): Frame => {
+  const size = FRAME_SIZES[file]
+  if (!size) throw new Error(`site-frames: no size for ${file}; run scripts/site-demo/assets.mjs`)
+  return { file, alt, caption, source, width: size.width, height: size.height, twins: size.twins, ...(size.phone ? { phone: size.phone } : {}) }
+}
 
+/**
+ * Every picture once (2026-11-17, second round): each section of each page has its own file, cropped to what it is
+ * about from a render at high density, never a window of empty paper and never scaled up.
+ */
 export const DEMO = {
-  hero: demo('demo-hero-devices.jpg', 1400, 876, 'The same question from Planner on three devices: the desktop app, the app at phone width, and an Apple Watch',
-    'One agent, three screens: Planner (Claude Code) waits on an edit to CHANGELOG.md, drawn by the desktop renderer (the question opened from the dock, over Release Room’s four agents on four harnesses), by the same renderer at phone width, and by the watch app’s own view. Three renders on demo data set side by side in plain frames; not a photograph of devices.', 'composite'),
-  devices: demo('demo-devices.jpg', 1400, 876, 'The devices stop: Studio Mac with its two workspaces on the screen, and Build Server with its one',
-    'Pressed devices in the dock: Studio Mac with Release Room and Docs Site on its screen, and the account’s second machine, Build Server, with Nightly Builds and its two agents.'),
-  workspaces: demo('demo-workspaces.jpg', 1400, 876, 'The workspaces stop: Release Room and Docs Site, each with its agents’ faces and what needs you',
-    'The workspaces stop: Release Room with four agents on four harnesses and Docs Site with two, each tile counting what needs you.'),
-  agents: demo('demo-agents.jpg', 1400, 876, 'One workspace, four agents on four harnesses: Planner waiting on you, Reviewer working, Checker replied, Notes resting',
-    'Clicked Release Room: Planner on Claude Code waiting on you, Reviewer on Codex working, Checker on OpenCode replied, Notes on Pi resting.'),
-  hitlDesk: demo('demo-hitl-desk.jpg', 1400, 876, 'Planner’s card with the permission prompt Claude Code asked, mirrored as rows to pick',
-    'Clicked Planner: its card opened, and the permission prompt Claude Code is waiting on, an edit to CHANGELOG.md, came up as rows to pick, 1 to 3, or Esc.'),
-  artifacts: demo('demo-artifacts.jpg', 1400, 876, 'The artifacts stop: a browser card, a note, a phone screen card and a computer screen card',
-    'Clicked artifacts: the browser card Checker uses, the checklist note Planner keeps, and two screen cards, a phone simulator and the main display. Their thumbnails are the demo’s flat placeholders, not screens.'),
-  browserCard: demo('demo-browser-card.jpg', 1400, 876, 'A browser card open on a release-notes page, used by Checker',
-    'Clicked Release notes: the browser card opened on the page Checker checked, a local demo page, with the agent that uses it named at the top right.'),
-  ops: demo('demo-ops-cards.jpg', 1400, 1344, 'Three operation cards: a computer’s screen, a browser page, and a phone’s screen',
-    'The three kinds of card an agent operates: a computer screen card (top), a browser card and a phone screen card. The browser card renders its page itself. The demo has no screen behind the computer and phone cards, so a picture of a demo desktop, and of the same page at phone width, is laid into each card’s stage; the cards around them are the product’s.', 'composite'),
-  routing: demo('demo-routing.jpg', 1400, 828, 'The Routing panel: Magpie online, four harnesses ready to route, subscriptions and a local model, the default group',
+  hero: demo('demo-hero-devices.jpg', 'The same question from Planner on three devices: the desktop app, the app at phone width, and an Apple Watch',
+    'One agent, three screens: Planner (Claude Code) waits on an edit to CHANGELOG.md, drawn by the desktop renderer (cropped to Release Room’s four agents on four harnesses and the question opened from the dock), by the same renderer at phone width, and by the watch app’s own view. Renders on demo data set side by side in plain frames; not a photograph of devices.', 'composite'),
+  routing: demo('demo-routing.jpg', 'The Routing panel: Magpie online, four harnesses ready to route, subscriptions and a local model, the default group',
     'Opened Routing from the menu: the four harnesses each ticked installed, signed in and routed, two subscriptions and a local model, and the default every new card takes.'),
-  crewPhone: demo('demo-crew-phone.jpg', 700, 1514, 'The same four agents at phone width', 'The same workspace at phone width (390 px): the four agents and their states, Planner waiting on you.', 'illustration', 400),
-  hitlPhone: demo('demo-hitl-phone.jpg', 700, 1514, 'Planner’s question as rows to tap, at phone width',
-    'Planner’s question at phone width (390 px): the same rows to tap, with the reply box under them.', 'illustration', 400),
-  watch: demo('demo-watch.jpg', 1400, 556, 'Three Apple Watch screens: Checker’s reply, Release Room’s agents, and the account’s machines',
-    'Three watch screens drawn by the watch app’s own views on demo data: Checker’s reply with a box to answer it, Release Room’s agents with what needs you at the foot, and the account’s two machines, both online.', 'composite')
+  crewPhone: demo('demo-crew-phone.jpg', 'Release Room’s four agents at phone width', 'Release Room at phone width (390 px): the four agents and their states, Planner waiting on you.'),
+  watch: demo('demo-watch.jpg', 'Three Apple Watch screens: Checker’s reply, Release Room’s agents, and the account’s machines',
+    'Three watch screens drawn by the watch app’s own views on demo data: Checker’s reply with a box to answer it, Release Room’s agents with what needs you at the foot, and the account’s two machines, both online.', 'composite'),
+  ops: demo('demo-ops-cards.jpg', 'Three operation cards: a computer’s screen, a browser page, and a phone’s screen',
+    'The three kinds of card an agent operates: a computer screen card, a browser card and a phone screen card, each used by Checker. The browser card renders its page itself. The demo has no screen behind the computer and phone cards, so a picture of a demo desktop, and of the same page at phone width, is laid into each card’s stage; the cards around them are the product’s.', 'composite'),
+  agents: demo('demo-agents.jpg', 'One workspace, four agents on four harnesses: Planner waiting on you, Reviewer working, Checker replied, Notes resting',
+    'Clicked Release Room: Planner on Claude Code waiting on you, Reviewer on Codex working, Checker on OpenCode replied, Notes on Pi resting.'),
+  workspaces: demo('demo-workspaces.jpg', 'The workspaces stop: Release Room and Docs Site, each with its agents’ faces and what needs you',
+    'The workspaces stop: Release Room with four agents on four harnesses and Docs Site with two, each tile counting what needs you.'),
+  hitlDesk: demo('demo-hitl-desk.jpg', 'Planner’s card with the permission prompt Claude Code asked, mirrored as rows to pick',
+    'Clicked Planner: its card opened, and the permission prompt Claude Code is waiting on, an edit to CHANGELOG.md, came up as rows to pick, 1 to 3, or Esc.'),
+  artifacts: demo('demo-artifacts.jpg', 'The artifacts stop: a phone screen card, a computer screen card, a browser card and a note',
+    'Clicked artifacts: the phone simulator, the main display and the release-notes page, each used by Checker, and the checklist note Planner keeps. Their thumbnails are the demo’s flat placeholders, not screens.'),
+  board: demo('demo-board.jpg', 'The BOARD: every agent of Release Room with its harness, its last prompt and its state',
+    'Pressed the count beside search: the BOARD lists every agent with its harness (OpenCode, Pi, Claude Code, Codex), its workspace, what you last asked it and where it stands: done, needs you, working.'),
+  devices: demo('demo-devices.jpg', 'The devices stop: Studio Mac and Build Server, each drawn as a laptop with its workspaces on the screen',
+    'Pressed devices in the dock: Studio Mac (2 workspaces, 6 agents) and the account’s second machine, Build Server (1 workspace, 2 agents), each machine’s workspaces drawn small on its screen. On a phone, the same stop as the app draws it at phone width.'),
+  hitlPhone: demo('demo-hitl-phone.jpg', 'Planner’s question as rows to tap, at phone width',
+    'Planner’s question at phone width (390 px): the same rows to tap, with the reply box under them.'),
+  phoneWorkspaces: demo('demo-phone-workspaces.jpg', 'The workspaces stop at phone width: Release Room and Docs Site',
+    'The workspaces stop at phone width (390 px): Release Room and Docs Site, each tile with its agents and what needs you.'),
+  browserCard: demo('demo-browser-card.jpg', 'A browser card open on a release-notes page, used by Checker',
+    'Clicked Release notes: the browser card opened on the page Checker checked, a local demo page, with the agent that uses it named at the top right.'),
+  docsCrew: demo('demo-docs-crew.jpg', 'A second workspace, Docs Site: Writer waiting on you, Editor done',
+    'Clicked Docs Site, the second workspace on the same machine: Writer on Claude Code waiting on you, Editor on Codex done.')
 } as const satisfies Record<string, Frame>
 
 export type DemoKey = keyof typeof DEMO
 
-/** An <img> with its size known up front (no layout shift) and a smaller twin for narrow screens. */
+/** Where a phone takes its own framing of a figure. */
+export const PHONE_MEDIA = '(max-width: 640px)'
+
+const escAttr = (v: string): string => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+const twinUrl = (frame: Frame, width: number): string => `${SITE_FRAMES}${frame.file.replace(/\.jpg$/, `-${width}.jpg`)}`
+
+/**
+ * A <picture>: the crop and its narrower twins with their widths (no layout shift: the size is known up front), and,
+ * when the figure has one, its phone framing for narrow screens.
+ */
 export function frameImg(frame: Frame, options: { eager?: boolean; sizes?: string } = {}): string {
-  // The hero column is under 600px on a desktop, so the 800px twin is the
-  // right file there; only a feature page's wide figure needs the 1400.
-  const small = `${SITE_FRAMES}${frame.file.replace(/\.jpg$/, '-800.jpg')}`
-  const large = frameUrl(frame)
-  const esc = (v: string): string => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
-  return `<img src="${esc(large)}" srcset="${esc(small)} ${frame.smallWidth ?? 800}w, ${esc(large)} ${frame.width}w" sizes="${esc(options.sizes ?? '(max-width: 860px) 100vw, 60vw')}" width="${frame.width}" height="${frame.height}" alt="${esc(frame.alt)}"${options.eager ? ' fetchpriority="high"' : ' loading="lazy" decoding="async"'}>`
+  const set = [...frame.twins.map((w) => `${escAttr(twinUrl(frame, w))} ${w}w`), `${escAttr(frameUrl(frame))} ${frame.width}w`].join(', ')
+  const phone = frame.phone
+    ? `<source media="${PHONE_MEDIA}" srcset="${escAttr(`${SITE_FRAMES}${frame.file.replace(/\.jpg$/, '-phone.jpg')}`)}" width="${frame.phone.width}" height="${frame.phone.height}">`
+    : ''
+  const img = `<img src="${escAttr(frameUrl(frame))}" srcset="${set}" sizes="${escAttr(options.sizes ?? '(max-width: 860px) 100vw, 60vw')}" width="${frame.width}" height="${frame.height}" alt="${escAttr(frame.alt)}"${options.eager ? ' fetchpriority="high"' : ' loading="lazy" decoding="async"'}>`
+  return `<picture>${phone}${img}</picture>`
 }
 
 export function frameUrl(frame: Frame): string {
@@ -100,9 +125,10 @@ const escText = (v: string): string => v.replace(/&/g, '&amp;').replace(/</g, '&
  * ONE FIGURE, AND WHAT IT IS. The chip says illustration, composite or recording before the caption says what was
  * clicked; an extra sentence (a status the picture shows, what it is not) follows the caption.
  */
-export function figure(frame: Frame, options: { sizes?: string; note?: string; eager?: boolean } = {}): string {
+export function figure(frame: Frame, options: { sizes?: string; note?: string; eager?: boolean; cls?: string } = {}): string {
   const source = sourceOf(frame)
   const portrait = frame.height > frame.width
   const note = options.note ? ` ${escText(options.note)}` : ''
-  return `<figure class="shot ${source}${portrait ? ' portrait' : ''}" data-source="${source}">${frameImg(frame, { sizes: options.sizes ?? (portrait ? '300px' : '(max-width: 860px) 100vw, 40vw'), eager: options.eager })}<figcaption><span class="rec src-${source}">${escText(SOURCE_CHIP[source])}</span><span>${escText(frame.caption)}${note}</span></figcaption></figure>`
+  const cls = `shot ${source}${portrait ? ' portrait' : ''}${options.cls ? ` ${options.cls}` : ''}`
+  return `<figure class="${cls}" data-source="${source}">${frameImg(frame, { sizes: options.sizes, eager: options.eager })}<figcaption><span class="rec src-${source}">${escText(SOURCE_CHIP[source])}</span><span>${escText(frame.caption)}${note}</span></figcaption></figure>`
 }

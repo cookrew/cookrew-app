@@ -459,10 +459,11 @@ section.pillars-intro::before{display:none}
 .pillar{padding:64px 0}
 .pillar h2{font-size:clamp(28px,3.4vw,42px);line-height:1.1;letter-spacing:-.01em;margin:0 0 12px;max-width:22ch}
 .pillar .lede{max-width:58ch;margin-bottom:28px}
-.pillar-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:36px;align-items:start}
-.pillar-media{display:grid;gap:18px}
-.pillar-media figure.shot.portrait{max-width:300px;justify-self:center}
-ul.claims{list-style:none;margin:0;padding:0;border-top:1px solid var(--hair)}
+/* claims in two columns, the pictures the full width under them (12 columns; site-content.ts Pillar.media span) */
+.pillar-body{display:grid;gap:30px}
+.pillar-media{display:grid;gap:18px;grid-template-columns:repeat(12,minmax(0,1fr));align-items:start}
+.pillar-media>*{grid-column:1/-1}.pillar-media>.span-4{grid-column:span 4}.pillar-media>.span-6{grid-column:span 6}.pillar-media>.span-8{grid-column:span 8}
+ul.claims{list-style:none;margin:0;padding:0;border-top:1px solid var(--hair);display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:36px}
 .claim{display:grid;gap:7px;padding:16px 0;border-bottom:1px solid var(--line-soft)}
 .claim b{font:600 16.5px/1.3 var(--font-serif)}
 .claim p{margin:3px 0 0;color:var(--muted);font-size:14.5px;line-height:1.5}
@@ -481,7 +482,7 @@ ul.claims{list-style:none;margin:0;padding:0;border-top:1px solid var(--hair)}
 .roadmap-head b{font:600 20px var(--font-serif)}
 .roadmap ul{margin:0;padding-left:16px;color:var(--muted);font-size:14px}.roadmap ul li{margin:4px 0}
 .hero-sub{font:500 clamp(17px,1.7vw,21px)/1.35 var(--font-serif);color:var(--amber-deep);margin:0 0 14px;max-width:34ch}
-@media (max-width:860px){.pillar-body{grid-template-columns:1fr}.roadmap{grid-template-columns:1fr 1fr}}
+@media (max-width:860px){ul.claims{grid-template-columns:minmax(0,1fr)}.pillar-media>[class*=span-]{grid-column:1/-1}.roadmap{grid-template-columns:1fr 1fr}}
 @media (max-width:520px){.roadmap{grid-template-columns:1fr}.route-diagram ol{grid-template-columns:1fr;gap:18px}.route-diagram ol>li+li::before{content:'↓';left:50%;top:-16px;transform:translateX(-50%)}}
 /* a frame as a card's face (the features index): a 16:10 window onto the
    top-left of the recording, never the image at its own pixel size — the
@@ -495,16 +496,29 @@ ul.claims{list-style:none;margin:0;padding:0;border-top:1px solid var(--hair)}
 .crt::before{content:'';position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(255,255,255,.03) 0,rgba(255,255,255,.03) 1px,transparent 1px,transparent 3px)}
 /* recorded frame */
 figure.shot{margin:0;border:1px solid var(--hair);box-shadow:var(--lift);background:var(--phos-bg);overflow:hidden}
+figure.shot picture{display:block}
 figure.shot img,figure.shot video{display:block;width:100%;height:auto}
-figure.shot video{aspect-ratio:1400/874;background:var(--phos-bg)}
+figure.shot video{aspect-ratio:1024/640;background:var(--phos-bg)}
 figure.shot figcaption{font-size:13px;color:var(--muted);padding:9px 12px;background:var(--cream-hi);border-top:1px solid var(--hair);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 figure.shot .rec{font:8.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;background:var(--hp);color:var(--on-seal);border:1px solid var(--line);padding:2px 6px}
 figure.shot.missing{min-height:220px;display:grid;place-items:center;color:var(--phos-dim);font:18px var(--font-screen)}
 /* What a picture is, before what it shows (site-frames.ts SOURCE_CHIP): an illustration never wears the recording's green. */
 figure.shot .rec.src-illustration,figure.shot .rec.src-composite{background:var(--cream-md);color:var(--ink-soft);border-style:dashed}
 figure.shot.illustration,figure.shot.composite{background:var(--cream-md)}
-.feature-shots{display:grid;gap:18px}
-.feature-shots figure.shot.portrait{max-width:340px}
+/* How it looks: wider than the text column on a large screen (up to 1392 px; the crops are 2880 wide), phone screens
+   side by side; the clip at most its own 1024 px. */
+.feature-shots{display:grid;gap:22px;margin-inline:calc(50% - min(696px, 50vw - 24px))}
+.feature-shots.pair{grid-template-columns:repeat(2,minmax(0,420px));justify-content:center}
+.feature-shots figure.clip{max-width:1024px;width:100%;justify-self:center}
+.clip .on-phone{display:none}
+/* A phone takes each figure's own framing (<picture> source, site-frames.ts PHONE_MEDIA), edge to edge, the chip one small line. */
+@media (max-width:640px){
+.clip .off-phone{display:none}.clip .on-phone{display:block;width:100%;height:auto}
+.feature-shots.pair{grid-template-columns:minmax(0,1fr)}
+figure.shot:not(.portrait){margin-inline:calc(50% - 50vw);border-left:0;border-right:0}
+figure.shot figcaption{padding:8px 16px;font-size:12.5px;gap:4px 10px}
+figure.shot .rec.src-illustration,figure.shot .rec.src-composite{border:0;background:none;padding:0;font-size:7.5px}
+}
 /* sections */
 section{padding:56px 0;border-bottom:1px solid var(--line-soft)}
 .feature{display:grid;gap:34px;grid-template-columns:minmax(0,5fr) minmax(0,7fr);align-items:center}
@@ -662,8 +676,10 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
      carrying both destinations two rows up — one copy is enough. */
   .toc .jump{display:none}
 }
-.hero .wrap{display:grid;gap:34px;grid-template-columns:minmax(0,6fr) minmax(0,7fr);align-items:center}
-@media (max-width:900px){.hero .wrap{grid-template-columns:minmax(0,1fr)}.hero .wrap .tagline{white-space:normal}}
+/* the words in two columns over the composite, which takes the page's width */
+.hero .wrap{display:grid;gap:26px;grid-template-columns:minmax(0,1fr)}
+.hero-text{display:grid;gap:8px 40px;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:end}
+@media (max-width:900px){.hero-text{grid-template-columns:minmax(0,1fr)}.hero .wrap .tagline{white-space:normal}}
 .hero h1{margin-bottom:12px;font-size:clamp(34px,4.3vw,56px);max-width:12ch}
 /* the lockup is the header's mark writ large — a brand beat, not a billboard.
    site-brand.ts sizes it for a full-width band; in the hero it shares the

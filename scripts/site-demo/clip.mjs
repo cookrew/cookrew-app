@@ -5,10 +5,11 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { tab, sleep } from './cdp.mjs'
 
 const out = process.argv[2] ?? `${process.env.SHOOT_DIR ?? '/tmp/cookrew-site-demo'}/hero.mp4`
-const W = 1400, H = 874
+// Laid out at 1024×640 (the product's UI at the size the site shows it), each frame 1024×640 (a screencast sends CSS pixels, whatever the device scale).
+const VW = 1024, VH = 640, W = 1024, H = 640
 const t = await tab()
 await t.send('Page.addScriptToEvaluateOnNewDocument', { source: "try { if (!sessionStorage.getItem('walked')) { localStorage.clear(); sessionStorage.setItem('walked', '1') } } catch {}" })
-await t.size(W, H, { dsf: 1 })
+await t.size(VW, VH, { dsf: W / VW })
 await t.go('http://127.0.0.1:5397/')
 await sleep(5000)
 

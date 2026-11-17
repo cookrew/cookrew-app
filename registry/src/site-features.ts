@@ -27,7 +27,8 @@ export function featurePage(slug: string): Page | null {
   // A page still built for old links but listed nowhere is not to be indexed as current (LISTED_FEATURES).
   const unlisted = !LISTED_FEATURES.some((x) => x.slug === f.slug)
   // The current UI on demo data, labelled; a feature no picture shows yet has none, and nothing stands in.
-  const visual = (f.clip ? clipFigure() : '') + f.frames.map((key) => figure(DEMO[key], { sizes: '(max-width: 860px) 100vw, 70vw' })).join('')
+  const portraits = f.frames.length > 0 && f.frames.every((key) => DEMO[key].height > DEMO[key].width)
+  const visual = (f.clip ? clipFigure() : '') + f.frames.map((key) => figure(DEMO[key], { sizes: portraits ? '(max-width: 640px) 100vw, 420px' : '(max-width: 1440px) 96vw, 1392px' })).join('')
 
   return page(
     {
@@ -56,7 +57,7 @@ export function featurePage(slug: string): Page | null {
 <p class="row"><a class="btn primary" href="/#download">Get Cookrew</a><a class="btn" href="/#start">Get started</a></p>
 </div>
 ${visual ? `<section><div class="wrap"><p class="kicker"><span class="no">ILLUSTRATION</span>the current interface on demo data</p>
-<h2>How it looks</h2><div class="feature-shots">${visual}</div></div></section>` : ''}
+<h2>How it looks</h2><div class="feature-shots${portraits ? ' pair' : ''}">${visual}</div></div></section>` : ''}
 <section id="faq"><div class="wrap"><h2>Questions about ${esc(f.slug === 'cli' ? 'the CLI' : f.slug)}</h2><div class="faq">${f.faq
       .map((q) => `<details open><summary>${esc(q.q)}</summary><p>${esc(q.a)}</p></details>`)
       .join('')}</div></div></section>

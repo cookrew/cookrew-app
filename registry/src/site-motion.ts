@@ -1,4 +1,5 @@
-import { SOURCE_CHIP } from './site-frames'
+import { PHONE_MEDIA, SOURCE_CHIP } from './site-frames'
+import { FRAME_SIZES } from './site-frame-sizes'
 import { SITE_FRAMES, esc } from './site-shell'
 
 /**
@@ -12,8 +13,11 @@ import { SITE_FRAMES, esc } from './site-shell'
 export const CANVAS_CLIP = {
   file: 'demo-canvas.mp4',
   poster: 'demo-canvas.jpg',
-  width: 1400,
-  height: 874,
+  /** A screencast sends CSS-size frames, so the clip is 1024×640 whatever the device scale: it is shown at most that wide. */
+  width: FRAME_SIZES['demo-canvas.mp4']!.width,
+  height: FRAME_SIZES['demo-canvas.mp4']!.height,
+  /** For a phone: the clip's first beat, cropped to the workspace tiles (a 1024 px movie is unreadable at 390). */
+  still: 'demo-canvas-still.jpg',
   label:
     'Twenty seconds of the current Cookrew interface on demo data: two workspaces, one workspace with four agents on four harnesses, an agent’s question as rows to pick, the artifacts, a browser card, and back out',
   caption:
@@ -22,9 +26,10 @@ export const CANVAS_CLIP = {
 
 /**
  * The clip as a figure. No script: <video autoplay muted loop playsinline> needs none, and a reader whose browser
- * refuses autoplay sees the poster.
+ * refuses autoplay sees the poster. On a phone the still stands in its place (CSS: .clip .on-phone).
  */
 export function clipFigure(): string {
   const clip = CANVAS_CLIP
-  return `<figure class="shot clip illustration" data-source="illustration"><video autoplay muted loop playsinline preload="metadata" poster="${esc(`${SITE_FRAMES}${clip.poster}`)}" width="${clip.width}" height="${clip.height}" aria-label="${esc(clip.label)}"><source src="${SITE_FRAMES}${clip.file}" type="video/mp4"></video><figcaption><span class="rec src-illustration">${esc(SOURCE_CHIP.illustration)}</span><span>${esc(clip.caption)}</span></figcaption></figure>`
+  const still = FRAME_SIZES[clip.still]!
+  return `<figure class="shot clip illustration" data-source="illustration"><video class="off-phone" autoplay muted loop playsinline preload="metadata" poster="${esc(`${SITE_FRAMES}${clip.poster}`)}" width="${clip.width}" height="${clip.height}" aria-label="${esc(clip.label)}"><source src="${SITE_FRAMES}${clip.file}" type="video/mp4" media="not all and ${PHONE_MEDIA}"></video><img class="on-phone" src="${SITE_FRAMES}${clip.still}" width="${still.width}" height="${still.height}" loading="lazy" decoding="async" alt="The workspaces stop from the clip’s first beat: Release Room and Docs Site"><figcaption><span class="rec src-illustration">${esc(SOURCE_CHIP.illustration)}</span><span>${esc(clip.caption)}</span></figcaption></figure>`
 }

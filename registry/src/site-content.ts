@@ -141,7 +141,7 @@ export const FEATURES: FeatureSpec[] = [
     definition:
       'A harness is an agent CLI Cookrew knows how to host, watch and dispatch to. Claude Code, Codex, OpenCode and Pi ship as presets; each declares its capabilities in Cookrew’s registry, so orchestration is the same command line whatever answers.',
     pts: ['Pick a preset, click the canvas, the teammate boots and its card opens', 'One CLI for every harness; the orchestrator does not care which one answers', 'The turn tracker reports thinking, waiting and replied from the harness itself, no scraping', 'Route each harness through your own Magpie gateway, or run it directly on its own login'],
-    frames: ['routing'],
+    frames: ['board'],
     faq: [
       { q: 'Can I add a harness Cookrew does not ship?', a: 'A harness is a registry entry that declares how it starts, how its turns are detected and what it can do. New ones are added there without touching call sites.' }
     ],
@@ -167,7 +167,7 @@ export const FEATURES: FeatureSpec[] = [
     definition:
       'Cookrew’s fleet view is the top of the zoom: every machine with its workspaces and how many agents each one holds, and inside a workspace every agent with its state — working, done, resting, offline or waiting on you — under its name. Red is kept for the agent that is waiting on you.',
     pts: ['Machines, then workspaces, then a crew: one click each', 'Each agent shows working, done, resting, offline or waiting', 'Red is kept for the agent waiting on you', 'The command box gathers what is waiting on you in one list'],
-    frames: ['devices', 'workspaces'],
+    frames: ['devices'],
     faq: [{ q: 'Does the fleet view show offline agents?', a: 'Yes. An agent with no live pane shows as offline under its name; its history is still there.' }],
     related: ['checkpoints', 'workspaces']
   },
@@ -189,7 +189,7 @@ export const FEATURES: FeatureSpec[] = [
     definition:
       'A phone reaches your agents two ways. Signed in, the console opens in any phone browser, on any network, with every machine of your account. On the same Wi-Fi or Tailscale, the companion your desktop app hosts opens from a QR code: the same zoom by touch — crew, card, whole transcript with its rail — voice input and spoken replies, and a fixed slug URL per workspace for a bookmark.',
     pts: ['The console: any phone browser, any network, every machine of your account', 'The companion: cookrew mobile prints a QR code on your Wi-Fi or Tailscale', 'The same zoom by touch: crew, card, transcript', 'Voice in, spoken replies out'],
-    frames: ['crewPhone', 'hitlPhone'],
+    frames: ['hitlPhone', 'phoneWorkspaces'],
     faq: [{ q: 'Does the phone need an app installed?', a: 'No. The console and the companion are both web pages; a phone opens either in its browser.' }],
     related: ['canvas', 'board']
   },
@@ -200,7 +200,7 @@ export const FEATURES: FeatureSpec[] = [
     definition:
       'A Cookrew workspace is a project directory with its own canvas, team and history. A saved team is a template of nodes, wires and turn histories; cookrew workspace create --team puts a saved formation to work in a new directory immediately.',
     pts: ['A workspace is a project directory with its own canvas, crew and history', 'workspace create --team puts a saved formation to work immediately', 'Every workspace of every machine is listed in the console'],
-    frames: ['workspaces', 'browserCard'],
+    frames: ['browserCard', 'docsCrew'],
     faq: [{ q: 'What is in a saved team?', a: 'Its cards, the wires between them and their turn histories, in one file. Saving a team never touches the original session.' }],
     related: ['cli', 'marketplace']
   },
@@ -292,7 +292,8 @@ export interface Pillar {
    * Its pictures (site-frames.ts DEMO), each with a sentence of what it is not when the claims beside it say
    * more than the picture shows. Every one is the current UI on demo data, labelled as an illustration.
    */
-  media: readonly { key: DemoKey; note?: string }[]
+  /** span: of 12 columns on a desktop (default 12, the full width); every figure takes the full width on a phone. */
+  media: readonly { key: DemoKey; note?: string; span?: 4 | 6 | 8 | 12 }[]
 }
 
 export const PILLARS: readonly Pillar[] = [
@@ -325,8 +326,8 @@ export const PILLARS: readonly Pillar[] = [
       { status: 'planned', title: 'One request, any device, every machine', text: 'A request that waits on you is answered once, from whichever device is at hand, across every machine of the account.' }
     ],
     media: [
-      { key: 'crewPhone', note: 'Drawn at phone width from the app’s code; not filmed on a phone, and not the console’s sign-in around it.' },
-      { key: 'watch', note: 'Beta: the watch app runs on our own watches and is not on the App Store or TestFlight.' },
+      { key: 'crewPhone', span: 4, note: 'Drawn at phone width from the app’s code; not filmed on a phone, and not the console’s sign-in around it.' },
+      { key: 'watch', span: 8, note: 'Beta: the watch app runs on our own watches and is not on the App Store or TestFlight.' },
       { key: 'ops', note: 'Taking control of a computer’s or a phone’s screen needs the machine’s switch turned on and a 15-minute grant.' }
     ]
   },
