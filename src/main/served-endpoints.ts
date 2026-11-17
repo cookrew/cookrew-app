@@ -82,6 +82,8 @@ export interface ServedEndpointDeps {
     consumeChallenge(value: string, binding?: string): boolean
     mint(sub: string, scope: string): string
     verifyToken(token: string): { sub: string; workspace: string } | null
+    /** Whether mint() can answer NOW, without waiting. Absent means always. */
+    ready?(): boolean
   }
   callers: ServedCallers
   /**
@@ -328,6 +330,12 @@ export async function handleServedRoute(
 
   if (method === 'POST' && pathname === '/api/call/assert') {
     const body = (input.body ?? {}) as Record<string, unknown>
+    // A TOKEN MUST BE MINTABLE BEFORE ANYTHING IS SPENT OR BOUND. The first
+    // assert binds a name to a key for good; a door that bound it and then
+    // could not mint (on Windows the signing key is proven off the request
+    // path, call-credential.ts) left the holder refused on every retry. 503 is
+    // "not yet": the caller keeps its key and tries again.
+    if (deps.issuer.ready?.() === false) return json(503, { reason: 'starting' })
     // THREE SIGN-INS, ONE VERB, and the body picks which. Each is exclusive —
     // a token beside a key is two claims about who is knocking — so the field
     // that is present decides, and the other paths are left byte-identical.
@@ -341,7 +349,14 @@ export async function handleServedRoute(
     // One 401 for every failure — which half of a forgery was wrong is not
     // something a stranger gets to learn (the ceremony's own rule).
     if (!result.ok) return json(401, {})
-    return json(200, { ok: true, token: deps.issuer.mint(result.sub, serviceId) })
+    try {
+      return json(200, { ok: true, token: deps.issuer.mint(result.sub, serviceId) })
+    } catch {
+      // Bound by THIS request and not answered: unbound, so the same key (or,
+      // if it is lost, a new one) can take the name when the door is ready.
+      if (result.enrolled) deps.callers.forget(serviceId, result.sub, body.jwk)
+      return json(503, { reason: 'starting' })
+    }
   }
 
   if (method === 'POST' && pathname === '/ask') {
