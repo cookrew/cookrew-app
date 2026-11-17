@@ -1,0 +1,17 @@
+/* ---- THE AGENTS GROUP (agents-group.tsx): the seal with the whole count ----
+   One seal for the workspace card's row, the shelf over the artifacts and the
+   desktop's column beside a full view. Drawn with the navigator's ink where it
+   is set, the app's sumi seal elsewhere (the pets live outside the navigator). */
+.ag-seal {
+  display: inline-block;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 2px;
+  background: var(--zv-seal-fill, var(--sumi-seal-fill, #96592a));
+  color: var(--zv-on-seal, var(--sumi-on-seal, #fbf8f1));
+  font: 600 11px/18px var(--zv-mono, var(--font-mono, ui-monospace, monospace));
+  font-style: normal;
+  text-align: center;
+}

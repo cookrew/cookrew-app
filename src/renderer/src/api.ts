@@ -11,6 +11,7 @@ import type { LaunchFailure } from '../../shared/launch-failure'
 import type { TelemetryStatus } from '../../shared/funnel-events'
 import type { OpenBrowserStream } from './stream-line'
 import type { WatchCode, WatchInvite, WatchState } from './watch-code'
+import type { PhoneInvite, PhonePendingResult } from '../../shared/join-code'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
@@ -546,6 +547,11 @@ export interface CookrewApi {
    * Optional — the demo api lacks them; consumers feature-detect (EventToast).
    */
   onEvent?: (cb: (event: unknown) => void) => () => void;
+  /** Desktop notifications on or off (main/notifier.ts); absent off the desktop. */
+  getNotifications?: () => Promise<boolean>;
+  setNotifications?: (on: boolean) => Promise<boolean>;
+  /** A notification was clicked: bring that agent up, in its workspace. */
+  onHitlOpen?: (cb: (target: { workspaceId: string; id: string }) => void) => () => void;
   /**
    * The route program (shared/route.ts): is the Magpie gateway here, what it
    * serves, where each turn went; and one card's route. Optional and
@@ -889,6 +895,12 @@ export interface CookrewApi {
   /** One code for a watch anywhere: the account's join code, armed on this Mac as the claim too. */
   watchInvite?: (current: string) => Promise<WatchInvite>;
   watchForget?: () => Promise<unknown>;
+  /** ⋯ → Phone app: a phone's join code and the link its QR holds, under the account's step-up. Absent in the demo. */
+  phoneInvite?: (current: string) => Promise<PhoneInvite>;
+  /** Phones that joined with a code this Mac showed, waiting for its Keep (owner 2026-11-17). */
+  phonePending?: () => Promise<PhonePendingResult>;
+  /** Keep a waiting phone, or remove it everywhere. */
+  phoneAnswer?: (deviceId: string, answer: 'keep' | 'remove') => Promise<{ ok: boolean; reason?: string }>;
   /**
    * The desktop's own line to a browser card's Chrome: a MessagePort from
    * main (browser-cast-ipc.ts). Absent on the phone and the demo, and on a

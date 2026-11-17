@@ -1,0 +1,4 @@
+github.com/egoist/asuka v0.1.1 h1:g6N/ci9K8PuCtL5PnCuZU/DxXdiCOxl/YqnuQCRSpVI=
+github.com/egoist/asuka v0.1.1/go.mod h1:BDM4nmtZiJ7SqoPnagKW2z5vHAus2Y4Mllg0NtBaKVo=
+golang.org/x/text v0.43.0 h1:1QivrlhwAsnMOcqgOdl9my7s9OyZl8O5/UGUTJVXoWc=
+golang.org/x/text v0.43.0/go.mod h1:hbSIYA/amXcRXTFSZqh8tWHEoqRvvbKPJ2uz/KU+a+s=

@@ -104,6 +104,12 @@ mac:
   hardenedRuntime: true
   entitlements: resources/entitlements.mac.plist
   entitlementsInherit: resources/entitlements.mac.inherit.plist
+  # macOS keeps Screen Recording and Accessibility grants against this
+  # requirement. It names only the Dots Crafts team (NT8ZMJPJMR), so builds
+  # signed with the team's Apple Development or Developer ID certificate, and
+  # renewals of either, keep every grant across updates. It goes to every
+  # binary signed, helpers too, so it must not name an identifier.
+  requirements: resources/designated.mac.rqs
   # Notarizes and staples the app before the dmg and zip are built, so both carry
   # the ticket. The login comes from the environment (release.yml); with none
   # electron-builder logs a warning and moves on, so an unsigned build still

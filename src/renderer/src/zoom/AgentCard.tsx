@@ -1,3 +1,4 @@
+import { createContext, useContext } from 'react'
 import { InkAvatar } from './InkAvatar'
 import { useNameEdit } from './NameEdit'
 import { CardBody } from './CardBody'
@@ -25,6 +26,45 @@ import './agent-card.css'
  * Classes the troop's motion finds (pets/pet-zoom.ts · CARD_PARTS) stay on
  * the parts they name, so the face still zooms into it.
  */
+
+/**
+ * A FLOATING CARD IS THE CARD STOP'S SIZE (owner, 2026-11-17: the popout was
+ * not the agent card's size; the agents view pops a same-size card in place
+ * of zooming). The crew's card is drawn by the camera at the card stop's scale
+ * (zoom-camera.ts · cardStopCamera: 1.4 on a desk, up to 1.5 on a phone, less
+ * where the screen is small); a card floated over the page (ShelfCard, the
+ * bar's BarAgentCard) is drawn at that scale too, from its top-left corner. On
+ * a phone its words are pinned the way the card stop's are (phone-type.css ·
+ * --zv-k-card), so they read the same size; on a desk they grow with the card,
+ * as there. ZoomView provides it; outside one a card is 1:1.
+ */
+export interface CardScale {
+  readonly scale: number
+  readonly narrow: boolean
+}
+export const CardScaleContext = createContext<CardScale>({ scale: 1, narrow: false })
+export const useCardScale = (): CardScale => useContext(CardScaleContext)
+
+/**
+ * The floating card's own style at this scale: its corner stays where it is
+ * placed. The scale rides --zv-card-s, which the card's CSS reads for its rest
+ * and for its arrival (zoom.css · .zv-shelf-card, bar-groups.css · .zv-bar-card),
+ * so it settles from 0.96 of its size, not from 1:1.
+ */
+export function cardScaleStyle({ scale, narrow }: CardScale): React.CSSProperties {
+  if (scale === 1) return {}
+  const s = scale.toFixed(4)
+  return { '--zv-card-s': s, transformOrigin: '0 0', ...(narrow ? { '--zv-k-card': s } : {}) } as React.CSSProperties
+}
+
+/** How far the card's remove mark hangs past its right edge and above its top, as seen (the transform counted). */
+export function markOverhang(card: HTMLElement): { right: number; top: number } {
+  const mark = card.querySelector<HTMLElement>('.zv-del')
+  if (!mark) return { right: 0, top: 0 }
+  const m = mark.getBoundingClientRect()
+  const c = card.getBoundingClientRect()
+  return { right: Math.max(0, Math.ceil(m.right - c.right)), top: Math.max(0, Math.ceil(c.top - m.top)) }
+}
 
 /** Thumbnails on the card, as the crew card's strip holds. */
 export const CARD_THUMBS = 3

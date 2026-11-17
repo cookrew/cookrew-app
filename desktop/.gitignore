@@ -1,0 +1,5 @@
+# SwiftPM state the Asuka CLI and Xcode leave in native packages.
+.build/
+.swiftpm/
+# go build output (the app itself is built by asuka build into dist/).
+/desktop

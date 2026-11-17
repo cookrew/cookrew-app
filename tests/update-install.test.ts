@@ -20,6 +20,14 @@ describe('canUpdateItself', () => {
     expect(await canUpdateItself(facts({ describeSignature: async () => 'Signature=adhoc\nTeamIdentifier=not set' }))).toBe(false)
   })
 
+  // Releases are signed by the team under a requirement that names only the
+  // team (electron-builder.yml), so Apple Development and Developer ID builds
+  // each meet the other's requirement.
+  it('a build signed with the team Apple Development identity can', async () => {
+    const development = 'Authority=Apple Development: someone@example.com (VMLA3CJPN8)\nTeamIdentifier=NT8ZMJPJMR'
+    expect(await canUpdateItself(facts({ describeSignature: async () => development }))).toBe(true)
+  })
+
   it('asks about the bundle, not the binary inside it', async () => {
     const describeSignature = vi.fn(async () => 'Authority=x')
     await canUpdateItself(facts({ describeSignature }))

@@ -36,14 +36,26 @@ export const JOIN_CODE_TTL_MS = 10 * 60 * 1000
  */
 const JOIN_CODES_MAX = 1000
 
+/**
+ * What a code may make, when it is not "any device": a watch (⋯ → Apple Watch),
+ * or a trusted phone (⋯ → Phone app, owner 2026-11-16). Each enters every
+ * machine of the account on its pairing alone, so each is made only by a code
+ * minted for it, and that code makes nothing else.
+ */
+export type JoinPurpose = 'watch' | 'phone'
+
+export const isJoinPurpose = (value: unknown): value is JoinPurpose => value === 'watch' || value === 'phone'
+
 export interface JoinCode {
   /** The code as it is shown: two blocks of four, dashed. */
   code: string
   username: string
   at: number
   expiresAt: number
-  /** Minted for a watch (⋯ → Apple Watch): the only code a watch joins with, and it joins nothing else. */
-  purpose?: 'watch'
+  /** Minted for a watch or a trusted phone: the only code either joins with, and it joins nothing else. */
+  purpose?: JoinPurpose
+  /** The device that minted it: for a phone's code, the Mac that is asked to keep the phone (v2-accounts.ts · keepPhone). */
+  by?: string
 }
 
 /**
@@ -65,7 +77,7 @@ export class JoinCodes {
   }
 
   /** Mint one for this account, retiring whatever it had. */
-  mint(username: string, purpose?: 'watch'): JoinCode {
+  mint(username: string, purpose?: JoinPurpose, by?: string): JoinCode {
     const at = this.now()
     this.sweep(at)
     for (const [key, held] of this.codes) {
@@ -78,7 +90,7 @@ export class JoinCodes {
     const block = (): string =>
       Array.from({ length: 4 }, () => RECOVERY_ALPHABET[randomInt(RECOVERY_ALPHABET.length)]).join('')
     const code = `${block()}-${block()}`
-    const minted: JoinCode = { code, username, at, expiresAt: at + this.ttlMs, ...(purpose ? { purpose } : {}) }
+    const minted: JoinCode = { code, username, at, expiresAt: at + this.ttlMs, ...(purpose ? { purpose } : {}), ...(by ? { by } : {}) }
     this.codes.set(normaliseRecoveryCode(code), minted)
     return minted
   }

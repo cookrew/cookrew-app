@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AgentCard } from './AgentCard'
+import { AgentCard, cardScaleStyle, markOverhang, useCardScale, type CardScale } from './AgentCard'
 import { eatNextClick } from './ShelfCard'
 import { ItemCard, type CrewFace, type ItemFace } from '../pets/ItemPets'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
@@ -50,7 +50,9 @@ const stageTop = (): number => Math.max(0, document.querySelector('.cr-stage')?.
 /** Presses that keep the card: on it, on a group's face (its own tap decides), in the prompt box. */
 const KEEPS = '.zv-gf, .zv-group-more, .cr-prompt, .cr-dock, .pf-who, .cr-prompt-menu'
 
-function BarCardFrame({ anchor, className, label, keep, onOutside, onClose, children }: {
+const ONE: CardScale = { scale: 1, narrow: false }
+
+function BarCardFrame({ anchor, className, label, keep, onOutside, onClose, size = ONE, children }: {
   /** The face it opened from; its last place stands in once it has left the stack. */
   anchor: HTMLElement | null
   className: string
@@ -59,6 +61,8 @@ function BarCardFrame({ anchor, className, label, keep, onOutside, onClose, chil
   keep: () => boolean
   onOutside: (target: EventTarget | null) => boolean
   onClose: () => void
+  /** An agent's card is drawn at the card stop's size (AgentCard.tsx · cardScaleStyle); a menu or an artifact 1:1. */
+  size?: CardScale
   children: React.ReactNode
 }): React.JSX.Element {
   const box = useRef<HTMLDivElement>(null)
@@ -76,11 +80,10 @@ function BarCardFrame({ anchor, className, label, keep, onOutside, onClose, chil
       const face = last.current
       if (!face) return
       // The card's remove mark hangs past its corner (agent-card.css · .zv-del): it too stays on screen.
-      const mark = el.querySelector<HTMLElement>('.zv-del')
-      const over = mark ? Math.max(0, Math.ceil(mark.getBoundingClientRect().right - el.getBoundingClientRect().right)) : 0
+      const over = markOverhang(el)
       // A long menu scrolls inside its card (wait-choices.css): it never runs under the bar or off the top.
       if (el.classList.contains('wc-card')) el.style.maxHeight = `${Math.max(180, boxTop() - stageTop() - 20)}px`
-      const next = barCardSpot(face, { width: el.offsetWidth + over, height: el.offsetHeight }, window.innerWidth, boxTop(), stageTop())
+      const next = barCardSpot(face, { width: el.offsetWidth * size.scale + over.right, height: el.offsetHeight * size.scale }, window.innerWidth, boxTop(), stageTop() + over.top)
       setSpot((at) => (at && at.left === next.left && at.top === next.top ? at : next))
     }
     // The box opens behind an agent's card (its flight is 360 ms): follow it a moment, and on any resize.
@@ -105,7 +108,7 @@ function BarCardFrame({ anchor, className, label, keep, onOutside, onClose, chil
       ro?.disconnect()
       window.removeEventListener('resize', again)
     }
-  }, [anchor])
+  }, [anchor, size.scale])
 
   useEffect(() => {
     const onDown = (e: PointerEvent): void => {
@@ -120,7 +123,7 @@ function BarCardFrame({ anchor, className, label, keep, onOutside, onClose, chil
   }, [keep, onOutside, onClose])
 
   return createPortal(
-    <div ref={box} className={`cr-pet-card ag-ink zv-bar-card ${className}`} role="dialog" aria-label={label} style={spot ? { left: spot.left, top: spot.top } : { left: 0, top: 0, visibility: 'hidden' }}>
+    <div ref={box} className={`cr-pet-card ag-ink zv-bar-card ${className}`} role="dialog" aria-label={label} style={{ ...cardScaleStyle(size), ...(spot ? { left: spot.left, top: spot.top } : { left: 0, top: 0, visibility: 'hidden' }) }}>
       {children}
     </div>,
     document.body
@@ -141,6 +144,7 @@ export function BarAgentCard({ agent, items, anchor, onOpen, onItem, onDelete, o
   onClose: () => void
 }): React.JSX.Element {
   const keep = useRef(() => getDraft(draftKey(agent.id)).trim() !== '').current
+  const size = useCardScale()
   // Waiting on a menu: the card carries its rows (BarWaitCard.tsx), the box's own stand down.
   const wait = useWaitAnswer(agent.id, promptBox.focus)
   if (wait.view) {
@@ -151,7 +155,7 @@ export function BarAgentCard({ agent, items, anchor, onOpen, onItem, onDelete, o
     )
   }
   return (
-    <BarCardFrame anchor={anchor} className={`ag-card zv-shelf-card${agent.phase === 'waiting' ? ' needs' : ''}`} label={`${agent.name}'s card`} keep={keep} onOutside={onOutside} onClose={onClose}>
+    <BarCardFrame anchor={anchor} className={`ag-card zv-shelf-card${agent.phase === 'waiting' ? ' needs' : ''}`} label={`${agent.name}'s card`} keep={keep} onOutside={onOutside} onClose={onClose} size={size}>
       <AgentCard agent={agent} items={items} onOpen={onOpen} onItem={onItem} onDelete={onDelete} onDraft={KEEP_DRAFT} />
     </BarCardFrame>
   )
@@ -172,6 +176,39 @@ export function BarItemCard({ item, crew, since, anchor, onOpen, onAgent, onOuts
   return (
     <BarCardFrame anchor={anchor} className={`item-card item ${item.kind}`} label={item.title} keep={NEVER} onOutside={onOutside} onClose={onClose}>
       <ItemCard item={item} crew={crew} since={since} controls={{ draft: KEEP_DRAFT, open: onOpen, close: onClose }} onAgent={onAgent} />
+    </BarCardFrame>
+  )
+}
+
+/**
+ * A CARD OF ANOTHER WORKSPACE, READ-ONLY (plan docs/hitl-cross-workspace-2026-11-15
+ * · v6.2): who or what it is, where, and why it is here. No reply box: the box
+ * speaks only to the open workspace. Open (or the face tapped again) jumps there.
+ */
+export function BarAwayCard({ face, title, where, line, since, anchor, onOpen, onOutside, onClose }: {
+  face: React.ReactNode
+  title: string
+  where: string
+  /** What it waits for, its reply's first line, or what changed. */
+  line: string | null
+  since?: string
+  anchor: HTMLElement | null
+  onOpen: () => void
+  onOutside: (target: EventTarget | null) => boolean
+  onClose: () => void
+}): React.JSX.Element {
+  return (
+    <BarCardFrame anchor={anchor} className="zv-away-card" label={`${title}, in ${where}`} keep={NEVER} onOutside={onOutside} onClose={onClose}>
+      <div className="zv-away-head">
+        <span className="zv-away-face" aria-hidden="true">{face}</span>
+        <div className="zv-away-names">
+          <b>{title}</b>
+          <p className="zv-bar-where">in {where}</p>
+        </div>
+      </div>
+      {line && <p className="zv-away-line">{line}</p>}
+      {since && <p className="cr-pet-since">{since}</p>}
+      <button type="button" className="zv-away-open" onClick={onOpen}>Open in {where}</button>
     </BarCardFrame>
   )
 }

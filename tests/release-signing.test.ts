@@ -27,6 +27,7 @@ interface BuilderConfig {
     notarize?: boolean
     entitlements?: string
     entitlementsInherit?: string
+    requirements?: string
     extendInfo: Record<string, string>
   }
 }
@@ -71,6 +72,28 @@ describe('signing config', () => {
   it('points at entitlement files that exist', () => {
     expect(existsSync(path.join(ROOT, builder.mac.entitlements ?? 'missing'))).toBe(true)
     expect(existsSync(path.join(ROOT, builder.mac.entitlementsInherit ?? 'missing'))).toBe(true)
+  })
+})
+
+// macOS keeps Screen Recording and Accessibility grants against the app's
+// designated requirement. The default one names a single certificate, so
+// moving from Apple Development to Developer ID, or renewing, would cost every
+// user their grants again. Naming the team keeps one identity across both.
+describe('designated requirement', () => {
+  const requirement = (): string => read(builder.mac.requirements ?? 'missing').trim()
+
+  it('is set from a file that exists', () => {
+    expect(existsSync(path.join(ROOT, builder.mac.requirements ?? 'missing'))).toBe(true)
+  })
+
+  it('anchors on Apple and the team, nothing else', () => {
+    expect(requirement()).toMatch(/^designated => anchor apple generic and certificate leaf\[subject\.OU\] = "[A-Z0-9]{10}"$/)
+  })
+
+  // electron-builder hands the same file to every binary it signs, helpers
+  // included: an identifier would leave each helper failing its own check.
+  it('names no identifier, certificate name or hash', () => {
+    expect(requirement()).not.toMatch(/identifier|subject\.CN|cdhash/)
   })
 })
 
@@ -245,8 +268,32 @@ describe('release.yml', () => {
     expect(signedStep.run).toContain('-c.npmRebuild=false')
   })
 
-  it('removes the .p8 when the signed step ends, however it ends', () => {
-    expect(signedStep.run).toMatch(/trap 'rm -f "\$APPLE_API_KEY"' EXIT/)
+  // One trap: a second `trap … EXIT` silently replaces the first.
+  it('removes the .p8, the .p12 and the keychain when the signed step ends, however it ends', () => {
+    const traps = signedStep.run?.match(/trap '[^']*' EXIT/g) ?? []
+    expect(traps).toHaveLength(1)
+    expect(traps[0]).toContain('"$APPLE_API_KEY"')
+    expect(traps[0]).toContain('"$P12"')
+    expect(traps[0]).toContain('security delete-keychain "$KEYCHAIN"')
+  })
+
+  // electron-builder 25 imports CSC_LINK into a keychain whose password it
+  // randomises, then runs set-key-partition-list with the .p12's password in
+  // its place. macOS 15 runners refuse that (run 44096006620). So the step
+  // builds the keychain itself and hands over only the keychain and a hash.
+  it('imports the certificate into its own keychain and never hands electron-builder CSC_LINK', () => {
+    const run = signedStep.run ?? ''
+    expect(run).toContain('security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"')
+    expect(run).toContain('security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"')
+    expect(run).toMatch(/export CSC_KEYCHAIN="\$KEYCHAIN"/)
+    // A hash, not a name: a name starting "Developer ID Application:" is refused.
+    expect(run).toContain(`IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk 'NR==1{print $2}')`)
+    expect(run).toContain('export CSC_NAME="$IDENTITY"')
+    // An empty name would fall through to electron-builder's own discovery.
+    expect(run).toMatch(/if \[ -z "\$IDENTITY" \]; then .*exit 1; fi/)
+    const unset = run.indexOf('unset CSC_LINK CSC_KEY_PASSWORD')
+    expect(unset).toBeGreaterThan(-1)
+    expect(unset).toBeLessThan(run.indexOf('npx electron-builder --mac'))
   })
 
   // build-cr-listen.mjs exits 0 when clang fails and a missing extraResource is

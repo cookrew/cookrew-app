@@ -70,10 +70,21 @@ export type AdmittedDevice = {
    * it ("Not me", ending sessions), the revoked list names it and the row goes.
    */
   readonly sid?: string
+  /**
+   * A TRUSTED PHONE'S trusted moment, from the pass it came in on (registry
+   * phonePassAt): forgetting it here keeps out passes no newer than this
+   * (refused-phones.ts). Only on a `phone` row.
+   */
+  readonly since?: number
 }
 
-/** `machine`: another machine of the account, let in by its pass, until it is revoked. */
-export type AdmittedVia = 'token' | 'password' | 'passkey' | 'account' | 'machine'
+/**
+ * `machine`: another machine of the account, let in by its pass, until it is revoked.
+ * `phone`: a trusted phone (owner 2026-11-16), let in by its phone pass, until it is revoked.
+ */
+export type AdmittedVia = 'token' | 'password' | 'passkey' | 'account' | 'machine' | 'phone'
+
+const VIAS: readonly AdmittedVia[] = ['token', 'password', 'passkey', 'account', 'machine', 'phone']
 
 export type AdmittedDeviceStore = {
   readonly list: () => AdmittedDevice[]
@@ -127,7 +138,7 @@ export type AdmittedDeviceStore = {
    * second browser on the same phone does not leave two live credentials for
    * one device, and the row keeps its first `admittedAt`.
    */
-  readonly admit: (device: { deviceId: string; name?: string; via?: AdmittedVia; until?: number; sid?: string }) => {
+  readonly admit: (device: { deviceId: string; name?: string; via?: AdmittedVia; until?: number; sid?: string; since?: number }) => {
     device: AdmittedDevice
     token: string
   }
@@ -181,9 +192,10 @@ const looksLikeDevice = (value: unknown): value is AdmittedDevice => {
     typeof d.lastSeenAt === 'number' &&
     (d.name === undefined || typeof d.name === 'string') &&
     (d.tokenHash === undefined || typeof d.tokenHash === 'string') &&
-    (d.via === undefined || d.via === 'token' || d.via === 'password' || d.via === 'passkey' || d.via === 'account' || d.via === 'machine') &&
+    (d.via === undefined || VIAS.includes(d.via as AdmittedVia)) &&
     (d.until === undefined || typeof d.until === 'number') &&
-    (d.sid === undefined || typeof d.sid === 'string')
+    (d.sid === undefined || typeof d.sid === 'string') &&
+    (d.since === undefined || (typeof d.since === 'number' && Number.isFinite(d.since)))
   )
 }
 
@@ -303,7 +315,7 @@ export const createAdmittedDeviceStore = (
     },
     accepts: (token) => holderOf(load(), token, now()) !== null,
     deviceFor: (token) => holderOf(load(), token, now())?.deviceId ?? null,
-    admit: ({ deviceId, name, via, until, sid }) => {
+    admit: ({ deviceId, name, via, until, sid, since }) => {
       const at = now()
       // A pass that ran out is a row that admits nothing: it goes, so it never
       // holds one of the ADMITTED_MAX places (review, 11-09).
@@ -318,7 +330,8 @@ export const createAdmittedDeviceStore = (
         tokenHash: hashToken(token),
         ...(via ? { via } : {}),
         ...(until !== undefined ? { until } : {}),
-        ...(sid ? { sid } : {})
+        ...(sid ? { sid } : {}),
+        ...(via === 'phone' && since !== undefined ? { since } : {})
       }
       // Written BEFORE the token is answered: a token handed out ahead of a
       // write that then failed would be a credential this Mac never agreed to.

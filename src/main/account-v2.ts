@@ -136,6 +136,23 @@ export interface UnlockVerifier {
   hash: string
 }
 
+/** A phone that joined with a code this Mac showed, waiting for this Mac's Keep. */
+export interface PendingPhone {
+  readonly deviceId: string
+  readonly name: string
+  /** The phone's key in six digits, which the phone shows too. */
+  readonly match: string
+  readonly at: number
+  /** When no answer becomes a Remove. */
+  readonly until: number
+}
+
+const isPendingPhone = (value: unknown): value is PendingPhone => {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return typeof v.deviceId === 'string' && typeof v.name === 'string' && typeof v.match === 'string' && typeof v.at === 'number' && typeof v.until === 'number'
+}
+
 export interface AccountFile {
   username: string
   deviceId: string
@@ -1296,7 +1313,7 @@ export class Accounts {
    */
   async mintJoinCode(
     proof: StepUpProof,
-    purpose?: 'watch',
+    purpose?: 'watch' | 'phone',
   ): Promise<AccountResult<{ code: string; expiresAt: number; url: string }>> {
     const result = await this.authed<{ code?: unknown; expiresAt?: unknown }>('/v2/me/join-codes', {
       method: 'POST',
@@ -1308,6 +1325,23 @@ export class Accounts {
       return { ok: false, reason: 'unknown' }
     }
     return { ok: true, value: { code, expiresAt, url: joinLink(this.site, code) } }
+  }
+
+  /**
+   * PHONES WAITING ON THIS MAC (owner 2026-11-17): joined with a phone's code
+   * this Mac showed, not kept yet. Only this Mac is asked, and only it may
+   * answer (registry v2-routes.ts · phones).
+   */
+  async pendingPhones(): Promise<AccountResult<readonly PendingPhone[]>> {
+    const result = await this.authed<unknown>('/v2/me/phones/pending', { method: 'GET' })
+    if (!result.ok) return result
+    return { ok: true, value: Array.isArray(result.value) ? result.value.filter(isPendingPhone) : [] }
+  }
+
+  /** Keep a waiting phone (trusted until revoked), or remove it (revoked everywhere). */
+  async answerPhone(deviceId: string, answer: 'keep' | 'remove'): Promise<AccountResult<void>> {
+    const result = await this.authed<unknown>(`/v2/me/phones/${encodeURIComponent(deviceId)}/${answer}`, { method: 'POST', body: '{}' })
+    return result.ok ? { ok: true, value: undefined } : result
   }
 
   /**

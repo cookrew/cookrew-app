@@ -1,4 +1,5 @@
 import { LAST_USED_GRAIN_MS, sessionEnded, type SessionAge, type VerifiedBy } from './v2-session-age'
+import { matchSalt, phoneMatchCode } from './v2-phone-match'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -95,6 +96,50 @@ export interface V2Device {
   lastSeenAt: number
   /** A desktop that proved itself once on this machine: it enters the account's others with no proof (v2-device-grant.ts · issueMachineGrant). */
   machine?: true
+  /**
+   * A PHONE JOINED BY A PHONE'S CODE (owner 2026-11-16): when it was made a
+   * trusted phone, which enters every machine of the account on its pairing
+   * alone (v2-device-grant.ts · issuePhoneGrant). Only a phone's code sets it
+   * ("phone" is a kind any sign-in may name); a password change or "Not me"
+   * drops it. The moment rides on every pass, so a machine that forgot this
+   * phone keeps it out until it joins again (account-pair.ts).
+   */
+  phonePassAt?: number
+  /**
+   * A PHONE THAT JOINED AND IS NOT KEPT YET (owner 2026-11-17): the Mac that
+   * showed the code (`by`) is asked "A phone joined: <name>. Keep it?" until
+   * `until`. Meanwhile the phone gets no pass; Remove, or no answer in time,
+   * revokes it everywhere (keepPhone, removePendingPhone, sweepPendingPhones).
+   */
+  phonePending?: { by: string; at: number; until: number; salt: string }
+}
+
+/** How long the Mac that showed a phone's code has to keep the phone: a few minutes (owner 2026-11-17). */
+export const PHONE_KEEP_WINDOW_MS = 5 * 60 * 1000
+
+/**
+ * A KEPT PHONE'S SESSION LIVES UNTIL REVOKED (owner 2026-11-17): no thirty-day
+ * and no seven-day cap, for a phone kept by its Mac and nothing else. A
+ * password change or "Not me" drops the mark (untrustOtherMachines), and the
+ * caps apply again.
+ */
+export const livesUntilRevoked = (device: V2Device | undefined): boolean =>
+  device !== undefined && device.kind === 'phone' && device.phonePassAt !== undefined
+
+/**
+ * The device as a join leaves it. A phone's code makes it a PENDING phone, to
+ * be kept by the Mac that minted the code before it is trusted (a trusted phone
+ * that rejoins waits again). Any other join keeps an earlier trust only while
+ * the device stays a phone.
+ */
+function joinedPhone(device: V2Device, pending: { by: string; at: number } | null): V2Device {
+  const { phonePassAt, phonePending: _earlier, ...plain } = device
+  if (pending !== null && device.kind === 'phone') {
+    return { ...plain, phonePending: { by: pending.by, at: pending.at, until: pending.at + PHONE_KEEP_WINDOW_MS, salt: matchSalt() } }
+  }
+  // Any other join was its own approval (a plain code, a sign-in): a question still open about this phone is moot.
+  if (device.kind !== 'phone' || phonePassAt === undefined) return plain
+  return { ...plain, phonePassAt }
 }
 
 export interface V2Workspace {
@@ -688,10 +733,11 @@ export class V2Accounts {
    * that signs in twice is one phone — and its name and last-seen are brought
    * up to date, because "iPhone" being renamed should show on the profile.
    */
-  attachDevice(username: string, input: unknown, as: { watch?: boolean } = {}): Attached | Refused<'bad_credentials' | 'bad_device'> {
+  attachDevice(username: string, input: unknown, as: { watch?: boolean; phoneKeptBy?: string } = {}): Attached | Refused<'bad_credentials' | 'bad_device'> {
     const account = this.get(username)
     if (!account) return { ok: false, reason: 'bad_credentials' }
-    const device = this.readDevice(input, as.watch === true)
+    const phone = as.phoneKeptBy !== undefined
+    const device = this.readDevice(input, as.watch === true ? 'watch' : phone ? 'phone' : null)
     if (device === null) return { ok: false, reason: 'bad_device' }
     const owner = this.ownerOfDevice(device.id)
     if (owner !== null && owner !== account.username) return { ok: false, reason: 'bad_device' }
@@ -702,9 +748,12 @@ export class V2Accounts {
     if (known && !sameKey(known.jwk, device.jwk)) return { ok: false, reason: 'bad_device' }
     // A watch that joined as a phone (before there were watches) becomes one; nothing else does.
     if (known && as.watch === true && known.kind !== 'phone' && known.kind !== 'watch') return { ok: false, reason: 'bad_device' }
-    const attached: V2Device = known
+    // A phone's code trusts a phone, never a desktop or a browser the account already knows.
+    if (known && phone && known.kind !== 'phone') return { ok: false, reason: 'bad_device' }
+    const updated: V2Device = known
       ? { ...known, kind: device.kind, name: device.name, lastSeenAt: this.now() }
       : device
+    const attached = joinedPhone(updated, phone ? { by: as.phoneKeptBy ?? '', at: this.now() } : null)
     const next: V2Account = {
       ...account,
       devices: known
@@ -774,12 +823,12 @@ export class V2Accounts {
    * nothing else. Creating an account, recovery and every other door read the
    * three kinds a client may name.
    */
-  private readDevice(input: unknown, watch = false): V2Device | null {
+  private readDevice(input: unknown, only: 'watch' | 'phone' | null = null): V2Device | null {
     if (typeof input !== 'object' || input === null || Array.isArray(input)) return null
     const raw = input as Partial<DeviceInput>
     const id = typeof raw.id === 'string' ? raw.id.toLowerCase() : ''
     if (!UUID.test(id)) return null
-    if (watch ? raw.kind !== 'watch' : raw.kind !== 'desktop' && raw.kind !== 'phone' && raw.kind !== 'browser') return null
+    if (only !== null ? raw.kind !== only : raw.kind !== 'desktop' && raw.kind !== 'phone' && raw.kind !== 'browser') return null
     const name = typeof raw.name === 'string' ? raw.name.trim() : ''
     if (name.length === 0 || name.length > DEVICE_NAME_MAX) return null
     const jwk = sanitiseJwk(raw.jwk)
@@ -891,7 +940,8 @@ export class V2Accounts {
    * still exist.
    */
   authenticate(claims: { sub: string; dev: string; jti: string }): { account: V2Account; device: V2Device } | null {
-    const account = this.get(claims.sub)
+    // A phone nobody kept in time is revoked before anything of this account is answered.
+    const account = this.sweepPendingPhones(claims.sub)
     if (!account) return null
     const device = account.devices.find((d) => d.id === claims.dev)
     if (!device) return null
@@ -905,7 +955,8 @@ export class V2Accounts {
      * the deploy rather than ending on the spot.
      */
     const at = this.now()
-    if (sessionEnded(session, at) !== null) {
+    // A kept phone's session lives until revoked (owner 2026-11-17); every other ends on the clock.
+    if (!(livesUntilRevoked(device) && session.via !== 'console') && sessionEnded(session, at) !== null) {
       this.closeSession(account.username, session.jti)
       return null
     }
@@ -926,7 +977,10 @@ export class V2Accounts {
    */
   liveSessionOf(username: string, deviceId: string): V2Session | null {
     const at = this.now()
-    const mine = (this.get(username)?.sessions ?? []).filter((s) => s.dev === deviceId && sessionEnded(s, at) === null)
+    // A phone nobody kept in time has no sitting to carry forward.
+    const account = this.sweepPendingPhones(username)
+    const lasting = livesUntilRevoked(account?.devices.find((d) => d.id === deviceId))
+    const mine = (account?.sessions ?? []).filter((s) => s.dev === deviceId && ((lasting && s.via !== 'console') || sessionEnded(s, at) === null))
     return mine.sort((a, b) => b.issuedAt - a.issuedAt)[0] ?? null
   }
 
@@ -937,20 +991,101 @@ export class V2Accounts {
 
   /** This sitting just proved itself again: the five-minute window opens from now. */
   /**
-   * EVERY OTHER MACHINE PROVES ITSELF AGAIN. A machine's trust was earned under
-   * the password of its day; "Not me" and a password change say that password
-   * may be someone else's, so only the machine the owner is on keeps it
-   * (security review 2026-11-09).
+   * EVERY OTHER MACHINE PROVES ITSELF AGAIN, AND EVERY OTHER PHONE JOINS AGAIN.
+   * A machine's trust was earned under the password of its day, and a trusted
+   * phone's under the step-up its code was minted with; "Not me" and a password
+   * change say that password may be someone else's, so only the device the
+   * owner is on keeps it (security review 2026-11-09; phones 2026-11-16).
    */
   untrustOtherMachines(username: string, keepDeviceId: string | null): void {
     const account = this.get(username)
-    if (!account || !account.devices.some((d) => d.machine === true && d.id !== keepDeviceId)) return
+    const trusted = (d: V2Device): boolean =>
+      d.id !== keepDeviceId && (d.machine === true || d.phonePassAt !== undefined || d.phonePending !== undefined)
+    if (!account || !account.devices.some(trusted)) return
+    // A phone joined under that password is trusted the same way (or waiting to be), and walks back in only by a new phone's code.
+    const unkept = account.devices.filter((d) => d.id !== keepDeviceId && d.phonePending !== undefined).map((d) => d.id)
     const devices = account.devices.map((d) => {
-      if (d.machine !== true || d.id === keepDeviceId) return d
-      const { machine: _dropped, ...rest } = d
+      if (!trusted(d)) return d
+      const { machine: _machine, phonePassAt: _phone, phonePending: _pending, ...rest } = d
       return rest
     })
     this.replace({ ...account, devices })
+    // A phone still waiting to be kept joined on a code that password may have minted for someone else: it goes.
+    for (const id of unkept) this.dropUnkeptPhone(username, id)
+  }
+
+  /**
+   * PHONES WAITING ON THIS MAC: joined with a code it showed, not kept yet.
+   * Those whose time ran out are revoked first, so a Mac never offers one.
+   */
+  pendingPhones(username: string, byDeviceId: string): { deviceId: string; name: string; match: string; at: number; until: number }[] {
+    const account = this.sweepPendingPhones(username)
+    if (!account) return []
+    // The match number is the phone's key in six digits: the owner checks it against the phone, since the name is the joiner's to choose.
+    return account.devices.flatMap((d) =>
+      d.phonePending !== undefined && d.phonePending.by === byDeviceId
+        ? [{ deviceId: d.id, name: d.name, match: phoneMatchCode(d.jwk, d.phonePending.salt) ?? '', at: d.phonePending.at, until: d.phonePending.until }]
+        : []
+    )
+  }
+
+  /**
+   * KEEP IT: the Mac that showed the code says yes, in time. The phone is a
+   * trusted phone from now (phonePassAt): its passes need no proof, and its
+   * session lives until revoked. Anyone else asking, or too late, is not_found.
+   */
+  keepPhone(username: string, deviceId: string, byDeviceId: string): { ok: true } | Refused<'not_found'> {
+    const account = this.sweepPendingPhones(username)
+    const device = account?.devices.find((d) => d.id === deviceId)
+    if (!account || device?.phonePending === undefined || device.phonePending.by !== byDeviceId) return { ok: false, reason: 'not_found' }
+    const { phonePending: _kept, ...plain } = device
+    const kept: V2Device = { ...plain, phonePassAt: this.now() }
+    this.replace({ ...account, devices: account.devices.map((d) => (d.id === deviceId ? kept : d)) })
+    return { ok: true }
+  }
+
+  /** REMOVE IT: the Mac that showed the code says no. Revoked everywhere, as Devices does. */
+  removePendingPhone(username: string, deviceId: string, byDeviceId: string): { ok: true } | Refused<'not_found'> {
+    const account = this.sweepPendingPhones(username)
+    const device = account?.devices.find((d) => d.id === deviceId)
+    if (!account || device?.phonePending === undefined || device.phonePending.by !== byDeviceId) return { ok: false, reason: 'not_found' }
+    const revoked = this.revokeDevice(username, deviceId)
+    return revoked.ok ? revoked : { ok: false, reason: 'not_found' }
+  }
+
+  /**
+   * NO ANSWER IN TIME IS A NO: every pending phone of the account whose window
+   * has passed is revoked, as Remove would. Asked wherever the account is read
+   * for a request (authenticate), so it happens on the next request of anyone
+   * on the account, the phone's own included. The account as it is after.
+   */
+  sweepPendingPhones(username: string): V2Account | null {
+    const account = this.get(username)
+    if (!account) return null
+    const at = this.now()
+    const lapsed = account.devices.filter((d) => d.phonePending !== undefined && d.phonePending.until <= at)
+    if (lapsed.length === 0) return account
+    for (const d of lapsed) this.dropUnkeptPhone(username, d.id)
+    return this.get(username)
+  }
+
+  /**
+   * A phone that was never kept goes: revoked everywhere, as Remove does. When
+   * it is somehow the account's last device (the Mac that showed the code was
+   * revoked meanwhile), revoking refuses, so its mark and sittings end instead:
+   * a plain phone with no session, which a sweep never meets again.
+   */
+  private dropUnkeptPhone(username: string, deviceId: string): void {
+    if (this.revokeDevice(username, deviceId).ok) return
+    const account = this.get(username)
+    if (!account) return
+    const ended = account.sessions.filter((s) => s.dev === deviceId)
+    const devices = account.devices.map((d) => {
+      if (d.id !== deviceId) return d
+      const { phonePending: _gone, ...plain } = d
+      return plain
+    })
+    this.replace(this.withRevoked({ ...account, devices, sessions: account.sessions.filter((s) => s.dev !== deviceId) }, endedIds(ended), endedIds(ended)))
   }
 
   /** This desktop proved itself: from now on a trusted machine of the account. */

@@ -13,6 +13,7 @@ import { StatusCoin } from './nodes/AgentAvatar'
 import { PathBadge } from './PathBadge'
 import { RoutingEntry } from './routing/RoutingPanel'
 import { setSoundsOn, useSoundsOn } from './chime-sound'
+import { useNotificationsOn } from './notify-switch'
 import { useTheme } from './color-scheme'
 import { skinInfo } from '../../shared/skins'
 import { SkinSheet } from './skins/SkinSheet'
@@ -24,7 +25,8 @@ import { LaunchSettingsRow, LaunchSettingsSheet } from './LaunchSettingsSheet'
 import { WatchPairRow } from './WatchPairRow'
 import { RemoteSwitchRow } from './use/RemoteSwitch'
 import { WatchPairSheet } from './WatchPairSheet'
-import { isRemoteMode } from './api'
+import { PhoneAppSheet } from './PhoneAppSheet'
+import { cookrew, isRemoteMode } from './api'
 import { accountPageOf, readConsoleConfig } from './console/console-config'
 import type { RouteStatus } from '../../shared/route'
 import type { PathBadgeView } from '../../shared/path-badge'
@@ -58,11 +60,13 @@ export function HeaderMore({
 }: HeaderMoreProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [pairingWatch, setPairingWatch] = useState(false)
+  const [phoneApp, setPhoneApp] = useState(false)
   const [launchSheet, setLaunchSheet] = useState(false)
   const [skinSheet, setSkinSheet] = useState(false)
   const closeSkinSheet = useCallback(() => setSkinSheet(false), [])
   const closeLaunchSheet = useCallback(() => setLaunchSheet(false), [])
   const sounds = useSoundsOn()
+  const notifications = useNotificationsOn()
   const theme = useTheme()
   const light = useFoldLight()
   const fullscreen = useFullscreen()
@@ -189,6 +193,18 @@ export function HeaderMore({
             <CrIcon name="speaker" />
             <span className="cr-more-label">{sounds ? 'Sounds on' : 'Sounds off'}</span>
           </button>
+          {notifications.supported && notifications.on !== null && (
+            <button
+              type="button"
+              className={`cr-more-item${notifications.on ? ' on' : ''}`}
+              aria-pressed={notifications.on === true}
+              title="A notification when an agent needs you or replies, while Cookrew is not in front"
+              onClick={() => notifications.set(!notifications.on)}
+            >
+              <CrIcon name="dot" />
+              <span className="cr-more-label">{notifications.on ? 'Notifications on' : 'Notifications off'}</span>
+            </button>
+          )}
           <button
             type="button"
             className="cr-more-item"
@@ -219,6 +235,20 @@ export function HeaderMore({
               setPairingWatch(true)
             }}
           />
+          {cookrew().phoneInvite && (
+            <button
+              type="button"
+              className="cr-more-item"
+              title="A QR for the Cookrew phone app: it joins your account and reaches every machine on it"
+              onClick={() => {
+                close()
+                setPhoneApp(true)
+              }}
+            >
+              <CrIcon name="mobile" />
+              <span className="cr-more-label">Phone app…</span>
+            </button>
+          )}
           <RemoteSwitchRow />
           {offerFullscreen && (
             <button
@@ -248,6 +278,7 @@ export function HeaderMore({
       )}
     </div>
     {pairingWatch && <WatchPairSheet onClose={() => setPairingWatch(false)} />}
+    {phoneApp && <PhoneAppSheet onClose={() => setPhoneApp(false)} />}
     {launchSheet && <LaunchSettingsSheet onClose={closeLaunchSheet} />}
     {skinSheet && <SkinSheet onClose={closeSkinSheet} />}
     </>
