@@ -114,8 +114,10 @@ describe('a blip', () => {
 describe('the heartbeat', () => {
   it('pings, and a Mac that answers keeps the link', async () => {
     const { link, channel } = await tracked({ pingMs: 10, deadMs: 35 })
-    await wait(80)
-    expect(channel.sent.filter((f) => f.t === 'ping').length).toBeGreaterThan(3)
+    // Counted, not timed: Windows ticks a 10 ms interval every ~15.6 ms, so a
+    // fixed 80 ms saw three pings there. Four ticks span 40 ms, past deadMs,
+    // so the link has outlived its silence deadline on the Mac's answers alone.
+    await vi.waitFor(() => expect(channel.sent.filter((f) => f.t === 'ping').length).toBeGreaterThan(3), { timeout: 5_000 })
     expect(link.isOpen()).toBe(true)
   })
 
