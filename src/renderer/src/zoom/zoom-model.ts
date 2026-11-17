@@ -292,16 +292,25 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
   const all = [...input.nodes].reverse().filter((n) => n.kind === 'browser' || n.kind === 'note')
 
   // A link per coin an agent wears: its newest wires (the attachment index lists them newest first).
-  const links: LinkModel[] = []
-  const worn = new Map<string, CanvasNode>()
-  for (const a of agents) {
-    const list = (input.attachIndex.get(a.id) ?? []).slice(0, COINS_PER_AGENT)
-    list.forEach((att, k) => {
-      const o = owners.get(att.node.id) ?? []
-      links.push({ key: `${a.id}|${att.node.id}`, agent: a.id, item: att.node.id, k, j: Math.max(0, o.indexOf(a.id)) })
-      worn.set(att.node.id, att.node)
-    })
-  }
+  const wearing = agents.flatMap((a) =>
+    (input.attachIndex.get(a.id) ?? []).slice(0, COINS_PER_AGENT).map((att, k) => ({ agent: a.id, node: att.node, k }))
+  )
+  const worn = new Map<string, CanvasNode>(wearing.map((w) => [w.node.id, w.node] as const))
+  // Its place among the coins docked on its item, in the crew's order: a sharer
+  // that wears no coin for the item (its wire is past its seats) leaves no gap.
+  const onItem = new Map<string, number>()
+  const placed = wearing.map((w) => {
+    const j = onItem.get(w.node.id) ?? 0
+    onItem.set(w.node.id, j + 1)
+    return { agent: w.agent, item: w.node.id, k: w.k, j }
+  })
+  // The item page's "used by" row lists every owner in the wiring's order: its own face there is u.
+  const links: LinkModel[] = placed.map((w) => ({
+    key: `${w.agent}|${w.item}`,
+    ...w,
+    of: onItem.get(w.item) as number,
+    u: Math.max(0, (owners.get(w.item) ?? []).indexOf(w.agent))
+  }))
   // The thumbs grid holds them all and scrolls (owner, 2026-11-02); a workspace can
   // hold hundreds (300 on the owner's), so the view mounts only the rows on screen.
   // The ones somebody carries come first, newest first within each; past
