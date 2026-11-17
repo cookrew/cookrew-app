@@ -178,9 +178,60 @@ export function typeLine(agentId: string, text: string, force = false): void {
   if (keys) cookrew().ptyInput(agentId, keys)
 }
 
+/**
+ * WHICH LINES ARE REBUILT ON THE SEND (owner, 2026-11-17: Codex input is still
+ * cut off, fix it at the root). Everything above edits the line by what this app BELIEVES it
+ * holds, and Codex's line is not a plain one: a path becomes one [Image #1],
+ * a fast burst is held as a paste, LIVE and other devices type and move the
+ * cursor in it. Whenever the belief is wrong, Backspaces counted from it eat
+ * the owner's words, and the send submitted what was left. So a send to Codex
+ * does not trust the belief: it clears the whole box and puts the draft in
+ * whole. Codex agents only: measured there (codex 0.169, idle and mid-turn,
+ * over a folded picture, a second line and a moved cursor). Claude's Ctrl-U
+ * takes one wrapped row, so its line keeps the typed send.
+ */
+let rebuilt: ReadonlySet<string> = new Set()
+
+/**
+ * What these agents run: a Codex agent's line is rebuilt on its send. Agents
+ * not named keep what they were, so the active workspace's cards and the
+ * fleet's other workspaces can each say what they know (Dock.tsx).
+ */
+export function noteLineAgents(agents: readonly { readonly id: string; readonly codex: boolean }[]): void {
+  const next = new Set(rebuilt)
+  for (const agent of agents) {
+    if (agent.codex) next.add(agent.id)
+    else next.delete(agent.id)
+  }
+  if (next.size !== rebuilt.size || [...next].some((id) => !rebuilt.has(id))) rebuilt = next
+}
+
+/**
+ * Codex's lines, in order: what is before the cursor, all that follows (a
+ * Ctrl-K at a line's end takes only its break, so two per line), then each
+ * line above. Spare keys fall on an empty box and do nothing there.
+ */
+const KILL_LINES = 8
+export const CODEX_CLEAR = '\x15' + '\x0b'.repeat(2 * KILL_LINES) + '\x7f\x15'.repeat(KILL_LINES)
+const PASTE_OPEN = '\x1b[200~'
+const PASTE_CLOSE = '\x1b[201~'
+const pasted = (text: string): string => `${PASTE_OPEN}${text}${PASTE_CLOSE}`
+
+/**
+ * The keys that make Codex's box hold exactly `text`: the words as one paste,
+ * each picture as its own (so it attaches), a space before each so a picture
+ * Codex cannot read stays a path of its own.
+ */
+function rebuildKeys(text: string): string {
+  const words = shownWords(text).trim()
+  const pictures = pictureTokens(text).map((token, i) => (words || i > 0 ? ' ' : '') + pasted(token))
+  return CODEX_CLEAR + (words ? pasted(words) : '') + pictures.join('')
+}
+
 /** Enter on the agent's line, holding `text` (an empty text submits what is there). */
 export function submitLine(agentId: string, text: string): void {
-  if (text) typeLine(agentId, text, true)
+  if (text && rebuilt.has(agentId)) cookrew().ptyInput(agentId, rebuildKeys(text))
+  else if (text) typeLine(agentId, text, true)
   cookrew().ptyInput(agentId, '\r')
   endLine(agentId)
 }
@@ -234,4 +285,5 @@ export function useLiveLine(agentId: string | null): TerminalActivity | undefine
 
 export function resetLinesForTests(): void {
   lines = new Map()
+  rebuilt = new Set()
 }
