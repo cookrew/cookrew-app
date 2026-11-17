@@ -1,13 +1,11 @@
 import type { Commit } from './github-commits'
-import { SITE_FRAMES } from './site-shell'
 import { esc, icon, page, type Page } from './site-shell'
 import { RELEASES_PAGE, pickAsset, type Release } from './releases'
 import { DEFINITION, FACTS, FAQ, HEADLINE, HEADLINE_SUB, PILLARS, START_FAQ, START_HOWTO as HOWTO } from './site-content'
 import { commitsSection, compareTable, featuresGrid } from './site-features'
 import { faqPage, organization, softwareApplication, webPage } from './site-seo'
 import { BRAND_LOCKUP_CSS, BRAND_LOCKUP_HTML } from './site-brand'
-import { PROMO } from './site-motion'
-import { SOURCE_CHIP } from './site-frames'
+import { DEMO, figure } from './site-frames'
 import { pillarsSection, roadmapSection } from './site-pillars'
 
 /**
@@ -33,17 +31,12 @@ const ONE_LINE = DEFINITION.slice(0, DEFINITION.indexOf('. ') + 1)
 const DESCRIPTION = DEFINITION.slice(0, 157).replace(/\s+\S*$/, '') + '…'
 
 /**
- * THE HERO CLIP (2026-11-17) — twenty seconds of the current UI on the demo
- * cast, every beat one real click through the app's renderer: the workspaces
- * stop, Release Room's four agents on four harnesses, Reviewer's question as
- * rows to pick, the artifacts, Checker's browser card, and back out. It is an
- * illustration on demo data and says so; the file and its poster live with
- * the frames on GitHub. No script: <video autoplay muted loop playsinline>
- * needs none, and a reader whose browser refuses autoplay sees the poster.
+ * THE HERO (2026-11-17): one agent's question on three devices, a composite of
+ * three renders on demo data (site-frames.ts DEMO.hero), labelled as such. The
+ * twenty-second clip that stood here is on the canvas feature page.
  */
-function promo(): string {
-  const poster = `${SITE_FRAMES}${PROMO.poster}`
-  return `<figure class="shot promo illustration" data-source="illustration"><video autoplay muted loop playsinline preload="metadata" poster="${esc(poster)}" width="1400" height="874" aria-label="${esc(PROMO.label)}"><source src="${SITE_FRAMES}${PROMO.file}" type="video/mp4"></video><figcaption><span class="rec src-illustration">${esc(SOURCE_CHIP.illustration)}</span><span>${esc(PROMO.caption)}</span></figcaption></figure>`
+function hero(): string {
+  return figure(DEMO.hero, { eager: true, sizes: '(max-width: 860px) 100vw, 50vw' })
 }
 
 /** GET STARTED: the two steps, the crew builder, and the two questions people ask first. */
@@ -132,7 +125,6 @@ export function staticHomePage(input: StaticHomeInput): Page {
       active: 'home',
       description: DESCRIPTION,
       path: '/',
-      preload: [`${SITE_FRAMES}${PROMO.poster}`],
       jsonLd: [
         organization(),
         softwareApplication(input.release),
@@ -155,7 +147,7 @@ export function staticHomePage(input: StaticHomeInput): Page {
 <p class="hero-sub">${esc(HEADLINE_SUB)}</p>
 <p class="lede">${esc(ONE_LINE)} Follow and answer them from the desktop or any browser.</p>
 ${staticHeroButtons(input.release, input.console)}</div>
-<div>${promo()}</div>
+<div>${hero()}</div>
 </div></div>
 
 <div class="wrap" style="padding:0">${staticDock()}</div>

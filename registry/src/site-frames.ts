@@ -12,13 +12,15 @@ import { SITE_FRAMES } from './site-shell'
  *
  *   illustration  the app's renderer (or the watch's SwiftUI views) on the
  *                 demo cast, driven by real clicks; nothing drawn over it
- *   composite     several such renders set side by side; nothing painted in
+ *   composite     several such renders set side by side in plain frames, or
+ *                 (the operation cards) a picture of a demo page laid into a
+ *                 card's empty stage; the caption says which
  *   recording     the running app on real work — none on the site this round
  *
  * Source of every file: the worktree's renderer at dev d28ddfbb on the demo api
  * with a synthetic seed, and watch/Sources/watch-shots on a recast copy of its
- * fixture (the seed, the recast and the shoot scripts are listed in the commit
- * that added the files). The files live under registry/assets/site/ and are
+ * fixture (scripts/site-demo: the seed, the recast, and the shoot and compose
+ * scripts). The files live under registry/assets/site/ and are
  * served from GitHub at the commit the site is built from.
  */
 export type FrameSource = 'illustration' | 'composite' | 'recording'
@@ -51,25 +53,29 @@ const demo = (file: string, width: number, height: number, alt: string, caption:
   ({ file, alt, caption, width, height, source, ...(smallWidth ? { smallWidth } : {}) })
 
 export const DEMO = {
-  devices: demo('demo-devices.jpg', 1400, 876, 'The devices stop: this desktop drawn as a laptop with its two workspaces on the screen',
-    'Clicked the empty paper: the view stepped out to the devices stop, this desktop with Release Room and Docs Site on its screen.'),
+  hero: demo('demo-hero-devices.jpg', 1400, 876, 'The same question from Planner on three devices: the desktop app, the app at phone width, and an Apple Watch',
+    'One agent, three screens: Planner (Claude Code) waits on an edit to CHANGELOG.md, drawn by the desktop renderer, by the same renderer at phone width, and by the watch app’s own view. Three renders on demo data set side by side in plain frames; not a photograph of devices.', 'composite'),
+  devices: demo('demo-devices.jpg', 1400, 876, 'The devices stop: Studio Mac drawn as a laptop with its two workspaces on the screen, and Build Server beside it',
+    'Clicked the empty paper: the view stepped out to the devices stop, Studio Mac with Release Room and Docs Site on its screen, and the account’s second machine, Build Server, beside it.'),
   workspaces: demo('demo-workspaces.jpg', 1400, 876, 'The workspaces stop: Release Room and Docs Site, each with its agents’ faces and what needs you',
     'The workspaces stop: Release Room with four agents on four harnesses and Docs Site with two, each tile counting what needs you.'),
-  agents: demo('demo-agents.jpg', 1400, 876, 'One workspace, four agents on four harnesses: Planner working, Reviewer waiting on you, Checker replied, Notes resting',
-    'Clicked Release Room: Planner on Claude Code working, Reviewer on Codex waiting on you, Checker on OpenCode replied, Notes on Pi resting.'),
-  hitlDesk: demo('demo-hitl-desk.jpg', 1400, 876, 'Reviewer’s card with the question Codex asked, mirrored as rows to pick',
-    'Clicked Reviewer: its card opened, and the permission prompt Codex is waiting on came up as rows to pick, 1 to 3, or Esc.'),
+  agents: demo('demo-agents.jpg', 1400, 876, 'One workspace, four agents on four harnesses: Planner waiting on you, Reviewer working, Checker replied, Notes resting',
+    'Clicked Release Room: Planner on Claude Code waiting on you, Reviewer on Codex working, Checker on OpenCode replied, Notes on Pi resting.'),
+  hitlDesk: demo('demo-hitl-desk.jpg', 1400, 876, 'Planner’s card with the permission prompt Claude Code asked, mirrored as rows to pick',
+    'Clicked Planner: its card opened, and the permission prompt Claude Code is waiting on, an edit to CHANGELOG.md, came up as rows to pick, 1 to 3, or Esc.'),
   artifacts: demo('demo-artifacts.jpg', 1400, 876, 'The artifacts stop: a browser card, a note, a phone screen card and a computer screen card',
-    'Clicked artifacts: the browser card Checker uses, the checklist note Planner keeps, and two screen cards, a phone simulator and the main display. Their pictures are the demo’s flat placeholders, not screens.'),
+    'Clicked artifacts: the browser card Checker uses, the checklist note Planner keeps, and two screen cards, a phone simulator and the main display. Their thumbnails are the demo’s flat placeholders, not screens.'),
   browserCard: demo('demo-browser-card.jpg', 1400, 876, 'A browser card open on a release-notes page, used by Checker',
     'Clicked Release notes: the browser card opened on the page Checker checked, a local demo page, with the agent that uses it named at the top right.'),
+  ops: demo('demo-ops-cards.jpg', 1400, 1344, 'Three operation cards: a computer’s screen, a browser page, and a phone’s screen',
+    'The three kinds of card an agent operates: a computer screen card (top), a browser card and a phone screen card. The browser card renders its page itself. The demo has no screen behind the computer and phone cards, so a picture of a demo desktop, and of the same page at phone width, is laid into each card’s stage; the cards around them are the product’s.', 'composite'),
   routing: demo('demo-routing.jpg', 1400, 828, 'The Routing panel: Magpie online, four harnesses ready to route, subscriptions and a local model, the default group',
     'Opened Routing from the menu: the four harnesses each ticked installed, signed in and routed, two subscriptions and a local model, and the default every new card takes.'),
-  crewPhone: demo('demo-crew-phone.jpg', 700, 1514, 'The same four agents at phone width', 'The same workspace at phone width (390 px): the four agents and their states.', 'illustration', 400),
-  hitlPhone: demo('demo-hitl-phone.jpg', 700, 1514, 'Reviewer’s question as rows to tap, at phone width',
-    'Reviewer’s question at phone width (390 px): the same rows to tap, with the reply box under them.', 'illustration', 400),
-  watch: demo('demo-watch.jpg', 1400, 556, 'Three Apple Watch screens: Reviewer’s question, a row picked, and the workspace’s agents',
-    'Three watch screens drawn by the watch app’s own views: Reviewer’s question, the row it would send, and Release Room’s agents with what needs you at the foot.', 'composite')
+  crewPhone: demo('demo-crew-phone.jpg', 700, 1514, 'The same four agents at phone width', 'The same workspace at phone width (390 px): the four agents and their states, Planner waiting on you.', 'illustration', 400),
+  hitlPhone: demo('demo-hitl-phone.jpg', 700, 1514, 'Planner’s question as rows to tap, at phone width',
+    'Planner’s question at phone width (390 px): the same rows to tap, with the reply box under them.', 'illustration', 400),
+  watch: demo('demo-watch.jpg', 1400, 556, 'Three Apple Watch screens: Checker’s reply, Release Room’s agents, and the account’s machines',
+    'Three watch screens drawn by the watch app’s own views on demo data: Checker’s reply with a box to answer it, Release Room’s agents with what needs you at the foot, and the account’s machines, Studio Mac online and Build Server offline.', 'composite')
 } as const satisfies Record<string, Frame>
 
 export type DemoKey = keyof typeof DEMO

@@ -1,4 +1,5 @@
 import { DEMO, figure } from './site-frames'
+import { clipFigure } from './site-motion'
 import { esc, page, type Page } from './site-shell'
 import { COMPARE, DEFINITION, FEATURES, GITHUB_REPO, LISTED_FEATURES, type FeatureSpec } from './site-content'
 import type { Commit } from './github-commits'
@@ -26,7 +27,7 @@ export function featurePage(slug: string): Page | null {
   // A page still built for old links but listed nowhere is not to be indexed as current (LISTED_FEATURES).
   const unlisted = !LISTED_FEATURES.some((x) => x.slug === f.slug)
   // The current UI on demo data, labelled; a feature no picture shows yet has none, and nothing stands in.
-  const visual = f.frames.map((key) => figure(DEMO[key], { sizes: '(max-width: 860px) 100vw, 70vw' })).join('')
+  const visual = (f.clip ? clipFigure() : '') + f.frames.map((key) => figure(DEMO[key], { sizes: '(max-width: 860px) 100vw, 70vw' })).join('')
 
   return page(
     {

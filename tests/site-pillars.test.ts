@@ -4,7 +4,7 @@ import { PILLARS, ROADMAP, STATUS, llmsText } from '../registry/src/site-content
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { DEMO } from '../registry/src/site-frames'
-import { PROMO } from '../registry/src/site-motion'
+import { CANVAS_CLIP } from '../registry/src/site-motion'
 
 /**
  * THE FRONT PAGE KEEPS WHAT IS SHIPPED APART FROM WHAT IS NOT (2026-11-16).
@@ -128,13 +128,23 @@ describe('the pictures say what they are (2026-11-17)', () => {
     for (const [name, body] of pages()) expect(body, name).not.toMatch(old)
   })
 
-  it('the hero is the demo clip, and it says it is an illustration on demo data', () => {
-    const body = home()
-    expect(body).toContain(`/site/${PROMO.file}"`)
-    expect(body).toContain(`poster="`)
-    expect(body).toMatch(/<figure class="shot promo illustration" data-source="illustration">/)
-    expect(PROMO.caption).toMatch(/demo data/)
-    expect(PROMO.caption).not.toMatch(/record/i)
+  it('the hero is one question on three devices, and it says it is a composite of renders on demo data', () => {
+    const hero = /<div class="hero">[\s\S]*?<\/figure>/.exec(home())?.[0] ?? ''
+    expect(hero).toContain(`/site/${DEMO.hero.file}"`)
+    expect(hero).toContain('data-source="composite"')
+    expect(hero).toContain('Composite of product UI renders on demo data · illustration')
+    expect(hero).toContain('fetchpriority="high"')
+    expect(DEMO.hero.caption).toMatch(/demo data/)
+    expect(DEMO.hero.caption).toMatch(/not a photograph/)
+  })
+
+  it('the clip is on the canvas page, an illustration on demo data, and not on the front page', () => {
+    const canvas = pages().get('features/canvas.html') ?? ''
+    expect(canvas).toContain(`/site/${CANVAS_CLIP.file}"`)
+    expect(canvas).toMatch(/<figure class="shot clip illustration" data-source="illustration"><video [^>]*poster="/)
+    expect(home()).not.toContain(CANVAS_CLIP.file)
+    expect(CANVAS_CLIP.caption).toMatch(/demo data/)
+    expect(CANVAS_CLIP.caption).not.toMatch(/record/i)
   })
 
   it('every figure on every page wears what it is; none claims to be recorded', () => {
@@ -172,7 +182,7 @@ describe('the pictures say what they are (2026-11-17)', () => {
       expect(existsSync(path.join(dir, frame.file)), frame.file).toBe(true)
       expect(existsSync(path.join(dir, frame.file.replace(/\.jpg$/, '-800.jpg'))), frame.file).toBe(true)
     }
-    expect(existsSync(path.join(dir, PROMO.file))).toBe(true)
-    expect(existsSync(path.join(dir, PROMO.poster))).toBe(true)
+    expect(existsSync(path.join(dir, CANVAS_CLIP.file))).toBe(true)
+    expect(existsSync(path.join(dir, CANVAS_CLIP.poster))).toBe(true)
   })
 })

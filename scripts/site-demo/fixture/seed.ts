@@ -29,21 +29,21 @@ function activity(terminalId: string, phase: string, extra: Record<string, unkno
 }
 
 export const ACTIVITY = [
-  activity('rr-planner', 'thinking', {
+  activity('rr-planner', 'waiting', {
     prompt: 'Draft the v1.4 release notes from the merged changes',
-    glance: { status: 'Writing… (41s)', tools: ['Read CHANGELOG.md', 'Bash git log --oneline v1.3..HEAD'], message: 'Grouping the changes into features and fixes.' }
-  }),
-  activity('rr-reviewer', 'waiting', {
-    prompt: 'Review the API diff for breaking changes',
     waitSeq: 1,
     waitChoice: {
-      kind: 'menu', question: 'Allow this edit to src/api/routes.ts?', sub: 'Edit · routes.ts · +4 −1', cursor: 0, escIndex: 2,
+      kind: 'menu', question: 'Allow this edit to CHANGELOG.md?', sub: 'Edit · CHANGELOG.md · +18 −0', cursor: 0, escIndex: 2,
       options: [
         { key: '1', label: 'Yes', detail: null },
-        { key: '2', label: 'Yes, and allow edits this session', detail: null },
-        { key: '3', label: 'No, and tell Codex what to change', detail: null }
+        { key: '2', label: 'Yes, allow all edits during this session', detail: null },
+        { key: '3', label: 'No, and tell Claude what to do differently', detail: null }
       ]
     }
+  }),
+  activity('rr-reviewer', 'thinking', {
+    prompt: 'Review the API diff for breaking changes',
+    glance: { status: 'Reviewing… (38s)', tools: ['Read src/api/routes.ts', 'Bash git diff v1.3 -- src/api'], message: 'Two routes changed shape; checking the callers.' }
   }),
   activity('rr-checker', 'replied', {
     prompt: 'Open the notes page and check every link',
@@ -89,7 +89,7 @@ export function cleanRoute() {
   return {
     ...base,
     defaultModel: 'group/default',
-    mcpServers: ['memory'],
+    mcpServers: [],
     providers: 3,
     models: [group('group/default', 'default'), group('group/review', 'review'), { id: 'ollama/qwen3:32b', displayName: 'qwen3:32b', ownedBy: 'ollama', group: false, reasoning: false, levels: [], contextWindow: 32_000 }],
     quotas: [
@@ -129,10 +129,20 @@ export async function seed(api: Api, options: { page: string }): Promise<void> {
   await api.switchWorkspace(RELEASE)
 
   const list = roster(DOCS)
+  const profile = (kind: string, os: string, label: string) => ({ kind, model: null, label, vendor: null, os, osVersion: null, arch: 'arm64', cpus: null, memoryGb: null, evidence: [] })
+  const machines = {
+    ok: true,
+    machines: [
+      { id: 'demo-studio', name: 'Studio Mac', online: true, lastSeenAt: now, appVersion: '0.6.15', profile: profile('laptop', 'darwin', 'MacBook'), workspaces: [{ id: RELEASE, name: 'Release Room' }, { id: DOCS, name: 'Docs Site' }], current: true },
+      { id: 'demo-build', name: 'Build Server', online: true, lastSeenAt: ago(1), appVersion: '0.6.15', profile: profile('server', 'linux', 'Linux server'), workspaces: [{ id: 'demo-nightly', name: 'Nightly Builds' }], current: false }
+    ]
+  }
   Object.assign(api, {
     routeState: () => Promise.resolve(cleanRoute()),
     terminalRoute: (id: string) =>
       Promise.resolve({ route: ROUTES[id] ?? 'direct', effective: ROUTES[id] ?? null, appliesOn: 'now', live: null, turn: null, offline: false, note: null, gateway: 'online', routable: true }),
+    zoomFleetMachines: () => Promise.resolve(machines),
+    machineName: () => Promise.resolve('Studio Mac'),
     listActivity: () => Promise.resolve(ACTIVITY),
     onTerminalActivity: () => () => undefined,
     listAgents: () => Promise.resolve(list),
@@ -143,7 +153,7 @@ export async function seed(api: Api, options: { page: string }): Promise<void> {
       Promise.resolve(
         rankInbox(
           [
-            { kind: 'waiting', nodeId: 'rr-reviewer', nodeName: 'Reviewer', nodeKind: 'terminal', workspaceId: RELEASE, workspaceName: 'Release Room', reason: 'asks you — "Allow this edit to src/api/routes.ts?"', since: ago(3), served: false, blockedDownstream: 1 },
+            { kind: 'waiting', nodeId: 'rr-planner', nodeName: 'Planner', nodeKind: 'terminal', workspaceId: RELEASE, workspaceName: 'Release Room', reason: 'asks you — "Allow this edit to CHANGELOG.md?"', since: ago(3), served: false, blockedDownstream: 1 },
             { kind: 'waiting', nodeId: 'ds-writer', nodeName: 'Writer', nodeKind: 'terminal', workspaceId: DOCS, workspaceName: 'Docs Site', reason: 'asks you — "Which install path should the guide lead with?"', since: ago(6), served: false, blockedDownstream: 0 }
           ],
           now

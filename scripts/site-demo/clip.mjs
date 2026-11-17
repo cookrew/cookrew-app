@@ -1,4 +1,4 @@
-// node clip.mjs <out.mp4> — the hero clip: real clicks through the renderer on the demo cast, screencast frames
+// node clip.mjs <out.mp4> — the canvas clip: real clicks through the renderer on the demo cast, screencast frames
 // paced by their arrival time, encoded with ffmpeg. Every beat is the product answering one click.
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -33,7 +33,7 @@ const start = Date.now()
 await t.send('Page.startScreencast', { format: 'jpeg', quality: 88, maxWidth: W, maxHeight: H, everyNthFrame: 1 })
 await sleep(2200)
 await beat('agents', '.zv-door.agents', 'Release Room', 2600)
-await beat('reviewer', '.zv-m.waiting .cr-name-text', 'Reviewer', 3400)
+await beat('planner', '.zv-m.waiting .cr-name-text', 'Planner', 3400)
 await t.key('Escape'); await sleep(900)
 await beat('artifacts', '.zv-group.items .zv-group-stop', null, 2200)
 await beat('browser', '.zv-ip .zv-who, .zv-ip', 'Release notes', 3000)

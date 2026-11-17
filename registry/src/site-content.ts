@@ -112,6 +112,8 @@ export interface FeatureSpec {
   pts: string[]
   /** Pictures from site-frames.ts DEMO: the current UI on demo data. Empty: no picture shows this yet, and none stands in. */
   frames: DemoKey[]
+  /** The twenty-second clip on demo data (site-motion.ts CANVAS_CLIP), above the stills. */
+  clip?: true
   faq: Faq[]
   related: string[]
 }
@@ -124,7 +126,8 @@ export const FEATURES: FeatureSpec[] = [
     definition:
       'The Cookrew canvas is a zoom you walk by clicking: your machines, a machine’s workspaces, one workspace’s crew tied by ink cables, one agent’s card, and its whole transcript. Each agent is a live terminal with a name, a role and a turn tracker; sticky notes hold specs and handovers; browser cards are real Chromium tabs an agent can drive; and the cables say who hands work to whom.',
     pts: ['Agent terminals with a name, a role and a live turn tracker', 'Sticky notes for specs, reviews and handovers', 'Connected browser cards that agents can drive', 'Wires say who hands work to whom, and who reviews whom'],
-    frames: ['agents', 'hitlDesk'],
+    frames: ['hitlDesk', 'artifacts'],
+    clip: true,
     faq: [
       { q: 'Is the terminal on a card a real terminal?', a: 'Yes. Each card is a PTY hosted by tmux or herdr, running the harness’s own CLI. What you see is what the agent sees.' },
       { q: 'Can an agent use a browser card?', a: 'Yes. Browser cards are Chromium pages driven over the DevTools protocol; an agent can navigate, click, fill and read them with the cookrew browser commands.' }
@@ -197,7 +200,7 @@ export const FEATURES: FeatureSpec[] = [
     definition:
       'A Cookrew workspace is a project directory with its own canvas, team and history. A saved team is a template of nodes, wires and turn histories; cookrew workspace create --team puts a saved formation to work in a new directory immediately.',
     pts: ['A workspace is a project directory with its own canvas, crew and history', 'workspace create --team puts a saved formation to work immediately', 'Every workspace of every machine is listed in the console'],
-    frames: ['workspaces'],
+    frames: ['workspaces', 'browserCard'],
     faq: [{ q: 'What is in a saved team?', a: 'Its cards, the wires between them and their turn histories, in one file. Saving a team never touches the original session.' }],
     related: ['cli', 'marketplace']
   },
@@ -322,9 +325,9 @@ export const PILLARS: readonly Pillar[] = [
       { status: 'planned', title: 'One request, any device, every machine', text: 'A request that waits on you is answered once, from whichever device is at hand, across every machine of the account.' }
     ],
     media: [
-      { key: 'hitlPhone', note: 'Drawn at phone width from the app’s code; not filmed on a phone, and not the console’s sign-in around it.' },
+      { key: 'crewPhone', note: 'Drawn at phone width from the app’s code; not filmed on a phone, and not the console’s sign-in around it.' },
       { key: 'watch', note: 'Beta: the watch app runs on our own watches and is not on the App Store or TestFlight.' },
-      { key: 'artifacts', note: 'What an agent operates, shown as cards. Taking control of a screen needs the machine’s switch and a 15-minute grant.' }
+      { key: 'ops', note: 'Taking control of a computer’s or a phone’s screen needs the machine’s switch turned on and a 15-minute grant.' }
     ]
   },
   {
@@ -338,7 +341,7 @@ export const PILLARS: readonly Pillar[] = [
       { status: 'shipped', title: 'Every turn is a checkpoint', text: 'Scrub back through a session and fork a new agent from any past turn; the original keeps running.' },
       { status: 'planned', title: 'Cloud Workspace', text: 'Teammates, clients or family working with agents in one workspace, with roles, an isolated sandbox and an audit trail. Not available: it waits on security work that has to land first.' }
     ],
-    media: [{ key: 'agents' }, { key: 'browserCard' }]
+    media: [{ key: 'agents' }, { key: 'workspaces' }]
   }
 ]
 
