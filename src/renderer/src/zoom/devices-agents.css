@@ -1,0 +1,234 @@
+/* ── a machine's screen on the devices stop: its agents only (DevicesAgents.tsx; owner 2026-11-17) ──
+   Drawn in a workspace card's px (36 px faces, its serif name) and scaled into the frame by the
+   component, so a face is as big on screen as on the workspaces stop. More than fits scrolls inside. */
+.da-screen {
+  position: absolute;
+  z-index: 2;
+  overflow: hidden;
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+.da-scroll {
+  box-sizing: border-box;
+  padding: 12px 14px 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  touch-action: pan-y;
+  transform-origin: 0 0;
+  color: var(--zv-ink);
+  font-family: var(--zv-mono);
+  text-align: left;
+  pointer-events: auto;
+  cursor: zoom-in;
+}
+
+.da-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 10px;
+  white-space: nowrap;
+}
+
+.da-title b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: 600 17px/1.2 var(--zv-serif);
+}
+
+.da-title span {
+  flex: none;
+  font: 10px/1 var(--zv-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--zv-ink-soft);
+}
+
+/* Workspaces side by side as their faces allow, a long one wrapping its faces. */
+.da-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px 18px;
+}
+
+.da-ws {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.da-ws-name {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin: 0 0 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--zv-ink);
+  cursor: pointer;
+}
+
+.da-ws-name span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 15px/1.25 var(--zv-serif);
+}
+
+@media (hover: hover) {
+  .da-ws-name:hover span {
+    text-decoration: underline;
+  }
+}
+
+.da-faces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.da-face {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.da-face .ink-avatar {
+  display: block;
+}
+
+.da-face.still {
+  cursor: inherit;
+}
+
+/* The agent the keys stand on (agent-keys.ts), or the one whose card is up: a seal ring, never a transform. */
+.da-face[aria-current='true'] {
+  box-shadow:
+    0 0 0 2px var(--zv-paper),
+    0 0 0 4px var(--zv-seal);
+}
+
+@media (hover: hover) {
+  .da-face:not(.still):hover {
+    box-shadow:
+      0 0 0 2px var(--zv-paper),
+      0 0 0 3.5px var(--zv-seal);
+  }
+}
+
+.da-none {
+  margin: 0;
+  font: italic 11px/36px var(--zv-mono);
+  color: var(--zv-muted);
+}
+
+/* This machine's screen: placed by its frame (.zv-machine), shown by the painter (zoom-frame.ts · AGENTS_ONLY). */
+.zv-local-agents {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+/* The painter's word (pointer-events none while it fades: zoom-frame.ts · put) reaches its faces too,
+   so a screen on its way out takes no press. A press on the bezel is the frame's own (LocalMachine). */
+.zv-local-agents :is(.da-screen, .da-scroll) {
+  pointer-events: inherit;
+}
+
+/* ── a workspace card's agent, when the keys stand on it (WorkspaceTile.tsx · TilePick) ── */
+.dm-head {
+  border-radius: 50%;
+}
+
+.dm-head[aria-current='true'] {
+  box-shadow:
+    0 0 0 2px var(--zv-card),
+    0 0 0 4px var(--zv-seal);
+}
+
+/* ── another machine's agent, popped at the devices stop (RemotePickCard.tsx) ──
+   That machine's own card (RemoteCardView) inside the floating card, its box under it.
+   Its width as drawn is under the screen's once scaled to the card stop's size (--zv-card-s). */
+.zv-pick-remote {
+  width: min(340px, calc((100vw - 16px) / var(--zv-card-s, 1)));
+  box-sizing: border-box;
+}
+
+.zv-pick-remote .rm-card {
+  max-width: none;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.zv-pick-remote .rm-head .ink-avatar {
+  width: 40px;
+  height: 40px;
+}
+
+.zv-pick-remote .rm-words {
+  max-height: min(220px, 34vh);
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.zv-pick-remote .rm-thumbs {
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.zv-pick-remote .rm-thumb {
+  grid-template-rows: 56px auto;
+  font-size: 10px;
+}
+
+.zv-pick-remote .rm-note:empty {
+  display: none;
+}
+
+.zv-pick-reply.zv-reply {
+  position: relative;
+  left: auto;
+  top: auto;
+  width: auto;
+  flex: none;
+}
+
+.zv-pick-open {
+  appearance: none;
+  align-self: flex-end;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--zv-ink-soft);
+  font: 10.5px/1.2 var(--zv-mono);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .zv-pick-open:hover {
+    color: var(--zv-ink);
+    text-decoration: underline;
+  }
+}

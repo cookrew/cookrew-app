@@ -260,12 +260,12 @@ describe("a clicked agent's card", () => {
   const tile = readFileSync('src/renderer/src/zoom/WorkspaceTile.tsx', 'utf8')
   it('goes back a second after the mouse leaves the agent, not the tile', () => {
     expect(tile).toMatch(/const LINGER_MS = 1000/)
-    expect(tile).toMatch(/<section className=/)
+    expect(tile).toMatch(/<section (ref=\{tile\} )?className=/)
     expect(tile).toMatch(/className=\{`dm-row[^>]*onPointerEnter=\{holdCard\} onPointerLeave=\{leaveCard\}/)
     expect(tile).toMatch(/className=\{`dm-ov-layer[^>]*onPointerEnter=\{holdCard\} onPointerLeave=\{leaveCard\}/)
   })
   it('stays while its reply box holds the focus', () => {
-    expect(tile).toMatch(/if \(!card\?\.contains\(document\.activeElement\)\) setMode\('bag'\)/)
+    expect(tile).toMatch(/if \(card\?\.contains\(document\.activeElement\)\) return\s+setMode\('bag'\)/)
   })
 })
 

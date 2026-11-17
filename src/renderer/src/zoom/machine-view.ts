@@ -1,5 +1,7 @@
 import { tintOf } from './zoom-layout'
-import type { DeckSource, ItemView, MachineView, MarkView, ZoomInput } from './zoom-model'
+import { inkStatusOfRow, statusWord } from './ink-status'
+import type { AgentPhase } from '../agent-rows'
+import type { AgentView, DeckSource, ItemView, MachineView, MarkView, SeatedAgent, ZoomInput } from './zoom-model'
 
 /**
  * ANOTHER MACHINE AS THE DEVICES STOP DRAWS IT (zoom-model.ts re-exports
@@ -13,6 +15,32 @@ import type { DeckSource, ItemView, MachineView, MarkView, ZoomInput } from './z
 /** A browser's letter, on its coin, its card and its full view's head: the title's first letter or digit. */
 export const itemInitial = (title: string): string => (title.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase()
 
+/**
+ * The feed's phase (shared/fleet.ts · AgentPhase: idle, thinking, waiting, replied, offline) in the
+ * board's words every view reads (agent-rows.ts · AgentPhase); a board word passes as it is. A reply
+ * the feed calls `replied` is one not read yet.
+ */
+const SEAT_PHASE: Record<string, { phase: AgentPhase; unread: boolean }> = {
+  idle: { phase: 'quiet', unread: false },
+  thinking: { phase: 'working', unread: false },
+  replied: { phase: 'done', unread: true },
+  waiting: { phase: 'waiting', unread: false },
+  offline: { phase: 'offline', unread: false },
+  working: { phase: 'working', unread: false },
+  done: { phase: 'done', unread: false },
+  failed: { phase: 'failed', unread: false },
+  quiet: { phase: 'quiet', unread: false }
+}
+export const seatPhase = (phase: string): { phase: AgentPhase; unread: boolean } => SEAT_PHASE[phase] ?? { phase: 'quiet', unread: false }
+
+/** An agent as its desktop's feed seats it, drawn as every view draws one; null when the feed names no id. */
+export function seatedView(agent: SeatedAgent): AgentView | null {
+  if (!agent.id) return null
+  const { phase, unread } = seatPhase(agent.phase)
+  const status = inkStatusOfRow(phase, unread)
+  return { id: agent.id, name: agent.name ?? agent.id, preset: agent.harness, orch: !!agent.orch, phase, unread, status, word: statusWord(status), line: agent.reply || agent.task || 'Nothing said yet.', browsers: agent.attachments?.filter((item) => item.kind === 'browser').length ?? 0, notes: agent.attachments?.filter((item) => item.kind === 'note').length ?? 0, turn: null }
+}
+
 /** A workspace of another machine as a tile (owner 2026-11-11): from its own feed, never a made-up zero. */
 const machineMarkOf = (w: NonNullable<ZoomInput['machines']>[number]['workspaces'][number]): MarkView => {
   const waitingCount = w.counts?.waiting ?? w.agents.filter((a) => a.phase === 'waiting').length
@@ -20,6 +48,8 @@ const machineMarkOf = (w: NonNullable<ZoomInput['machines']>[number]['workspaces
     id: w.id,
     name: w.name,
     presets: w.agents.map((a) => a.harness),
+    // Who is there, by name and state: the devices stop draws them, and the keys stand on them (agent-keys.ts).
+    agents: w.agents.flatMap((a) => seatedView(a) ?? []),
     waiting: waitingCount > 0,
     waitingCount,
     browsers: w.counts?.browsers ?? null,

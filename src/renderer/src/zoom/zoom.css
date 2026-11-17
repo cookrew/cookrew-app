@@ -1726,63 +1726,9 @@
 
 /* ── the account's other machines (MachineFrame.tsx): drawn as this one is ──
    The same frame, base and label as this machine's (.zv-machine); on its screen
-   its own workspace tiles, still, at the scale this machine's are drawn (owner
-   2026-11-11, screenshot 5). One that cannot be read keeps its shape: a blank
-   screen with the one thing to do on it. */
-.zv-other .zv-om-screen {
-  position: absolute;
-  left: 0;
-  top: 0;
-  z-index: 2;
-  width: 0;
-  height: 0;
-  transform-origin: 0 0;
-}
-
-/* A tile of another machine: placed by MachineFrame, its words at one scale (no painter here). */
-.zv-om-tile {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 0;
-  height: 0;
-  transform-origin: 0 0;
-}
-
-.zv-om-tile .zv-tw {
-  scale: var(--zv-k, 1);
-}
-
-.zv-om-tile .zv-mark > .zv-door {
-  pointer-events: auto;
-}
-
-.zv-om-title {
-  position: absolute;
-  left: 0;
-  top: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  width: max-content;
-  white-space: nowrap;
-  transform-origin: 0 100%;
-  pointer-events: none;
-  scale: var(--zv-title-k, 1);
-}
-
-.zv-om-title b {
-  font: 600 22px/1.1 var(--zv-serif);
-  color: var(--zv-ink);
-}
-
-.zv-om-title span {
-  font: 11px/1 var(--zv-mono);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--zv-ink-soft);
-}
-
+   its workspaces' agents (DevicesAgents.tsx · devices-agents.css; owner
+   2026-11-17). One that cannot be read keeps its shape: a blank screen with the
+   one thing to do on it. */
 .zv-om-say {
   position: absolute;
   inset: 10px;
