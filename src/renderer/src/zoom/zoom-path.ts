@@ -97,6 +97,17 @@ export function settle(dir: ZoomDir, v: number): number {
   return v
 }
 
+/**
+ * Where an agent's tap pops its card in place, the zoom kept (ZoomView.tsx ·
+ * tapAgent): the artifacts stop (owner, 2026-11-03) and the agents stop
+ * (owner, 2026-11-17: "the agents view keeps its zoom, the card pops up the
+ * same size"). Never inside a full view, and nowhere the zoom is passing.
+ */
+export function popsCard(dir: ZoomDir, v: number, inFull: boolean): boolean {
+  if (inFull) return false
+  return dir === 'items' ? Math.abs(v) < 0.5 : Math.abs(v - 1) < 0.5
+}
+
 /** What a click on an agent does, from where the view is (and which agent holds the focus). */
 export type AgentClick = { kind: 'set'; v: number } | { kind: 'switch'; v: number } | { kind: 'refocus-full' } | { kind: 'jump-card' }
 export function agentClick(dir: ZoomDir, v: number, isFocus: boolean): AgentClick {

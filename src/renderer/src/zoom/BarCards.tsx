@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AgentCard } from './AgentCard'
+import { AgentCard, cardScaleStyle, useCardScale, type CardScale } from './AgentCard'
 import { eatNextClick } from './ShelfCard'
 import { ItemCard, type CrewFace, type ItemFace } from '../pets/ItemPets'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
@@ -50,7 +50,9 @@ const stageTop = (): number => Math.max(0, document.querySelector('.cr-stage')?.
 /** Presses that keep the card: on it, on a group's face (its own tap decides), in the prompt box. */
 const KEEPS = '.zv-gf, .zv-group-more, .cr-prompt, .cr-dock, .pf-who, .cr-prompt-menu'
 
-function BarCardFrame({ anchor, className, label, keep, onOutside, onClose, children }: {
+const ONE: CardScale = { scale: 1, narrow: false }
+
+function BarCardFrame({ anchor, className, label, keep, onOutside, onClose, size = ONE, children }: {
   /** The face it opened from; its last place stands in once it has left the stack. */
   anchor: HTMLElement | null
   className: string
@@ -59,6 +61,8 @@ function BarCardFrame({ anchor, className, label, keep, onOutside, onClose, chil
   keep: () => boolean
   onOutside: (target: EventTarget | null) => boolean
   onClose: () => void
+  /** An agent's card is drawn at the card stop's size (AgentCard.tsx · cardScaleStyle); a menu or an artifact 1:1. */
+  size?: CardScale
   children: React.ReactNode
 }): React.JSX.Element {
   const box = useRef<HTMLDivElement>(null)
@@ -80,7 +84,7 @@ function BarCardFrame({ anchor, className, label, keep, onOutside, onClose, chil
       const over = mark ? Math.max(0, Math.ceil(mark.getBoundingClientRect().right - el.getBoundingClientRect().right)) : 0
       // A long menu scrolls inside its card (wait-choices.css): it never runs under the bar or off the top.
       if (el.classList.contains('wc-card')) el.style.maxHeight = `${Math.max(180, boxTop() - stageTop() - 20)}px`
-      const next = barCardSpot(face, { width: el.offsetWidth + over, height: el.offsetHeight }, window.innerWidth, boxTop(), stageTop())
+      const next = barCardSpot(face, { width: el.offsetWidth * size.scale + over, height: el.offsetHeight * size.scale }, window.innerWidth, boxTop(), stageTop())
       setSpot((at) => (at && at.left === next.left && at.top === next.top ? at : next))
     }
     // The box opens behind an agent's card (its flight is 360 ms): follow it a moment, and on any resize.
@@ -105,7 +109,7 @@ function BarCardFrame({ anchor, className, label, keep, onOutside, onClose, chil
       ro?.disconnect()
       window.removeEventListener('resize', again)
     }
-  }, [anchor])
+  }, [anchor, size.scale])
 
   useEffect(() => {
     const onDown = (e: PointerEvent): void => {
@@ -120,7 +124,7 @@ function BarCardFrame({ anchor, className, label, keep, onOutside, onClose, chil
   }, [keep, onOutside, onClose])
 
   return createPortal(
-    <div ref={box} className={`cr-pet-card ag-ink zv-bar-card ${className}`} role="dialog" aria-label={label} style={spot ? { left: spot.left, top: spot.top } : { left: 0, top: 0, visibility: 'hidden' }}>
+    <div ref={box} className={`cr-pet-card ag-ink zv-bar-card ${className}`} role="dialog" aria-label={label} style={{ ...cardScaleStyle(size), ...(spot ? { left: spot.left, top: spot.top } : { left: 0, top: 0, visibility: 'hidden' }) }}>
       {children}
     </div>,
     document.body
@@ -141,6 +145,7 @@ export function BarAgentCard({ agent, items, anchor, onOpen, onItem, onDelete, o
   onClose: () => void
 }): React.JSX.Element {
   const keep = useRef(() => getDraft(draftKey(agent.id)).trim() !== '').current
+  const size = useCardScale()
   // Waiting on a menu: the card carries its rows (BarWaitCard.tsx), the box's own stand down.
   const wait = useWaitAnswer(agent.id, promptBox.focus)
   if (wait.view) {
@@ -151,7 +156,7 @@ export function BarAgentCard({ agent, items, anchor, onOpen, onItem, onDelete, o
     )
   }
   return (
-    <BarCardFrame anchor={anchor} className={`ag-card zv-shelf-card${agent.phase === 'waiting' ? ' needs' : ''}`} label={`${agent.name}'s card`} keep={keep} onOutside={onOutside} onClose={onClose}>
+    <BarCardFrame anchor={anchor} className={`ag-card zv-shelf-card${agent.phase === 'waiting' ? ' needs' : ''}`} label={`${agent.name}'s card`} keep={keep} onOutside={onOutside} onClose={onClose} size={size}>
       <AgentCard agent={agent} items={items} onOpen={onOpen} onItem={onItem} onDelete={onDelete} onDraft={KEEP_DRAFT} />
     </BarCardFrame>
   )

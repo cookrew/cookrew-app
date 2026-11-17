@@ -17,14 +17,15 @@ import { machineTooOld, machineWhyShows, machineWhyWords, machineSays } from './
 import { hostPlatform } from '../../../shared/machine-words'
 import { MachineTrustRow, useMachineTrust } from './MachineTrustRow'
 import { ShelfCard } from './ShelfCard'
+import { CardScaleContext } from './AgentCard'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
 import { DEFAULT_TILE_SIZE, defaultCrewCols, machineFrameOf, machinesAt, screenGridCols, shelfPage, TILE_SIZES } from './zoom-layout'
 import { useCrewCols, useTileSize } from './crew-cols'
 import { ViewTools, type PerRow, type TileSizePick } from './ViewTools'
-import { deviceOfModel, deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from './zoom-frame'
+import { cardStopCamera, deviceOfModel, deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
-import { BAR_NAMES, BAR_STOPS, barSide, barStop, stepOut } from './zoom-path'
+import { BAR_NAMES, BAR_STOPS, barSide, barStop, popsCard, stepOut } from './zoom-path'
 import { BarGroups } from './BarGroups'
 import { barCard } from './bar-pick'
 import { setFaceSlot } from '../prompt/face-slot'
@@ -260,6 +261,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // THE PHONE'S WORDS (scene-words.ts): each stop's scale at rest, for the words seen at
   // one stop only (phone-type.css), and the names' width; a new width is measured again.
   const sceneVars = useMemo(() => wordsOf(layout, size.w, size.h, narrow).vars, [layout, narrow, size])
+  // A card floated over the page is drawn at the card stop's size (AgentCard.tsx · CardScaleContext).
+  const cardScale = useMemo(() => ({ scale: cardStopCamera(layout, null, size.w, size.h, narrow).S, narrow }), [layout, narrow, size])
   const varsSet = useRef<string[]>([])
   useLayoutEffect(() => {
     const el = root.current
@@ -376,7 +379,10 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // AN AGENT TAPPED OVER THE ARTIFACTS opens its card on this page (owner,
   // 2026-11-03; ShelfCard.tsx), the artifacts still under it: a face on the
   // shelf or a coin under a thumbnail. The same agent again, or the card's
-  // face, is its full view. Anywhere else an agent's tap zooms as it did.
+  // face, is its full view. So does one tapped at the agents (owner,
+  // 2026-11-17): the crew keeps its zoom and the card pops up beside the face,
+  // the card stop's size, instead of the camera closing in on it. Anywhere
+  // else an agent's tap zooms as it did.
   const [shelfCard, setShelfCard] = useState<{ id: string; anchor: string } | null>(null)
   const shelfCardOpen = useRef(false)
   shelfCardOpen.current = shelfCard !== null
@@ -385,7 +391,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const shelfCardDraft = (): boolean => shelfCard !== null && getDraft(draftKey(shelfCard.id)).trim() !== ''
   const atShelf = (): boolean => {
     const z = zoomStore.get()
-    return z.dir === 'items' && z.full === null && Math.abs(z.v) < 0.5
+    return popsCard(z.dir, z.v, z.full !== null)
   }
   const tapAgent = (id: string, anchor: string): void => {
     if (!atShelf()) return motion.agent(id)
@@ -398,7 +404,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // A press outside on the artifacts only closes the card (ShelfCard eats its click); the bar and the header keep theirs.
   const pressedOutside = useCallback((target: EventTarget | null): boolean => target instanceof Node && (overview.current?.contains(target) ?? false), [])
   useEffect(() => {
-    const onShelf = zoom.dir === 'items' && zoom.full === null && Math.abs(zoom.v) < 0.5
+    const onShelf = popsCard(zoom.dir, zoom.v, zoom.full !== null)
     if (!onShelf || (shelfCard && !model.agents.some((a) => a.id === shelfCard.id))) closeShelfCard()
   }, [zoom.dir, zoom.v, zoom.full, model.agents, shelfCard, closeShelfCard])
   // THE WHEEL SCROLLS, IT NEVER ZOOMS (owner, 2026-10-31: the wheel is the
@@ -689,6 +695,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0
   }
   return (
+    <CardScaleContext.Provider value={cardScale}>
     <div className="zv-root" ref={root} data-testid="zoom-navigator">
       <div className="zv-full" aria-hidden={!zoom.full}>
         {/* Its own boundary: the real full view is a lazy chunk, and waiting for it must never blank the navigator. */}
@@ -955,6 +962,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       {whyShows && <div className="zv-trust-bar"><MachineTrustRow machines={model.machines} trust={trust} /></div>}
       {!error && why && whyShows && <div role="status" className="zv-error">{why}<button type="button" onClick={() => setWhy(null)} aria-label="Dismiss">×</button></div>}
     </div>
+    </CardScaleContext.Provider>
   )
 }
 
