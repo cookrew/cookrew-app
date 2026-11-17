@@ -160,6 +160,25 @@ export class ReconnectingStream {
     this.openPending()
   }
 
+  /**
+   * Reconnect NOW, the old connection closed FIRST: what it says is no longer
+   * this client's to hear (the phone took another workspace's seat).
+   *
+   * The opposite of `restart`'s make-before-break, which is right for the same
+   * stream on another path and wrong here: the old stream carries the seat
+   * just left, so each frame it delivers while the new one proves itself —
+   * and every frame after, when the new one does not prove and the old one is
+   * kept — paints the workspace just left under the new one's id (11-13). A
+   * stream that is down heals by the backoff; one that speaks for the wrong
+   * workspace never does.
+   */
+  reopen(): void {
+    if (this.closed) return
+    this.retry = 0
+    this.pendingRetry = 0
+    this.connect()
+  }
+
   private unwatchPending(pending: EventStreamLike): void {
     pending.removeEventListener('error', this.onPendingError)
     for (const [type, probe] of this.pendingProbes) pending.removeEventListener(type, probe)
