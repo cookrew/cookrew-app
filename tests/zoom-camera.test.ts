@@ -5,7 +5,8 @@
 // and scrolls; the open card fills the screen; neither goes past 1:1.
 import { describe, expect, it } from 'vitest'
 import { deskThumbs, layoutOf, phoneCamera, phoneThumbs, type FrameModel } from '../src/renderer/src/zoom/zoom-frame'
-import { deviceOf, fitScale, shelfPage, shelfPer, SHELF_FACE, SHELF_MORE_GAP, SHELF_STEP } from '../src/renderer/src/zoom/zoom-layout'
+import { deviceOf, fitScale, shelfRow } from '../src/renderer/src/zoom/zoom-layout'
+import { GROUP_FACE, GROUP_SEAL_GAP, GROUP_STEP } from '../src/renderer/src/zoom/agents-group'
 import { deviceCam } from '../src/renderer/src/zoom/zoom-camera'
 
 const crewOf = (n: number): FrameModel => ({
@@ -103,57 +104,68 @@ describe('the shelf of agents over the thumbnails', () => {
     expect(L.thumbs.shelf.order).toHaveLength(20)
   })
 
-  it('stacks the faces at the troop’s step, from the grid’s left edge', () => {
+  it('sets the faces the agents group’s step apart, none over another, from the grid’s left edge', () => {
     const L = layoutOf(withItems(20, 4), true)
-    const page = shelfPage(L.thumbs.shelf, 0)
-    const xs = L.thumbs.shelf.order.filter((id) => id in page.x).map((id) => page.x[id])
-    // Each face lies over the one before it and shows 16 of the troop's 28 px.
-    expect(SHELF_STEP / SHELF_FACE).toBeCloseTo(16 / 28, 1)
-    for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBe(SHELF_STEP)
+    const row = shelfRow(L.thumbs.shelf, 0, 1)
+    const xs = L.thumbs.shelf.order.map((id) => row.x[id])
+    for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBe(GROUP_STEP)
+    expect(GROUP_STEP).toBeGreaterThan(GROUP_FACE)
     // The first face's edge is the first thumbnail's (two columns 200 apart, 168 wide).
-    expect(xs[0] - SHELF_FACE / 2).toBeCloseTo(-(200 + 168) / 2)
+    expect(xs[0] - GROUP_FACE / 2).toBeCloseTo(-(200 + 168) / 2)
   })
 
-  it('holds as many faces a page as fit across the grid, many more than four', () => {
-    const phone = layoutOf(withItems(25, 4), true).thumbs.shelf
-    const desk = layoutOf(withItems(25, 4), false).thumbs.shelf
-    expect(phone.per).toBe(17)
-    // A desk's grid is three columns wide: twenty-five fit on one page.
-    expect(desk.per).toBe(25)
-    // The page and its chip stay inside the grid.
-    const page = shelfPage(phone, 0)
-    expect(page.more).not.toBeNull()
-    expect(page.more!.x + SHELF_FACE / 2).toBeLessThanOrEqual((200 + 168) / 2)
-    expect(page.more!.x - Math.max(...Object.values(page.x))).toBe(SHELF_FACE + SHELF_MORE_GAP)
+  it('keeps 36 px on screen whatever the camera: a screen px is k scene px', () => {
+    const shelf = layoutOf(withItems(20, 4), false).thumbs.shelf
+    const at1 = shelfRow(shelf, 0, 1)
+    const at2 = shelfRow(shelf, 0, 2)
+    expect(at2.x[shelf.order[1]] - at2.x[shelf.order[0]]).toBe(2 * GROUP_STEP)
+    // Twice as many scene px a face: half as many fit across the same grid.
+    expect(at2.per).toBeLessThan(at1.per)
   })
 
-  it('needs no chip when everyone fits, and gives every face a page when they do not', () => {
-    expect(shelfPer(3, 368)).toBe(3)
-    expect(shelfPage(layoutOf(withItems(3, 4), true).thumbs.shelf, 0).more).toBeNull()
-    expect(shelfPer(1000, 10)).toBe(1)
+  it('shows as many faces as fit with the seal after them, and every face when they do', () => {
+    const phone = shelfRow(layoutOf(withItems(25, 4), true).thumbs.shelf, 0, 1)
+    // (368 − the seal's 30 − a face) / 42, and the first face.
+    expect(phone.per).toBe(8)
+    expect(phone.max).toBe(17)
+    const few = shelfRow(layoutOf(withItems(3, 4), true).thumbs.shelf, 0, 1)
+    expect(few.per).toBe(3)
+    expect(few.max).toBe(0)
+    expect(Object.values(few.o)).toEqual([1, 1, 1])
   })
 
-  it('turns a page with "+N", says "–" on the last, and goes back to the first', () => {
+  it('stands the seal after the last face shown, inside the grid', () => {
+    const shelf = layoutOf(withItems(25, 4), true).thumbs.shelf
+    const row = shelfRow(shelf, 0, 1)
+    const last = row.x[shelf.order[row.per - 1]]
+    expect(row.seal).toBe(last + GROUP_FACE / 2 + GROUP_SEAL_GAP)
+    expect(row.seal + 18).toBeLessThanOrEqual(shelf.left + shelf.span)
+    const few = shelfRow(layoutOf(withItems(2, 4), true).thumbs.shelf, 0, 1)
+    expect(few.seal).toBe(few.x[layoutOf(withItems(2, 4), true).thumbs.shelf.order[1]] + GROUP_FACE / 2 + GROUP_SEAL_GAP)
+  })
+
+  it('scrolls along instead of turning pages: the faces past its ends fade, the scroll is clamped', () => {
     const shelf = layoutOf(withItems(40, 4), true).thumbs.shelf
-    const first = shelfPage(shelf, 0)
-    expect(Object.keys(first.x)).toHaveLength(17)
-    expect(first.more).toMatchObject({ rest: 23, last: false })
-    const second = shelfPage(shelf, 1)
-    expect(Object.keys(second.x)).toEqual(shelf.order.slice(17, 34))
-    expect(second.more).toMatchObject({ rest: 6, last: false })
-    const last = shelfPage(shelf, 2)
-    expect(Object.keys(last.x)).toEqual(shelf.order.slice(34))
-    expect(last.more).toMatchObject({ rest: 0, last: true })
-    // The chip follows the page's last face, a short page's too.
-    expect(last.more!.x).toBe(shelf.left + 5 * SHELF_STEP + SHELF_FACE + SHELF_MORE_GAP)
-    expect(shelfPage(shelf, 3)).toEqual(first)
+    const at0 = shelfRow(shelf, 0, 1)
+    expect(at0.o[shelf.order[0]]).toBe(1)
+    expect(at0.o[shelf.order[at0.per - 1]]).toBe(1)
+    expect(at0.o[shelf.order[at0.per + 1]]).toBe(0)
+    const at3 = shelfRow(shelf, 3, 1)
+    expect(at3.x[shelf.order[3]]).toBe(at0.x[shelf.order[0]])
+    expect(at3.o[shelf.order[0]]).toBe(0)
+    // Half a face past the start: the face leaving is half gone, not hidden.
+    const half = shelfRow(shelf, 0.5, 1)
+    expect(half.o[shelf.order[0]]).toBeGreaterThan(0)
+    expect(half.o[shelf.order[0]]).toBeLessThan(1)
+    expect(shelfRow(shelf, 999, 1).x).toEqual(shelfRow(shelf, at0.max, 1).x)
+    expect(shelfRow(shelf, -5, 1).x).toEqual(at0.x)
   })
 
   it('stands below the label’s band, where the names stood, clear of the first row of thumbnails', () => {
     const T = layoutOf(withItems(20, 4), true).thumbs
     expect(T.shelf.y).toBeGreaterThan(T.shelfY)
     // The first row's thumbnails are 108 tall about y 0.
-    expect(T.shelf.y + SHELF_FACE / 2).toBeLessThan(-54 - 20)
+    expect(T.shelf.y + GROUP_FACE / 2).toBeLessThan(-54 - 20)
   })
 
   it('never widens the view: the box is the grid’s, however many agents there are', () => {

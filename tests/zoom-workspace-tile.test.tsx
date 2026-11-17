@@ -253,6 +253,37 @@ describe('a tile', () => {
   })
 })
 
+// Owner, 2026-11-17: "agent点击后，鼠标移开后正文内容也只显示一秒", and after 0.6.18 "鼠标点击agent逻辑没有变化，
+// 没有改成读1秒恢复": the second starts when the mouse leaves the AGENT (its row of faces, its card), not the tile.
+describe("a clicked agent's card", () => {
+  const tile = readFileSync('src/renderer/src/zoom/WorkspaceTile.tsx', 'utf8')
+  it('goes back a second after the mouse leaves the agent, not the tile', () => {
+    expect(tile).toMatch(/const LINGER_MS = 1000/)
+    expect(tile).toMatch(/<section className=/)
+    expect(tile).toMatch(/className=\{`dm-row[^>]*onPointerEnter=\{holdCard\} onPointerLeave=\{leaveCard\}/)
+    expect(tile).toMatch(/className=\{`dm-ov-layer[^>]*onPointerEnter=\{holdCard\} onPointerLeave=\{leaveCard\}/)
+  })
+  it('stays while its reply box holds the focus', () => {
+    expect(tile).toMatch(/if \(!card\?\.contains\(document\.activeElement\)\) setMode\('bag'\)/)
+  })
+})
+
+// Owner, 2026-11-17: "所有的agents group统一样式": the tile's row, the artifacts' shelf and the desktop's column are one form.
+describe('the agents group, one form', () => {
+  const read = (file: string): string => readFileSync(`src/renderer/src/${file}`, 'utf8')
+  it('draws its faces and its seal from one component everywhere', () => {
+    expect(read('zoom/WorkspaceTile.tsx')).toMatch(/<GroupSeal count=\{mark\.presets\.length\} \/>/)
+    expect(read('zoom/ZoomView.tsx')).toMatch(/<GroupSeal count=\{model\.agents\.length\} \/>/)
+    expect(read('pets/PetTroop.tsx')).toMatch(/<GroupSeal count=\{total \?\? members\.length \+ more\.length\} \/>/)
+    expect(read('pets/AgentPets.tsx')).toMatch(/<GroupFace /)
+    expect(read('pets/AgentPets.tsx')).toMatch(/\n      group\n/)
+  })
+  it('says no "+N" on the shelf or in the agents\u2019 column', () => {
+    expect(read('zoom/ZoomView.tsx')).not.toMatch(/more agents`/)
+    expect(read('zoom/ZoomView.tsx')).not.toContain('turnShelf')
+  })
+})
+
 describe('a tile through a rebuild', () => {
   // The model is rebuilt on every crew update: a deck of new objects would redraw every tile each time (same-props.ts).
   const decks = new Map([['w2', [{ id: 'b', kind: 'browser' as const, title: 'b', host: null }]]])

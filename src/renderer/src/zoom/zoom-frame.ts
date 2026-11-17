@@ -9,7 +9,8 @@
  * device IS its group, and the device view IS the machine's screen.
  */
 import { clamp01, derive, ease, lerp, ramp, type ZoomDir } from './zoom-path'
-import { crewOf, deviceOf, deviceOnScreen, fitScale, machineFrameOf, machinesAt, screenFit, shelfPage, stackOf, thumbsOf, DECK_POSE, SHELF_FACE, type Box, type Pos, NEW_POSE } from './zoom-layout'
+import { GROUP_FACE } from './agents-group'
+import { crewOf, deviceOf, deviceOnScreen, fitScale, machineFrameOf, machinesAt, screenFit, shelfRow, stackOf, thumbsOf, DECK_POSE, type Box, type Pos, NEW_POSE } from './zoom-layout'
 import { near, pinned, SCENE_CSS, SCENE_TYPE, sceneWords, SHELF_NAME_S, UNDER_FACE, type RestScales, type SceneWords } from './scene-words'
 import { fullPoses } from './full-poses'
 /* The cameras, the card stop's label and the words' scales: zoom-camera.ts. */
@@ -126,7 +127,7 @@ export interface FrameEls {
   fullHead?: Put | null
   /** The newest browser beside the stack when no coin carries it (ZoomView · NewestThumb). */
   newThumb?: Put | null
-  /** The shelf's "+N" chip, which turns its page (ZoomView). */
+  /** The shelf's seal with the whole count, after its last face shown (ZoomView). */
   shelfMore?: Put | null
   machine: Put
 }
@@ -145,7 +146,7 @@ export interface FrameState {
   pan?: number
   /** How far the workspaces' tiles are scrolled down, in px: their own, apart from the crew's (deviceCam clamps it). */
   tilesPan?: number
-  /** The page of the shelf over the thumbnails: taps on its "+N" chip, wrapping (zoom-layout.ts · shelfPage). */
+  /** How far the shelf over the thumbnails is scrolled along, in faces (zoom-layout.ts · shelfRow): a swipe or a sideways wheel. */
   shelf?: number
   /** The agent the pointer rests on, and how far the fold round it has come (0–1, use-zoom-motion eases it). */
   hover?: { id: string; amt: number } | null
@@ -363,6 +364,8 @@ export interface FrameOut {
   tilesMax: number
   /** The agent a dragged face is over, which a drop swaps it with (crew-slots.ts); null when none. */
   dropOn: string | null
+  /** How far the shelf over the thumbnails scrolls along, in faces: 0 when every face fits. */
+  shelfMax: number
 }
 
 const f1 = (n: number): string => n.toFixed(1)
@@ -552,8 +555,10 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   const dockAt = new Map(others.map((a, k) => [a.id, k] as const))
   // A phone's head is the bar's, above this view: the face and words are seen rising to it, gone just as the real view arrives.
   const headOut = FV.headFades ? 1 - ramp(z, 2.6, 2.86) : 1
-  // The shelf's page: the faces it shows, and where the others wait (behind its "+N" chip).
-  const shelf = shelfPage(L.thumbs.shelf, st.shelf ?? 0)
+  // The shelf at its scroll: every face along one row, those past its ends faded (agents-group.tsx),
+  // each 36 px on screen at the thumbnails' camera.
+  const shelf = shelfRow(L.thumbs.shelf, st.shelf ?? 0, 1 / iS)
+  const shelfS = GROUP_FACE / (64 * iS)
   // THE FOLD round the hovered agent (foldAt): at the crew only, never on the way to a card, the
   // thumbnails or the full view. Reckoned on the crew's own places, so nothing it moves moves it.
   // A DRAGGED FACE (crew-slots.ts): it stands where the pointer has taken it, and the fold is worked
@@ -608,14 +613,13 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     }
     const back = fw > 0 && hov && a.id !== hov.id && !onFold.has(a.id) ? 1 - 0.45 * fw : 1
     // To the shelf as the thumbs unfold.
-    const shown = a.id in shelf.x
-    const sh = { x: shown ? shelf.x[a.id] : shelf.more?.x ?? 0, y: L.thumbs.shelf.y }
+    const sh = { x: shelf.x[a.id] ?? 0, y: L.thumbs.shelf.y }
     const pm = ease(ramp(P, 0.02 * Math.min(i, 8), 0.44 + 0.02 * Math.min(i, 8)))
-    // Off this page an agent goes into the "+N" chip and fades (a tap on the chip brings it).
-    const onShelf = lerp(1, shown ? 1 : 0, pm)
+    // Past the row's ends a face fades out (a swipe along it brings it).
+    const onShelf = lerp(1, shelf.o[a.id] ?? 0, pm)
     x = lerp(x, sh.x, pm)
     y = lerp(y, sh.y, pm)
-    s = lerp(s, 0.5, pm)
+    s = lerp(s, shelfS, pm)
     agentAt[a.id] = { x, y, s }
     const focused = a.id === st.focus
     // Into the full view: the open card's face goes to the head; the others
@@ -630,7 +634,8 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const avAt = focused && into > 0 ? local(FV.avatar.x, FV.avatar.y, x, y) : { x: 0, y: 0 }
     const avS = focused ? lerp(s, FV.avatar.size / (64 * S), into) : dock ? lerp(s, dock.size / (64 * S), docked) : s
     const avMove = focused && into > 0 ? `translate(${f1(avAt.x * into)}px, ${f1(avAt.y * into)}px) ` : ''
-    put(e.av, `${avMove}rotate(${r.toFixed(2)}deg) scale(${f4(avS)})`, ramp(zIn, -1, -0.6) * (1 - ramp(iz * pc, 0, 0.35)) * (focused ? headOut : 1))
+    // On the shelf a face stands upright, as the agents group's do everywhere (agents-group.tsx).
+    put(e.av, `${avMove}rotate(${(r * (1 - pm)).toFixed(2)}deg) scale(${f4(avS)})`, ramp(zIn, -1, -0.6) * (1 - ramp(iz * pc, 0, 0.35)) * (focused ? headOut : 1))
     // What the fold lifts casts its shadow on the page below it (zoom.css · .zv-av, --zv-lift).
     const raised = Math.round(lift * 20) / 20
     if (e.av._l !== raised) {
@@ -646,7 +651,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const cBase = ramp(zi, 1.3, 1.85) * gone
     const ce = ease(cBase)
     put(e.cardl, `translate(${f1(x)}px, ${f1(y)}px)`, focused ? 1 - ramp(z, 2.04, 2.14) : 1 - ramp(z, 2, 2.3))
-    put(e.card, `scale(${f4(lerp(64 / 260, 1, ce) * lerp(1, 0.5, pm))}, ${f4(lerp(64 / 244, 1, ce) * lerp(1, 0.5, pm))})`, cBase)
+    put(e.card, `scale(${f4(lerp(64 / 260, 1, ce) * lerp(1, shelfS, pm))}, ${f4(lerp(64 / 244, 1, ce) * lerp(1, shelfS, pm))})`, cBase)
     const n = zi <= 1 ? 0 : zi - 1
     const nx = ease(ramp(n, 0, 0.6))
     const ny = ease(ramp(n, 0.4, 1))
@@ -1012,8 +1017,8 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   }
   put(els.fullHead, null, st.dir === 'items' && st.focusItem !== null ? ramp(I, 0.4, 0.7) : 0)
   const cover = st.dir === 'agents' ? 1 - ramp(z, 2.86, 2.99) : 1 - ramp(I, 0.86, 0.99)
-  // The shelf's "+N" chip: after its page's last face, as the thumbnails unfold, gone into an item's full view.
-  const more = shelf.more
-  put(els.shelfMore, more ? `translate(${f1(more.x - SHELF_FACE / 2)}px, ${f1(L.thumbs.shelf.y - SHELF_FACE / 2)}px)` : null, more ? ease(ramp(P, 0.4, 0.9)) * (1 - ramp(iz * pc, 0, 0.35)) : 0)
-  return { cover, scale: S, panMax, tilesMax: dc.panMax, dropOn }
+  // The shelf's seal: after the last face shown, at its own size on screen, as the thumbnails unfold, gone into an item's full view.
+  const sealed = L.thumbs.shelf.order.length > 0
+  put(els.shelfMore, sealed ? `translate(${f1(shelf.seal)}px, ${f1(L.thumbs.shelf.y - 9 / iS)}px) scale(${f4(1 / iS)})` : null, sealed ? ease(ramp(P, 0.4, 0.9)) * (1 - ramp(iz * pc, 0, 0.35)) : 0)
+  return { cover, scale: S, panMax, tilesMax: dc.panMax, dropOn, shelfMax: shelf.max }
 }

@@ -2,17 +2,18 @@ import { useCallback, useLayoutEffect, useRef } from 'react'
 import { agentClick, derive, itemClick, settle, type ZoomDir } from './zoom-path'
 import { layoutOf, paint, type FrameEls, type FrameModel } from './zoom-frame'
 import { zoomStore } from './zoom-store'
-import { shelfPage } from './zoom-layout'
 import { stageSelect } from '../stage/stage-select'
 import { createRestFlag } from './zoom-rest'
 import { foldLight, subscribeFoldLight } from './fold-light'
 import { slotsOf, subscribeSlots, swapSlots, withSlots } from './crew-slots'
 
 /** The compositor-facing part of the navigator. React builds nodes; this owns the moving values. */
-/** The crew's scroll on a narrow screen and the thumbnails', and the page of their shelf: the view owns them (a drag, the wheel, the shelf's chip), the painter clamps the scroll. */
+/** The crew's scroll on a narrow screen and the thumbnails', and their shelf's along its row: the view owns them (a drag, the wheel), the painter clamps them. */
 export interface ZoomPan {
   get: () => number
   shelf: () => number
+  /** How far the shelf can scroll, in faces (zoom-layout.ts · shelfRow). */
+  setShelfMax?: (max: number) => void
   setMax: (max: number) => void
   /** The workspaces' tiles' own scroll (ZoomView). */
   tiles: () => number
@@ -22,7 +23,7 @@ export interface ZoomPan {
 /** How far a pressed face moves before it is a drag rather than a press, in px on screen. */
 const DRAG_START_PX = 5
 
-/** A shelf face's node stands at 12 + its place on the page, kept under the waiting dots (zoom.css · .zv-dot, 44). */
+/** A shelf face's node stands at 12 + its place on the row, kept under the waiting dots (zoom.css · .zv-dot, 44). */
 const SHELF_RANKS = 31
 
 export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null, root: React.RefObject<HTMLDivElement>, pan?: ZoomPan) {
@@ -140,6 +141,7 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       m.current.pan?.setMax(out.panMax)
       if (dragging.current) dragging.current.dropOn = out.dropOn
       m.current.pan?.setTilesMax(out.tilesMax)
+      m.current.pan?.setShelfMax?.(out.shelfMax)
       // The real view fades in under the shell as the shell's own cover goes.
       env.style.setProperty('--zv-full-opacity', String(1 - out.cover))
       env.style.setProperty('--zv-cover', String(out.cover))
@@ -153,12 +155,12 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       const going = (at.dir === 'agents' && at.v > 2.05 && at.v < 2.99) || (at.dir === 'items' && at.v > 0.02 && at.v < 0.99) ? 'full' : ''
       if (env.dataset.going !== going) env.dataset.going = going
       // Per-agent stacking order is changed only when the focus changes. On
-      // the artifacts' shelf each face lies over the one before it, as the
-      // troop's do (zoom-layout.ts · shelfPage): by z-index, never by moving
-      // the nodes (a moved node drops the focus of the reply box it holds).
+      // the artifacts' shelf the faces rank in the row's order (zoom-layout.ts
+      // · shelfRow): by z-index, never by moving the nodes (a moved node drops
+      // the focus of the reply box it holds).
       // Out at the workspaces the two paths draw the same fan, whichever one the view came back by.
       const fanned = at.v < (at.dir === 'agents' ? 0.5 : -0.5)
-      const onShelf = at.dir === 'items' && !fanned ? Object.keys(shelfPage(layout.thumbs.shelf, m.current.pan?.shelf() ?? 0).x) : []
+      const onShelf = at.dir === 'items' && !fanned ? layout.thumbs.shelf.order : []
       const shelfRank = new Map(onShelf.map((id, k) => [id, Math.min(k, SHELF_RANKS)] as const))
       for (const [i, a] of m.current.model.agents.entries()) {
         const el = els.agents.get(a.id)

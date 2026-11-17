@@ -719,3 +719,84 @@
 .cr-pets .cr-pet.open .cr-pet-name {
   display: none;
 }
+
+/* ---- THE AGENTS GROUP'S FORM (PetTroop · group; zoom/agents-group.tsx) ----
+   The owner, 2026-11-17: "所有的agents group统一样式 … 桌面端右侧边，仅改竖排列".
+   The agents' troop is the workspace card's row stood on end: everyone in one
+   strip that scrolls, faces at 36 px a gap of 6 apart, no ring, no pill, no
+   bob, fading out past the strip's ends (--ag-fade, written as it scrolls),
+   and the seal with the whole count after them. A phone's strip lays it in a
+   row again, as wide as the crew's row always ran (pet-dock.ts · stripRoom). */
+.cr-pets.group,
+.cr-pets.group.docked,
+.cr-pets.group.docked.right {
+  gap: 8px;
+}
+
+.cr-pets-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-height: calc(100vh - 240px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-snap-type: y proximity;
+  scrollbar-width: none;
+  touch-action: pan-y;
+  pointer-events: auto;
+}
+
+.cr-pets-group::-webkit-scrollbar {
+  display: none;
+}
+
+.cr-pets.group .cr-pets-group > .cr-pet:not(.item):not(.more) {
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  border: 0;
+  background: none;
+  opacity: var(--ag-fade, 1);
+  scroll-snap-align: start;
+  animation: none;
+  transition: opacity 120ms ease;
+}
+
+.cr-pets.group .cr-pets-group > .cr-pet:not(.item):not(.more):hover,
+.cr-pets.group .cr-pets-group > .cr-pet:not(.item):not(.more).open {
+  transform: none;
+  box-shadow: none;
+}
+
+.cr-pets.group .cr-pets-group > .cr-pet.asleep {
+  opacity: calc(0.62 * var(--ag-fade, 1));
+}
+
+.cr-pets.group.docked .cr-pets-group > .cr-pet.dim {
+  opacity: calc(0.42 * var(--ag-fade, 1));
+}
+
+.cr-pets.group.docked .cr-pets-group > .cr-pet.dim:hover,
+.cr-pets.group.docked .cr-pets-group > .cr-pet.dim.open {
+  opacity: var(--ag-fade, 1);
+}
+
+.cr-pets.group .ag-seal {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 700px) {
+  .cr-pets.group.docked .cr-pets-group {
+    flex-direction: row;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x proximity;
+    touch-action: pan-x;
+  }
+  .cr-pets.group.docked .cr-pets-group > .cr-pet:not(.more) + .cr-pet:not(.more) {
+    margin-left: 0;
+  }
+}

@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { inkStatusOfRow } from '../zoom/ink-status'
-import { InkAvatar } from '../zoom/InkAvatar'
+import { GroupFace } from '../zoom/agents-group'
 import type { AttachmentIndex } from '../terminal-attachments'
 import type { Crew } from '../stage/crew-rows'
 import { activityStore } from '../activity-thumb-store'
@@ -8,7 +8,7 @@ import { AgentPetCard } from './AgentPetCard'
 import { agentViewOf, itemViewOf } from '../zoom/zoom-model'
 import { petMax, pickPets, type Pet, type PetMood } from './pet-pick'
 import { useOfToolLine, type ToolUse } from '../../../shared/use-signal'
-import { dockedCount, dockedOrder } from './pet-dock'
+import { dockedOrder } from './pet-dock'
 import { PetTroop } from './PetTroop'
 
 /**
@@ -64,13 +64,13 @@ export function AgentPets({
   const { now } = crew
   const troop = useMemo(() => pickPets(crew.crew, { now, max: petMax(window.innerWidth) }), [crew.crew, now])
   const byId = useMemo(() => new Map([...troop.pets, ...troop.more].map((pet) => [pet.row.id, pet])), [troop])
-  // In a full view the column is the demo's: the card on the panel is not in it, the ones wired to it lead.
+  // THE AGENTS GROUP (zoom/agents-group.tsx; owner, 2026-11-17): everyone in one strip that
+  // scrolls, no "+N". In a full view the column is the demo's: the card on the panel is not in
+  // it, the ones wired to it lead.
   const column = useMemo(() => {
-    if (!dock) return { pets: troop.pets, more: troop.more, dim: new Set<string>() }
-    const all = [...troop.pets, ...troop.more].map((pet) => ({ id: pet.row.id, pet }))
-    const order = dockedOrder(all, dock)
-    const count = dockedCount(troop.pets.filter((pet) => pet.row.id !== dock.exclude).length, 'right', window.innerWidth)
-    return { pets: order.members.slice(0, count).map((m) => m.pet), more: order.members.slice(count).map((m) => m.pet), dim: order.dim }
+    if (!dock) return { pets: [...troop.pets, ...troop.more], dim: new Set<string>() }
+    const order = dockedOrder([...troop.pets, ...troop.more].map((pet) => ({ id: pet.row.id, pet })), dock)
+    return { pets: order.members.map((m) => m.pet), dim: order.dim }
   }, [troop, dock])
   const member = (pet: Pet) => {
     const use = petUse(pet)
@@ -81,8 +81,8 @@ export function AgentPets({
       label: `${pet.row.name}, ${MOOD_WORD[pet.mood]}${use ? `, using ${use.use === 'hardware' ? 'hardware' : `a ${use.use}`} (${use.via})` : ''}`,
       face: (
         <>
-          {/* The navigator's ink face, so the side group and the full view are one family. */}
-          <InkAvatar id={pet.row.id} preset={pet.row.preset} orch={pet.row.orch} status={inkStatusOfRow(pet.row.phase, pet.row.unread)} />
+          {/* The agents group's face (the workspace card's), so the side group and the navigator are one family. */}
+          <GroupFace id={pet.row.id} preset={pet.row.preset} orch={pet.row.orch} status={inkStatusOfRow(pet.row.phase, pet.row.unread)} />
           {use && (
             <span className="cr-pet-use" data-use={use.use} aria-hidden="true">
               {use.via}
@@ -98,7 +98,9 @@ export function AgentPets({
       storageKey="cookrew.pets.agents"
       label="agents"
       members={column.pets.map(member)}
-      more={column.more.map(member)}
+      more={[]}
+      group
+      total={troop.pets.length + troop.more.length}
       dockable={dock !== null}
       onOpen={onOpen}
       cardClass={(id) => (activityStore.get(id)?.waitChoice ? 'wc-card needs' : `ag-ink ag-card ${byId.get(id)?.mood ?? ''}`)}

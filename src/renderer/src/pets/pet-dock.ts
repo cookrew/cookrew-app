@@ -58,6 +58,8 @@ export const stripFaces = (side: Side, viewportWidth: number): number =>
   side === 'right'
     ? Math.max(3, Math.floor((viewportWidth - STRIP_SHARED - STRIP_OWN - STRIP_FACE) / STRIP_STEP) + 1)
     : 3 - (viewportWidth < 380 ? 1 : 0)
+/** How wide the crew's row in the strip may run, in px: the stacked faces' width it always had; the agents group scrolls along it (PetTroop · group). */
+export const stripRoom = (side: Side, viewportWidth: number): number => STRIP_FACE + (stripFaces(side, viewportWidth) - 1) * STRIP_STEP
 /** How many faces an attached troop shows: all of them beside the sheet; on a phone, what its row in the strip holds. */
 export const dockedCount = (count: number, side: Side, viewportWidth: number): number =>
   viewportWidth <= PHONE_PX ? Math.min(count, stripFaces(side, viewportWidth)) : count
