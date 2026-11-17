@@ -69,9 +69,11 @@ let deps: ServedEndpointDeps
 const { publicKey, privateKey } = generateKeyPairSync('ed25519')
 const jwk = publicKey.export({ format: 'jwk' }) as Record<string, unknown>
 
-beforeEach(() => {
+beforeEach(async () => {
   base = mkdtempSync(path.join(tmpdir(), 'served-'))
   issuer = new CallCredentialService({ base })
+  // Proven private before anything signs: async on Windows (file-privacy.ts).
+  await issuer.prepare()
   callers = new ServedCallers()
   sessions = new Map()
   ended = []

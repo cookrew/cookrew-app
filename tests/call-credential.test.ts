@@ -1,10 +1,14 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { CallCredentialService, type CallScope } from '../src/main/call-credential'
+import { PrivacyCache } from '../src/main/file-privacy'
 import { makeCallAuthorize, type CallTarget } from '../src/main/call-authorize'
 import type { Visibility } from '../src/shared/gate'
+import { ACE_ALLOWED, ace, acl, descriptor } from './support/security-descriptor'
+
+const ME = 'S-1-5-21-1111111111-2222222222-3333333333-1001'
 
 /**
  * THE OWNER'S ISSUER AND THE LIVE-CALL BINDING (④ · S1).
@@ -21,10 +25,12 @@ let base = ''
 let clock = 1_700_000_000_000
 let issuer: CallCredentialService
 
-beforeEach(() => {
+beforeEach(async () => {
   base = mkdtempSync(path.join(tmpdir(), 'cookrew-call-'))
   clock = 1_700_000_000_000
   issuer = new CallCredentialService({ base, now: () => clock })
+  // Proven private before anything signs: async on Windows (file-privacy.ts).
+  await issuer.prepare()
 })
 afterEach(() => rmSync(base, { recursive: true, force: true }))
 
@@ -168,5 +174,59 @@ describe('makeCallAuthorize — the gate mounts per workspace session', () => {
       return 'identified'
     })(PLAY, issuer.mint('alice', PLAY.workspaceId))
     expect(asked).toEqual([PLAY])
+  })
+})
+
+// Windows, injected (file-privacy.ts): an access list that lets Everyone in.
+describe('the signing key where its file is not proven private', () => {
+  const OPEN = descriptor({ owner: ME, dacl: acl([ace(ACE_ALLOWED, ME), ace(ACE_ALLOWED, 'S-1-1-0')]) })
+  const PRIVATE = descriptor({ owner: ME, dacl: acl([ace(ACE_ALLOWED, ME)]), protectedDacl: true })
+  // Its own folder: the shared `base` already holds the real key prepared above.
+  let winBase = ''
+  beforeEach(() => {
+    winBase = mkdtempSync(path.join(tmpdir(), 'cookrew-call-win-'))
+  })
+  afterEach(() => rmSync(winBase, { recursive: true, force: true }))
+  const windows = (created: Buffer, read: Buffer): CallCredentialService =>
+    new CallCredentialService({
+      base: winBase,
+      now: () => clock,
+      privacy: {
+        platform: 'win32',
+        cache: new PrivacyCache(),
+        windows: {
+          readFolder: async () => ({ userSid: ME, descriptor: PRIVATE }),
+          createPrivate: async (file, data) => {
+            writeFileSync(file, data, { flag: 'wx' })
+            return { userSid: ME, descriptor: created }
+          },
+          read: async () => ({ userSid: ME, descriptor: read })
+        }
+      }
+    })
+
+  it('NEVER WAITS: refuses while the key is made, answers no token, and mints once prepared', async () => {
+    const service = windows(PRIVATE, PRIVATE)
+    expect(() => service.mint('alice', 'ws-cookrew-dev')).toThrow(/being made/)
+    expect(service.verifyToken('a.b')).toBeNull()
+    await service.prepare()
+    expect(service.verifyToken(service.mint('alice', 'ws-cookrew-dev'))).toMatchObject({ sub: 'alice' })
+  })
+
+  it('keeps nothing, in memory or on disk, when the key cannot be proven private', async () => {
+    const service = windows(OPEN, OPEN)
+    await expect(service.prepare()).rejects.toThrow(/lets S-1-1-0 in/)
+    // Never kept: the next ask is refused again, not signed with it.
+    expect(() => service.mint('alice', 'ws-cookrew-dev')).toThrow(/being made/)
+    await expect(service.prepare()).rejects.toThrow(/lets S-1-1-0 in/)
+    expect(existsSync(path.join(winBase, 'call-token-key.jwk'))).toBe(false)
+    expect(readdirSync(winBase)).toEqual([])
+  })
+
+  it('refuses a key file that is already there when it reads back open', async () => {
+    await windows(PRIVATE, PRIVATE).prepare()
+    const reopened = windows(PRIVATE, OPEN)
+    await expect(reopened.prepare()).rejects.toThrow(/not private: it lets S-1-1-0 in/)
+    expect(() => reopened.mint('alice', 'ws-cookrew-dev')).toThrow(/not private: it lets S-1-1-0 in/)
   })
 })

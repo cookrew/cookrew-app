@@ -1,13 +1,15 @@
+import { rmSync } from 'node:fs'
 import {
   callerKeyCandidates,
+  callerKeyFile,
   callerSub,
   mintCallerKey,
   readCallerKey,
-  saveCallerKey,
   signChallenge,
   writeKeyFile,
   type CallerKey
 } from './caller-identity'
+import { movePrivateFile, type FilePrivacyDeps } from './file-privacy'
 import type { PaymentRequirements } from './x402-rail'
 import { teamPath } from './door-seats'
 import { checkoutSessionOf, isStripeCheckoutUrl } from '../shared/stripe-checkout'
@@ -108,6 +110,8 @@ export interface CallerKeyStore {
   candidates?: (serviceId: string) => string[]
   /** The one file a winning key is promoted to. */
   canonical?: (serviceId: string) => string
+  /** How a key file's privacy is proven (file-privacy.ts); this host by default. */
+  privacy?: FilePrivacyDeps
 }
 
 export async function signInToDoor(
@@ -147,15 +151,30 @@ export async function signInToDoor(
   const candidates =
     store.candidates?.(serviceId) ?? callerKeyCandidates(target.origin, target.slug, serviceId)
   const canonical = store.canonical?.(serviceId) ?? candidates[0]
-  const promote = (raw: { pub: unknown; priv: unknown }): void =>
-    store.canonical ? writeKeyFile(canonical, raw) : saveCallerKey(serviceId, raw)
-  for (const file of candidates) {
-    const key = readCallerKey(file)
+  // Where the account's key is filed, and where a new one waits until the door has bound it.
+  const home = store.canonical ? canonical : callerKeyFile(serviceId)
+  const pending = `${home}.pending`
+  const privacy = store.privacy ?? {}
+  const file_ = async (from: string): Promise<void> => {
+    try {
+      await movePrivateFile(from, home, privacy)
+    } catch (error) {
+      // Still on disk and still offered next time: never a lost account.
+      console.error('Filing the account key under its door failed; it stays where it is:', error)
+    }
+  }
+  // A key that waited at `pending` is tried LAST: the door may have bound it
+  // just as the answer was lost.
+  for (const file of [...candidates, pending]) {
+    const key = await readCallerKey(file, privacy)
     if (!key) continue
     const token = await attempt(key)
     if (token === null) continue
-    if (file !== canonical) {
-      promote({ pub: key.jwk, priv: key.priv.export({ format: 'jwk' }) })
+    if (file === pending) await file_(pending)
+    else if (file !== canonical) {
+      await writeKeyFile(home, { pub: key.jwk, priv: key.priv.export({ format: 'jwk' }) }, privacy).catch((error: unknown) =>
+        console.error('Filing the account key under its door failed; it stays where it was:', error)
+      )
     }
     return token
   }
@@ -163,14 +182,23 @@ export async function signInToDoor(
   // No key we hold is this account — so either we have never signed in here,
   // or the name belongs to someone else's key. Minting IS the sign-up; the
   // door refuses it if the name is taken, which is the honest answer.
+  //
+  // KEPT BEFORE IT IS BOUND. The door ties the name to this key on the first
+  // assert, for good; a key bound there and then lost here is an account
+  // nobody can open again. So it is written and proven private first, under
+  // `pending` (rejecting here costs the door nothing), and only then shown.
   const minted = mintCallerKey()
+  await writeKeyFile(pending, minted.raw, privacy)
+  // An attempt that THROWS may have been bound and lost on the way back: the
+  // pending key stays, and is tried first thing next time.
   const token = await attempt(minted)
   if (token === null) {
+    rmSync(pending, { force: true })
     throw new Error(
       'sign-in refused — this name already belongs to another key at this door'
     )
   }
-  promote(minted.raw)
+  await file_(pending)
   return token
 }
 

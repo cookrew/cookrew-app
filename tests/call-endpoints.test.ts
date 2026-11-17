@@ -73,10 +73,12 @@ let forks = 0
 let asked: string[] = []
 let caller: KeyPairKeyObjectResult
 
-beforeEach(() => {
+beforeEach(async () => {
   base = mkdtempSync(path.join(tmpdir(), 'cookrew-call-http-'))
   clock = 1_700_000_000_000
   issuer = new CallCredentialService({ base, now: () => clock })
+  // Proven private before anything signs: async on Windows (file-privacy.ts).
+  await issuer.prepare()
   exports = new AgentExportStore(base)
   conversations = new CallConversationStore(base)
   forks = 0
