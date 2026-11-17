@@ -39,25 +39,22 @@ const beat = async (label, css, text, hold, box) => {
   mark(box)
   await sleep(hold)
 }
-const DEVICES = [32, 20, 960, 600], TILES = [190, 120, 640, 400], CARD = [0, 60, 832, 520], ITEMS = [150, 110, 720, 450], PAGE = [56, 40, 912, 570], BOARD = [190, 40, 832, 520]
+const TILES = [190, 120, 640, 400], CARD = [0, 60, 832, 520], ITEMS = [190, 170, 640, 400], PAGE = [56, 40, 912, 570], BOARD = [190, 40, 832, 520]
 
-// The steps dwell on the dense views (the devices with their gauges, the workspaces, Planner's question, the browser card,
-// the BOARD) and pass through a crew and the artifacts only as the way between them.
-console.log('devices', await press('button[aria-label="devices"]'))
-await sleep(5000) // the gauges answer every 4 s: they are on screen before the first frame
+// The steps dwell on the dense views (the workspaces, Planner's question, the browser card, the BOARD) and pass through a
+// crew and the artifacts (cropped to its four cards) only as the way between them. The devices are the board page's.
 const start = Date.now()
 await t.send('Page.startScreencast', { format: 'jpeg', quality: 90, maxWidth: VW * K, maxHeight: VH * K, everyNthFrame: 1 })
-mark(DEVICES)
-await sleep(2600)
-await beat('workspaces', 'button[aria-label="workspaces"]', null, 2200, TILES)
+mark(TILES)
+await sleep(3000)
 await beat('agents', '.zv-door.agents', 'Release Room', 1100, TILES)
-await beat('planner', '.zv-m.waiting .cr-name-text', 'Planner', 3600, CARD)
+await beat('planner', '.zv-m.waiting .cr-name-text', 'Planner', 4200, CARD)
 await t.key('Escape'); await sleep(500)
-await beat('artifacts', '.zv-group.items .zv-group-stop', null, 1000, ITEMS)
-await beat('browser', '.zv-ip .zv-who, .zv-ip', 'Release notes', 3000, PAGE)
+await beat('artifacts', '.zv-group.items .zv-group-stop', null, 1300, ITEMS)
+await beat('browser', '.zv-ip .zv-who, .zv-ip', 'Release notes', 3600, PAGE)
 await beat('out', 'button.zv-back', null, 700, ITEMS)
 await beat('workspaces', 'button[aria-label="workspaces"]', null, 700, TILES)
-await beat('board', '.cr-board-badge', null, 3200, BOARD)
+await beat('board', '.cr-board-badge', null, 3800, BOARD)
 await t.send('Page.stopScreencast')
 const end = Date.now()
 await t.close()

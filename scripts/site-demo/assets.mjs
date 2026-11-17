@@ -67,10 +67,10 @@ frame('demo-watch', `${raw}/watch-strip.png`, { phone: { src: `${raw}/watch-phon
 frame('demo-hero-devices', `${raw}/hero.png`, { phone: { src: `${raw}/hero-phone.png` } })
 frame('demo-ops-cards', `${raw}/ops.png`, { phone: { src: `${raw}/ops-phone-stack.png` } })
 // The canvas clip (clip.mjs: 2048×1280 frames from a headful Chrome, each step cropped, 1280×800) and its poster: the
-// browser card step (15 s), a view no other figure on the canvas page shows. Phones are not shown the clip (a 1024 px movie is
+// browser card step (14 s), a view no other figure on the canvas page shows. Phones are not shown the clip (a 1024 px movie is
 // unreadable at 390, and a still would not be the twenty seconds its caption describes).
 copyFileSync(`${raw}/canvas.mp4`, `${dest}/demo-canvas.mp4`)
-ff(['-ss', '15', '-i', `${raw}/canvas.mp4`, '-frames:v', '1', '-q:v', '3', `${dest}/demo-canvas.jpg`])
+ff(['-ss', '14', '-i', `${raw}/canvas.mp4`, '-frames:v', '1', '-q:v', '3', `${dest}/demo-canvas.jpg`])
 const [cw, ch] = size(`${dest}/demo-canvas.mp4`)
 sizes['demo-canvas.mp4'] = { width: cw, height: ch, twins: [] }
 

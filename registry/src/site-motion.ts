@@ -17,9 +17,9 @@ export const CANVAS_CLIP = {
   width: FRAME_SIZES['demo-canvas.mp4']!.width,
   height: FRAME_SIZES['demo-canvas.mp4']!.height,
   label:
-    'Twenty seconds of the current Cookrew interface on demo data: two machines with their load, two workspaces, a crew of four on four harnesses, an agent’s question as rows to pick, the artifacts, a browser card, and the board of every agent',
+    'Twenty seconds of the current Cookrew interface on demo data: two workspaces, a crew of four on four harnesses, an agent’s question as rows to pick, the artifacts, a browser card, and the board of every agent',
   caption:
-    'Twenty seconds clicked through the app’s current interface on demo data (17 Nov 2026): the devices with their load, the workspaces, Release Room’s four agents on Claude Code, Codex, OpenCode and Pi, Planner’s question as rows to pick, the artifacts, Checker’s browser card, and the BOARD. Each step is cropped to what it shows. Nobody’s real work is in it.'
+    'Twenty seconds clicked through the app’s current interface on demo data (17 Nov 2026): the workspaces, Release Room’s four agents on Claude Code, Codex, OpenCode and Pi, Planner’s question as rows to pick, the artifacts, Checker’s browser card, and the BOARD. Each step is cropped to what it shows. Nobody’s real work is in it.'
 } as const
 
 /**
