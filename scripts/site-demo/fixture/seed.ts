@@ -15,6 +15,12 @@ export const RELEASE = 'demo-ws'
 
 const agent = (id: string, name: string, harness: 'claude' | 'codex', orch: boolean, phase: 'thinking' | 'idle', task: string, reply: string | null) =>
   ({ id, name, harness, model: null, orch, phase, phaseSource: 'live', phaseSince: ago(4), task, reply, status: null, turns: 3, attachments: [] })
+const GB = 1024 ** 3
+/** Fictional load for the two demo machines. */
+const GAUGES = {
+  studio: () => ({ at: Date.now(), cpuPercent: 23, memory: { usedBytes: 21.4 * GB, totalBytes: 32 * GB, swapUsedBytes: 0, kernelLevel: 1 }, disk: { freeBytes: 412e9, totalBytes: 1e12 }, gpuPercent: 11, gpuAbsent: false }),
+  build: () => ({ at: Date.now(), cpuPercent: 64, memory: { usedBytes: 38 * GB, totalBytes: 64 * GB, swapUsedBytes: 0, kernelLevel: null }, disk: { freeBytes: 1.3e12, totalBytes: 2e12 }, gpuPercent: null, gpuAbsent: true })
+}
 /** Build Server's own answer: one workspace, two agents. */
 const BUILD_SERVER = {
   v: 1,
@@ -32,8 +38,9 @@ const BUILD_SERVER = {
         agent('nb-builder', 'Builder', 'codex', true, 'thinking', 'Run the nightly build and the test suite', null),
         agent('nb-triage', 'Triage', 'claude', false, 'idle', 'Sort last night’s failures', 'Two flaky tests, both in the upload path; notes in the issue.')
       ],
-      loose: [],
-      counts: { agents: 2, notes: 0, browsers: 0 }
+      loose: [{ id: 'nb-ci', kind: 'browser', title: 'Nightly CI', host: 'ci.example/nightly', tabs: 1, shared: false }],
+      newest: { id: 'nb-ci', kind: 'browser', title: 'Nightly CI', host: 'ci.example/nightly', tabs: 1, shared: false },
+      counts: { agents: 2, notes: 0, browsers: 1 }
     }
   ]
 }
@@ -169,6 +176,10 @@ export async function seed(api: Api, options: { page: string }): Promise<void> {
     zoomFleetMachines: () => Promise.resolve(machines),
     // The account's second machine, read as a signed-in desktop reads it (its own fleet snapshot), not the no-account page.
     machineFleetOf: (id: string) => Promise.resolve(id === 'demo-build' ? BUILD_SERVER : null),
+    // Demo gauges (shared/machine-gauges.ts), so the devices stop shows load rather than "no reading": a Mac with a GPU, a
+    // Linux build box without one.
+    machineGauges: () => Promise.resolve(GAUGES.studio()),
+    machineGaugesOf: (id: string) => Promise.resolve(id === 'demo-build' ? GAUGES.build() : null),
     machineName: () => Promise.resolve('Studio Mac'),
     listActivity: () => Promise.resolve(ACTIVITY),
     onTerminalActivity: () => () => undefined,

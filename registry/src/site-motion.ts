@@ -13,13 +13,13 @@ import { SITE_FRAMES, esc } from './site-shell'
 export const CANVAS_CLIP = {
   file: 'demo-canvas.mp4',
   poster: 'demo-canvas.jpg',
-  /** A screencast sends CSS-size frames, so the clip is 1024×640 whatever the device scale: it is shown at most that wide. */
+  /** 1280×800: each step cropped from 2048×1280 frames (scripts/site-demo/clip.mjs); shown at most 1024 CSS px wide. */
   width: FRAME_SIZES['demo-canvas.mp4']!.width,
   height: FRAME_SIZES['demo-canvas.mp4']!.height,
   label:
-    'Twenty seconds of the current Cookrew interface on demo data: two workspaces, one workspace with four agents on four harnesses, an agent’s question as rows to pick, the artifacts, a browser card, and back out',
+    'Twenty seconds of the current Cookrew interface on demo data: two machines with their load, two workspaces, a crew of four on four harnesses, an agent’s question as rows to pick, the artifacts, a browser card, and the board of every agent',
   caption:
-    'Twenty seconds clicked through the app’s current interface on demo data (17 Nov 2026): the workspaces stop, Release Room’s four agents on Claude Code, Codex, OpenCode and Pi, Planner’s question as rows to pick, the artifacts, Checker’s browser card, and back out. Nobody’s real work is in it.'
+    'Twenty seconds clicked through the app’s current interface on demo data (17 Nov 2026): the devices with their load, the workspaces, Release Room’s four agents on Claude Code, Codex, OpenCode and Pi, Planner’s question as rows to pick, the artifacts, Checker’s browser card, and the BOARD. Each step is cropped to what it shows. Nobody’s real work is in it.'
 } as const
 
 /**

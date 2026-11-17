@@ -20,8 +20,11 @@ shared/route-fixture.ts (no email, generic group names, no MCP servers).
      h-board (the BOARD, from `.cr-board-badge`);
    - 1440×900 ×4, prefix `h`: h-peek (the question from the dock, over all four faces) and h-routing;
    - phone, 390×844 ×3, prefix `p`: p-devices, p-workspaces, p-crew, p-card.
-   The operation cards: `node scripts/site-demo/ops.mjs` (1024×640 ×2.8125). The canvas clip: `node scripts/site-demo/clip.mjs
-   $SHOOT_DIR/canvas.mp4` (1024×640: a screencast sends CSS pixels whatever the scale, so the site never shows it wider).
+   The operation cards: `node scripts/site-demo/ops.mjs` (1024×640 ×2.8125). The devices composite:
+   `node scripts/site-demo/devices.mjs` (the stop with demo gauges, each machine's screen enlarged under it, desktop and phone).
+   The canvas clip: `CDP_PORT=9335 node scripts/site-demo/clip.mjs $SHOOT_DIR/canvas.mp4`, against a HEADFUL Chrome on a 2×
+   display (a headless one screencasts CSS pixels only; the script stops if the frames are not 2048 wide): its own profile, the
+   same proxy and host flags, parked off screen (see the top of clip.mjs). Each step is cropped; the clip is 1280×800.
 4. Watch: copy `watch/` elsewhere, `python3 -I scripts/site-demo/watch-neutral.py <copy>/Sources/watch-shots/Shots.swift`,
    then `swift run watch-shots $SHOOT_DIR/watch` in the copy (a debug build: the staging helpers are DEBUG-only).
 5. Composites: `node scripts/site-demo/compose.mjs` (hero and hero-phone, ops and ops-phone-stack, watch-phone).

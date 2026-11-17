@@ -51,8 +51,8 @@ frame('demo-hitl-desk', `${raw}/h-hitl.png`, { box: [0, 60, 700, 520], dsf: 6, p
 frame('demo-artifacts', `${raw}/h-artifacts.png`, { box: [215, 110, 585, 450], dsf: 6, phone: { box: [250, 240, 520, 305] } })
 frame('demo-browser-card', `${raw}/h-browser.png`, { box: [60, 50, 910, 540], dsf: 6, phone: { box: [70, 60, 450, 500] } })
 frame('demo-board', `${raw}/h-board.png`, { box: [445, 50, 570, 475], dsf: 6, phone: { box: [450, 110, 410, 410] } })
-// The devices stop; on a phone, the same stop as the renderer draws it at 390 px (p-devices, ×3).
-frame('demo-devices', `${raw}/h-devices.png`, { box: [20, 165, 984, 335], dsf: 6, phone: { src: `${raw}/p-devices.png`, box: [0, 110, 390, 620], dsf: 3 } })
+// The devices stop with each machine's screen enlarged under it (devices.mjs); on a phone, the 390 px layout's machines.
+frame('demo-devices', `${raw}/devices.png`, { phone: { src: `${raw}/devices-phone.png` } })
 // Routing: 1440×900 at ×4, the panel down to the model catalogue; on a phone, the harness rows and the accounts.
 frame('demo-routing', `${raw}/h-routing.png`, { box: [185, 15, 1070, 657], dsf: 4, phone: { box: [195, 70, 525, 440] } })
 // Phone renders: 390×844 at ×3, each cropped to its subject.
@@ -66,11 +66,11 @@ frame('demo-watch', `${raw}/watch-strip.png`, { phone: { src: `${raw}/watch-phon
 // The composites (compose.mjs).
 frame('demo-hero-devices', `${raw}/hero.png`, { phone: { src: `${raw}/hero-phone.png` } })
 frame('demo-ops-cards', `${raw}/ops.png`, { phone: { src: `${raw}/ops-phone-stack.png` } })
-// The canvas clip (clip.mjs: a screencast sends CSS-size frames, so 1024×640 whatever the scale) and its poster: the browser
-// card beat (14 s), a view no other figure on the canvas page shows. Phones are not shown the clip (a 1024 px movie is
+// The canvas clip (clip.mjs: 2048×1280 frames from a headful Chrome, each step cropped, 1280×800) and its poster: the
+// browser card step (15 s), a view no other figure on the canvas page shows. Phones are not shown the clip (a 1024 px movie is
 // unreadable at 390, and a still would not be the twenty seconds its caption describes).
 copyFileSync(`${raw}/canvas.mp4`, `${dest}/demo-canvas.mp4`)
-ff(['-ss', '14', '-i', `${raw}/canvas.mp4`, '-frames:v', '1', '-q:v', '3', `${dest}/demo-canvas.jpg`])
+ff(['-ss', '15', '-i', `${raw}/canvas.mp4`, '-frames:v', '1', '-q:v', '3', `${dest}/demo-canvas.jpg`])
 const [cw, ch] = size(`${dest}/demo-canvas.mp4`)
 sizes['demo-canvas.mp4'] = { width: cw, height: ch, twins: [] }
 

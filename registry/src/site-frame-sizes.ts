@@ -74,14 +74,14 @@ export const FRAME_SIZES: Readonly<Record<string, { width: number; height: numbe
   },
   "demo-devices.jpg": {
     "width": 2880,
-    "height": 980,
+    "height": 2618,
     "twins": [
       1440,
       800
     ],
     "phone": {
       "width": 1170,
-      "height": 1860
+      "height": 3796
     }
   },
   "demo-routing.jpg": {
@@ -154,8 +154,8 @@ export const FRAME_SIZES: Readonly<Record<string, { width: number; height: numbe
     }
   },
   "demo-canvas.mp4": {
-    "width": 1024,
-    "height": 640,
+    "width": 1280,
+    "height": 800,
     "twins": []
   }
 }
