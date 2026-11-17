@@ -7,7 +7,8 @@ import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { isWholeSuiteRun, liveSlots, slotCount, takeHeavySlot } from '../scripts/heavy-slot.mjs'
+import { fork } from 'node:child_process'
+import { isWholeSuiteRun, liveSlots, slotCount, takeHeavySlot, testWorkers, TEST_NICE, WORKER_GUARD, yieldToAgents } from '../scripts/heavy-slot.mjs'
 
 const fresh = () => mkdtempSync(path.join(tmpdir(), 'heavy-slot-'))
 const NOW = 1_800_000_000_000
@@ -125,5 +126,78 @@ describe('takeHeavySlot', () => {
   it('an unwritable directory never stops a test run', async () => {
     const out = await takeHeavySlot(opts('/dev/null/nope'))
     expect(out.taken).toBe(false)
+  })
+})
+
+describe('testWorkers', () => {
+  it('takes four on a machine with cores to spare, two once it is oversubscribed', () => {
+    expect(testWorkers({}, { cores: 10, load: 3 })).toBe(4)
+    expect(testWorkers({}, { cores: 10, load: 10 })).toBe(2)
+    expect(testWorkers({}, { cores: 10, load: 172 })).toBe(2)
+  })
+
+  it('never asks for more than every core but one', () => {
+    expect(testWorkers({}, { cores: 2, load: 0 })).toBe(1)
+    expect(testWorkers({}, { cores: 1, load: 0 })).toBe(1)
+  })
+
+  it('COOKREW_TEST_WORKERS wins, and garbage is ignored', () => {
+    expect(testWorkers({ COOKREW_TEST_WORKERS: '8' }, { cores: 10, load: 172 })).toBe(8)
+    expect(testWorkers({ COOKREW_TEST_WORKERS: 'lots' }, { cores: 10, load: 0 })).toBe(4)
+    expect(testWorkers({ COOKREW_TEST_WORKERS: '0' }, { cores: 10, load: 0 })).toBe(4)
+  })
+})
+
+describe('yieldToAgents', () => {
+  const priority = (start: number) => {
+    const seen: number[] = []
+    return { seen, get: () => start, set: (value: number) => void seen.push(value) }
+  }
+
+  it('drops a normal-priority run to TEST_NICE', () => {
+    const p = priority(0)
+    expect(yieldToAgents({}, p)).toBe(true)
+    expect(p.seen).toEqual([TEST_NICE])
+  })
+
+  it('never raises a run someone already lowered further', () => {
+    const p = priority(15)
+    expect(yieldToAgents({}, p)).toBe(false)
+    expect(p.seen).toEqual([])
+  })
+
+  it('is off on CI and with COOKREW_TEST_NICE=0', () => {
+    for (const env of [{ CI: '1' }, { COOKREW_TEST_NICE: '0' }]) {
+      const p = priority(0)
+      expect(yieldToAgents(env, p)).toBe(false)
+      expect(p.seen).toEqual([])
+    }
+  })
+
+  it('a priority it cannot set never stops a test run', () => {
+    const set = () => {
+      throw new Error('EACCES')
+    }
+    expect(yieldToAgents({}, { get: () => 0, set })).toBe(false)
+  })
+})
+
+describe('WORKER_GUARD', () => {
+  it('caps a fork at 2 GB of heap', () => {
+    expect(WORKER_GUARD.execArgv).toEqual(['--max-old-space-size=2048'])
+  })
+
+  // Measured 2026-11-16: three forks of a killed run, 30+ minutes, 4.4 GB each.
+  it('its setupFile kills a fork when its run goes away, even with process.exit stubbed the way vitest does', async () => {
+    const dir = fresh()
+    const worker = path.join(dir, 'worker.mjs')
+    writeFileSync(
+      worker,
+      `process.exit = () => { throw new Error('process.exit unexpectedly called') }\nprocess.on('uncaughtException', () => {})\nawait import(${JSON.stringify(WORKER_GUARD.setupFiles[0])})\nprocess.send('ready')\nsetTimeout(() => {}, 30000)\n`
+    )
+    const child = fork(worker, [])
+    await new Promise((resolve) => child.once('message', resolve))
+    child.disconnect()
+    expect(await new Promise((resolve) => child.once('exit', (_code, signal) => resolve(signal)))).toBe('SIGKILL')
   })
 })

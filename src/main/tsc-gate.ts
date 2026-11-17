@@ -17,6 +17,23 @@
 //
 // A served pane never gets this: its sandbox may not be able to read the file,
 // and node treats a preload it cannot load as fatal.
+//
+// VITEST rides the same preload, because agents walk around the repo's config
+// too: lanes write their own `vitest.*.config.ts`, which never load
+// scripts/heavy-slot.mjs and so default to every core but one at full priority.
+// A vitest drops to nice 10 (`COOKREW_TEST_NICE=0` keeps the priority; its pool
+// forks inherit it) and, unless the caller chose a worker count, gets
+// VITEST_MAX_FORKS/THREADS: 4, or 2 once the 1-minute load reaches the core
+// count. No slot: that stays with the config. tsc is NOT niced: it is 1.5 GB,
+// and starving it on a swapping machine only holds that memory longer.
+//
+// ORPHANED POOL WORKERS. Measured 2026-11-16: three vitest forks whose run had
+// been killed (a Bash tool timeout) kept going for 30+ minutes, 4.4 GB each,
+// 13 GB of a 16 GB machine, because tinypool's child entry never listens for
+// its parent going away. Every such fork here exits when its IPC channel
+// disconnects (by SIGKILL: vitest swaps process.exit in its workers for one that
+// only throws), and a vitest's forks get a 2 GB heap so a runaway test dies of
+// OOM instead of growing to node's default 4 GB.
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -28,18 +45,43 @@ export const TSC_GATE_SOURCE = String.raw`'use strict'
 // Written by Cookrew at boot (src/main/tsc-gate.ts). Edits here are overwritten.
 ;(() => {
   try {
-    if (!/(?:^|\/)_?tsc(?:\.js)?$/.test(process.argv[1] || '')) return
+    const entry = process.argv[1] || ''
+    if (/(?:^|\/)tinypool\/dist\/entry\/process\.js$/.test(entry)) {
+      if (process.send) process.once('disconnect', () => process.kill(process.pid, 'SIGKILL'))
+      return
+    }
+    const vitest = /(?:^|\/)vitest(?:\.mjs)?$/.test(entry)
+    if (!vitest && !/(?:^|\/)_?tsc(?:\.js)?$/.test(entry)) return
     const env = process.env
     if (env.CI) return
+    if (!require('node:worker_threads').isMainThread) return
+    const os = require('node:os')
+    if (vitest) {
+      if (env.COOKREW_TEST_NICE !== '0') {
+        try {
+          if (os.getPriority() < 10) os.setPriority(10)
+        } catch {}
+      }
+      if (!/--max-old-space-size/.test(env.NODE_OPTIONS || '')) {
+        env.NODE_OPTIONS = (env.NODE_OPTIONS ? env.NODE_OPTIONS + ' ' : '') + '--max-old-space-size=2048'
+      }
+      if (env.VITEST_MAX_FORKS || env.VITEST_MAX_THREADS) return
+      if (process.argv.some((arg) => /^--(?:maxWorkers|max-workers|poolOptions|pool-options)\b/.test(arg))) return
+      const cores = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length
+      const forced = Number(env.COOKREW_TEST_WORKERS)
+      const wanted = Number.isInteger(forced) && forced > 0 ? forced : Math.max(1, Math.min(cores - 1, os.loadavg()[0] >= cores ? 2 : 4))
+      env.VITEST_MAX_FORKS = String(wanted)
+      env.VITEST_MAX_THREADS = String(wanted)
+      return
+    }
     const free = new Set(['watch', 'w', 'version', 'v', 'help', 'h', '?', 'all', 'init', 'showconfig'])
     if (process.argv.slice(2).some((arg) => free.has(arg.replace(/^--?/, '').toLowerCase()))) return
-    if (!require('node:worker_threads').isMainThread) return
     const raw = Number(env.COOKREW_TSC_SLOTS === undefined ? 2 : env.COOKREW_TSC_SLOTS)
     const slots = Number.isInteger(raw) && raw >= 0 ? raw : 2
     if (slots === 0) return
     const fs = require('node:fs')
     const path = require('node:path')
-    const dir = env.COOKREW_TSC_SLOT_DIR || path.join(require('node:os').homedir(), '.cookrew', 'heavy-slots', 'tsc')
+    const dir = env.COOKREW_TSC_SLOT_DIR || path.join(os.homedir(), '.cookrew', 'heavy-slots', 'tsc')
     const maxWait = Number(env.COOKREW_TSC_MAX_WAIT_MS) || 45000
     const poll = Number(env.COOKREW_TSC_POLL_MS) || 1000
     const maxAge = 30 * 60000

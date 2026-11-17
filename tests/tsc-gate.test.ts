@@ -4,9 +4,9 @@
 // RAM. 39 of 40 sampled calls are `npx tsc`, and npx puts node_modules/.bin
 // first on PATH, so only a preload sees them all. These run REAL node processes
 // with the preload, because what matters is what node does with it.
-import { spawn, spawnSync } from 'node:child_process'
+import { fork, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { getPriority, tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { installTscGate, tscGateEnv, tscGateOptions, TSC_GATE_SOURCE } from '../src/main/tsc-gate'
@@ -21,11 +21,17 @@ function rig() {
   writeFileSync(tsc, "process.stdout.write('ran')\n")
   const other = path.join(root, 'build.js')
   writeFileSync(other, "process.stdout.write('ran')\n")
+  const vitest = path.join(root, 'vitest.mjs')
+  writeFileSync(
+    vitest,
+    "import os from 'node:os'\nprocess.stdout.write(JSON.stringify({ nice: os.getPriority(), forks: process.env.VITEST_MAX_FORKS ?? null, threads: process.env.VITEST_MAX_THREADS ?? null, options: process.env.NODE_OPTIONS ?? '' }))\n"
+  )
   const env = (over: Record<string, string> = {}) => {
-    const { CI: _ci, ...rest } = process.env
+    const { CI: _ci, VITEST_MAX_FORKS: _forks, VITEST_MAX_THREADS: _threads, COOKREW_TEST_NICE: _nice, COOKREW_TEST_WORKERS: _workers, ...rest } =
+      process.env
     return { ...rest, NODE_OPTIONS: `--require=${gate}`, COOKREW_TSC_SLOT_DIR: slots, COOKREW_TSC_SLOTS: '1', ...over }
   }
-  return { gate, slots, tsc, other, env }
+  return { gate, slots, tsc, other, vitest, env }
 }
 
 /** A slot held by this live test process, the same way a real run holds one. */
@@ -99,6 +105,90 @@ describe('the preload, in a real node', () => {
     const out = spawnSync(process.execPath, [r.tsc], { env: r.env({ COOKREW_TSC_SLOT_DIR: '/dev/null/nope' }), encoding: 'utf8', timeout: 5000 })
     expect(out.stdout).toBe('ran')
     expect(out.status).toBe(0)
+  })
+
+  it('leaves a typecheck at its priority: starving 1.5 GB on a swapping machine only holds it longer', () => {
+    const r = rig()
+    const dir = path.join(path.dirname(r.tsc), 'nice')
+    mkdirSync(dir)
+    const tsc = path.join(dir, 'tsc')
+    writeFileSync(tsc, "process.stdout.write(String(require('node:os').getPriority()))\n")
+    const out = spawnSync(process.execPath, [tsc], { env: r.env(), encoding: 'utf8', timeout: 5000 })
+    expect(Number(out.stdout)).toBe(getPriority())
+  })
+})
+
+describe('a vitest through the preload, in a real node', () => {
+  type Seen = { nice: number; forks: string | null; threads: string | null; options: string }
+  // This suite's own config already lowered it, and a child starts where its parent is.
+  const base = getPriority()
+  const run = (r: ReturnType<typeof rig>, over: Record<string, string> = {}, args: string[] = []): Seen => {
+    const out = spawnSync(process.execPath, [r.vitest, ...args], { env: r.env(over), encoding: 'utf8', timeout: 5000 })
+    expect(out.status).toBe(0)
+    return JSON.parse(out.stdout)
+  }
+
+  it('drops to nice 10 and caps the pool, whatever config it loads next', () => {
+    const seen = run(rig())
+    expect(seen.nice).toBe(Math.max(base, 10))
+    expect(['2', '4']).toContain(seen.forks)
+    expect(seen.threads).toBe(seen.forks)
+  })
+
+  it('hands its forks a 2 GB heap, and keeps one the caller chose', () => {
+    const r = rig()
+    expect(run(r).options).toContain('--max-old-space-size=2048')
+    const own = run(r, { NODE_OPTIONS: `--require=${r.gate} --max-old-space-size=6000` }).options
+    expect(own).toContain('--max-old-space-size=6000')
+    expect(own).not.toContain('2048')
+  })
+
+  it('never takes a slot: the queue for whole-suite runs stays with the config', () => {
+    const r = rig()
+    holdSlot(r.slots)
+    run(r)
+    expect(readdirSync(r.slots)).toHaveLength(1)
+  })
+
+  it('leaves a worker count the caller chose', () => {
+    const r = rig()
+    expect(run(r, { VITEST_MAX_FORKS: '7' }).threads).toBeNull()
+    expect(run(r, {}, ['run', '--maxWorkers=7']).forks).toBeNull()
+    expect(run(r, { COOKREW_TEST_WORKERS: '6' }).forks).toBe('6')
+  })
+
+  it('is off on CI, and COOKREW_TEST_NICE=0 keeps the priority', () => {
+    const r = rig()
+    expect(run(r, { CI: '1' })).toEqual({ nice: base, forks: null, threads: null, options: `--require=${r.gate}` })
+    expect(run(r, { COOKREW_TEST_NICE: '0' }).nice).toBe(base)
+  })
+})
+
+describe('a pool worker through the preload', () => {
+  // Measured 2026-11-16: three forks of a killed run, 30+ minutes, 4.4 GB each.
+  it('exits when its run goes away, instead of running on as an orphan', async () => {
+    const r = rig()
+    const dir = path.join(path.dirname(r.tsc), 'node_modules', 'tinypool', 'dist', 'entry')
+    mkdirSync(dir, { recursive: true })
+    const worker = path.join(dir, 'process.js')
+    writeFileSync(worker, "process.on('message', () => {})\nsetTimeout(() => {}, 30000)\n")
+    const child = fork(worker, [], { env: r.env({ CI: '1' }) })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const started = Date.now()
+    child.disconnect()
+    const signal = await new Promise((resolve) => child.once('exit', (_code, sig) => resolve(sig)))
+    expect(signal).toBe('SIGKILL')
+    expect(Date.now() - started).toBeLessThan(5000)
+  })
+
+  it('never touches a fork that is not a pool worker', async () => {
+    const r = rig()
+    const other = path.join(path.dirname(r.tsc), 'child.js')
+    writeFileSync(other, "process.on('disconnect', () => setTimeout(() => process.exit(7), 50))\nsetTimeout(() => {}, 30000)\n")
+    const child = fork(other, [], { env: r.env() })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    child.disconnect()
+    expect(await new Promise((resolve) => child.once('exit', resolve))).toBe(7)
   })
 })
 
