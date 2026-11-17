@@ -905,7 +905,7 @@ export interface CookrewApi {
   /** One code for a watch anywhere: the account's join code, armed on this Mac as the claim too. */
   watchInvite?: (current: string) => Promise<WatchInvite>;
   watchForget?: () => Promise<unknown>;
-  /** ⋯ → Phone app: a phone's join code and the link its QR holds, under the account's step-up. Absent in the demo. */
+  /** A phone's join code and the link its QR holds, under the account's step-up. No menu offers it until the phone app ships. Absent in the demo. */
   phoneInvite?: (current: string) => Promise<PhoneInvite>;
   /** Phones that joined with a code this Mac showed, waiting for its Keep (owner 2026-11-17). */
   phonePending?: () => Promise<PhonePendingResult>;
