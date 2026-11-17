@@ -17,7 +17,7 @@ import type { PathBadgeView } from '../../shared/path-badge'
 import { useActiveWorkspace } from './WorkspaceSwitcher'
 import { stageSelect } from './stage/stage-select'
 import { useZoomFull, zoomStore } from './zoom/zoom-store'
-import { stepOut } from './zoom/zoom-path'
+import { placeWords } from './zoom/full-return'
 import { setFullRouteSlot } from './route-slot'
 import { remotePlace, type RemotePlace } from './zoom/remote-machine-store'
 
@@ -80,6 +80,11 @@ export function remoteDeviceStep(inside: RemoteRoute): () => void {
 }
 
 const readPlace = (): RemotePlace => remotePlace.get()
+/** Where the phone bar's ‹ goes from a full view (zoom-store.ts · back), in the bar's words. */
+const backTitleNow = (): string => {
+  const to = zoomStore.get().full !== null ? zoomStore.backTarget() : null
+  return `Back to ${to ? placeWords(to, () => null) : 'agents'}`
+}
 
 interface HeaderRouteProps {
   view: MainView
@@ -112,12 +117,12 @@ export function HeaderRoute({ view, workspaceName, dir, path, zoomedAgent, stage
   const toDevice = (): void => {
     zoomStore.go(zoomStore.get().v <= -1 ? -2 : -1, zoomStore.get().dir)
   }
-  // The full view's way out, the round ‹'s own step (ZoomView · stepBack).
+  // The full view's way out, the round ‹'s own step (ZoomView · stepBack): where it was opened from.
   const back = (): void => {
-    const z = zoomStore.get()
-    const next = stepOut(z.dir, z.v)
-    if (next !== z.v) zoomStore.go(next, z.dir)
+    zoomStore.back('route')
   }
+  // The agent's own name is beside it on this bar: a full view is named by its kind here.
+  const backTitle = useSyncExternalStore(zoomStore.subscribe, backTitleNow, backTitleNow)
 
   if (inside) {
     // Its steps go back to its own stops (remote-machine-store.ts), in its colour.
@@ -175,7 +180,7 @@ export function HeaderRoute({ view, workspaceName, dir, path, zoomedAgent, stage
           CSS shows these two at phone width only. */}
       {agent !== null && (
         <>
-          <button type="button" className="cr-route-back" aria-label="Back to the crew" title="Back to the crew" onClick={back}>
+          <button type="button" className="cr-route-back" aria-label={backTitle} title={backTitle} onClick={back}>
             ‹
           </button>
           <span className="cr-route-full" ref={setFullRouteSlot} />
