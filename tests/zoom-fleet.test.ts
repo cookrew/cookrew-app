@@ -9,7 +9,7 @@ import { machineOutdated } from '../src/shared/machine-version'
 import type { FleetAgent, FleetEvent, FleetSnapshot, FleetWorkspace } from '../src/shared/fleet'
 import type { AccountMachine, AccountMachines } from '../src/shared/zoom-fleet'
 import type { WorkspaceList } from '../src/shared/model'
-import { composeFleet, createZoomFleetStore, devicesInSightAt, LOCAL_MACHINE_ID, REMOTE_READ_MS, type FleetApi, type Sight } from '../src/renderer/src/zoom/use-zoom-fleet'
+import { composeFleet, createZoomFleetStore, devicesInSightAt, LOCAL_MACHINE_ID, REMOTE_BACKGROUND_MS, REMOTE_READ_MS, type FleetApi, type Sight } from '../src/renderer/src/zoom/use-zoom-fleet'
 import { relayAccountMachines } from '../src/renderer/src/relay-machines'
 import { PROFILE } from './fleet-fixture'
 
@@ -267,6 +267,135 @@ describe('the zoom fleet store', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     expect(read).toHaveBeenCalledTimes(4)
     expect(store.get().machines.find((m) => m.id === OTHER)?.detail).toBe('live')
+  })
+
+  it('reads the other machines slowly while the HITL bar wants them, at the Devices pace while drawn, and not while hidden (phase 6)', async () => {
+    const read = vi.fn(async (_id: string) => snapshot(4))
+    const { api, feed } = fakeApi({ read, machines: async () => ({ ok: true, machines: [machine(ME, 'Studio', true), machine(OTHER, 'Laptop', false)] }) })
+    const { sight, set: setHidden } = fakeSight()
+    const flag = () => {
+      let on = false
+      let changed = null as (() => void) | null
+      return {
+        want: { now: () => on, watch: (cb: () => void) => ((changed = cb), () => void (changed = null)) },
+        set: (next: boolean) => ((on = next), changed?.())
+      }
+    }
+    const devices = flag()
+    const bar = flag()
+    const store = createZoomFleetStore(() => api, { sight, remoteWanted: devices.want, remoteBackground: bar.want })
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(read).not.toHaveBeenCalled()
+    // The bar mounted: read at once, then every REMOTE_BACKGROUND_MS.
+    bar.set(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(read).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(REMOTE_BACKGROUND_MS * 2)
+    expect(read).toHaveBeenCalledTimes(3)
+    // Out to the Devices stop too: the faster pace, at once.
+    devices.set(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(read).toHaveBeenCalledTimes(4)
+    await vi.advanceTimersByTimeAsync(REMOTE_READ_MS * 2)
+    expect(read).toHaveBeenCalledTimes(6)
+    // Back from the Devices stop: the slow pace again, with no extra read on the way down.
+    devices.set(false)
+    await vi.advanceTimersByTimeAsync(REMOTE_BACKGROUND_MS - 1)
+    expect(read).toHaveBeenCalledTimes(6)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(read).toHaveBeenCalledTimes(7)
+    // Hidden: nothing; seen again: at once.
+    setHidden(true)
+    await vi.advanceTimersByTimeAsync(REMOTE_BACKGROUND_MS * 4)
+    expect(read).toHaveBeenCalledTimes(7)
+    setHidden(false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(read).toHaveBeenCalledTimes(8)
+    // The bar unmounted: the clock stops.
+    bar.set(false)
+    await vi.advanceTimersByTimeAsync(REMOTE_BACKGROUND_MS * 4)
+    expect(read).toHaveBeenCalledTimes(8)
+  })
+
+  it('names the other machines read, the same object until a read or the account changes (the bar does not redraw per poll)', async () => {
+    const read = vi.fn(async (_id: string) => snapshot(4))
+    const { api, feed } = fakeApi({ read, machines: async () => ({ ok: true, machines: [machine(ME, 'Studio', true), machine(OTHER, 'Laptop', false)] }) })
+    const store = createZoomFleetStore(() => api)
+    store.subscribe(() => undefined)
+    expect(store.remoteReads().machines).toEqual([])
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    await vi.advanceTimersByTimeAsync(0)
+    const first = store.remoteReads()
+    expect(first.machines.map((m) => [m.id, m.name])).toEqual([[OTHER, 'Laptop']])
+    expect(first.machines[0].snapshot.rev).toBe(4)
+    // A local delta and an unchanged remote read: the same object.
+    feed.cb?.({ type: 'focus', rev: 2, workspaceId: null })
+    await vi.advanceTimersByTimeAsync(REMOTE_READ_MS * 2)
+    expect(store.remoteReads()).toBe(first)
+    read.mockImplementation(async () => snapshot(5))
+    await vi.advanceTimersByTimeAsync(REMOTE_READ_MS)
+    expect(store.remoteReads()).not.toBe(first)
+    // A machine that stops answering is no longer read: nothing of it stays.
+    read.mockImplementation(async () => null as unknown as ReturnType<typeof snapshot>)
+    await vi.advanceTimersByTimeAsync(REMOTE_READ_MS)
+    expect(store.remoteReads().machines).toEqual([])
+  })
+
+  it('lets go of a machine gone offline or unreadable: none of its rows stay for the bar, read or not (phase 6)', async () => {
+    let online = true
+    let readable = true
+    let drawn = true
+    const read = vi.fn(async (_id: string) => snapshot(4))
+    const { api, feed } = fakeApi({ read, machines: async () => ({ ok: true, machines: [machine(ME, 'Studio', true), machine(OTHER, 'Laptop', false, { online })] }) })
+    const store = createZoomFleetStore(() => api, {
+      refreshMs: 10_000,
+      readable: () => readable,
+      remoteWanted: { now: () => drawn, watch: () => () => undefined }
+    })
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.remoteReads().machines.map((m) => m.id)).toEqual([OTHER])
+    // The last other machine goes offline while it is read: what it said last is let go of.
+    online = false
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(store.remoteReads().machines).toEqual([])
+    expect(store.get().machines.find((m) => m.id === OTHER)?.detail).toBe('listed')
+    // Back, read again; then too old for the floor while nothing reads it: not named for the bar either.
+    online = true
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(store.remoteReads().machines.map((m) => m.id)).toEqual([OTHER])
+    drawn = false
+    readable = false
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(store.remoteReads().machines).toEqual([])
+  })
+
+  it('says after each read of the other machines which answered: the HITL log reads ride that clock (phase 6)', async () => {
+    const read = vi.fn(async (_id: string) => snapshot(4))
+    const { api, feed } = fakeApi({ read, machines: async () => ({ ok: true, machines: [machine(ME, 'Studio', true), machine(OTHER, 'Laptop', false)] }) })
+    const store = createZoomFleetStore(() => api)
+    const rounds: string[][] = []
+    const off = store.onRemoteRound((ids) => void rounds.push([...ids]))
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(rounds).toEqual([[OTHER]])
+    // An unchanged answer is still a round: the log may have moved though the fleet did not.
+    await vi.advanceTimersByTimeAsync(REMOTE_READ_MS)
+    expect(rounds).toEqual([[OTHER], [OTHER]])
+    read.mockImplementation(async () => null as unknown as ReturnType<typeof snapshot>)
+    await vi.advanceTimersByTimeAsync(REMOTE_READ_MS)
+    expect(rounds.at(-1)).toEqual([])
+    off()
+    await vi.advanceTimersByTimeAsync(REMOTE_READ_MS)
+    expect(rounds).toHaveLength(3)
   })
 
   it('the page’s own store reads the other machines only on the Devices side of the path (bytes 0.6.2)', () => {

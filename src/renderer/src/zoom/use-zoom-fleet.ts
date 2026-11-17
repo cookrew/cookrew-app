@@ -27,6 +27,7 @@ import { machineOutdated } from '../../../shared/machine-version'
 import { cookrew, type CookrewApi } from '../api'
 import { zoomStore } from './zoom-store'
 import { composeFleet, deckOf, snapshotOf, type FleetParts, type ZoomCounts, type ZoomFleet, type ZoomMachineDetail } from './fleet-compose'
+import { hitlWant } from './remote-hitl-want'
 
 export * from './fleet-compose'
 
@@ -38,6 +39,8 @@ export const RETRY_MS = 2_000
 export const RETRY_MAX_MS = 30_000
 
 export const REMOTE_READ_MS = 5_000
+/** The other machines, read for the HITL bar alone (phase 6): a third of the Devices pace. */
+export const REMOTE_BACKGROUND_MS = 15_000
 
 const ACCOUNT_SENTENCE: Partial<Record<AccountMachinesRefusal, string>> = {
   offline: 'Your other devices could not be listed: cookrew.dev did not answer.',
@@ -79,7 +82,31 @@ export interface FleetStoreOptions {
    * (devicesInSight), the one place another machine's fleet is drawn since
    * every device moved onto one canvas. What was read stays drawn meanwhile.
    */
-  remoteWanted?: { now: () => boolean; watch: (changed: () => void) => () => void }
+  remoteWanted?: Wanted
+  /**
+   * Are the other machines wanted for something not drawn, read at the slower
+   * REMOTE_BACKGROUND_MS (phase 6): the page's store passes the HITL bar's want
+   * (remote-hitl-want.ts). Absent = never. Read at the Devices pace whenever
+   * `remoteWanted` holds too; the same reads, tags and 304s either way.
+   */
+  remoteBackground?: Wanted
+}
+
+export interface Wanted {
+  now: () => boolean
+  watch: (changed: () => void) => () => void
+}
+
+/** One other machine of the account as its own fleet answered, for the HITL bar (zoom/remote-hitl.ts). */
+export interface RemoteFleetRead {
+  readonly id: string
+  readonly name: string
+  readonly snapshot: FleetSnapshot
+}
+
+export interface RemoteFleetReads {
+  /** Every other machine read now: online, readable, and answering at the last read. */
+  readonly machines: readonly RemoteFleetRead[]
 }
 
 export interface ZoomFleetStore {
@@ -94,6 +121,30 @@ export interface ZoomFleetStore {
    */
   turn: () => void
   resume: () => void
+  /** The other machines as last read: the same object until a read or the account's list changes. */
+  remoteReads: () => RemoteFleetReads
+  /**
+   * Told after each read of the other machines, with the ones that answered:
+   * the HITL bar's log reads ride this clock (remote-hitl.ts), so one machine
+   * is asked on one rhythm, not two.
+   */
+  onRemoteRound: (listener: (answered: readonly string[]) => void) => () => void
+}
+
+const NO_READS: RemoteFleetReads = Object.freeze({ machines: Object.freeze([]) as readonly RemoteFleetRead[] })
+
+/**
+ * The other machines that answered, by the account's name for them; never this
+ * one, and never one the account now lists offline or that may not be read: what
+ * it said last is no news of it now.
+ */
+function readsOf(parts: Pick<FleetParts, 'account' | 'remote'>, mayRead: (row: AccountMachine) => boolean): RemoteFleetReads {
+  const rows = parts.account?.ok ? parts.account.machines : []
+  const machines = rows.flatMap((row) => {
+    const snapshot = row.current || !row.online || !mayRead(row) ? undefined : parts.remote?.[row.id]
+    return snapshot ? [{ id: row.id, name: (row.name || snapshot.machine.name).replace(/\.local$/i, ''), snapshot }] : []
+  })
+  return machines.length === 0 ? NO_READS : { machines }
 }
 
 interface State extends FleetParts {
@@ -119,6 +170,11 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
   let stopTimer: ReturnType<typeof setTimeout> | null = null
   let refreshTimer: ReturnType<typeof setInterval> | null = null
   let remoteTimer: ReturnType<typeof setInterval> | null = null
+  /** The pace the other machines are read at now; null while they are not. */
+  let remoteEvery: number | null = null
+  let reads: { account: FleetParts['account']; remote: FleetParts['remote']; readable: string; value: RemoteFleetReads } | null = null
+  const roundListeners = new Set<(answered: readonly string[]) => void>()
+  const mayRead = options.readable ?? ((): boolean => true)
   let remoteKey = ''
   let readingRemote = false
   let unwatch: (() => void) | null = null
@@ -240,15 +296,19 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     if (key === accountKey) return
     accountKey = key
     set({ account: answer })
-    // The machines are known now: read the ones this desktop holds a key for, if they are drawn.
-    if (remoteWanted()) void askRemote()
+    // The machines are known now: read the ones this desktop holds a key for, if they are drawn or the bar wants them.
+    if (remoteWanted() || backgroundWanted()) void askRemote()
   }
 
   /** The account's other machines, each read through the key this desktop holds for it. */
   const askRemote = async (): Promise<void> => {
     const read = api().machineFleetOf
-    const mayRead = options.readable ?? ((): boolean => true)
     const rows = state.account?.ok ? state.account.machines.filter((row) => !row.current && row.online && mayRead(row)) : []
+    // None left to read (the last went offline, or below the floor): what they said last is let go of.
+    if (rows.length === 0 && state.remote !== undefined && Object.keys(state.remote).length > 0) {
+      remoteKey = JSON.stringify({})
+      set({ remote: {} })
+    }
     if (!read || readingRemote || rows.length === 0) return
     const mine = turns
     readingRemote = true
@@ -258,9 +318,12 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
       if (mine !== turns) return
       const remote = Object.fromEntries(answers.filter((pair): pair is readonly [string, FleetSnapshot] => pair[1] !== null))
       const key = JSON.stringify(remote)
-      if (key === remoteKey) return
-      remoteKey = key
-      set({ remote })
+      if (key !== remoteKey) {
+        remoteKey = key
+        set({ remote })
+      }
+      const answered = Object.keys(remote)
+      for (const listener of roundListeners) listener(answered)
     } finally {
       if (mine === turns) readingRemote = false
     }
@@ -289,18 +352,31 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
   }
 
   const remoteWanted = (): boolean => options.remoteWanted?.now() ?? true
-  /** The other machines' clock runs while the page is in sight AND they are drawn. */
-  const followRemote = (): void => {
-    if (running && !sight?.hidden() && remoteWanted()) {
-      if (remoteTimer !== null) return
-      void askRemote()
-      remoteTimer = setInterval(() => void askRemote(), REMOTE_READ_MS)
-      return
-    }
+  const backgroundWanted = (): boolean => options.remoteBackground?.now() ?? false
+  /** The pace the other machines should be read at: while the page is in sight, drawn fast, wanted by the bar slowly. */
+  const remotePace = (): number | null => {
+    if (!running || sight?.hidden()) return null
+    if (remoteWanted()) return REMOTE_READ_MS
+    return backgroundWanted() ? REMOTE_BACKGROUND_MS : null
+  }
+  const stopRemote = (): void => {
     if (remoteTimer !== null) clearInterval(remoteTimer)
     remoteTimer = null
+    remoteEvery = null
+  }
+  /** The other machines' clock: at once when it starts or speeds up, never an extra read when it slows. */
+  const followRemote = (): void => {
+    const pace = remotePace()
+    if (pace === remoteEvery) return
+    const sooner = remoteEvery === null || (pace !== null && pace < remoteEvery)
+    stopRemote()
+    if (pace === null) return
+    remoteEvery = pace
+    if (sooner) void askRemote()
+    remoteTimer = setInterval(() => void askRemote(), pace)
   }
   let unwatchRemote: (() => void) | null = null
+  let unwatchBackground: (() => void) | null = null
 
   const wake = (): void => {
     openFeed()
@@ -312,8 +388,7 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     closeFeed()
     if (refreshTimer !== null) clearInterval(refreshTimer)
     refreshTimer = null
-    if (remoteTimer !== null) clearInterval(remoteTimer)
-    remoteTimer = null
+    stopRemote()
   }
 
   const onSight = (): void => {
@@ -340,6 +415,7 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     running = true
     if (sight) unwatch = sight.watch(onSight)
     if (options.remoteWanted) unwatchRemote = options.remoteWanted.watch(followRemote)
+    if (options.remoteBackground) unwatchBackground = options.remoteBackground.watch(followRemote)
     startGrace()
     void askLocal()
     if (!sight?.hidden()) wake()
@@ -357,6 +433,8 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
       unwatch = null
       unwatchRemote?.()
       unwatchRemote = null
+      unwatchBackground?.()
+      unwatchBackground = null
     }, stopGraceMs)
   }
 
@@ -370,6 +448,21 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
       }
     },
     get: () => fleet,
+    remoteReads: () => {
+      // Which may be read can change with no new answer (the floor is the scope's): it is part of the key.
+      const rows = state.account?.ok ? state.account.machines : []
+      const readable = rows.filter((row) => !row.current && row.online && mayRead(row)).map((row) => row.id).join(' ')
+      if (reads && reads.account === state.account && reads.remote === state.remote && reads.readable === readable) return reads.value
+      const value = readsOf(state, mayRead)
+      // A new answer that names the same machines with the same snapshots is no change to the bar.
+      const same = reads !== null && sameReads(reads.value, value)
+      reads = { account: state.account, remote: state.remote, readable, value: same && reads ? reads.value : value }
+      return reads.value
+    },
+    onRemoteRound: (listener) => {
+      roundListeners.add(listener)
+      return () => void roundListeners.delete(listener)
+    },
     turn: () => {
       closeFeed()
       retries = 0
@@ -402,6 +495,10 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     }
   }
 }
+
+const sameReads = (a: RemoteFleetReads, b: RemoteFleetReads): boolean =>
+  a.machines.length === b.machines.length &&
+  a.machines.every((m, i) => m.id === b.machines[i].id && m.name === b.machines[i].name && m.snapshot === b.machines[i].snapshot)
 
 // ── the hook ────────────────────────────────────────────────────────────────
 
@@ -448,8 +545,10 @@ export const sharedZoomFleet = (): ZoomFleetStore => {
   shared ??= createZoomFleetStore(() => cookrew(), {
     sight: documentSight,
     readable: (row) => !scopeNeedsMachine() || !machineOutdated(row.appVersion),
-    // Other machines are drawn only on the Devices side: read there and nowhere else.
-    remoteWanted: devicesInSight
+    // Other machines are drawn only on the Devices side: read there at its pace.
+    remoteWanted: devicesInSight,
+    // And slowly while the HITL bar is mounted (phase 6: zoom/remote-hitl.ts), for what needs you there.
+    remoteBackground: hitlWant
   })
   return shared
 }

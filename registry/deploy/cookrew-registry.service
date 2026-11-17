@@ -18,6 +18,16 @@
 #
 # All three or it refuses to start (registry/src/auth-origin.ts). Only --dev
 # runs as one host.
+#
+# PHONE PUSH (optional, registry/src/v2-push-vapid.ts). Neither key set: push
+# is off and /v2/me/push/* answers 404 push_off. Make the pair once with
+# `node scripts/vapid-keys.mjs` and keep it: a new pair unsubscribes every
+# browser. The private key is a secret, so it never goes in this file; give it
+# from an EnvironmentFile= readable by root only, or the cluster's secret:
+#
+#   COOKREW_VAPID_PUBLIC_KEY    base64url, the 65-byte uncompressed P-256 point
+#   COOKREW_VAPID_PRIVATE_KEY   base64url, the 32-byte private scalar d
+#   COOKREW_VAPID_SUBJECT       mailto: or https: (default https://cookrew.dev)
 
 [Unit]
 Description=Cookrew registry and relay

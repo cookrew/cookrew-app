@@ -79,7 +79,8 @@ describe('what the console loads before anyone opens a machine', () => {
     ]) {
       expect(names, heavy).not.toContain(heavy)
     }
-    expect(names.length).toBeLessThan(60)
+    // 62 since phone push (HITL phase 4): the account menu's notifications item and its controller.
+    expect(names.length).toBeLessThan(62)
   })
 
   it('pulls in React and nothing else from outside', () => {
