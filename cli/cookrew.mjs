@@ -24,6 +24,19 @@ function fail(message, exitCode = 1) {
 }
 
 /**
+ * Why the app could not be reached. On Windows it serves no CLI at all
+ * (src/main/cli-transport.ts, whose CLI_NOT_ON_WINDOWS this text matches), so a
+ * failed connection there says so instead of asking whether the app is running.
+ */
+function unreachable(error) {
+  const code = error.code ?? error.message
+  if (process.platform === 'win32') {
+    fail(`The cookrew CLI is not available on Windows yet: the app serves it over a Unix-domain socket, and has no Windows transport. (${code})`)
+  }
+  fail(`Cannot reach the Cookrew app (${code}). Is it running?`)
+}
+
+/**
  * The app's socket.
  *
  * Inside a pane COOKREW_SOCKET is injected. Outside one — a plain shell, once
@@ -336,7 +349,7 @@ function openConversation(session) {
       waiting.delete(answer.id)
     }
   })
-  socket.on('error', (error) => fail(`Cannot reach the Cookrew app (${error.code ?? error.message}). Is it running?`))
+  socket.on('error', unreachable)
   // Whatever was open: the conversation belongs to this connection, so nothing
   // typed after this could reach anyone.
   socket.on('close', () => fail('This sign-in ended: the Cookrew app went away, or nobody answered for ten minutes. Nothing more was sent. Run this again.'))
@@ -514,6 +527,4 @@ socket.on('data', (chunk) => {
   }
 })
 
-socket.on('error', (error) => {
-  fail(`Cannot reach the Cookrew app (${error.code ?? error.message}). Is it running?`)
-})
+socket.on('error', unreachable)

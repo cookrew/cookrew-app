@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { cliTransport } from '../../src/main/cli-transport'
 
 export const IS_WINDOWS = process.platform === 'win32'
 
@@ -18,9 +19,14 @@ export function testSocketPath(dir: string, name: string): string {
 }
 
 /**
- * Why a test of the app's OWN CLI socket does not run on Windows: the app
- * serves a Unix-domain socket and claims it by probing and hard-linking a
- * staged path (src/main/socket-claim.ts). Windows has neither, and the app has
- * no named-pipe transport yet, so there is no Windows behaviour to test.
+ * Whether the app serves NO Unix-socket CLI on this host, as the app itself
+ * decides (src/main/cli-transport.ts), not as this file guesses. Tests of the
+ * app's own socket (its claim, its server, the CLI's guess at its path) run
+ * exactly where the app serves one; today that is every OS but Windows, and
+ * the day a Windows transport lands they follow it. What the app and the CLI
+ * do where there is none is tested in cli-transport.test.ts.
+ *
+ * The named pipe above is a TEST HARNESS only: a fake app on a pipe lets the
+ * CLI's argument handling run on Windows. It is not a transport the app serves.
  */
-export const NO_APP_SOCKET_ON_WINDOWS = IS_WINDOWS
+export const NO_APP_CLI_SOCKET = cliTransport().kind !== 'unix-socket'
