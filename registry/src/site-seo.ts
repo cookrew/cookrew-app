@@ -105,6 +105,9 @@ export function sitemapXml(): string {
     // /start and /features are anchors on the homepage; a fragment is not a
     // sitemap URL, and the redirects cover old links.
     ...LISTED_FEATURES.map((f) => ({ path: `/features/${f.slug}`, priority: 0.7 })),
+    // The same pages in Chinese (site-lang.ts).
+    { path: '/zh/', priority: 0.9 },
+    ...LISTED_FEATURES.map((f) => ({ path: `/zh/features/${f.slug}`, priority: 0.6 })),
     ...(LEGAL_PUBLISHED
       ? [
           { path: '/privacy', priority: 0.3 },

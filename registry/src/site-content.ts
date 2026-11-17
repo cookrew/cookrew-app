@@ -1,5 +1,7 @@
 import { LEGAL_PUBLISHED } from './site-legal-entity'
 import type { DemoKey } from './site-frames'
+import { currentLang } from './site-lang'
+import { ZH_COMPARE, ZH_DEFINITION, ZH_FAQ, ZH_FEATURES, ZH_HEADLINE, ZH_HEADLINE_SUB, ZH_PILLARS, ZH_ROADMAP, ZH_START_FAQ, ZH_START_HOWTO, ZH_STATUS } from './site-content-zh'
 
 /**
  * THE WORDS — every sentence cookrew.dev says about itself, in one place.
@@ -293,25 +295,10 @@ export interface Pillar {
    * more than the picture shows. Every one is the current UI on demo data, labelled as an illustration.
    */
   /** span: of 12 columns on a desktop (default 12, the full width); every figure takes the full width on a phone. */
-  media: readonly { key: DemoKey; note?: string; span?: 4 | 6 | 8 | 12 }[]
+  media: readonly { key: DemoKey; span?: 4 | 6 | 8 | 12 }[]
 }
 
 export const PILLARS: readonly Pillar[] = [
-  {
-    id: 'gateway',
-    kicker: 'one route for every harness',
-    title: 'Every harness, the models you choose',
-    lede: 'Claude Code, Codex, OpenCode and Pi each expect a different model API. Cookrew can send all four through Magpie, yetone’s open-source model gateway (MIT, usemagpie.ai), installed separately on the same machine, so every agent uses the subscriptions, API keys or local models you set up there. Until you pick a default model in the Routing panel, a card runs its harness directly, on its own login.',
-    claims: [
-      { status: 'shipped', title: 'Four harnesses, one route', text: 'Claude Code, Codex, OpenCode and Pi can each be routed through the machine’s own Magpie. A plain shell is not routed.' },
-      { status: 'shipped', title: 'Provider keys stay in the gateway', text: 'Subscriptions and API keys are set up in Magpie. A routed agent is given the local gateway’s address, its gateway key and a tag naming its card — never a provider key.' },
-      { status: 'shipped', title: 'Usage per agent', text: 'Every request carries the card that made it, so the gateway counts usage agent by agent.' },
-      { status: 'experiment', title: 'Borrow another machine’s model', text: 'On 12 November 2026, Codex on one Mac ran its tools on that Mac while its model was answered by another machine’s Magpie, over an SSH tunnel set up by hand. One model, one run; no card is wired this way.' },
-      { status: 'planned', title: 'A gateway across your machines', text: 'Reach another machine’s gateway through your account, without a hand-made tunnel.' },
-      { status: 'planned', title: 'An official model gateway', text: 'Models offered through Cookrew itself. No provider agreement is in place.' }
-    ],
-    media: [{ key: 'routing', note: 'The gateway the panel reads is Magpie, installed separately on the same machine.' }]
-  },
   {
     id: 'everywhere',
     kicker: 'see and prompt everywhere',
@@ -326,10 +313,25 @@ export const PILLARS: readonly Pillar[] = [
       { status: 'planned', title: 'One request, any device, every machine', text: 'A request that waits on you is answered once, from whichever device is at hand, across every machine of the account.' }
     ],
     media: [
-      { key: 'crewPhone', span: 4, note: 'Drawn at phone width from the app’s code; not filmed on a phone, and not the console’s sign-in around it.' },
-      { key: 'watch', span: 8, note: 'Beta: the watch app runs on our own watches and is not on the App Store or TestFlight.' },
-      { key: 'ops', note: 'Taking control of a computer’s or a phone’s screen needs the machine’s switch turned on and a 15-minute grant.' }
+      { key: 'crewPhone', span: 4 },
+      { key: 'watch', span: 8 },
+      { key: 'ops' }
     ]
+  },
+  {
+    id: 'gateway',
+    kicker: 'one route for every harness',
+    title: 'Every harness, the models you choose',
+    lede: 'Claude Code, Codex, OpenCode and Pi each expect a different model API. Cookrew can send all four through Magpie, yetone’s open-source model gateway (MIT, usemagpie.ai), installed separately on the same machine, so every agent uses the subscriptions, API keys or local models you set up there. Until you pick a default model in the Routing panel, a card runs its harness directly, on its own login.',
+    claims: [
+      { status: 'shipped', title: 'Four harnesses, one route', text: 'Claude Code, Codex, OpenCode and Pi can each be routed through the machine’s own Magpie. A plain shell is not routed.' },
+      { status: 'shipped', title: 'Provider keys stay in the gateway', text: 'Subscriptions and API keys are set up in Magpie. A routed agent is given the local gateway’s address, its gateway key and a tag naming its card — never a provider key.' },
+      { status: 'shipped', title: 'Usage per agent', text: 'Every request carries the card that made it, so the gateway counts usage agent by agent.' },
+      { status: 'experiment', title: 'Borrow another machine’s model', text: 'On 12 November 2026, Codex on one Mac ran its tools on that Mac while its model was answered by another machine’s Magpie, over an SSH tunnel set up by hand. One model, one run; no card is wired this way.' },
+      { status: 'planned', title: 'A gateway across your machines', text: 'Reach another machine’s gateway through your account, without a hand-made tunnel.' },
+      { status: 'planned', title: 'An official model gateway', text: 'Models offered through Cookrew itself. No provider agreement is in place.' }
+    ],
+    media: [{ key: 'routing' }]
   },
   {
     id: 'workspace',
@@ -386,3 +388,30 @@ function llmsBody(): string {
     ...FAQ.flatMap((f) => [`### ${f.q}`, '', f.a, ''])
   ].join('\n')
 }
+
+/**
+ * THE WORDS IN THE LANGUAGE BEING DRAWN (owner 2026-11-18: English and Chinese). The constants above are the English
+ * text and stay as they are (llms.txt and the tests read them); the page builders ask these instead. Chinese text is
+ * site-content-zh.ts, the same facts and the same status labels.
+ */
+const zh = (): boolean => currentLang() === 'zh'
+export const definition = (): string => (zh() ? ZH_DEFINITION : DEFINITION)
+export const headline = (): string => (zh() ? ZH_HEADLINE : HEADLINE)
+export const headlineSub = (): string => (zh() ? ZH_HEADLINE_SUB : HEADLINE_SUB)
+export const faq = (): readonly Faq[] => (zh() ? ZH_FAQ : FAQ)
+export const compare = (): readonly CompareRow[] => (zh() ? ZH_COMPARE : COMPARE)
+export const startHowto = (): readonly { name: string; text: string; detail: readonly string[] }[] => (zh() ? ZH_START_HOWTO : START_HOWTO)
+export const startFaq = (): readonly Faq[] => (zh() ? ZH_START_FAQ : START_FAQ)
+export const status = (): Readonly<Record<ClaimStatus, { label: string; meaning: string }>> => (zh() ? ZH_STATUS : STATUS)
+const featureIn = (f: FeatureSpec): FeatureSpec => (zh() && ZH_FEATURES[f.slug] ? { ...f, ...ZH_FEATURES[f.slug] } : f)
+export const features = (): readonly FeatureSpec[] => FEATURES.map(featureIn)
+export const listedFeatures = (): readonly FeatureSpec[] => LISTED_FEATURES.map(featureIn)
+export const pillars = (): readonly Pillar[] =>
+  zh()
+    ? PILLARS.map((p) => {
+        const w = ZH_PILLARS[p.id]
+        return { ...p, kicker: w.kicker, title: w.title, lede: w.lede, claims: p.claims.map((c, i) => ({ ...c, ...w.claims[i] })) }
+      })
+    : PILLARS
+export const roadmap = (): typeof ROADMAP =>
+  zh() ? ROADMAP.map((r) => ({ ...r, ...ZH_ROADMAP[r.phase as keyof typeof ZH_ROADMAP] })) : ROADMAP

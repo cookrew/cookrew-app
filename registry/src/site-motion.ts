@@ -1,13 +1,14 @@
-import { PHONE_MEDIA, SOURCE_CHIP } from './site-frames'
+import { PHONE_MEDIA } from './site-frames'
 import { FRAME_SIZES } from './site-frame-sizes'
 import { SITE_FRAMES, esc } from './site-shell'
+import { tr } from './site-lang'
 
 /**
  * THE CANVAS CLIP (2026-11-17). The 1 Nov recordings (promo.mp4 and the six
  * motion-* clips) were of the maintainer's own workspace; none is on a page
  * now. This clip is the current UI on the demo cast, every beat one real click
- * through the app's renderer, and its caption says it is an illustration on
- * demo data, never a recording. It sits on the canvas feature page; the front
+ * through the app's renderer on demo data, never a recording (no caption since
+ * 2026-11-18; a day and a night take). It sits on the canvas feature page; the front
  * page's hero is the multi-device composite (site-frames.ts DEMO.hero).
  */
 export const CANVAS_CLIP = {
@@ -18,6 +19,7 @@ export const CANVAS_CLIP = {
   height: FRAME_SIZES['demo-canvas.mp4']!.height,
   label:
     'Twenty seconds of the current Cookrew interface on demo data: two workspaces, a crew of four on four harnesses, an agent’s question as rows to pick, the artifacts, a browser card, and the board of every agent',
+  labelZh: '二十秒的 Cookrew 当前界面，演示数据：两个工作空间、四个 harness 上的四个 agent、一个 agent 的问题和可选的回答、产出物、一张浏览器卡片，以及所有 agent 的面板',
   caption:
     'Twenty seconds clicked through the app’s current interface on demo data (17 Nov 2026): the workspaces, Release Room’s four agents on Claude Code, Codex, OpenCode and Pi, Planner’s question as rows to pick, the artifacts, Checker’s browser card, and the BOARD. Each step is cropped to what it shows. Nobody’s real work is in it.'
 } as const
@@ -29,5 +31,8 @@ export const CANVAS_CLIP = {
  */
 export function clipFigure(): string {
   const clip = CANVAS_CLIP
-  return `<figure class="shot clip illustration" data-source="illustration"><video autoplay muted loop playsinline preload="metadata" poster="${esc(`${SITE_FRAMES}${clip.poster}`)}" width="${clip.width}" height="${clip.height}" aria-label="${esc(clip.label)}"><source src="${SITE_FRAMES}${clip.file}" type="video/mp4" media="not all and ${PHONE_MEDIA}"></video><figcaption><span class="rec src-illustration">${esc(SOURCE_CHIP.illustration)}</span><span>${esc(clip.caption)}</span></figcaption></figure>`
+  const video = (file: string, poster: string, cls: string): string =>
+    `<video class="${cls}" autoplay muted loop playsinline preload="${cls === 'v-day' ? 'metadata' : 'none'}" poster="${esc(`${SITE_FRAMES}${poster}`)}" width="${clip.width}" height="${clip.height}" aria-label="${esc(tr(clip.label, clip.labelZh))}"><source src="${SITE_FRAMES}${file}" type="video/mp4" media="not all and ${PHONE_MEDIA}"></video>`
+  const night = FRAME_SIZES[clip.file.replace(/\.mp4$/, '-night.mp4')]
+  return `<figure class="shot clip illustration" data-source="illustration">${video(clip.file, clip.poster, night ? 'v-day' : '')}${night ? video(clip.file.replace(/\.mp4$/, '-night.mp4'), clip.poster.replace(/\.jpg$/, '-night.jpg'), 'v-night') : ''}</figure>`
 }

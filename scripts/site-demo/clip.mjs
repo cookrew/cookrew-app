@@ -39,7 +39,7 @@ const beat = async (label, css, text, hold, box) => {
   mark(box)
   await sleep(hold)
 }
-const TILES = [190, 120, 640, 400], CARD = [0, 60, 832, 520], ITEMS = [190, 170, 640, 400], PAGE = [56, 40, 912, 570], BOARD = [190, 40, 832, 520]
+const TILES = [190, 120, 640, 400], CARD = [190, 110, 640, 400], ITEMS = [190, 170, 640, 400], PAGE = [56, 40, 912, 570], BOARD = [190, 40, 832, 520]
 
 // The steps dwell on the dense views (the workspaces, Planner's question, the browser card, the BOARD) and pass through a
 // crew and the artifacts (cropped to its four cards) only as the way between them. The devices are the board page's.
@@ -48,7 +48,7 @@ await t.send('Page.startScreencast', { format: 'jpeg', quality: 90, maxWidth: VW
 mark(TILES)
 await sleep(3000)
 await beat('agents', '.zv-door.agents', 'Release Room', 1100, TILES)
-await beat('planner', '.zv-m.waiting .cr-name-text', 'Planner', 4200, CARD)
+await beat('planner', 'button.zv-gf.agent.waiting', null, 4200, CARD)
 await t.key('Escape'); await sleep(500)
 await beat('artifacts', '.zv-group.items .zv-group-stop', null, 1300, ITEMS)
 await beat('browser', '.zv-ip .zv-who, .zv-ip', 'Release notes', 3600, PAGE)

@@ -45,7 +45,7 @@ pairs = [
     ('desktop: "MacBook Pro", account: "drej"', 'desktop: "Studio Mac", account: "demo"'),
     ('desktop: "MacBook Pro", account: nil', 'desktop: "Studio Mac", account: nil'),
     ('      print("drew \\(list.count) screens into \\(out.path)")',
-     '      for (index, shot) in list.enumerated() { write(Glass(size: CGSize(width: 198, height: 242), palette: .day) { shot.view }, scale: 3, to: out.appending(path: String(format: "w45-%02d.png", index + 1))) }\n      print("drew \\(list.count) screens into \\(out.path)")'),
+     '      for (index, shot) in list.enumerated() { write(Glass(size: CGSize(width: 198, height: 242), palette: .day) { shot.view }, scale: 3, to: out.appending(path: String(format: "w45-%02d.png", index + 1))); write(Glass(size: CGSize(width: 198, height: 242), palette: .night) { shot.view }, scale: 3, to: out.appending(path: String(format: "w45n-%02d.png", index + 1))) }\n      print("drew \\(list.count) screens into \\(out.path)")'),
 ]
 missing = []
 for old, new in pairs:

@@ -53,7 +53,10 @@ describe('the files', () => {
     // host serves a flat file at the address without a slash, which is the address the
     // page calls canonical, and sends a directory's index to the address WITH one.
     for (const feature of FEATURES) expect(names, feature.slug).toContain(`features/${feature.slug}.html`)
-    expect(names.filter((name) => name.endsWith('/index.html'))).toEqual([])
+    // The Chinese pages (site-lang.ts): the front page is the one directory index, /zh/, its canonical address.
+    expect(names).toContain('zh/index.html')
+    for (const feature of FEATURES) expect(names, `zh ${feature.slug}`).toContain(`zh/features/${feature.slug}.html`)
+    expect(names.filter((name) => name.endsWith('/index.html'))).toEqual(['zh/index.html'])
   })
 
   it('link nowhere on this site that is neither a file of it nor a rule of it', () => {
@@ -61,7 +64,7 @@ describe('the files', () => {
       .split('\n')
       .filter((line) => line.startsWith('/'))
       .map((line) => line.split(' ')[0])
-    const served = (path: string): boolean => path === '/' || files.has(`${path.slice(1)}.html`) || files.has(path.slice(1)) || rules.includes(path)
+    const served = (path: string): boolean => path === '/' || (path.endsWith('/') && files.has(`${path.slice(1)}index.html`)) || files.has(`${path.slice(1)}.html`) || files.has(path.slice(1)) || rules.includes(path)
     for (const [path, html] of pages(files)) {
       for (const [, link] of html.matchAll(/\s(?:href|src|poster)="(\/[^"#?]*)[^"]*"/g)) expect(served(link), `${path} links ${link}`).toBe(true)
     }

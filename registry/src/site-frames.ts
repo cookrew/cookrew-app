@@ -1,5 +1,6 @@
 import { SITE_FRAMES } from './site-shell'
 import { FRAME_SIZES } from './site-frame-sizes'
+import { currentLang } from './site-lang'
 
 /**
  * WHAT THE SITE SHOWS, AND WHAT EACH PICTURE IS (2026-11-17).
@@ -8,17 +9,18 @@ import { FRAME_SIZES } from './site-frame-sizes'
  * the interface has moved on since; none of them is on a page any more. Every
  * picture now is the CURRENT product UI, rendered from the app's own code on a
  * demo cast with nobody's data in it (the workspace "Release Room": Planner on
- * Claude Code, Reviewer on Codex, Checker on OpenCode, Notes on Pi), and each
- * says so beside it: an illustration on demo data, never a recording.
+ * Claude Code, Reviewer on Codex, Checker on OpenCode, Notes on Pi). Since
+ * 2026-11-18 (owner) a picture wears no chip and no caption: what it is stays
+ * in the markup as data-source, and its alt text says what it shows.
  *
  *   illustration  the app's renderer (or the watch's SwiftUI views) on the
  *                 demo cast, driven by real clicks; nothing drawn over it
  *   composite     several such renders set side by side in plain frames, or
  *                 (the operation cards) a picture of a demo page laid into a
- *                 card's empty stage; the caption says which
+ *                 card's empty stage
  *   recording     the running app on real work — none on the site this round
  *
- * Source of every file: the worktree's renderer at dev d28ddfbb on the demo api
+ * Source of every file: the worktree's renderer at dev fd70898d (day and night) on the demo api
  * with a synthetic seed, and watch/Sources/watch-shots on a recast copy of its
  * fixture (scripts/site-demo: the seed, the recast, and the shoot and compose
  * scripts). The files live under registry/assets/site/ and are
@@ -40,24 +42,21 @@ export interface Frame {
   phone?: { width: number; height: number }
   /** A sparse picture (two faces) is drawn no wider than this many CSS px on a desktop, not blown up to the page. */
   maxWidth?: number
-}
-
-/** The words a figure wears for what it is, beside its caption. */
-export const SOURCE_CHIP: Readonly<Record<FrameSource, string>> = {
-  illustration: 'Product UI on demo data · illustration',
-  composite: 'Composite of product UI renders on demo data · illustration',
-  recording: '● REC'
+  /** The same render at night (<file>-night.jpg, the app's night palette): shown at night instead. */
+  night?: Frame
 }
 
 export const sourceOf = (frame: Frame): FrameSource => frame.source
 
-/** Where the pictures were made, once, for every caption that needs to say it. */
-export const RENDERED = 'Rendered on 17 Nov 2026 from the app’s code on dev, on demo data.'
-
 const demo = (file: string, alt: string, caption: string, source: FrameSource = 'illustration', maxWidth?: number): Frame => {
   const size = FRAME_SIZES[file]
   if (!size) throw new Error(`site-frames: no size for ${file}; run scripts/site-demo/assets.mjs`)
-  return { file, alt, caption, source, width: size.width, height: size.height, twins: size.twins, ...(size.phone ? { phone: size.phone } : {}), ...(maxWidth ? { maxWidth } : {}) }
+  const at = (name: string): Frame | null => {
+    const z = FRAME_SIZES[name]
+    return z ? { file: name, alt, caption, source, width: z.width, height: z.height, twins: z.twins, ...(z.phone ? { phone: z.phone } : {}), ...(maxWidth ? { maxWidth } : {}) } : null
+  }
+  const night = at(file.replace(/\.jpg$/, '-night.jpg'))
+  return { ...at(file)!, ...(night ? { night } : {}) }
 }
 
 /**
@@ -98,6 +97,26 @@ export const DEMO = {
 
 export type DemoKey = keyof typeof DEMO
 
+/** The alt text on a Chinese page, by file (day and night share it). */
+const ALT_ZH: Readonly<Record<string, string>> = {
+  'demo-hero-devices.jpg': 'Planner 的同一个问题出现在三台设备上：桌面应用、手机宽度的应用和 Apple Watch',
+  'demo-routing.jpg': 'Routing 面板：Magpie 在线，四个 harness 都可路由，订阅和本地模型，默认分组',
+  'demo-crew-phone.jpg': '手机宽度下 Release Room 的四个 agent',
+  'demo-watch.jpg': '三个 Apple Watch 屏幕：Checker 的回复、Release Room 的 agent 和账号下的机器',
+  'demo-ops-cards.jpg': '三种操作卡片：电脑屏幕、浏览器页面和手机屏幕',
+  'demo-agents.jpg': '一个工作空间，四个 harness 上的四个 agent：Planner 在等你，Reviewer 工作中，Checker 已回复，Notes 休息中',
+  'demo-workspaces.jpg': '工作空间视图：Release Room 和 Docs Site，各自显示 agent 头像和等你处理的事',
+  'demo-hitl-desk.jpg': '从底栏打开 Planner 的问题，Claude Code 的权限请求变成可选择的几行',
+  'demo-artifacts.jpg': '产出物视图：手机屏幕卡片、电脑屏幕卡片、浏览器卡片和一张便签',
+  'demo-board.jpg': 'BOARD 面板：Release Room 的每个 agent，带着它的 harness、最后的提示和状态',
+  'demo-devices.jpg': '设备视图：Studio Mac 和 Build Server，屏幕上是各自的工作空间，下方是负载',
+  'demo-hitl-phone.jpg': '手机宽度下 Planner 的问题，可以点选的几行',
+  'demo-phone-workspaces.jpg': '手机宽度下的工作空间视图：Release Room 和 Docs Site',
+  'demo-browser-card.jpg': '打开在发布说明页面上的浏览器卡片，由 Checker 使用',
+  'demo-docs-crew.jpg': '第二个工作空间 Docs Site：Writer 在等你，Editor 已完成'
+}
+const altOf = (frame: Frame): string => (currentLang() === 'zh' ? (ALT_ZH[frame.file.replace(/-night\.jpg$/, '.jpg')] ?? frame.alt) : frame.alt)
+
 /** Where a phone takes its own framing of a figure. */
 export const PHONE_MEDIA = '(max-width: 640px)'
 
@@ -108,13 +127,13 @@ const twinUrl = (frame: Frame, width: number): string => `${SITE_FRAMES}${frame.
  * A <picture>: the crop and its narrower twins with their widths (no layout shift: the size is known up front), and,
  * when the figure has one, its phone framing for narrow screens.
  */
-export function frameImg(frame: Frame, options: { eager?: boolean; sizes?: string } = {}): string {
+export function frameImg(frame: Frame, options: { eager?: boolean; sizes?: string; cls?: string } = {}): string {
   const set = [...frame.twins.map((w) => `${escAttr(twinUrl(frame, w))} ${w}w`), `${escAttr(frameUrl(frame))} ${frame.width}w`].join(', ')
   const phone = frame.phone
     ? `<source media="${PHONE_MEDIA}" srcset="${escAttr(`${SITE_FRAMES}${frame.file.replace(/\.jpg$/, '-phone.jpg')}`)}" width="${frame.phone.width}" height="${frame.phone.height}">`
     : ''
-  const img = `<img src="${escAttr(frameUrl(frame))}" srcset="${set}" sizes="${escAttr(options.sizes ?? '(max-width: 860px) 100vw, 60vw')}" width="${frame.width}" height="${frame.height}" alt="${escAttr(frame.alt)}"${options.eager ? ' fetchpriority="high"' : ' loading="lazy" decoding="async"'}>`
-  return `<picture>${phone}${img}</picture>`
+  const img = `<img src="${escAttr(frameUrl(frame))}" srcset="${set}" sizes="${escAttr(options.sizes ?? '(max-width: 860px) 100vw, 60vw')}" width="${frame.width}" height="${frame.height}" alt="${escAttr(altOf(frame))}"${options.eager ? ' fetchpriority="high"' : ' loading="lazy" decoding="async"'}>`
+  return `<picture${options.cls ? ` class="${options.cls}"` : ''}>${phone}${img}</picture>`
 }
 
 export function frameUrl(frame: Frame): string {
@@ -124,14 +143,17 @@ export function frameUrl(frame: Frame): string {
 const escText = (v: string): string => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 /**
- * ONE FIGURE, AND WHAT IT IS. The chip says illustration, composite or recording before the caption says what was
- * clicked; an extra sentence (a status the picture shows, what it is not) follows the caption.
+ * ONE FIGURE (owner 2026-11-18: no illustration box and no caption on a picture). What it is stays in the markup,
+ * as `data-source` (illustration or composite), and its alt text says what it shows.
  */
-export function figure(frame: Frame, options: { sizes?: string; note?: string; eager?: boolean; cls?: string } = {}): string {
+export function figure(frame: Frame, options: { sizes?: string; eager?: boolean; cls?: string } = {}): string {
   const source = sourceOf(frame)
   const portrait = frame.height > frame.width
-  const note = options.note ? ` ${escText(options.note)}` : ''
-  const cls = `shot ${source}${portrait ? ' portrait' : ''}${options.cls ? ` ${options.cls}` : ''}`
+  const cls = `shot ${source}${portrait ? ' portrait' : ''}${options.cls ? ` ${options.cls}` : ''}${frame.maxWidth ? ' narrow' : ''}`
   const style = frame.maxWidth ? ` style="--max:${frame.maxWidth}px"` : ''
-  return `<figure class="${cls}${frame.maxWidth ? ' narrow' : ''}" data-source="${source}"${style}>${frameImg(frame, { sizes: options.sizes, eager: options.eager })}<figcaption><span class="rec src-${source}">${escText(SOURCE_CHIP[source])}</span><span>${escText(frame.caption)}${note}</span></figcaption></figure>`
+  // Day and night: the one not shown is not loaded (lazy, and display:none until the scheme or the reader's pick asks).
+  const pictures = frame.night
+    ? frameImg(frame, { sizes: options.sizes, eager: options.eager, cls: 'v-day' }) + frameImg(frame.night, { sizes: options.sizes, cls: 'v-night' })
+    : frameImg(frame, { sizes: options.sizes, eager: options.eager })
+  return `<figure class="${cls}" data-source="${source}"${style}>${pictures}</figure>`
 }

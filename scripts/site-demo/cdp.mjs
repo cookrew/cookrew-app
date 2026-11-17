@@ -1,7 +1,13 @@
 // A tab on the shoot Chrome (:9334), with the few verbs the shots need.
+//
+// NIGHT=1: every tab is drawn at night. The system scheme is emulated as dark, and the app's `data-scheme` is held at
+// 'auto' (what the console wears in a browser; the desktop app itself stays light), so its night palette is the one
+// drawn (src/renderer/src/color-scheme.ts, night.css).
 import { writeFileSync } from 'node:fs'
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+export const NIGHT = process.env.NIGHT === '1'
+const HOLD_AUTO = "new MutationObserver(() => { const r = document.documentElement; if (r && r.dataset.scheme && r.dataset.scheme !== 'auto') r.dataset.scheme = 'auto' }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-scheme'] })"
 
 export async function tab(port = 9334) {
   const t = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json()
@@ -20,6 +26,7 @@ export async function tab(port = 9334) {
   const errors = []
   on('Runtime.exceptionThrown', (p) => errors.push((p.exceptionDetails?.exception?.description ?? p.exceptionDetails?.text ?? '').slice(0, 300)))
   await send('Page.enable'); await send('Runtime.enable'); await send('Network.enable'); await send('Network.setCacheDisabled', { cacheDisabled: true })
+  if (NIGHT) await send('Page.addScriptToEvaluateOnNewDocument', { source: HOLD_AUTO })
   const value = async (expression) => {
     const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text)
@@ -30,7 +37,7 @@ export async function tab(port = 9334) {
     while (Date.now() < end) { if (await value(`!!(${expression})`).catch(() => false)) return; await sleep(150) }
     throw new Error(`never saw: ${label}`)
   }
-  const size = async (width, height, { mobile = false, dsf = 2, scheme = 'light' } = {}) => {
+  const size = async (width, height, { mobile = false, dsf = 2, scheme = NIGHT ? 'dark' : 'light' } = {}) => {
     await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: dsf, mobile })
     await send('Emulation.setTouchEmulationEnabled', { enabled: mobile })
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }, { name: 'prefers-reduced-motion', value: 'no-preference' }] })

@@ -5,6 +5,7 @@ import { GITHUB_REPO, SITE_ORIGIN } from './site-content'
 import { jsonLd } from './site-seo'
 import { webCopy } from './v3-copy'
 import { LEGAL_PUBLISHED } from './site-legal-entity'
+import { htmlLang, local, otherLang, tr } from './site-lang'
 
 /**
  * THE ONE SHELL — the app's own dress, for the two places a page is still drawn.
@@ -264,6 +265,15 @@ const FONT_FACES = `
 @font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 700;font-display:optional;src:url(${SITE_FONTS}jetbrains-mono.woff2?v=${ASSET_VERSION}) format('woff2')}`
 const PRECONNECT = `<link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}inter.woff2?v=${ASSET_VERSION}" crossorigin>`
 
+/** A page's English path: '/zh/features/canvas' is '/features/canvas', '/zh/' is '/'. */
+export const englishPath = (path: string | undefined): string => (path === undefined ? '/' : path.replace(/^\/zh(\/|$)/, '/'))
+const translated = (path: string): boolean => path === '/' || path.startsWith('/features/')
+/** The page in both languages, for the engines. */
+const alternates = (en: string): string => {
+  const zh = en === '/' ? '/zh/' : `/zh${en}`
+  return `<link rel="alternate" hreflang="en" href="${SITE_ORIGIN}${en}"><link rel="alternate" hreflang="zh-CN" href="${SITE_ORIGIN}${zh}"><link rel="alternate" hreflang="x-default" href="${SITE_ORIGIN}${en}">`
+}
+
 function head(options: ShellOptions): string {
   const url = options.path === undefined ? null : `${SITE_ORIGIN}${options.path}`
   const description = options.description ?? ''
@@ -274,6 +284,7 @@ function head(options: ShellOptions): string {
     description ? `<meta name="description" content="${esc(description)}">` : '',
     options.noindex ? `<meta name="robots" content="noindex">` : '',
     url ? `<link rel="canonical" href="${esc(url)}">` : '',
+    staticSite !== null && options.path !== undefined && translated(englishPath(options.path)) ? alternates(englishPath(options.path)) : '',
     `<meta property="og:site_name" content="Cookrew"><meta property="og:type" content="website">`,
     `<meta property="og:title" content="${esc(options.title)}">`,
     description ? `<meta property="og:description" content="${esc(description)}">` : '',
@@ -296,23 +307,26 @@ function head(options: ShellOptions): string {
 function shell(options: ShellOptions, main: string): string {
   if (staticSite !== null) {
     const top = [
-      ['/', 'Home', 'home'],
-      ['/#download', 'Get the app', 'download']
+      [local('/'), tr('Home', '首页'), 'home'],
+      [local('/#download'), tr('Get the app', '获取应用'), 'download']
     ]
       .map(([href, label, key]) => `<a class="btn sm${options.active === key ? ' primary' : ''}" href="${href}">${label}</a>`)
       .join('')
+    // This page in the other language (a page with no Chinese copy offers the Chinese front page).
+    const other = otherLang(englishPath(options.path))
+    const prefs = `<span class="prefs"><a class="btn sm" href="${esc(other.href)}" hreflang="${other.lang === 'zh' ? 'zh-CN' : 'en'}" lang="${other.lang === 'zh' ? 'zh-CN' : 'en'}">${other.label}</a><span class="theme" role="radiogroup" aria-label="${tr('Theme', '主题')}"><input type="radio" name="th" id="th-auto" checked><label for="th-auto">${tr('Auto', '自动')}</label><input type="radio" name="th" id="th-day"><label for="th-day">${tr('Day', '日间')}</label><input type="radio" name="th" id="th-night"><label for="th-night">${tr('Night', '夜间')}</label></span></span>`
     return `<!doctype html>
-<html lang="en"><head>${head(options)}<style>${FONT_FACES}${SITE_STYLE}</style></head>
+<html lang="${htmlLang()}"><head>${head(options)}<style>${FONT_FACES}${SITE_STYLE}</style></head>
 <body>
 <header class="hdr"><div class="wrap">
-<a class="mark" href="/" aria-label="Cookrew home">${LOGO}</a>
-<span class="chip">your agents on every machine · one account</span>
-<nav class="top">${top}<a class="btn sm" href="${esc(staticSite.console)}/">${icon('mac')} Open console</a></nav>
+<a class="mark" href="${local('/')}" aria-label="${tr('Cookrew home', 'Cookrew 首页')}">${LOGO}</a>
+<span class="chip">${tr('your agents on every machine · one account', '每台机器上的 agent · 一个账号')}</span>
+<nav class="top">${top}<a class="btn sm" href="${esc(staticSite.console)}/">${icon('mac')} ${tr('Open console', '打开控制台')}</a>${prefs}</nav>
 </div></header>
 ${main}
 <footer><div class="wrap">
-<nav class="row" aria-label="Site"><a href="/#features">Features</a><a href="/#start">Get started</a><a href="/#download">Download</a><a href="${esc(staticSite.console)}/">Console</a><a href="${esc(staticSite.auth)}/account">Account</a><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a>${LEGAL_PUBLISHED ? '<a href="/privacy">Privacy</a><a href="/terms">Terms</a>' : ''}</nav>
-<p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. This site is static: no script runs on it and nothing here signs you in. Your machines are in the console; your account is at ${esc(new URL(staticSite.auth).host)}.</p>
+<nav class="row" aria-label="${tr('Site', '站点')}"><a href="${local('/#features')}">${tr('Features', '功能')}</a><a href="${local('/#start')}">${tr('Get started', '开始使用')}</a><a href="${local('/#download')}">${tr('Download', '下载')}</a><a href="${esc(staticSite.console)}/">${tr('Console', '控制台')}</a><a href="${esc(staticSite.auth)}/account">${tr('Account', '账号')}</a><a href="${GITHUB_REPO}">${tr('Source', '源码')}</a><a href="${GITHUB_REPO}/releases">${tr('Releases', '版本')}</a>${LEGAL_PUBLISHED ? `<a href="/privacy">${tr('Privacy', '隐私（英文）')}</a><a href="/terms">${tr('Terms', '条款（英文）')}</a>` : ''}</nav>
+<p class="meta" style="margin-top:12px">${tr(`Cookrew is open source under the MIT license. This site is static: no script runs on it and nothing here signs you in. Your machines are in the console; your account is at ${esc(new URL(staticSite.auth).host)}.`, `Cookrew 以 MIT 许可开源。本站是静态网站：不运行任何脚本，也不会让你登录。你的机器在控制台里；你的账号在 ${esc(new URL(staticSite.auth).host)}。`)}</p>
 </div></footer>
 </body></html>`
   }
@@ -385,7 +399,7 @@ export function icon(name: keyof typeof ICONS): string {
 }
 
 /** One stylesheet for every document; a second would drift from the first. */
-export const SITE_STYLE = `
+const RAW_STYLE = `
 :root{--cream:#f4efe4;--cream-hi:#fbf8f1;--cream-md:#ebe3d3;--cream-lo:#e3d9c6;--ink:#1d1a16;--ink-soft:#5d554a;
 --muted:#6f675b;--dim:#8c8374;--line:rgba(29,26,22,.42);--line-soft:rgba(29,26,22,.16);--hair:rgba(29,26,22,.16);--amber:#e2b866;--amber-soft:#f3e4c2;--amber-deep:#8f5520;
 --seal:#a8692b;--seal-fill:#96592a;--on-seal:#fbf8f1;--wash:rgba(168,140,98,.16);
@@ -497,13 +511,21 @@ ul.claims{list-style:none;margin:0;padding:0;border-top:1px solid var(--hair);di
 /* recorded frame */
 figure.shot{margin:0;border:1px solid var(--hair);box-shadow:var(--lift);background:var(--phos-bg);overflow:hidden}
 figure.shot picture{display:block}
+/* a picture's night twin (site-frames.ts): shown at night, the day one hidden */
+.v-night{display:none}
+@media (prefers-color-scheme:dark){.v-day{display:none}.v-night{display:block}}
+/* the language and the theme, in the header */
+.prefs{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.theme{display:inline-flex;border:1px solid var(--line);background:var(--cream-hi)}
+.theme input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}
+.theme label{font:600 9.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;padding:6px 9px;cursor:pointer;color:var(--ink-soft)}
+.theme input:checked+label{background:var(--ink);color:var(--cream)}
+.theme input:focus-visible+label{outline:2px solid var(--amber-deep);outline-offset:1px}
 figure.shot img,figure.shot video{display:block;width:100%;height:auto}
 figure.shot video{aspect-ratio:1024/640;background:var(--phos-bg)}
 figure.shot figcaption{font-size:13px;color:var(--muted);padding:9px 12px;background:var(--cream-hi);border-top:1px solid var(--hair);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 figure.shot .rec{font:8.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;background:var(--hp);color:var(--on-seal);border:1px solid var(--line);padding:2px 6px}
 figure.shot.missing{min-height:220px;display:grid;place-items:center;color:var(--phos-dim);font:18px var(--font-screen)}
-/* What a picture is, before what it shows (site-frames.ts SOURCE_CHIP): an illustration never wears the recording's green. */
-figure.shot .rec.src-illustration,figure.shot .rec.src-composite{background:var(--cream-md);color:var(--ink-soft);border-style:dashed}
 figure.shot.illustration,figure.shot.composite{background:var(--cream-md)}
 /* How it looks: wider than the text column on a large screen (up to 1392 px; the crops are 2880 wide), phone screens
    side by side; the clip at most its own 1024 px. */
@@ -511,13 +533,12 @@ figure.shot.illustration,figure.shot.composite{background:var(--cream-md)}
 .feature-shots.pair{grid-template-columns:repeat(2,minmax(0,420px));justify-content:center}
 .feature-shots figure.clip{max-width:1024px;width:100%;justify-self:center}
 .feature-shots figure.narrow{max-width:var(--max);width:100%;justify-self:center}
-/* A phone takes each figure's own framing (<picture> source, site-frames.ts PHONE_MEDIA), edge to edge, the chip one small line. */
+/* A phone takes each figure's own framing (<picture> source, site-frames.ts PHONE_MEDIA), edge to edge. */
 @media (max-width:640px){
 .feature-shots figure.clip{display:none}
 .feature-shots.pair{grid-template-columns:minmax(0,1fr)}
 figure.shot:not(.narrow){margin-inline:calc(50% - 50vw);border-left:0;border-right:0}
 figure.shot figcaption{padding:8px 16px;font-size:12.5px;gap:4px 10px}
-figure.shot .rec.src-illustration,figure.shot .rec.src-composite{border:0;background:none;padding:0;font-size:9px;letter-spacing:.02em}
 }
 /* sections */
 section{padding:56px 0;border-bottom:1px solid var(--line-soft)}
@@ -827,6 +848,39 @@ mark.ph{background:var(--amber);color:#1d1a16;padding:0 4px;border-radius:3px;fo
 .motion figure.shot figcaption{align-items:flex-start}.motion figure.shot figcaption b{font-size:15px;color:var(--ink)}
 dialog.acct{border-radius:14px}
 `
+
+/**
+ * DAY, NIGHT OR THE SYSTEM'S (owner 2026-11-18: day and night versions). The site follows the system's scheme; three
+ * radios in the header (#th-auto, #th-day, #th-night) let a reader pick, with no script (the policy allows none), so
+ * the pick lasts for the page. Every rule the stylesheet keeps for a dark system is drawn a second time for a reader who
+ * picked night, and held back from one who picked day: the same rules, two more selectors.
+ */
+const DAY = ':root:not(:has(#th-day:checked))'
+const NIGHT = ':root:has(#th-night:checked)'
+function themed(css: string): string {
+  const open = '@media (prefers-color-scheme:dark){'
+  let out = ''
+  let forced = ''
+  let at = 0
+  for (;;) {
+    const start = css.indexOf(open, at)
+    if (start === -1) break
+    let depth = 1
+    let i = start + open.length
+    for (; i < css.length && depth > 0; i++) depth += css[i] === '{' ? 1 : css[i] === '}' ? -1 : 0
+    const inner = css.slice(start + open.length, i - 1)
+    const rules = [...inner.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => [m[1]!.trim(), m[2]!] as const)
+    const scope = (prefix: string, sel: string): string =>
+      sel.split(',').map((one) => (one.trim().startsWith(':root') ? one.trim().replace(':root', prefix) : `${prefix} ${one.trim()}`)).join(',')
+    out += css.slice(at, start) + open + rules.map(([sel, body]) => `${scope(DAY, sel)}{${body}}`).join('') + '}'
+    forced += rules.map(([sel, body]) => `${scope(NIGHT, sel)}{${body}}`).join('')
+    at = i
+  }
+  return `${out}${css.slice(at)}\n${forced}\n:root:has(#th-day:checked){color-scheme:light}${NIGHT}{color-scheme:dark}\n`
+}
+
+/** One stylesheet for every document; a second would drift from the first. */
+export const SITE_STYLE = themed(RAW_STYLE)
 /** The sheet's and /me's own dress, appended to the site's one stylesheet. */
 export const ACCOUNT_STYLE = `
 dialog.acct{max-width:420px;width:calc(100vw - 32px);border:1px solid var(--hair);box-shadow:var(--lift);background:var(--cream-hi);color:var(--ink);padding:20px}

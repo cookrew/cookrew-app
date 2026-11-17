@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildStaticSite } from '../registry/src/site-static'
 import { SITE_STYLE } from '../registry/src/site-shell'
-import { PILLARS, ROADMAP, STATUS, llmsText } from '../registry/src/site-content'
+import { FEATURES, PILLARS, ROADMAP, STATUS, llmsText } from '../registry/src/site-content'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { DEMO, PHONE_MEDIA } from '../registry/src/site-frames'
@@ -141,41 +141,53 @@ describe('the pictures say what they are (2026-11-17)', () => {
     for (const [name, body] of pages()) expect(body, name).not.toMatch(old)
   })
 
-  it('the hero is one question on three devices, and it says it is a composite of renders on demo data', () => {
+  it('the hero is one question on three devices, a composite of renders on demo data, by day and by night', () => {
     const hero = /<div class="hero">[\s\S]*?<\/figure>/.exec(home())?.[0] ?? ''
     expect(hero).toContain(`/site/${DEMO.hero.file}"`)
+    expect(hero).toContain(`/site/${DEMO.hero.night!.file}"`)
     expect(hero).toContain('data-source="composite"')
-    expect(hero).toContain('Composite of product UI renders on demo data · illustration')
     expect(hero).toContain('fetchpriority="high"')
     expect(DEMO.hero.caption).toMatch(/demo data/)
-    expect(DEMO.hero.caption).toMatch(/not a photograph/)
   })
 
   it('the clip is on the canvas page, an illustration on demo data, and not on the front page', () => {
     const canvas = pages().get('features/canvas.html') ?? ''
     expect(canvas).toContain(`/site/${CANVAS_CLIP.file}"`)
-    expect(canvas).toMatch(/<figure class="shot clip illustration" data-source="illustration"><video [^>]*poster="/)
+    expect(canvas).toMatch(/<figure class="shot clip illustration" data-source="illustration"><video class="v-day"[^>]*poster="/)
+    expect(canvas).toContain(CANVAS_CLIP.file.replace(/\.mp4$/, '-night.mp4'))
     expect(home()).not.toContain(CANVAS_CLIP.file)
     expect(CANVAS_CLIP.caption).toMatch(/demo data/)
     expect(CANVAS_CLIP.caption).not.toMatch(/record/i)
   })
 
-  it('every figure on every page wears what it is; none claims to be recorded', () => {
+  it('every figure keeps what it is in its markup, wears no box or caption (owner 2026-11-18), and none claims to be recorded', () => {
     let seen = 0
     for (const [name, body] of pages()) {
       for (const fig of figures(body)) {
         seen += 1
         expect(fig, name).toMatch(/data-source="(illustration|composite)"/)
-        expect(fig, name).toMatch(/Product UI on demo data · illustration|Composite of product UI renders on demo data · illustration/)
+        expect(fig, name).not.toContain('<figcaption')
         expect(fig, name).not.toMatch(/● REC|[Rr]ecorded|captured from the running app/)
       }
+      expect(body, name).not.toMatch(/Product UI on demo data · illustration|<span class="no">ILLUSTRATION<\/span>/)
     }
     expect(seen).toBeGreaterThan(5)
   })
 
+  it('every picture has its night twin, shown at night or when the reader picks night', () => {
+    for (const [key, frame] of Object.entries(DEMO)) expect(frame.night, key).toBeDefined()
+    const body = home()
+    expect(body).toContain('<picture class="v-day">')
+    expect(body).toContain('<picture class="v-night">')
+    expect(body).toMatch(/<input type="radio" name="th" id="th-auto" checked>.*id="th-day".*id="th-night"/s)
+    expect(SITE_STYLE).toContain(':root:has(#th-night:checked) .v-night{display:block}')
+    expect(SITE_STYLE).toContain(':root:not(:has(#th-day:checked)) .v-night{display:block}')
+  })
+
   it('every picture is in one section of one page, never two (2026-11-17, second round)', () => {
     const seenIn = new Map<string, string>()
-    for (const [name, body] of pages()) {
+    // Within one language: the Chinese pages show the same pictures as their English twins.
+    for (const [name, body] of [...pages()].filter(([n]) => !n.startsWith('zh/'))) {
       for (const fig of figures(body)) {
         const files = new Set([...fig.matchAll(/\/site\/(demo-[a-z-]+?)(?:-\d+|-phone)?\.(?:jpg|mp4)/g)].map((m) => m[1]))
         for (const file of files) {
@@ -201,14 +213,15 @@ describe('the pictures say what they are (2026-11-17)', () => {
     expect(SITE_STYLE).toMatch(/@media \(max-width:640px\)\{[^}]*\.feature-shots figure\.clip\{display:none\}/)
   })
 
-  it('a pillar shows its pictures, each with the sentence of what it is not when one is needed; the drawing is a diagram', () => {
+  it('the pillars run everywhere, then the gateway, then the workspace (owner 2026-11-18), each showing its pictures', () => {
+    expect(PILLARS.map((p) => p.id)).toEqual(['everywhere', 'gateway', 'workspace'])
     const body = home()
+    expect(body.indexOf('id="everywhere"')).toBeLessThan(body.indexOf('id="gateway"'))
+    expect(body).toMatch(/<span class="no">01<\/span>see and prompt everywhere/)
     for (const p of PILLARS) for (const m of p.media) {
       expect(body).toContain(DEMO[m.key].file.replace(/\.jpg$/, '-800.jpg'))
       expect(body).toContain(`/site/${DEMO[m.key].file} ${DEMO[m.key].width}w`)
-      if (m.note) expect(body).toContain(m.note.replace(/&/g, '&amp;'))
     }
-    expect(PILLARS.find((p) => p.id === 'everywhere')!.media.find((m) => m.key === 'watch')!.note).toMatch(/^Beta/)
     expect(body).toContain('Diagram, not a screenshot.')
   })
 
@@ -224,5 +237,39 @@ describe('the pictures say what they are (2026-11-17)', () => {
     }
     expect(existsSync(path.join(dir, CANVAS_CLIP.file))).toBe(true)
     expect(existsSync(path.join(dir, CANVAS_CLIP.poster))).toBe(true)
+  })
+})
+
+describe('the site in Chinese (owner 2026-11-18)', () => {
+  const files = site()
+  const read = (name: string): string => {
+    const body = files.get(name)
+    if (typeof body !== 'string') throw new Error(`no ${name}`)
+    return body
+  }
+
+  it('draws the front page and every feature page again at /zh/, in Chinese, with the same claims and labels', () => {
+    const zh = read('zh/index.html')
+    expect(zh).toContain('<html lang="zh-CN">')
+    expect(zh).toContain('任何设备。任何 harness。任何模型。')
+    expect(zh).toContain('<link rel="canonical" href="https://cookrew.dev/zh/">')
+    // As many claims, each with its label, as the English page.
+    const claimsIn = (html: string): string[] => [...html.matchAll(/<li class="claim" data-status="([a-z-]+)">/g)].map((m) => m[1]!)
+    expect(claimsIn(zh)).toEqual(claimsIn(read('index.html')))
+    expect(zh).toContain('<span class="st st-planned">规划中</span>')
+    for (const f of FEATURES) expect(read(`zh/features/${f.slug}.html`)).toContain('<html lang="zh-CN">')
+  })
+
+  it('links each page to its other-language twin, for readers and for engines', () => {
+    expect(read('index.html')).toContain('href="/zh/" hreflang="zh-CN"')
+    expect(read('zh/index.html')).toContain('href="/" hreflang="en"')
+    expect(read('zh/features/canvas.html')).toContain('href="/features/canvas" hreflang="en"')
+    for (const name of ['index.html', 'zh/index.html']) {
+      expect(read(name)).toContain('<link rel="alternate" hreflang="en" href="https://cookrew.dev/">')
+      expect(read(name)).toContain('<link rel="alternate" hreflang="zh-CN" href="https://cookrew.dev/zh/">')
+    }
+    // A Chinese page keeps its links in Chinese.
+    expect(read('zh/index.html')).toContain('href="/zh/features/canvas"')
+    expect(read('zh/features/canvas.html')).toContain('href="/zh/#download"')
   })
 })

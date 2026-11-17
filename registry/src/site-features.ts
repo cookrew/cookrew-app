@@ -1,7 +1,8 @@
 import { DEMO, figure } from './site-frames'
 import { clipFigure } from './site-motion'
 import { esc, page, type Page } from './site-shell'
-import { COMPARE, DEFINITION, FEATURES, GITHUB_REPO, LISTED_FEATURES, type FeatureSpec } from './site-content'
+import { compare, definition, features, GITHUB_REPO, listedFeatures, type FeatureSpec } from './site-content'
+import { local, tr } from './site-lang'
 import type { Commit } from './github-commits'
 import { breadcrumbs, faqPage, organization, webPage } from './site-seo'
 
@@ -20,12 +21,13 @@ import { breadcrumbs, faqPage, organization, webPage } from './site-seo'
  */
 
 export function featurePage(slug: string): Page | null {
-  const f = FEATURES.find((x) => x.slug === slug)
+  const f = features().find((x) => x.slug === slug)
   if (!f) return null
-  const related = f.related.map((r) => LISTED_FEATURES.find((x) => x.slug === r)).filter((x): x is FeatureSpec => x !== undefined)
-  const path = `/features/${f.slug}`
+  const listed = listedFeatures()
+  const related = f.related.map((r) => listed.find((x) => x.slug === r)).filter((x): x is FeatureSpec => x !== undefined)
+  const path = local(`/features/${f.slug}`)
   // A page still built for old links but listed nowhere is not to be indexed as current (LISTED_FEATURES).
-  const unlisted = !LISTED_FEATURES.some((x) => x.slug === f.slug)
+  const unlisted = !listed.some((x) => x.slug === f.slug)
   // The current UI on demo data, labelled; a feature no picture shows yet has none, and nothing stands in.
   const portraits = f.frames.length > 0 && f.frames.every((key) => DEMO[key].height > DEMO[key].width)
   const visual = (f.clip ? clipFigure() : '') + f.frames.map((key) => figure(DEMO[key], { sizes: portraits ? '(max-width: 640px) 100vw, 420px' : '(max-width: 1440px) 96vw, 1392px' })).join('')
@@ -42,42 +44,42 @@ export function featurePage(slug: string): Page | null {
         organization(),
         webPage({ path, name: f.title, description: f.definition }),
         breadcrumbs([
-          { name: 'Cookrew', path: '/' },
-          { name: 'Features', path: '/#features' },
+          { name: 'Cookrew', path: local('/') },
+          { name: tr('Features', '功能'), path: local('/#features') },
           { name: f.title, path }
         ]),
         faqPage(f.faq)
       ]
     },
     `<div class="wrap" style="padding-top:36px">
-<p class="meta"><a href="/">Cookrew</a> / <a href="/#features">Features</a> / ${esc(f.slug)}</p>
+<p class="meta"><a href="${local('/')}">Cookrew</a> / <a href="${local('/#features')}">${tr('Features', '功能')}</a> / ${esc(f.slug)}</p>
 <h1>${esc(f.title)}</h1>
 <p class="lede">${esc(f.definition)}</p>
 <ul class="pts">${f.pts.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
-<p class="row"><a class="btn primary" href="/#download">Get Cookrew</a><a class="btn" href="/#start">Get started</a></p>
+<p class="row"><a class="btn primary" href="${local('/#download')}">${tr('Get Cookrew', '获取 Cookrew')}</a><a class="btn" href="${local('/#start')}">${tr('Get started', '开始使用')}</a></p>
 </div>
-${visual ? `<section><div class="wrap"><p class="kicker"><span class="no">ILLUSTRATION</span>the current interface on demo data</p>
-<h2>How it looks</h2><div class="feature-shots${portraits ? ' pair' : ''}">${visual}</div></div></section>` : ''}
-<section id="faq"><div class="wrap"><h2>Questions about ${esc(f.slug === 'cli' ? 'the CLI' : f.slug)}</h2><div class="faq">${f.faq
+${visual ? `<section><div class="wrap">
+<h2>${tr('How it looks', '界面一览')}</h2><div class="feature-shots${portraits ? ' pair' : ''}">${visual}</div></div></section>` : ''}
+<section id="faq"><div class="wrap"><h2>${tr(`Questions about ${esc(f.slug === 'cli' ? 'the CLI' : f.slug)}`, '常见问题')}</h2><div class="faq">${f.faq
       .map((q) => `<details open><summary>${esc(q.q)}</summary><p>${esc(q.a)}</p></details>`)
       .join('')}</div></div></section>
-<section><div class="wrap"><h2>Related</h2><div class="grid">${related
-      .map((r) => `<div class="card"><h3><a href="/features/${r.slug}">${esc(r.title)}</a></h3><p>${esc(r.short)}</p></div>`)
+<section><div class="wrap"><h2>${tr('Related', '相关功能')}</h2><div class="grid">${related
+      .map((r) => `<div class="card"><h3><a href="${local(`/features/${r.slug}`)}">${esc(r.title)}</a></h3><p>${esc(r.short)}</p></div>`)
       .join('')}</div>
-<p class="meta" style="margin-top:18px">${esc(DEFINITION)} <a href="${GITHUB_REPO}">Source on GitHub ↗</a></p></div></section>`
+<p class="meta" style="margin-top:18px">${esc(definition())} <a href="${GITHUB_REPO}">${tr('Source on GitHub ↗', 'GitHub 上的源码 ↗')}</a></p></div></section>`
   )
 }
 
 export function compareTable(): string {
-  return `<table class="cmp"><caption>Chat tab, single agent CLI, or Cookrew — what each can do (2026-11)</caption><thead><tr><th></th><th>A chat tab</th><th>One CLI agent</th><th>Cookrew</th></tr></thead><tbody>${COMPARE.map(
+  return `<table class="cmp"><caption>${tr('Chat tab, single agent CLI, or Cookrew — what each can do (2026-11)', '聊天标签页、单个 agent CLI 还是 Cookrew——各自能做什么（2026-11）')}</caption><thead><tr><th></th><th>${tr('A chat tab', '聊天标签页')}</th><th>${tr('One CLI agent', '单个 CLI agent')}</th><th>Cookrew</th></tr></thead><tbody>${compare().map(
     (r) => `<tr><th scope="row">${esc(r.question)}</th><td>${esc(r.chat)}</td><td>${esc(r.singleAgent)}</td><td><b>${esc(r.cookrew)}</b></td></tr>`
   ).join('')}</tbody></table>`
 }
 
 export function commitsSection(commits: readonly Commit[] | null): string {
   if (!commits || commits.length === 0) return ''
-  return `<section id="built"><div class="wrap"><p class="kicker"><span class="no">PROOF</span>built in the open, by its own crew</p><h2>What landed on the dev branch</h2>
-<p>Cookrew is developed on its own canvas by a crew of agents — Forge writes features, Tinker fixes bugs, Magpie runs QA, Conductor directs — and every recorded frame on these pages comes from that canvas. These are the latest commits, straight from GitHub.</p>
+  return `<section id="built"><div class="wrap"><p class="kicker"><span class="no">${tr('PROOF', '证明')}</span>${tr('built in the open, by its own crew', '由它自己的团队公开构建')}</p><h2>${tr('What landed on the dev branch', 'dev 分支上的最新提交')}</h2>
+<p>${tr('Cookrew is developed on its own canvas by a crew of agents — Forge writes features, Tinker fixes bugs, Magpie runs QA, Conductor directs. These are the latest commits, straight from GitHub.', 'Cookrew 由一支 agent 团队在它自己的画布上开发——Forge 写功能，Tinker 修 bug，Magpie 做 QA，Conductor 指挥。下面是来自 GitHub 的最新提交。')}</p>
 <ol class="commits">${commits
     .slice(0, 10)
     .map((c) => `<li><time datetime="${esc(c.date)}">${esc(c.date)}</time> <a href="${esc(c.url)}"><code>${esc(c.sha)}</code></a> ${esc(c.title)}</li>`)
@@ -90,5 +92,5 @@ export function commitsSection(commits: readonly Commit[] | null): string {
  * own page carries its pictures.
  */
 export function featuresGrid(): string {
-  return `<div class="grid">${LISTED_FEATURES.map((f) => `<div class="card"><h3><a href="/features/${f.slug}">${esc(f.title)}</a></h3><p>${esc(f.short)}</p></div>`).join('')}</div>`
+  return `<div class="grid">${listedFeatures().map((f) => `<div class="card"><h3><a href="${local(`/features/${f.slug}`)}">${esc(f.title)}</a></h3><p>${esc(f.short)}</p></div>`).join('')}</div>`
 }

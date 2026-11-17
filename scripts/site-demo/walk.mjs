@@ -8,7 +8,7 @@ const [prefix, w, h, mobile, scheme, stepsJson] = process.argv.slice(2)
 const t = await tab()
 // Every walk starts as a fresh install: no remembered stop, theme or zoom from the last one.
 await t.send('Page.addScriptToEvaluateOnNewDocument', { source: "try { if (!sessionStorage.getItem('walked')) { localStorage.clear(); sessionStorage.setItem('walked', '1') } } catch {}" })
-await t.size(Number(w), Number(h), { mobile: mobile === '1', dsf: Number(process.env.DSF ?? 2), scheme })
+await t.size(Number(w), Number(h), { mobile: mobile === '1', dsf: Number(process.env.DSF ?? 2), scheme: process.env.NIGHT === '1' ? 'dark' : scheme })
 await t.go('http://127.0.0.1:5397/' + (process.env.Q ?? ''))
 await sleep(Number(process.env.BOOT ?? 4500))
 for (const step of JSON.parse(stepsJson)) {

@@ -54,7 +54,10 @@ describe('the crawl files', () => {
     expect(xml).not.toContain('lastmod')
     // No person and no team: those pages are gone, so no address but the site's own is named.
     const listed = [...xml.matchAll(/<loc>https:\/\/cookrew\.dev(\/[^<]*)<\/loc>/g)].map(([, at]) => at)
-    expect(listed.filter((at) => at !== '/' && !at.startsWith('/features/') && at !== '/privacy' && at !== '/terms')).toEqual([])
+    expect(listed.filter((at) => at !== '/' && !at.startsWith('/features/') && at !== '/zh/' && !at.startsWith('/zh/features/') && at !== '/privacy' && at !== '/terms')).toEqual([])
+    // The same pages in Chinese, and the marketplace in neither.
+    expect(xml).toContain('<loc>https://cookrew.dev/zh/</loc>')
+    for (const f of FEATURES.filter((f) => f.slug !== 'marketplace')) expect(xml).toContain(`<loc>https://cookrew.dev/zh/features/${f.slug}</loc>`)
   })
 
   it('llms.txt opens with the definition and answers every FAQ', () => {
@@ -79,8 +82,8 @@ describe('the feature and start pages', () => {
       expect(rendered!.body).toContain('"@type":"FAQPage"')
       expect(rendered!.body).toContain(`<link rel="canonical" href="https://cookrew.dev/features/${f.slug}">`)
       expect(rendered!.body).toContain('<meta name="description"')
-      // A picture says it is the current UI on demo data, or a composite of such renders (site-frames.ts); a feature with none shows none.
-      if (f.frames.length > 0) expect(rendered!.body).toMatch(/Product UI on demo data · illustration|Composite of product UI renders on demo data · illustration/)
+      // A picture carries no box or caption (owner 2026-11-18); what it is stays in data-source. A feature with none shows none.
+      if (f.frames.length > 0) expect(rendered!.body).toMatch(/<figure class="shot[^"]*" data-source="(illustration|composite)"/)
       else expect(rendered!.body).not.toContain('<figure class="shot')
       expect(rendered!.body).not.toContain('● REC')
     }
