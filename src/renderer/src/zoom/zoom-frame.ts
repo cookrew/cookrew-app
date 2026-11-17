@@ -9,8 +9,8 @@
  * device IS its group, and the device view IS the machine's screen.
  */
 import { clamp01, derive, ease, lerp, ramp, type ZoomDir } from './zoom-path'
-import { GROUP_FACE } from './agents-group'
 import { coinDock, DOCK_EDGE } from './coin-dock'
+import { GROUP_FACE } from './agents-group'
 import { crewOf, deviceOf, deviceOnScreen, fitScale, machineFrameOf, machinesAt, screenFit, shelfRow, stackOf, thumbsOf, DECK_POSE, type Box, type Pos, NEW_POSE } from './zoom-layout'
 import { near, pinned, SCENE_CSS, SCENE_TYPE, sceneWords, SHELF_NAME_S, UNDER_FACE, type RestScales, type SceneWords } from './scene-words'
 import { fullPoses } from './full-poses'
