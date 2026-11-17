@@ -24,6 +24,7 @@ import { reapOrphansOn } from './orphan-reap'
 import { endPane, type PaneEnd } from './pane-end'
 import { sharedListing, type Listing } from './pane-listing'
 import { processFact } from './process-facts'
+import { terminalPid } from './terminal-pid'
 import { folderFailure } from './launch-check'
 import { installPaneExitHook, paneExitConf } from './pane-exit'
 import { harnessFor } from './harness'
@@ -1699,31 +1700,19 @@ export class PtyManager {
     const session = this.sessions.get(terminalId)
     const others = allBackends.filter((mux) => mux !== activeMux && mux.available() && mux.sessionExists(name))
     const held = [...(activeMux ? [activeMux] : []), ...others]
-    /** Which process this pid was at the start: a pid can come back as someone else's. */
-    let identity: string | null = null
-    /** A pid remembered with no start time could be anyone's by now: looked at, never signalled. */
-    let unsure = false
-    const panePid = (): number | null =>
-      session && !session.usesTmux ? session.pid : (activeMux?.panePid(name) ?? others[0]?.panePid(name) ?? null)
+    // A pid is signalled only once its start time names it (terminal-pid.ts).
+    const root = terminalPid({
+      remembered: () => survivors.get(terminalId),
+      forget: () => survivors.delete(terminalId),
+      panePid: () =>
+        session && !session.usesTmux ? session.pid : (activeMux?.panePid(name) ?? others[0]?.panePid(name) ?? null),
+      fact: (pid) => processFact(pid),
+      taken: pidTaken,
+      kill: (pid, signal) => process.kill(pid, signal)
+    })
     const end = await endPane(
       {
-        pid: async () => {
-          const known = survivors.get(terminalId)
-          const fact = known ? await processFact(known.pid) : null
-          // Only proof it is over lets it go: a ps that timed out is not that.
-          const over = fact?.state === 'gone' || (fact?.state === 'running' && known?.started != null && fact.started !== known.started)
-          if (known && !over) {
-            identity = known.started
-            unsure = known.started === null
-            return known.pid
-          }
-          survivors.delete(terminalId)
-          const pid = panePid()
-          if (pid === null) return null
-          const now = await processFact(pid)
-          identity = now.state === 'running' ? now.started : null
-          return pid
-        },
+        pid: () => root.pid(),
         close: () => {
           this.closeNow(terminalId)
           this.ownership.release(terminalId)
@@ -1734,25 +1723,13 @@ export class PtyManager {
           if (answers.includes(true)) return true
           return answers.includes(null) ? null : false
         },
-        alive: async (pid) => {
-          if (!pidTaken(pid)) return false
-          const now = await processFact(pid)
-          if (now.state === 'unknown') return true
-          return now.state === 'running' && (identity === null || now.started === identity)
-        },
-        signal: (pid, signal) => {
-          if (unsure) return
-          try {
-            process.kill(pid, signal)
-          } catch {
-            // Gone between the look and the signal: the next poll says so.
-          }
-        }
+        alive: (pid) => root.alive(pid),
+        signal: (pid, signal) => root.signal(pid, signal)
       },
       timeoutMs
     )
     if (end.ended) survivors.delete(terminalId)
-    else if (end.pid !== null) survivors.set(terminalId, { pid: end.pid, started: identity })
+    else if (end.pid !== null) survivors.set(terminalId, { pid: end.pid, started: root.identity() })
     return end
   }
 
