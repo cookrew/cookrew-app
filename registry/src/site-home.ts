@@ -144,7 +144,7 @@ export function staticHomePage(input: StaticHomeInput): Page {
 <style>${BRAND_LOCKUP_CSS}</style>
 <div class="hero"><div class="wrap">
 <div class="hero-text"><div>${BRAND_LOCKUP_HTML}<span class="tagline">${tr('OPEN SOURCE', '开源')} · ${FACTS.license} · ${FACTS.harnesses.slice(0, 4).join(' · ').toUpperCase()}</span>
-<h1>${esc(headline())}</h1></div>
+<h1>${headline().split(/(?<=[.。])\s*/).filter(Boolean).map((line) => `<span class="hl">${esc(line)}</span>`).join(' ')}</h1></div>
 <div><p class="hero-sub">${esc(headlineSub())}</p>
 <p class="lede">${esc(oneLine())} ${tr('Follow and answer them from the desktop or any browser.', '在桌面或任何浏览器里跟进并回复它们。')}</p>
 ${staticHeroButtons(input.release, input.console)}</div></div>

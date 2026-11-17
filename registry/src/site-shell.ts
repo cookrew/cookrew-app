@@ -702,6 +702,8 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .hero-text{display:grid;gap:8px 40px;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:end}
 @media (max-width:900px){.hero-text{grid-template-columns:minmax(0,1fr)}.hero .wrap .tagline{white-space:normal}}
 .hero h1{margin-bottom:12px;font-size:clamp(34px,4.3vw,56px);max-width:12ch}
+/* a line breaks between the headline's sentences, never inside one (in Chinese too) */
+.hero h1 .hl{display:inline-block}
 /* the lockup is the header's mark writ large — a brand beat, not a billboard.
    site-brand.ts sizes it for a full-width band; in the hero it shares the
    column with the headline, so it is capped here. */

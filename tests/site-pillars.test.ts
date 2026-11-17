@@ -253,7 +253,7 @@ describe('the site in Chinese (owner 2026-11-18)', () => {
   it('draws the front page and every feature page again at /zh/, in Chinese, with the same claims and labels', () => {
     const zh = read('zh/index.html')
     expect(zh).toContain('<html lang="zh-CN">')
-    expect(zh).toContain('任何设备。任何 harness。任何模型。')
+    expect(zh).toContain('<h1><span class="hl">任何设备。</span> <span class="hl">任何 harness。</span> <span class="hl">任何模型。</span></h1>')
     expect(zh).toContain('<link rel="canonical" href="https://cookrew.dev/zh/">')
     // As many claims, each with its label, as the English page.
     const claimsIn = (html: string): string[] => [...html.matchAll(/<li class="claim" data-status="([a-z-]+)">/g)].map((m) => m[1]!)
