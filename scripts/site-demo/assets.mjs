@@ -25,8 +25,9 @@ jpg(`${raw}/r-routing.png`, 'demo-routing', { crop: '2200:1300:340:40' })
 // phone, 390×844 at 2× → 700 wide portrait, 400 twin (walk.mjs prefix p)
 jpg(`${raw}/p-1-crew.png`, 'demo-crew-phone', { width: 700, small: 400 })
 jpg(`${raw}/p-2-card.png`, 'demo-hitl-phone', { width: 700, small: 400 })
-// the watch: three 45 mm screens on ink, one strip (Checker's reply, the crew, the devices); w45-01 is in the hero
-ff(['-f', 'lavfi', '-i', 'color=c=0x1D1A16:s=2052x816', '-i', `${raw}/watch/w45-05.png`, '-i', `${raw}/watch/w45-13.png`, '-i', `${raw}/watch/w45-18.png`, '-filter_complex',
+// the watch: three 45 mm screens on ink, one strip (Checker's reply, the crew, the devices: w45-19, as 13b shifts the
+// numbers after it by one); w45-01 is in the hero
+ff(['-f', 'lavfi', '-i', 'color=c=0x1D1A16:s=2052x816', '-i', `${raw}/watch/w45-05.png`, '-i', `${raw}/watch/w45-13.png`, '-i', `${raw}/watch/w45-19.png`, '-filter_complex',
   '[0][1]overlay=45:45[a];[a][2]overlay=729:45[b];[b][3]overlay=1413:45', '-frames:v', '1', `${raw}/watch-strip.png`])
 jpg(`${raw}/watch-strip.png`, 'demo-watch')
 // the composites (compose.mjs): one question on three devices, and the three operation cards

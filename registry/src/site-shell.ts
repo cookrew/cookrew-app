@@ -663,7 +663,7 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
   .toc .jump{display:none}
 }
 .hero .wrap{display:grid;gap:34px;grid-template-columns:minmax(0,6fr) minmax(0,7fr);align-items:center}
-@media (max-width:900px){.hero .wrap{grid-template-columns:1fr}}
+@media (max-width:900px){.hero .wrap{grid-template-columns:minmax(0,1fr)}.hero .wrap .tagline{white-space:normal}}
 .hero h1{margin-bottom:12px;font-size:clamp(34px,4.3vw,56px);max-width:12ch}
 /* the lockup is the header's mark writ large — a brand beat, not a billboard.
    site-brand.ts sizes it for a full-width band; in the hero it shares the
