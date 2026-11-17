@@ -9,10 +9,10 @@ const WorkspaceTileCard = lazy(() => import('./WorkspaceTileCard').then((module)
 const WorkspaceTileShot = lazy(() => import('./WorkspaceTileShot').then((module) => ({ default: module.WorkspaceTileShot })))
 
 type Bind = (key: string) => (el: HTMLElement | null) => void
-type TileProps = { mark: MarkView; open?: boolean; bind: Bind; onOpen: (agentId?: string) => void; onOpenItems?: (itemId?: string) => void }
+type TileProps = { mark: MarkView; open?: boolean; bind: Bind; onOpen: (agentId?: string, full?: boolean) => void; onOpenItems?: (itemId?: string, full?: boolean) => void }
 type Mode = 'bag' | 'agent'
-const DWELL_MS = 800
-const LINGER_MS = 2500
+/** How long an opened fan stays once the pointer leaves or the finger lifts (owner, 2026-11-17: 1 s). */
+const LINGER_MS = 1000
 /** An agent's face in the row, and the room each takes: an agent card's type wants a face to match (owner 2026-11-16). */
 const HEAD_PX = 36
 const HEAD_STEP = 42
@@ -170,8 +170,9 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
   const agents = mark.agents ?? []
   const [mode, setMode] = useState<Mode>('bag')
   const [openFan, setOpenFan] = useState(false)
-  const dwell = useRef<number | null>(null)
   const linger = useRef<number | null>(null)
+  // An agent's card, opened by a mouse, goes back to the fan this long after the pointer leaves the tile (owner, 2026-11-17).
+  const cardLinger = useRef<number | null>(null)
   const touching = useRef(false)
   const openedBy = useRef<'mouse' | 'touch'>('touch')
   const pointer = useRef<'mouse' | 'touch'>('mouse')
@@ -183,8 +184,8 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
   const selected = agents[at] ?? null
   const clearTimer = (timer: { current: number | null }): void => { if (timer.current !== null) window.clearTimeout(timer.current); timer.current = null }
   const closeSoon = (): void => { clearTimer(linger); linger.current = window.setTimeout(() => { linger.current = null; setOpenFan(false) }, LINGER_MS) }
-  const showFan = (by: 'mouse' | 'touch'): void => { if (items.length === 0) return; clearTimer(dwell); clearTimer(linger); openedBy.current = by; setOpenFan(true) }
-  const selectAgent = (agent: AgentView): void => { clearTimer(dwell); clearTimer(linger); setOpenFan(false); row.go(Math.max(0, agents.findIndex((entry) => entry.id === agent.id))); setMode('agent') }
+  const showFan = (by: 'mouse' | 'touch'): void => { if (items.length === 0) return; clearTimer(linger); openedBy.current = by; setOpenFan(true) }
+  const selectAgent = (agent: AgentView): void => { clearTimer(linger); setOpenFan(false); row.go(Math.max(0, agents.findIndex((entry) => entry.id === agent.id))); setMode('agent') }
   const front = items[clamp(artifacts.index, 0, Math.max(0, items.length - 1))] ?? null
   const tied = front ? agents.filter((agent) => front.owners.includes(agent.id)) : []
   const cardItems = selected ? items.filter((item) => item.owners.includes(selected.id)) : []
@@ -193,14 +194,14 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
   const itemsDoor = known && total > 0 && onOpenItems
 
   useEffect(() => { if (openFan && openedBy.current === 'touch' && !touching.current) closeSoon() }, [artifacts.index, openFan])
-  useEffect(() => () => { clearTimer(dwell); clearTimer(linger) }, [])
-  useEffect(() => { setMode('bag'); setOpenFan(false); row.go(0); clearTimer(dwell); clearTimer(linger) }, [mark.id])
+  useEffect(() => () => { clearTimer(linger); clearTimer(cardLinger) }, [])
+  useEffect(() => { setMode('bag'); setOpenFan(false); row.go(0); clearTimer(linger) }, [mark.id])
 
   return (
     <div ref={bind(open ? 'openMark' : `mark:${mark.id}`)} className="zv-mark" data-open={open || undefined} data-waiting={mark.waitingCount > 0 || undefined}>
       <div className="zv-tile" />
-      <section className={`dm-tile ${mode}${openFan ? ' peeking' : ''}`} data-mode={mode} data-front={artifacts.index} data-open={openFan || undefined} onPointerDownCapture={(event) => { pointer.current = event.pointerType === 'mouse' ? 'mouse' : 'touch' }}>
-        <header onClick={() => onOpen(selected?.id)}><h3>{mark.name}</h3>{mark.waitingCount > 0 && <i className="dm-wait">{mark.waitingCount}</i>}</header>
+      <section onPointerEnter={(event) => { if (event.pointerType === 'mouse') clearTimer(cardLinger) }} onPointerLeave={(event) => { if (event.pointerType !== 'mouse' || mode !== 'agent') return; clearTimer(cardLinger); cardLinger.current = window.setTimeout(() => { cardLinger.current = null; setMode('bag') }, LINGER_MS) }} className={`dm-tile ${mode}${openFan ? ' peeking' : ''}`} data-mode={mode} data-front={artifacts.index} data-open={openFan || undefined} onPointerDownCapture={(event) => { pointer.current = event.pointerType === 'mouse' ? 'mouse' : 'touch' }}>
+        <header onClick={() => onOpen(mode === 'agent' ? selected?.id : undefined)}><h3>{mark.name}</h3>{mark.waitingCount > 0 && <i className="dm-wait">{mark.waitingCount}</i>}</header>
         <div className={`dm-row${row.dragging ? ' dragging' : ''}`} {...row.handlers} onClick={() => setMode('agent')}>
           <div className="dm-crew">
             {selected && <div className="dm-card-head"><div className="zv-nm">{selected.name}</div><div className="ag-meta"><span className={`zv-st ${selected.status}`}>{selected.word}</span><span className="zv-cnt"><Counts browsers={selected.browsers} notes={selected.notes} /></span></div></div>}
@@ -213,16 +214,16 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
             <span className="dm-count agents" title={`${mark.presets.length} agents`}><i className="dm-seal">{mark.presets.length}</i></span>
           </div>
         </div>
-        <div className="dm-folder"><div className="dm-folder-view" /><div className={`dm-ov-layer${mode === 'agent' ? ' on' : ''}`} onClick={() => setMode('bag')}>{mode === 'agent' && selected && <EmbeddedCard agent={selected} items={cardItems} onOpen={() => onOpen(selected.id)} onItem={showItem} />}</div><div className="dm-pocket" onClick={() => { if (itemsDoor) onOpenItems?.(front?.id) }}><span className="dm-title">{front?.title ?? ''}</span><span className="dm-count items">{items.length > 0 && <em>{artifacts.index + 1}/{items.length}</em>}{(mark.browsers ?? 0) > 0 && <span>▭{mark.browsers}</span>}{(mark.notes ?? 0) > 0 && <span>▤{mark.notes}</span>}</span></div></div>
+        <div className="dm-folder"><div className="dm-folder-view" /><div className={`dm-ov-layer${mode === 'agent' ? ' on' : ''}`} onClick={(event) => { if ((event.target as Element).closest('button, input, textarea, form, a')) return; if (selected) onOpen(selected.id, true) }}>{mode === 'agent' && selected && <EmbeddedCard agent={selected} items={cardItems} onOpen={() => onOpen(selected.id, true)} onItem={showItem} />}</div><div className="dm-pocket" onClick={() => { if (itemsDoor) onOpenItems?.(front?.id, false) }}><span className="dm-title">{front?.title ?? ''}</span><span className="dm-count items">{items.length > 0 && <em>{artifacts.index + 1}/{items.length}</em>}{(mark.browsers ?? 0) > 0 && <span>▭{mark.browsers}</span>}{(mark.notes ?? 0) > 0 && <span>▤{mark.notes}</span>}</span></div></div>
         <div className={`dm-fan${artifacts.dragging ? ' dragging' : ''}${openFan ? ' open' : ''}`}
-          onPointerEnter={(event) => { if (event.pointerType !== 'mouse') return; clearTimer(linger); clearTimer(dwell); openedBy.current = 'mouse'; if (!openFan && items.length > 0) dwell.current = window.setTimeout(() => showFan('mouse'), DWELL_MS) }}
-          onPointerLeave={(event) => { if (event.pointerType !== 'mouse') return; clearTimer(dwell); if (openFan && openedBy.current === 'mouse') closeSoon() }}
+          onPointerEnter={(event) => { if (event.pointerType !== 'mouse') return; clearTimer(linger); openedBy.current = 'mouse' }}
+          onPointerLeave={(event) => { if (event.pointerType !== 'mouse') return; if (openFan && openedBy.current === 'mouse') closeSoon() }}
           onPointerDown={(event) => { if (event.pointerType !== 'mouse') { touching.current = true; clearTimer(linger) }; artifacts.handlers.onPointerDown(event) }}
           onPointerMove={artifacts.handlers.onPointerMove}
           onPointerUp={(event) => { artifacts.handlers.onPointerUp(event); if (event.pointerType !== 'mouse') { touching.current = false; if (openFan) closeSoon() } }}
           onPointerCancel={(event) => { artifacts.handlers.onPointerCancel(); if (event.pointerType !== 'mouse') { touching.current = false; if (openFan) closeSoon() } }}
           onWheel={artifacts.handlers.onWheel} onClickCapture={artifacts.handlers.onClickCapture}
-          onClick={() => { if (!openFan) showFan(pointer.current); else if (itemsDoor && front) onOpenItems?.(front.id) }}
+          onClick={() => { if (!openFan) showFan(pointer.current); else if (itemsDoor && front) onOpenItems?.(front.id, true) }}
         ><Fan items={items} total={known ? total : items.length} position={artifacts.pos} owner={`tile:${mark.id}`} /><div className="dm-fan-tied">{tied.map((agent) => <button key={agent.id} type="button" tabIndex={openFan ? 0 : -1} aria-label={`${agent.name}, ${agent.word}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectAgent(agent) }}><InkAvatar id={agent.id} preset={agent.preset} status={agent.status} size={30} weight="mini" /></button>)}</div></div>
       </section>
       <button type="button" className={`zv-door agents${itemsDoor ? '' : ' whole'}`} aria-current={open ? 'true' : undefined} aria-label={`Open ${mark.name} agents, ${plural(mark.presets.length, 'agent')}`} title={`${mark.name} · ${plural(mark.presets.length, 'agent')}`} onClick={() => onOpen()} />

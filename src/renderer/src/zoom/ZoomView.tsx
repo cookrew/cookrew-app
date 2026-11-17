@@ -649,14 +649,16 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     }
     motion.wake()
   }, [device, frameOf, words, model.marks, model.machines, narrow, motion.wake])
-  const switchWorkspace = useCallback(async (id: string, side: 'agents' | 'items' = 'agents', target?: string) => {
+  const switchWorkspace = useCallback(async (id: string, side: 'agents' | 'items' = 'agents', target?: string, full = false) => {
     setError(null)
     try {
       await cookrew().switchWorkspace(id)
       zoomStore.focusAgent(side === 'agents' ? target ?? null : null)
       zoomStore.focusItem(side === 'items' ? target ?? null : null)
-      if (side === 'items') zoomStore.go(target ? 1 : 0, 'items')
-      else zoomStore.go(target ? 2 : 1, 'agents')
+      // The tile's four doors (owner, 2026-11-17): an agent's or an artifact's full view, or the agents or the artifacts.
+      if (side === 'agents' && target && full) zoomStore.jumpTo('agent', target)
+      else if (side === 'items') zoomStore.go(target && full ? 1 : 0, 'items')
+      else zoomStore.go(1, 'agents')
     } catch (e) { setError(`Cannot open workspace: ${failureWords(e)}`) }
   }, [])
   const ghostItem = zoom.item ? (model.items.find((i) => i.id === zoom.item) ?? model.coinItems.find((i) => i.id === zoom.item) ?? null) : null
@@ -806,9 +808,9 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           </div>
           {/* In the grid's order, so Tab walks it as the eye does. The open tile's faces are the scene's, over it. */}
           {model.frame.workspaces.map((id) => {
-            if (id === model.frame.active) return <WorkspaceTile key={id} mark={model.openMark} open bind={bind} onOpen={stable('open-agents', (agentId?: string) => { if (agentId) { zoomStore.focusAgent(agentId); motion.go(2, 'agents') } else motion.go(1, 'agents') })} onOpenItems={stable('open-items', (itemId?: string) => { if (itemId) { zoomStore.focusItem(itemId); motion.go(1, 'items') } else motion.go(0, 'items') })} />
+            if (id === model.frame.active) return <WorkspaceTile key={id} mark={model.openMark} open bind={bind} onOpen={stable('open-agents', (agentId?: string, full?: boolean) => { if (agentId && full) return zoomStore.jumpTo('agent', agentId); if (agentId) zoomStore.focusAgent(agentId); motion.go(1, 'agents') })} onOpenItems={stable('open-items', (itemId?: string, full?: boolean) => { if (itemId) zoomStore.focusItem(itemId); motion.go(itemId && full ? 1 : 0, 'items') })} />
             const m = markOf.get(id)
-            return m ? <WorkspaceTile key={id} mark={m} bind={bind} onOpen={stable(`mark:${id}`, (agentId?: string) => void switchWorkspace(id, 'agents', agentId))} onOpenItems={stable(`mark-items:${id}`, (itemId?: string) => void switchWorkspace(id, 'items', itemId))} /> : null
+            return m ? <WorkspaceTile key={id} mark={m} bind={bind} onOpen={stable(`mark:${id}`, (agentId?: string, full?: boolean) => void switchWorkspace(id, 'agents', agentId, full))} onOpenItems={stable(`mark-items:${id}`, (itemId?: string, full?: boolean) => void switchWorkspace(id, 'items', itemId, full))} /> : null
           })}
         </div>
         {/* The full view's sheet, UNDER the scene: the open card's parts travel over it to their places (full-poses.ts). */}
