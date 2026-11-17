@@ -3,9 +3,9 @@
 // docs/hitl-cross-workspace-2026-11-15 · v6.2 phase 4). The desktop encrypts
 // each payload for the phone's subscription (RFC 8291, aes128gcm) and asks the
 // registry to forward the ciphertext. The registry only signs and delivers.
-import { createDecipheriv, createECDH, createHmac } from 'node:crypto'
+import { createDecipheriv, createECDH, createHash, createHmac } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { encryptWebPush, RECORD_SIZE } from '../src/main/web-push-crypto'
+import { encryptWebPush, MAX_PLAINTEXT, RECORD_SIZE } from '../src/main/web-push-crypto'
 import { createPhonePush, PUSH_TTL_S, topicOf, type PhonePushDeps, type PushPayload } from '../src/main/phone-push'
 
 const b64 = (s: string): Buffer => Buffer.from(s, 'base64url')
@@ -72,6 +72,14 @@ describe('RFC 8291 encryption', () => {
     expect(() => encryptWebPush(Buffer.from('x'), phone.getPublicKey(), Buffer.alloc(8))).toThrow()
     expect(() => encryptWebPush(Buffer.alloc(RECORD_SIZE), phone.getPublicKey(), Buffer.alloc(16))).toThrow()
   })
+
+  it('the largest payload a push service takes is 3993 bytes: the whole body stays within 4096 (RFC 8291 §4)', () => {
+    const phone = createECDH('prime256v1')
+    phone.generateKeys()
+    expect(MAX_PLAINTEXT).toBe(3993)
+    expect(encryptWebPush(Buffer.alloc(MAX_PLAINTEXT), phone.getPublicKey(), Buffer.alloc(16)).length).toBe(4096)
+    expect(() => encryptWebPush(Buffer.alloc(MAX_PLAINTEXT + 1), phone.getPublicKey(), Buffer.alloc(16))).toThrow()
+  })
 })
 
 describe('the phone sender', () => {
@@ -92,6 +100,7 @@ describe('the phone sender', () => {
         return Promise.resolve('sent' as const)
       }),
       now: () => clock,
+      topicKey: Buffer.alloc(32, 9),
       ...over
     }
     return { push: createPhonePush(deps), deps, sent, p, tick: (ms: number) => void (clock += ms) }
@@ -103,7 +112,7 @@ describe('the phone sender', () => {
     expect(h.sent).toHaveLength(1)
     const { body, ttl, urgency, topic, subscription } = h.sent[0]
     expect({ subscription, ttl, urgency }).toEqual({ subscription: 's1', ttl: PUSH_TTL_S, urgency: 'high' })
-    expect(topic).toBe(topicOf('agent:a'))
+    expect(topic).toBe(topicOf('agent:a', Buffer.alloc(32, 9)))
     expect(JSON.parse(decrypt(b64(body), h.p.ecdh.getPrivateKey(), Buffer.alloc(16, 3)).toString())).toEqual(payload)
   })
 
@@ -158,9 +167,15 @@ describe('the phone sender', () => {
     await expect(h.push.send(payload, 'high')).resolves.toBeUndefined()
   })
 
-  it('a topic is short, safe and the same for the same tag', () => {
-    expect(topicOf('agent:a')).toMatch(/^[A-Za-z0-9_-]{1,32}$/)
-    expect(topicOf('agent:a')).toBe(topicOf('agent:a'))
-    expect(topicOf('agent:a')).not.toBe(topicOf('agent:b'))
+  it('a topic is short, safe and the same for the same tag under one key', () => {
+    const key = Buffer.alloc(32, 1)
+    expect(topicOf('agent:a', key)).toMatch(/^[A-Za-z0-9_-]{1,32}$/)
+    expect(topicOf('agent:a', key)).toBe(topicOf('agent:a', key))
+    expect(topicOf('agent:a', key)).not.toBe(topicOf('agent:b', key))
+  })
+
+  it('a topic names nobody to the registry or the push service: keyed by a secret only this desktop holds', () => {
+    expect(topicOf('agent:a', Buffer.alloc(32, 1))).not.toBe(topicOf('agent:a', Buffer.alloc(32, 2)))
+    expect(topicOf('agent:a', Buffer.alloc(32, 1))).not.toBe(createHash('sha256').update('agent:a').digest('base64url').slice(0, 32))
   })
 })

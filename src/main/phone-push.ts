@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { encryptWebPush } from './web-push-crypto'
 
 /**
@@ -49,6 +49,8 @@ export interface PhonePushDeps {
   /** POST /v2/me/push/send: 'gone' when the push service dropped the subscription (410). */
   send: (request: SendRequest) => Promise<'sent' | 'gone' | 'failed'>
   now: () => number
+  /** The secret topics are keyed by; a fresh one per launch unless a test fixes it. */
+  topicKey?: Buffer
 }
 
 /** How long a waiting or a reply is worth delivering to a phone that was off. */
@@ -61,10 +63,14 @@ const OFF_KEPT_MS = 30 * 60_000
 /**
  * The push service's Topic for a tag: a newer push of the same topic replaces
  * an older one still queued for a phone that is off. ≤ 32 base64url chars.
+ * Keyed by a secret only this desktop holds, so neither the registry nor the
+ * push service can tie a topic to an agent (a plain hash of a known id could).
+ * A new launch is a new key: a queued push from before it is merely not replaced.
  */
-export const topicOf = (tag: string): string => createHash('sha256').update(tag).digest('base64url').slice(0, 32)
+export const topicOf = (tag: string, key: Buffer): string => createHmac('sha256', key).update(tag).digest('base64url').slice(0, 32)
 
 export function createPhonePush(deps: PhonePushDeps): { send: (payload: PushPayload, urgency: Urgency) => Promise<void> } {
+  const topicKey = deps.topicKey ?? randomBytes(32)
   let list: readonly PushSubscriptionKeys[] | null = null
   let readAt = Number.NEGATIVE_INFINITY
   let offUntil = Number.NEGATIVE_INFINITY
@@ -101,7 +107,7 @@ export function createPhonePush(deps: PhonePushDeps): { send: (payload: PushPayl
           subs.map(async (sub) => {
             const body = sealFor(sub, words)
             if (body === null) return 'failed' as const
-            return deps.send({ subscription: sub.id, body, ttl: PUSH_TTL_S, urgency, topic: topicOf(payload.tag) })
+            return deps.send({ subscription: sub.id, body, ttl: PUSH_TTL_S, urgency, topic: topicOf(payload.tag, topicKey) })
           })
         )
         // A phone the push service has forgotten: read the list again next time.

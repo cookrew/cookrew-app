@@ -12,6 +12,13 @@ import { createCipheriv, createECDH, createHmac, randomBytes } from 'node:crypto
 export const RECORD_SIZE = 4096
 const TAG_BYTES = 16
 const KEY_BYTES = 65
+/** Header (salt 16, rs 4, idlen 1) and the sender key. */
+const HEADER_BYTES = 21 + KEY_BYTES
+/**
+ * The most a push service takes: the whole body within 4096 bytes (RFC 8291
+ * §4) is header, payload, its delimiter and the tag, so 3993 bytes of payload.
+ */
+export const MAX_PLAINTEXT = 4096 - HEADER_BYTES - 1 - TAG_BYTES
 
 const hmac = (key: Buffer, data: Buffer): Buffer => createHmac('sha256', key).update(data).digest()
 
@@ -24,8 +31,7 @@ export interface EncryptOptions {
 export function encryptWebPush(plaintext: Buffer, uaPublic: Buffer, authSecret: Buffer, options: EncryptOptions = {}): Buffer {
   if (uaPublic.length !== KEY_BYTES || uaPublic[0] !== 0x04) throw new Error('The phone key is not a P-256 point')
   if (authSecret.length !== 16) throw new Error('The phone secret is not 16 bytes')
-  // The padding delimiter and the tag must fit in the one record.
-  if (plaintext.length + 1 + TAG_BYTES > RECORD_SIZE) throw new Error('The notification is too big to send')
+  if (plaintext.length > MAX_PLAINTEXT) throw new Error('The notification is too big to send')
   const sender = createECDH('prime256v1')
   if (options.asPrivate) sender.setPrivateKey(options.asPrivate)
   else sender.generateKeys()
