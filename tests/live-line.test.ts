@@ -11,7 +11,7 @@ vi.mock('../src/renderer/src/api', () => ({ cookrew: () => ({ ptyInput }) }))
 
 const { activityStore } = await import('../src/renderer/src/activity-thumb-store')
 const { draftKey, getDraft, setDraft } = await import('../src/renderer/src/prompt/prompt-draft')
-const { LINE_MAX, QUIET_MS, endLine, keysFor, lineTextFor, observeLine, resetLinesForTests, submitLine, typeLine } = await import(
+const { CODEX_CLEAR, LINE_MAX, QUIET_MS, endLine, keysFor, lineTextFor, noteLineAgents, observeLine, resetLinesForTests, submitLine, typeLine } = await import(
   '../src/renderer/src/prompt/live-line'
 )
 
@@ -264,5 +264,110 @@ describe('words typed in LIVE come back into the draft', () => {
     observeLine('a1', activity(), 0)
     observeLine('a1', activity({ pendingInput: 'guess', mirrorless: true }), 10_000)
     expect(getDraft(draftKey('a1'))).toBe('')
+  })
+})
+
+// Owner 2026-11-16 (Codex, phone): a long Chinese message with a screenshot
+// reached Codex as "5 /Users/…/Screenshot_….jpg". The picture's path was on
+// the line; Codex folds a path that arrives as one burst into ONE [Image #1]
+// element, so each later edit's Backspaces over the path (71 by our count)
+// took the element with the first and the owner's words with the rest.
+describe('a picture in the draft', () => {
+  const pic = '/Users/drej/.cookrew/attachments/Screenshot_20261116_231745_Chrome.jpg'
+
+  it('is not typed into the line while the words are written', () => {
+    typeLine('a1', '输入被截断了')
+    typeLine('a1', `输入被截断了 ${pic}`)
+    typeLine('a1', `输入被截断了，然后 ${pic}`)
+    expect(typedKeys()).toEqual(['输入被截断了', '，然后'])
+    expect(typedKeys().join('')).not.toContain('\x7f')
+  })
+
+  it('goes with Enter, last, after every word', () => {
+    typeLine('a1', `输入被截断了 ${pic}`)
+    typeLine('a1', `输入被截断了，修复 ${pic}`)
+    submitLine('a1', `输入被截断了，修复 ${pic}`)
+    expect(typedKeys()).toEqual(['输入被截断了', '，修复', ` ${pic}`, '\r'])
+  })
+
+  it('stays in the draft when the words come back from LIVE', () => {
+    setDraft(draftKey('a1'), `fix ${pic}`)
+    observeLine('a1', activity({ pendingInput: 'fix' }), 0)
+    observeLine('a1', activity({ pendingInput: 'fix it' }), 10_000)
+    expect(getDraft(draftKey('a1'))).toBe(`fix it ${pic}`)
+  })
+
+  it('goes with the words when the line is emptied in LIVE (Enter or a clear there)', () => {
+    setDraft(draftKey('a1'), `fix ${pic}`)
+    observeLine('a1', activity({ pendingInput: 'fix' }), 0)
+    observeLine('a1', activity({ pendingInput: null }), 10_000)
+    expect(getDraft(draftKey('a1'))).toBe('')
+  })
+})
+
+// Owner 2026-11-17: Codex input is still cut off, fix it at the root. Every send that backs over
+// what this app BELIEVES is on Codex's line breaks the moment the belief is
+// wrong (a folded picture, words typed or the cursor moved in LIVE, keys lost):
+// Backspaces counted from the belief eat the owner's words. A Codex send no
+// longer trusts the belief: it clears the whole box, then pastes the words and
+// each picture whole (measured on codex 0.169, idle and mid-turn).
+describe('a send to a Codex agent rebuilds its line', () => {
+  const PO = '\x1b[200~'
+  const PC = '\x1b[201~'
+  const pic = '/Users/drej/.cookrew/attachments/Screenshot_20261117_201900_Chrome.jpg'
+  const codex = (id = 'a1') => noteLineAgents([{ id, codex: true }])
+
+  it('clears the box, pastes the words, then each picture on its own, then Enter', () => {
+    codex()
+    typeLine('a1', '可以抽出统一组件')
+    ptyInput.mockReset()
+    submitLine('a1', `图中圈出部分替换成agents group风格 可以抽出统一组件 ${pic}`)
+    expect(typedKeys()).toEqual([`${CODEX_CLEAR}${PO}图中圈出部分替换成agents group风格 可以抽出统一组件${PC} ${PO}${pic}${PC}`, '\r'])
+  })
+
+  it('whatever it believes the line holds: the box is cleared whole', () => {
+    codex()
+    typeLine('a1', 'abc')
+    ptyInput.mockReset()
+    submitLine('a1', 'abc')
+    expect(typedKeys()).toEqual([`${CODEX_CLEAR}${PO}abc${PC}`, '\r'])
+  })
+
+  it('a picture alone still goes, and a bare Enter is only an Enter', () => {
+    codex()
+    submitLine('a1', pic)
+    submitLine('a1', '')
+    expect(typedKeys()).toEqual([`${CODEX_CLEAR}${PO}${pic}${PC}`, '\r', '\r'])
+  })
+
+  it('an agent named by one source stays as another left it', () => {
+    codex()
+    noteLineAgents([{ id: 'b2', codex: false }])
+    submitLine('a1', 'x')
+    expect(typedKeys()).toEqual([`${CODEX_CLEAR}${PO}x${PC}`, '\r'])
+  })
+
+  it('the clear kills to the start, past the end, and across lines, with keys that never interrupt', () => {
+    expect(CODEX_CLEAR.startsWith('\x15\x0b')).toBe(true)
+    expect(CODEX_CLEAR).toContain('\x7f\x15')
+    expect(CODEX_CLEAR).not.toMatch(/[\x03\x1b\r\n]/)
+  })
+
+  it('leaves the line empty and the draft too', () => {
+    codex()
+    setDraft(draftKey('a1'), 'go')
+    submitLine('a1', 'go')
+    ptyInput.mockReset()
+    typeLine('a1', 'next')
+    expect(typedKeys()).toEqual(['next'])
+    expect(getDraft(draftKey('a1'))).toBe('')
+  })
+
+  it('other agents keep their typed line, and a card that stops being Codex does too', () => {
+    codex()
+    noteLineAgents([{ id: 'a1', codex: false }])
+    typeLine('a1', 'hello')
+    submitLine('a1', 'hello there')
+    expect(typedKeys()).toEqual(['hello', ' there', '\r'])
   })
 })

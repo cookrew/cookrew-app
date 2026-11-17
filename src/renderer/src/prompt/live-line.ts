@@ -6,7 +6,7 @@ import { inputRefused } from './input-refused'
 import { cookrew } from '../api'
 import { agentRefs, artifactRefs, expandRefs, pendingName, type NamedAgent, type PromptArtifact } from './artifact-refs'
 import { draftKey, getDraft, setDraft } from './prompt-draft'
-import { shownWords, withShownWords } from './draft-pictures'
+import { draftOf, pictureTokens, shownWords, withShownWords } from './draft-pictures'
 
 /**
  * THE DRAFT IS THE AGENT'S OWN INPUT LINE (owner, 2026-11-01: the prompt box
@@ -23,6 +23,14 @@ import { shownWords, withShownWords } from './draft-pictures'
  *
  * Best effort, like the tracker's own reading: the line is assumed to end at
  * the cursor. An edit made in LIVE with the arrow keys is not seen.
+ *
+ * A picture's path waits for Enter (owner, 2026-11-16: a Chinese message with a
+ * screenshot reached Codex as "5 /Users/…/Screenshot_….jpg"). An agent folds a
+ * path that arrives as one burst into ONE element (Codex: [Image #1]), and one
+ * Backspace takes the element: every later edit's Backspaces over the path, 71
+ * by this count, took it with the first and the owner's words with the rest.
+ * So the line carries the words, and the paths go last, with the send from the
+ * box. Enter pressed in LIVE itself sends the words only, and the draft empties.
  */
 
 const BACKSPACE = '\x7f'
@@ -151,25 +159,79 @@ function lineOf(agentId: string): Line {
 }
 
 /**
- * Bring the agent's input line to `text`. Withheld while it asks a question, or
- * while the text is past LINE_MAX, unless `force` (an explicit send); the draft
- * keeps the words either way.
+ * Bring the agent's input line to `text`: its words only, unless `force` (an
+ * explicit send), which types its picture paths too, last. Withheld while it
+ * asks a question, or while the words are past LINE_MAX, unless `force`; the
+ * draft keeps the words either way.
  */
 export function typeLine(agentId: string, text: string, force = false): void {
   const line = lineOf(agentId)
   const now = Date.now()
-  if (!force && (held.has(agentId) || overLine(text) || activityStore.get(agentId)?.phase === 'waiting')) {
+  // The send (force) takes the pictures too, after every word; an edit only the words.
+  const want = force ? text : shownWords(text)
+  if (!force && (held.has(agentId) || overLine(want) || activityStore.get(agentId)?.phase === 'waiting')) {
     withLine(agentId, { ...line, editedAt: now })
     return
   }
-  const keys = lineKeys(line.typed, text)
-  withLine(agentId, { ...line, typed: text, editedAt: now })
+  const keys = lineKeys(line.typed, want)
+  withLine(agentId, { ...line, typed: want, editedAt: now })
   if (keys) cookrew().ptyInput(agentId, keys)
+}
+
+/**
+ * WHICH LINES ARE REBUILT ON THE SEND (owner, 2026-11-17: Codex input is still
+ * cut off, fix it at the root). Everything above edits the line by what this app BELIEVES it
+ * holds, and Codex's line is not a plain one: a path becomes one [Image #1],
+ * a fast burst is held as a paste, LIVE and other devices type and move the
+ * cursor in it. Whenever the belief is wrong, Backspaces counted from it eat
+ * the owner's words, and the send submitted what was left. So a send to Codex
+ * does not trust the belief: it clears the whole box and puts the draft in
+ * whole. Codex agents only: measured there (codex 0.169, idle and mid-turn,
+ * over a folded picture, a second line and a moved cursor). Claude's Ctrl-U
+ * takes one wrapped row, so its line keeps the typed send.
+ */
+let rebuilt: ReadonlySet<string> = new Set()
+
+/**
+ * What these agents run: a Codex agent's line is rebuilt on its send. Agents
+ * not named keep what they were, so the active workspace's cards and the
+ * fleet's other workspaces can each say what they know (Dock.tsx).
+ */
+export function noteLineAgents(agents: readonly { readonly id: string; readonly codex: boolean }[]): void {
+  const next = new Set(rebuilt)
+  for (const agent of agents) {
+    if (agent.codex) next.add(agent.id)
+    else next.delete(agent.id)
+  }
+  if (next.size !== rebuilt.size || [...next].some((id) => !rebuilt.has(id))) rebuilt = next
+}
+
+/**
+ * Codex's lines, in order: what is before the cursor, all that follows (a
+ * Ctrl-K at a line's end takes only its break, so two per line), then each
+ * line above. Spare keys fall on an empty box and do nothing there.
+ */
+const KILL_LINES = 8
+export const CODEX_CLEAR = '\x15' + '\x0b'.repeat(2 * KILL_LINES) + '\x7f\x15'.repeat(KILL_LINES)
+const PASTE_OPEN = '\x1b[200~'
+const PASTE_CLOSE = '\x1b[201~'
+const pasted = (text: string): string => `${PASTE_OPEN}${text}${PASTE_CLOSE}`
+
+/**
+ * The keys that make Codex's box hold exactly `text`: the words as one paste,
+ * each picture as its own (so it attaches), a space before each so a picture
+ * Codex cannot read stays a path of its own.
+ */
+function rebuildKeys(text: string): string {
+  const words = shownWords(text).trim()
+  const pictures = pictureTokens(text).map((token, i) => (words || i > 0 ? ' ' : '') + pasted(token))
+  return CODEX_CLEAR + (words ? pasted(words) : '') + pictures.join('')
 }
 
 /** Enter on the agent's line, holding `text` (an empty text submits what is there). */
 export function submitLine(agentId: string, text: string): void {
-  if (text) typeLine(agentId, text, true)
+  if (text && rebuilt.has(agentId)) cookrew().ptyInput(agentId, rebuildKeys(text))
+  else if (text) typeLine(agentId, text, true)
   cookrew().ptyInput(agentId, '\r')
   endLine(agentId)
 }
@@ -204,8 +266,12 @@ export function observeLine(agentId: string, activity: TerminalActivity | undefi
   withLine(agentId, { ...read, typed: pending })
   // A draft waiting in the box is not on the line: the line has no say over it.
   const draft = getDraft(draftKey(agentId))
-  if (overLine(draft) && draft.trim() !== known.typed.trim()) return
-  setDraft(draftKey(agentId), pending)
+  const words = shownWords(draft)
+  if (overLine(words) && words.trim() !== known.typed.trim()) return
+  // The line has the words; the draft's pictures were never on it, so they stay —
+  // unless the line was emptied there (Enter or a clear in LIVE): they go with the words.
+  const pictures = pending === '' ? [] : pictureTokens(draft).filter((token) => !pending.includes(token))
+  setDraft(draftKey(agentId), draftOf(pending, pictures))
 }
 
 /** Keep the agent's draft in step with its line while a box for it is on screen. */
@@ -219,4 +285,5 @@ export function useLiveLine(agentId: string | null): TerminalActivity | undefine
 
 export function resetLinesForTests(): void {
   lines = new Map()
+  rebuilt = new Set()
 }

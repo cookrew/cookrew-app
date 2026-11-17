@@ -10,6 +10,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { CodexSessionMeta, parseCodexSessionMeta } from '../shared/trace-blocks'
 import { realCwd } from './claude-fork'
+import { isCodexCommand } from '../shared/codex-command'
 
 /** |session_meta.timestamp - spawnedAt| tolerance for the spawn-time bind. */
 export const CODEX_SPAWN_WINDOW_MS = 180_000
@@ -24,9 +25,7 @@ const READ_CHUNK_BYTES = 16 * 1024
  */
 const FIRST_LINE_CAP_BYTES = 256 * 1024
 
-export function isCodexCommand(command: string): boolean {
-  return /^\s*codex\b/.test(command)
-}
+export { isCodexCommand }
 
 export function defaultCodexSessionsDir(): string {
   return path.join(homedir(), '.codex', 'sessions')
