@@ -50,7 +50,8 @@ public enum StatusAlerts {
     content.body = machine
     content.sound = .default
     content.threadIdentifier = machine
-    UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    // The same agent's newer alert replaces its older one (CookrewCore · alertIdentifier).
+    UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: alertIdentifier(event, machine: machine), content: content, trigger: nil))
   }
 
   /** Ask watchOS for the next background read. */
