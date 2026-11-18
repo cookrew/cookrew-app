@@ -185,7 +185,7 @@ import { createSealMarks } from './seal-marks'
 import { createSealDevice } from './seal-device'
 import { createSealPeers } from './seal-peers'
 import { createSealPinStore } from './seal-pins'
-import { pairWords } from '../shared/seal2/handshake'
+import { deviceWords } from '../shared/seal2/handshake'
 import { sealedSwitchMemory } from './remote-switch-memory'
 import { singleConfirm } from './remote-switch-confirm'
 import { createConnectCodes } from './connect-code'
@@ -9956,7 +9956,8 @@ function registerIpc(handlers: RestoreHandlers): void {
     ownerOnly(async () => {
       const self = sealDevice.self()
       if (self === null) return []
-      return Promise.all(sealPins.waiting().map(async (deviceId) => ({ deviceId, words: (await pairWords(self.deviceId, deviceId)).words })))
+      const mine = (await deviceWords(self.deviceId)).words
+      return Promise.all(sealPins.waiting().map(async (deviceId) => ({ deviceId, mine, theirs: (await deviceWords(deviceId)).words })))
     })
   )
   ipcMain.handle(
@@ -9968,8 +9969,8 @@ function registerIpc(handlers: RestoreHandlers): void {
       else if (answer === 'not-same') {
         // Not this owner's desktop, whatever the listing says: refused from now on, and every open session ends.
         sealPins.block(deviceId)
-        sealPeers.close()
-        sealTerminus.endSessions('a desktop the owner did not recognise')
+        sealPeers.closePeer(deviceId)
+        sealTerminus.endPeer(deviceId, 'a desktop the owner did not recognise')
       } else return false
       return true
     })

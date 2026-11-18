@@ -28,10 +28,12 @@ export const STREAM_KIND = /^[a-z][a-z0-9-]{0,31}$/
 const FIELD_NAME = /^:?[!#$%&'*+.^_`|~0-9a-z-]+$/
 
 /** Callers name things by plain property: a field called "__proto__" is refused, not merged. */
-const RESERVED = new Set(['__proto__', 'constructor', 'prototype', 'hasownproperty', 'tostring', 'valueof'])
+const RESERVED = new Set(['__proto__', 'constructor', 'prototype'])
+/** Kinds are looked up by name (own entries only, canvas-seal-terminus.ts); these are refused besides, to be plain. */
+const RESERVED_KINDS = new Set([...RESERVED, 'hasownproperty', 'tostring', 'valueof'])
 
 /** A kind is a lane's name: never one every object already answers to. */
-export const isStreamKind = (kind: string): boolean => STREAM_KIND.test(kind) && !RESERVED.has(kind)
+export const isStreamKind = (kind: string): boolean => STREAM_KIND.test(kind) && !RESERVED_KINDS.has(kind)
 
 export function encodeFields(fields: Fields): Bytes {
   const entries = Object.entries(fields)

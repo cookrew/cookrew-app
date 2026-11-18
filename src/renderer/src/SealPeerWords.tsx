@@ -15,7 +15,10 @@ import './team-fork.css'
 
 export interface WaitingPeer {
   readonly deviceId: string
-  readonly words: readonly string[]
+  /** This computer's own words: the other screen shows them as "the other computer". */
+  readonly mine: readonly string[]
+  /** The other computer's words: its screen shows them as "this computer". */
+  readonly theirs: readonly string[]
 }
 
 export type PeerAnswer = 'same' | 'not-same' | 'later'
@@ -23,17 +26,30 @@ export type PeerAnswer = 'same' | 'not-same' | 'later'
 export function SealPeerWordsView({ peer, busy, onAnswer }: { peer: WaitingPeer; busy: boolean; onAnswer: (answer: PeerAnswer) => void }): React.JSX.Element {
   return (
     <div className="gs-scrim cr-sheet" role="dialog" aria-modal="true" aria-label="Compare words with another computer">
-      <div className="gs-sheet gs-small cr-sheet">
+      <div
+        className="gs-sheet gs-small cr-sheet"
+        onKeyDown={(event) => {
+          event.stopPropagation()
+          if (event.key === 'Escape' && !busy) onAnswer('later')
+        }}
+      >
         <header className="gs-sheet-head">
           <h2>Another of your computers</h2>
         </header>
         <p className="gs-consequence">
-          This computer just connected to another one on your account ({peer.deviceId.slice(0, 8)}). Does the other computer show these same six words?
+          This computer just connected to another one on your account ({peer.deviceId.slice(0, 8)}). The other computer shows this same sheet. Check across the two screens:
         </p>
+        <p className="gs-consequence">This computer</p>
         <p className="gs-words" lang="en">
-          {peer.words.join(' ')}
+          {peer.mine.join(' ')}
         </p>
-        <p className="gs-consequence">Same words: the two trust each other's keys from now on. Not the same: that computer is refused, whatever your account says.</p>
+        <p className="gs-consequence">The other computer</p>
+        <p className="gs-words" lang="en">
+          {peer.theirs.join(' ')}
+        </p>
+        <p className="gs-consequence">
+          Press SAME WORDS only if the other screen shows this sheet too, with these words swapped: its "This computer" is the "The other computer" here. Not the same: that computer is refused, whatever your account says.
+        </p>
         <div className="gs-sheet-foot">
           <button type="button" className="gs-ghost" onClick={() => onAnswer('later')} disabled={busy}>
             LATER

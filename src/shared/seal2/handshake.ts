@@ -115,6 +115,18 @@ const uuidBytes = (id: string): Bytes => Uint8Array.from(id.replace(/-/g, '').ma
  * no other pair. Read once at first contact, they make the pairing the owner's
  * word and not only the account listing's.
  */
+/**
+ * The words ONE device is known by: six of them, from its id (and so its key). At first contact
+ * each screen shows its own words and the other's, and the owner checks across: this computer's
+ * own words on one screen must be the "other computer" words on the other. Faking that is finding
+ * a key whose id gives one fixed set of words (2^66), where words over a pair could be matched by
+ * someone choosing both sides of two pairs (a 2^33 collision; security review 2026-11-19).
+ */
+export async function deviceWords(id: string): Promise<KeyFingerprint> {
+  if (!UUID.test(id)) throw new Error('Not a device id')
+  return fingerprintOfDigest(await sha256(utf8(`${SEAL2_LABEL} device words`), u8(0), uuidBytes(id)))
+}
+
 export async function pairWords(a: string, b: string): Promise<KeyFingerprint> {
   if (!UUID.test(a) || !UUID.test(b)) throw new Error('Not a device id')
   const [low, high] = [a, b].sort()

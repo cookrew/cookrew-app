@@ -906,7 +906,7 @@ export interface CookrewApi {
   watchInvite?: (current: string) => Promise<WatchInvite>;
   watchForget?: () => Promise<unknown>;
   /** Desktops of the account met for the first time, with the six words both screens show (main/seal-pins.ts). */
-  sealPeersWaiting?: () => Promise<Array<{ deviceId: string; words: string[] }>>;
+  sealPeersWaiting?: () => Promise<Array<{ deviceId: string; mine: string[]; theirs: string[] }>>;
   sealPeerAnswer?: (deviceId: string, answer: 'same' | 'not-same' | 'later') => Promise<boolean>;
   /** Refuse every plain request over the relay (main/seal-marks.ts): the owner's switch, off by default. */
   sealedOnly?: () => Promise<boolean>;

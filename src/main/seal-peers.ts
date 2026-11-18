@@ -47,6 +47,8 @@ export interface SealPeers {
   words(peer: string): Promise<KeyFingerprint>
   /** Ends every session. */
   close(): void
+  /** Ends the session to that desktop only. */
+  closePeer(peer: string): void
 }
 
 export class SealPeerRefusedError extends Error {}
@@ -102,6 +104,11 @@ export function createSealPeers(deps: SealPeersDeps): SealPeers {
       const self = deps.self()
       if (self === null) throw new SealPeerRefusedError('This desktop is not signed in to an account.')
       return pairWords(self.deviceId, peer)
+    },
+    closePeer(peer) {
+      const link = links.get(peer)
+      links.delete(peer)
+      void link?.then((open) => open.close()).catch(() => undefined)
     },
     close() {
       for (const [peer, link] of links) {

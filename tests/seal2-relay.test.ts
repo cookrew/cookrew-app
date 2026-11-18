@@ -266,6 +266,9 @@ describe('device mode (desktop to desktop on one account) through the real relay
     await expect(sealedFetch(link.connection, { method: 'GET', path: '/api/refused-route', headers: { authorization: MACHINE_KEY } })).rejects.toMatchObject({ code: ABORT.refused })
     expect(seen.some((request) => request.path === '/api/refused-route')).toBe(false)
     expect(() => link.connection.openStream('constructor', {})).toThrow()
+    // A path the companion would read as another: refused before the allowlist sees it.
+    await expect(sealedFetch(link.connection, { method: 'GET', path: '/api/x/../refused-route', headers: { authorization: MACHINE_KEY } })).rejects.toMatchObject({ code: ABORT.refused })
+    await expect(sealedFetch(link.connection, { method: 'GET', path: '/api/%2e%2e/x', headers: { authorization: MACHINE_KEY } })).rejects.toMatchObject({ code: ABORT.refused })
   })
 
   it('opens a stream of another kind (openStream), here an echo', async () => {
@@ -296,6 +299,18 @@ describe('device mode (desktop to desktop on one account) through the real relay
     const wrong = newDevice()
     const started = await startDeviceHandshake({ self: world.otherDesktop.signer, to: wrong.id, verify: verifyDevice })
     await expect(shakeHandsOverHttp(deps, started, async (said) => new Seal2RefusedError('device', String(said?.error)))).rejects.toThrow()
+  })
+})
+
+describe('the owner says a desktop\'s words did not match', () => {
+  it('only that desktop\'s sessions end; a phone\'s stays', async () => {
+    const desk = await otherDesktop()
+    const mobile = await phone()
+    await readBody((await sealedFetch(desk.connection, { method: 'GET', path: '/api/before-block', headers: { authorization: MACHINE_KEY } })).body)
+    world.terminus().endPeer(world.otherDesktop.id, 'not recognised')
+    await until(() => desk.connection.closed, 'the desktop session to end', 4000)
+    const still = await sealedFetch(mobile.connection, { method: 'GET', path: ROUTE, headers: { authorization: BEARER } })
+    expect(text(await readBody(still.body))).toBe(REPLY)
   })
 })
 

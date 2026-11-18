@@ -16,7 +16,7 @@ import { writeFileAtomic } from './atomic-file'
  *   "pinned":  only pinned desktops (not offered in the app; the file may say so).
  *
  * A device id IS its key (a one-way function of it), so a pin cannot be met by
- * another key: \"only that key from then on\" holds by the id alone.
+ * another key: "only that key from then on" holds by the id alone.
  */
 
 export type SealPinPolicy = 'account' | 'pinned'
@@ -33,7 +33,7 @@ export interface SealPinStore {
   contact(deviceId: string): boolean
   /** Desktops met and not yet compared (nor blocked, nor put off): their words wait for the owner. */
   waiting(): string[]
-  /** \"Later\": not asked again until the next contact after a restart. */
+  /** "Later": not asked again until this app is next launched. */
   later(deviceId: string): void
   /** May this device be dialled or let in, as far as pins go? The account listing is checked separately. */
   allows(deviceId: string): boolean

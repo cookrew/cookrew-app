@@ -111,6 +111,14 @@ describe('cookrew-seal/2 device mode, against node:crypto', () => {
     expect(await started.finish(accepted?.accept)).toBeNull()
   })
 
+  it('each device has words of its own, from its id', async () => {
+    const { deviceWords } = await import('../src/shared/seal2/handshake')
+    const a = await deviceWords(v.from)
+    expect(await deviceWords(v.from)).toEqual(a)
+    expect(await deviceWords(v.to)).not.toEqual(a)
+    expect(a.words).toHaveLength(6)
+  })
+
   it('speaks the same words for the pair from either side', async () => {
     const words = fingerprintOfDigest(bytes(v.wordsDigest))
     expect(await pairWords(v.from, v.to)).toEqual(words)

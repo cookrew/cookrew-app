@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import { cookrew } from './api'
 import { CrIcon } from './icons'
 
-export const SEALED_ONLY_NOTE = 'Refuse everything sent unencrypted through the relay. Older phones, consoles and watches cannot reach this computer through the relay while it is on.'
+export const SEALED_ONLY_NOTE = 'Refuse everything sent unencrypted through the relay. Older phones, consoles and watches cannot reach this computer through the relay while it is on, and a watch cannot pair through the relay.'
 
 export function SealedOnlyRowView({ on, onToggle }: { on: boolean; onToggle: () => void }): React.JSX.Element {
   return (
@@ -37,6 +37,8 @@ export function SealedOnlyRow(): React.JSX.Element | null {
     <SealedOnlyRowView
       on={on}
       onToggle={() => {
+        // Turning it on shuts out every phone, console and watch not on the sealed session yet: asked first.
+        if (!on && typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm(SEALED_ONLY_NOTE)) return
         void cookrew()
           .setSealedOnly?.(!on)
           .then(setOn)

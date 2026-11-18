@@ -32,6 +32,8 @@ export interface SealMarks {
   /** Should a plain request that came over the relay line, in this device's name (or none), be refused? */
   refuses(deviceId: string | null): boolean
   mark(deviceId: string): void
+  /** That device (a watch the owner forgot) is no longer refused in the clear. */
+  unmark(deviceId: string): void
   marked(): string[]
   sealedOnly(): boolean
   setSealedOnly(on: boolean): void
@@ -79,6 +81,11 @@ export function createSealMarks(file: string, now: () => number = Date.now): Sea
       const was = Object.prototype.hasOwnProperty.call(held.devices, id) ? held.devices[id] : undefined
       if (was !== undefined && now() - was.at < RENEW_MS) return
       write({ ...held, devices: { ...held.devices, [id]: { at: now() } } })
+    },
+    unmark(deviceId) {
+      const id = deviceId.toLowerCase()
+      if (!Object.prototype.hasOwnProperty.call(held.devices, id)) return
+      write({ ...held, devices: Object.fromEntries(Object.entries(held.devices).filter(([known]) => known !== id)) })
     },
     marked: () => Object.keys(held.devices),
     sealedOnly: () => held.sealedOnly,

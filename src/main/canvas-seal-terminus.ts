@@ -125,6 +125,8 @@ export interface SealTerminus {
   tick(): void
   /** Everyone on an old code is out, and the terminus stays up for the new one. */
   endSessions(why: string): void
+  /** Only that desktop's sessions end (the owner said its words did not match). */
+  endPeer(deviceId: string, why: string): void
   close(): void
   stats(): { sessions: number; pending: number; listening: number; retained: number; held: number }
 }
@@ -505,6 +507,8 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
   const ceiling = new FixedWindowLimiter(SEAL_HANDSHAKES_ALL_PER_MINUTE, 60_000, now)
   const pending = new Map<string, Pending>()
   const sessions = new Map<string, LiveSession>()
+  /** Which device each device-mode session is with. */
+  const sessionPeers = new Map<string, string>()
 
   const hello = async (request: http.IncomingMessage, response: http.ServerResponse, outer: SealOuter): Promise<void> => {
     const body = await readSmallJson(request)
@@ -563,7 +567,9 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     if (stream.kind === HTTP_KIND) {
       if (peer.mode === 'device') {
         const asked = readRequest(stream.fields)
-        const allowed = asked !== null && deps.deviceHttp?.(peer.deviceId, asked.method, asked.path) === true
+        // Judged on the path as the companion will read it: no dot segment, nothing encoded that could become one.
+        const plainPath = asked !== null && !/(^|\/)\.{1,2}(\/|\?|$)|%2e|%2f|%5c/i.test(asked.path.split('?')[0])
+        const allowed = asked !== null && plainPath && deps.deviceHttp?.(peer.deviceId, asked.method, asked.path) === true
         if (!allowed) return stream.abort(ABORT.refused, 'not a route for this device')
       }
       return serveHttpStream(stream, { dial: deps.dial, headersFor: (asked) => innerHeaders(asked, outer), log })
@@ -587,7 +593,10 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
   const promote = (id: string, entry: Pending): void => {
     pending.delete(id)
     if (sessions.size >= SEAL_MAX_SESSIONS) dropQuietest()
-    const onClosed = (): void => void sessions.delete(id)
+    const onClosed = (): void => {
+      sessions.delete(id)
+      sessionPeers.delete(id)
+    }
     if (entry.v === 1) {
       const { accepted, outer } = entry
       sessions.set(id, openSession({ sealed: accepted.session, confirm: accepted.confirm, outer, dial: deps.dial, now, log, socketBacklog, onClosed }))
@@ -595,6 +604,7 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     }
     const live = openSeal2Live({ session: entry.accepted.session, serve: streamHandler(entry.peer, entry.outer), now, log, onClosed, socketBacklog })
     sessions.set(id, { ...live, confirm: entry.accepted.confirm })
+    if (entry.peer.mode === 'device') sessionPeers.set(id, entry.peer.deviceId)
     try {
       deps.onSealed?.({ peer: entry.peer, outer: entry.outer, ...(entry.codeId === undefined ? {} : { codeId: entry.codeId }) })
     } catch (error) {
@@ -646,6 +656,15 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     for (const live of [...sessions.values()]) live.tick(at)
   }
 
+  const endPeer = (deviceId: string, why: string): void => {
+    for (const [id, peer] of [...sessionPeers]) {
+      if (peer !== deviceId) continue
+      sessionPeers.delete(id)
+      sessions.get(id)?.close(why)
+    }
+    for (const [id, waiting] of [...pending]) if (waiting.v === 2 && waiting.peer.mode === 'device' && waiting.peer.deviceId === deviceId) pending.delete(id)
+  }
+
   const endSessions = (why: string): void => {
     pending.clear()
     for (const live of [...sessions.values()]) live.close(why)
@@ -665,6 +684,7 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     },
     tick,
     endSessions,
+    endPeer,
     close() {
       clearInterval(timer)
       endSessions('the app is closing')
