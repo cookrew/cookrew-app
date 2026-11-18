@@ -32,6 +32,8 @@ export interface SealDeviceInput {
 export interface SealDevice {
   readonly device: SealDeviceDeps
   self(): DeviceSigner | null
+  /** Is this id one of the account's desktops? Null when the listing could not be asked. */
+  listed(deviceId: string): Promise<boolean | null>
 }
 
 export const verifyDevice: DeviceVerifier = async (jwk, message, sig) => verifyWithDevice(jwk as unknown as Record<string, unknown>, message, sig)
@@ -65,6 +67,10 @@ export function createSealDevice(input: SealDeviceInput): SealDevice {
 
   return {
     self,
+    listed: async (deviceId) => {
+      const ids = await ask()
+      return ids === null ? null : ids.has(deviceId.toLowerCase())
+    },
     device: {
       self,
       verify: verifyDevice,

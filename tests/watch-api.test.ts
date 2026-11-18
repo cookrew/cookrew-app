@@ -1,4 +1,4 @@
-import { sealProofHeaders } from '../src/main/seal-proof'
+import { relayLineHeaders, sealProofHeaders } from '../src/main/seal-proof'
 import { SEALED_MARKER } from '../src/shared/remote-unlock'
 import { readFileSync, writeFileSync, existsSync, mkdtempSync } from 'node:fs'
 import http from 'node:http'
@@ -349,6 +349,7 @@ describe('through the real gate', () => {
     setWatchHost({
       ...host(pairing),
       seal: {
+        sealedOnRelay: () => false,
         offer: async (deviceId, jwk) => {
           offered.push({ deviceId, x: jwk.x })
           return { deviceId: 'mac-device', jwk: macKey, nonce: 'n', words: ['able', 'baby', 'cable', 'dance', 'eagle', 'fabric'] }
@@ -368,7 +369,7 @@ describe('through the real gate', () => {
 
   it('a claim with no key, or a key that is not an Ed25519 one, is the old claim', async () => {
     let asked = 0
-    setWatchHost({ ...host(pairing), seal: { offer: async () => (asked++, null) } })
+    setWatchHost({ ...host(pairing), seal: { sealedOnRelay: () => false, offer: async () => (asked++, null) } })
     for (const extra of [{}, { deviceId: '0f0e0d0c-0b0a-4908-8706-050403020100', jwk: { kty: 'EC', crv: 'P-256', x: 'a' } }]) {
       const { code } = (await (await post('/api/watch/code', PAIRING)).json()) as { code: string }
       const claimed = (await (await post('/api/watch/claim', null, { code, ...extra })).json()) as { ok: boolean; seal?: unknown }
@@ -388,7 +389,26 @@ describe('through the real gate', () => {
     const { token } = (await traded.json()) as { token: string }
     expect(token).toMatch(/.{16,}/)
     expect(token).not.toBe(old)
+    // The answer may be lost, or another part of the watch still holds the old token: until the new one is
+    // presented, the old one still works, and asking again gives the same new token.
+    expect((await call('/api/watch/cards', old)).status).toBe(200)
+    const again = (await (await call('/api/watch/rekey', old, { method: 'POST', body: '{}', headers: sealed })).json()) as { token: string }
+    expect(again.token).toBe(token)
+    expect((await call('/api/watch/cards', token)).status).toBe(200)
+    // The new token was presented: the old one is done.
     expect((await call('/api/watch/cards', old)).status).toBe(401)
+    expect((await call('/api/watch/rekey', old, { method: 'POST', body: '{}', headers: sealed })).status).toBe(404)
+  })
+
+  it('once a watch key is confirmed, the watch token is refused in the clear on the relay line, whatever device the relay names', async () => {
+    let confirmed = false
+    setWatchHost({ ...host(pairing), seal: { sealedOnRelay: () => confirmed, offer: async () => null } })
+    const token = await paired()
+    const line = relayLineHeaders()
+    expect((await call('/api/watch/cards', token, { headers: line })).status).toBe(200)
+    confirmed = true
+    expect((await call('/api/watch/cards', token, { headers: line })).status).toBe(401)
+    // Not the relay line (home, or out of the sealed session): taken as before.
     expect((await call('/api/watch/cards', token)).status).toBe(200)
   })
 

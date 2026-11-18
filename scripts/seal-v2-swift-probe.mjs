@@ -49,9 +49,9 @@ console.log(JSON.stringify({ traded: afterStats.traded, oldTokenInTheClear: oldI
 world.stdin.end()
 const sends = (stats) => stats.seen.filter((row) => row.path === '/api/terminal/t1/input')
 const appPlainBefore = sends(beforeStats).length === 1 && sends(beforeStats)[0].plain === true
-const appSealedAfter = sends(afterStats).length === 3 && sends(afterStats).slice(1).every((row) => row.plain === false)
+const appSealedAfter = sends(afterStats).length === 4 && sends(afterStats).slice(1).every((row) => row.plain === false)
 console.log(JSON.stringify({ appBefore, appAfter, watchCalls: sends(afterStats) }, null, 2))
 console.log(JSON.stringify({ viaCode, beforeConfirm: { ok: beforeConfirm.ok, error: beforeConfirm.error }, afterConfirm }, null, 2))
-const ok = afterStats.traded === true && refusedPlain && appBefore.sent === true && appBefore.pinned === false && appPlainBefore && appAfter.sent === true && appAfter.pinned === true && appSealedAfter && full(viaCode) && beforeConfirm.ok === false && /refused/.test(beforeConfirm.error ?? '') && full(afterConfirm) && Array.isArray(afterConfirm.words) && afterConfirm.words.length === 6
+const ok = appAfter.traded === true && afterStats.traded === true && refusedPlain && appBefore.sent === true && appBefore.pinned === false && appPlainBefore && appAfter.sent === true && appAfter.pinned === true && appSealedAfter && full(viaCode) && beforeConfirm.ok === false && /refused/.test(beforeConfirm.error ?? '') && full(afterConfirm) && Array.isArray(afterConfirm.words) && afterConfirm.words.length === 6
 console.log(ok ? 'PASS: the Swift client speaks cookrew-seal/2 to the real terminus through the registry, by connect code and as a watch in device mode (refused until confirmed); the watch app\'s own calls go plain before the owner confirms and sealed, pinned, after' : 'FAIL')
 process.exit(ok ? 0 : 1)

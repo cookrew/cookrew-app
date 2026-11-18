@@ -38,8 +38,10 @@ export interface SealWatchKeys {
   pending(): PendingWatchKeyRow[]
   /** "Not the same": only the key that waited goes. */
   dropPending(deviceId: string): void
-  /** The watch was forgotten on this Mac: everything held for watches goes. */
-  forgetAll(): void
+  /** The watch was forgotten on this Mac: everything held for watches goes; the ids it held for. */
+  forgetAll(): string[]
+  /** Some watch's key is confirmed here. */
+  anyConfirmed(): boolean
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -127,7 +129,10 @@ export function createSealWatchKeys(file: string, now: () => number = Date.now):
       write(withRow(id, row.confirmed === undefined ? {} : { confirmed: row.confirmed }))
     },
     forgetAll() {
-      if (Object.keys(held).length > 0) write({})
-    }
+      const ids = Object.keys(held)
+      if (ids.length > 0) write({})
+      return ids
+    },
+    anyConfirmed: () => Object.values(held).some((row) => row.confirmed !== undefined)
   }
 }

@@ -114,7 +114,8 @@ final class WatchApp {
     liveSealer = sealer
     let api = HTTPWatchAPI(
       bases: urls, token: session.token, relay: pass, guarded: roams, sealer: sealer,
-      rekeyed: session.sealRekeyed, onToken: { vault.traded(key, token: $0) }
+      rekeyed: session.sealRekeyed, onToken: { vault.traded(key, token: $0) },
+      latest: { vault.session(key).map { ($0.token, $0.sealRekeyed) } }
     )
     store = WatchStore(api: api, feel: feel)
   }

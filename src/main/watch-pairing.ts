@@ -73,6 +73,12 @@ export class WatchPairing {
   private token: string | null
   /** The account's id for the watch let in by its pass; null for one paired by digits. */
   private deviceId: string | null = null
+  /**
+   * The token a trade replaced, still taken until the new one is first presented: an answer to the
+   * trade that never arrived, or another part of the watch still holding the old one, must not lose
+   * the pairing. Kept in memory only: a restart before the new token is used ends it.
+   */
+  private previous: string | null = null
   private live: LiveCode | null = null
   private fails: readonly number[] = []
   private pausedUntil = 0
@@ -122,7 +128,13 @@ export class WatchPairing {
   }
 
   accepts(candidate: string | null | undefined): boolean {
-    return !!candidate && this.token !== null && same(candidate, this.token)
+    if (!candidate || this.token === null) return false
+    if (same(candidate, this.token)) {
+      // The new token arrived from the watch: the old one is done.
+      this.previous = null
+      return true
+    }
+    return this.previous !== null && same(candidate, this.previous)
   }
 
   /** A fresh code, which replaces any code still standing. */
@@ -182,6 +194,7 @@ export class WatchPairing {
    */
   enter(deviceId: string | null): string {
     const token = randomBytes(24).toString('base64url')
+    this.previous = null
     this.token = token
     this.deviceId = deviceId
     this.claimed += 1
@@ -194,9 +207,13 @@ export class WatchPairing {
    * (watch-routes.ts · handleWatchRekey): the token its claim was given crossed the network in
    * the clear, and stops working now. Null with no watch paired.
    */
-  rekey(): string | null {
-    if (this.token === null) return null
+  rekey(presented: string | null): string | null {
+    if (this.token === null || !presented) return null
+    // Asked again with the token it replaced: the same new token, not another (the first answer was lost).
+    if (this.previous !== null && same(presented, this.previous)) return this.token
+    if (!same(presented, this.token)) return null
     const token = randomBytes(24).toString('base64url')
+    this.previous = this.token
     this.token = token
     this.write(token)
     return token
@@ -214,6 +231,7 @@ export class WatchPairing {
 
   /** Forget the watch: its token stops working here and now. */
   unpair(): void {
+    this.previous = null
     this.token = null
     this.deviceId = null
     this.live = null

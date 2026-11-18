@@ -55,7 +55,7 @@ import { lightenCanvas } from "../shared/wire-canvas";
 import { machineCopy } from "../shared/machine-words";
 import { SEAT_GONE, type WorkspaceCheck, type WorkspaceRemovePlan } from "../shared/workspace-door";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
-import { cardCheckpoint, handleWatchClaim, handleWatchHello, handleWatchRekey, handleWatchRoutes, watchRouteAllowed, watchTokenAccepted, watchWriteRefusal } from "./watch-routes";
+import { cardCheckpoint, handleWatchClaim, handleWatchHello, handleWatchRekey, handleWatchRoutes, watchRouteAllowed, watchTokenAccepted, watchTokenAcceptedOn, watchWriteRefusal } from "./watch-routes";
 import { handlePhoneInviteRoute } from "./phone-invite";
 import { bridgeablePath, SOCKET_BRIDGE_MESSAGE_MAX, SOCKET_BRIDGE_PATH, SOCKET_BRIDGE_POST_MESSAGES, type SocketBridge } from "./socket-bridge";
 import { dynamicCompressionStats } from "./http-compress";
@@ -69,7 +69,7 @@ import { ownerSubmit } from "./ask";
 import { fromTheMacsOwnPage, handleUseSourceRoutes, isUseSourceRoute } from "./use-source-routes";
 import { handleUnlockGrantRoutes, isUnlockGrantRoute } from "./unlock-grant-routes";
 import type { UnlockGrantDoor } from "./unlock-grant";
-import { carriesSealProof } from "./seal-proof";
+import { cameOverRelayLine, carriesSealProof } from "./seal-proof";
 import { UNLOCK_GRANT_EVENT } from "../shared/unlock-grant";
 import type { ViewerWho } from "../shared/remote-access";
 import type { SkinStore } from "./skin-store";
@@ -742,7 +742,7 @@ export async function handleMobileApi(
   // A watch's token clears this gate for its own short list of routes and no
   // other (watch-routes.ts): past here it is what a pairing is for those routes.
   const watchCleared =
-    !ownerPairing && watchRouteAllowed(method, p) && watchTokenAccepted(presentedToken(request, url));
+    !ownerPairing && watchRouteAllowed(method, p) && watchTokenAcceptedOn(presentedToken(request, url), cameOverRelayLine(request));
   const hasPairing = ownerPairing || watchCleared;
   const hasReadOnly =
     !!deps.wallToken && pairingAuthorized(request, url, deps.wallToken);

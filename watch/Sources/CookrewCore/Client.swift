@@ -139,6 +139,8 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   private var rekeyed: Bool
   private var rekeying: Task<Void, Never>?
   private let onToken: (@Sendable (String) -> Void)?
+  /** What the vault holds now: another instance (the background refresh) may have traded the token since. */
+  private let latest: (@Sendable () -> (token: String, rekeyed: Bool)?)?
   private let session: URLSession
   private let relay: RelayPass?
   /** A watch that roams: its plain roads may be anyone's, so they prove themselves first. */
@@ -157,8 +159,10 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
     guarded: Bool? = nil,
     sealer: WatchSealer? = nil,
     rekeyed: Bool = false,
-    onToken: (@Sendable (String) -> Void)? = nil
+    onToken: (@Sendable (String) -> Void)? = nil,
+    latest: (@Sendable () -> (token: String, rekeyed: Bool)?)? = nil
   ) {
+    self.latest = latest
     self.sealer = sealer
     self.rekeyed = rekeyed
     self.onToken = onToken
@@ -298,6 +302,15 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
    * is about to stop working. Not let in sealed yet: nothing is traded, and it is asked again later.
    */
   private func tradeToken() async {
+    // One token for the whole watch: a newer one in the vault (traded by another instance) is taken up first.
+    if let kept = latest?() {
+      lock.lock()
+      if kept.token != heldToken {
+        heldToken = kept.token
+        rekeyed = kept.rekeyed
+      }
+      lock.unlock()
+    }
     guard let sealer, await sealer.isPinned else { return }
     let running: Task<Void, Never> = {
       lock.lock()

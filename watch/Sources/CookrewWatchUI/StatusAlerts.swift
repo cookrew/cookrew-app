@@ -78,7 +78,8 @@ public enum StatusAlerts {
       }
       let api = HTTPWatchAPI(
         bases: urls, token: session.token, relay: pass, guarded: session.bases.contains { $0.kind == "relay" }, sealer: sealer,
-        rekeyed: session.sealRekeyed, onToken: { vault.traded(key, token: $0) }
+        rekeyed: session.sealRekeyed, onToken: { vault.traded(key, token: $0) },
+      latest: { vault.session(key).map { ($0.token, $0.sealRekeyed) } }
       )
       let answered = try? await api.cards(tag: nil)
       await sealer?.close()

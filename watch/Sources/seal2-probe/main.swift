@@ -32,12 +32,31 @@ if args[1] == "app" {
   let pass = FixedPass(host: base.host() ?? "", port: base.port, session: args[4])
   let peer = SealPeer(deviceId: args[5], x: args[6], words: Seal2.keyWords(args[6], args[6], nonce: Data(count: 16)))
   let sealer = WatchSealer(peer: peer, device: WatchDevice(id: args[7], seed: seed), relay: pass, pinned: false)
-  let api = HTTPWatchAPI(bases: [base], token: args.count > 9 ? args[9] : "watch-token", relay: pass, sealer: sealer)
+  // The vault, shared by every client instance of the watch, as SessionVault is.
+  final class Vault: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: (token: String, rekeyed: Bool)
+    init(_ token: String) { held = (token, false) }
+    func read() -> (token: String, rekeyed: Bool) { lock.lock(); defer { lock.unlock() }; return held }
+    func traded(_ token: String) { lock.lock(); held = (token, true); lock.unlock() }
+  }
+  let claimToken = args.count > 9 ? args[9] : "watch-token"
+  let vault = Vault(claimToken)
+  let api = HTTPWatchAPI(bases: [base], token: claimToken, relay: pass, sealer: sealer, onToken: { vault.traded($0) }, latest: { vault.read() })
   var out: [String: Any] = [:]
   do {
     try await api.send("hello from the wrist", to: "t1")
-    // Pinned by now if the road went sealed: the next call trades the claim's token first, and goes on the new one.
-    if await sealer.isPinned { try await api.send("again, on the traded token", to: "t1") }
+    if await sealer.isPinned {
+      // The app's own instance, made before the trade and still holding the claim's token.
+      let foregroundSealer = WatchSealer(peer: peer, device: WatchDevice(id: args[7], seed: seed), relay: pass, pinned: true)
+      let foreground = HTTPWatchAPI(bases: [base], token: claimToken, relay: pass, sealer: foregroundSealer, onToken: { vault.traded($0) }, latest: { vault.read() })
+      // The background refresh trades the claim's token, then goes on the new one.
+      try await api.send("again, on the traded token", to: "t1")
+      // The foreground instance takes up the traded token from the vault and is not lost.
+      try await foreground.send("from the instance that held the old token", to: "t1")
+      out["traded"] = vault.read().rekeyed
+      await foregroundSealer.close()
+    }
     out["sent"] = true
   } catch {
     out["sent"] = String(describing: error)

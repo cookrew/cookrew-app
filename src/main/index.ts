@@ -9983,9 +9983,13 @@ function registerIpc(handlers: RestoreHandlers): void {
   setWatchHost({
     ...watchHost,
     seal: {
+      sealedOnRelay: () => sealWatchKeys.anyConfirmed(),
       async offer(deviceId: string, jwk: DeviceKey) {
         const self = sealDevice.self()
         if (self === null) return null
+        // A watch's id is never a desktop's: a claim naming this Mac, a desktop of the account, or an id that
+        // could not be checked keeps the old way. Unknown fails closed.
+        if (deviceId === self.deviceId || (await sealDevice.listed(deviceId)) !== false) return null
         const nonce = sealWatchKeys.offer(deviceId, jwk)
         if (nonce === null) return null
         // The words go along for an older reader only: the watch computes its own from the keys and the nonce.
@@ -10085,7 +10089,8 @@ function registerIpc(handlers: RestoreHandlers): void {
     'watch:forget',
     ownerOnly(() => {
       // A forgotten watch is let in sealed no more either: its keys go with its token.
-      sealWatchKeys.forgetAll()
+      // Its sealed-only marks go too: paired again, it is not refused in the clear before it seals again.
+      for (const id of sealWatchKeys.forgetAll()) sealMarks.unmark(id)
       return watchPairing.unpair()
     })
   )

@@ -105,7 +105,11 @@ export interface WatchHost {
    * cookrew-seal/2 for a watch (seal-watch-keys.ts): keep the key a claim brought, pending until the owner
    * confirms its words here, and say this Mac's own key and the words. Null with no account key on this Mac.
    */
-  readonly seal?: { offer(deviceId: string, jwk: DeviceKey): Promise<WatchSealReply | null> }
+  readonly seal?: {
+    offer(deviceId: string, jwk: DeviceKey): Promise<WatchSealReply | null>
+    /** A watch key was confirmed: from now on the watch token is never taken in the clear on the relay line. */
+    sealedOnRelay(): boolean
+  }
 }
 
 /** What a claim's answer says of the sealed session: this Mac's device and key, and the six words both screens show. */
@@ -193,6 +197,14 @@ export async function inviteWatch(current: Pick<WatchHost, 'invite' | 'pairing'>
 }
 
 export const watchTokenAccepted = (candidate: string | null): boolean => host?.pairing.accepts(candidate) ?? false
+
+/**
+ * The watch token, judged by the road it came on. Once a watch's key is confirmed for the sealed session,
+ * its token is refused in the clear on the relay line whatever device the relay names: the relay saw
+ * the claim's token, and a mark by device name is one a lying relay steps round (security review 2026-11-19).
+ */
+export const watchTokenAcceptedOn = (candidate: string | null, overRelayLine: boolean): boolean =>
+  !(overRelayLine && (host?.seal?.sealedOnRelay() ?? false)) && watchTokenAccepted(candidate)
 
 const TERMINAL_WRITE = /^\/api\/terminal\/([^/]+)\/(input|menu)$|^\/api\/watch\/card\/([^/]+)\/stop$/
 
@@ -285,7 +297,7 @@ export function handleWatchRekey(response: http.ServerResponse, method: string, 
     respondJson(response, 404, { error: 'not found' })
     return true
   }
-  const token = host.pairing.rekey()
+  const token = host.pairing.rekey(presented)
   respondJson(response, token === null ? 404 : 200, token === null ? { error: 'not found' } : { ok: true, token })
   return true
 }
