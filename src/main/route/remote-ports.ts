@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { tailnetHost } from '../../shared/remote-magpie'
+import { isTailnetPeer, type Tailnet } from './tailnet'
 import type { DiscoveryEnv } from './discovery'
 
 /**
@@ -88,7 +88,7 @@ export interface PlainRemote {
  * network unencrypted, so the panel names each one. Loopback ones are the tunnels
  * remoteLoopbackProviders names; they are not repeated here.
  */
-export function plainRemoteProviders(d: DiscoveryEnv, read: (file: string) => string = (file) => readFileSync(file, 'utf8')): PlainRemote[] {
+export function plainRemoteProviders(d: DiscoveryEnv, read: (file: string) => string = (file) => readFileSync(file, 'utf8'), tailnet: Tailnet | null = null): PlainRemote[] {
   let parsed: unknown
   try {
     parsed = JSON.parse(read(providersFile(d)))
@@ -107,7 +107,8 @@ export function plainRemoteProviders(d: DiscoveryEnv, read: (file: string) => st
       if (typeof raw !== 'string') continue
       try {
         const url = new URL(raw)
-        if (url.protocol === 'http:' && !LOOPBACK.has(url.hostname) && !tailnetHost(url.hostname)) rows.set(provider.id, { id: provider.id, host: url.host })
+        // Plain http is let be only to a peer this computer's Tailscale names (route/tailnet.ts), never a lookalike.
+        if (url.protocol === 'http:' && !LOOPBACK.has(url.hostname) && !isTailnetPeer(tailnet, url.hostname)) rows.set(provider.id, { id: provider.id, host: url.host })
       } catch {
         // An address Magpie itself could not use either: nothing to warn of.
       }

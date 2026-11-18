@@ -2,7 +2,8 @@ import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { MAGPIE_PORT, privateHost, tailnetHost } from '../../shared/remote-magpie'
+import { MAGPIE_PORT, privateHost } from '../../shared/remote-magpie'
+import { isTailnetSelf, type Tailnet } from './tailnet'
 import type { PendingKey, ShareHandover, ShareIssueAnswer, SharedKey, ShareWhere } from '../../shared/share-devices'
 import type { DiscoveryEnv } from './discovery'
 import { INTENT_NAME_RE, type IntentStore, type ShareIntent } from './share-intents'
@@ -372,11 +373,12 @@ interface InterfaceAddress {
  * only on a tailnet, where WireGuard is under it (owner ruling 2026-11-17); a LAN
  * address is given as https, which Magpie serves once https is on there.
  */
-export function shareUrls(interfaces: Record<string, readonly InterfaceAddress[] | undefined>, port: number): string[] {
+export function shareUrls(interfaces: Record<string, readonly InterfaceAddress[] | undefined>, port: number, tailnet: Tailnet | null = null): string[] {
   return Object.values(interfaces)
     .flatMap((list) => list ?? [])
     .filter((a) => (a.family === 'IPv4' || a.family === 4) && !a.internal && privateHost(a.address))
-    .map((a) => `${tailnetHost(a.address) ? 'http' : 'https'}://${a.address}:${port}`)
+    // Plain http only on this computer's own address on a tailnet its Tailscale names (route/tailnet.ts).
+    .map((a) => `${isTailnetSelf(tailnet, a.address) ? 'http' : 'https'}://${a.address}:${port}`)
 }
 
 /** Where Magpie wrote down that it listens (`magpie status`), or null. */
@@ -390,10 +392,10 @@ export function gatewayAddr(d: DiscoveryEnv, read: (file: string) => string = (f
   }
 }
 
-export function shareWhere(d: DiscoveryEnv, interfaces: Record<string, readonly InterfaceAddress[] | undefined>, read?: (file: string) => string): ShareWhere {
+export function shareWhere(d: DiscoveryEnv, interfaces: Record<string, readonly InterfaceAddress[] | undefined>, read?: (file: string) => string, tailnet: Tailnet | null = null): ShareWhere {
   const addr = gatewayAddr(d, read)
   const port = Number(addr?.match(/:(\d+)$/)?.[1] ?? MAGPIE_PORT)
-  return { onNetwork: gatewayOnNetwork(addr), urls: shareUrls(interfaces, port) }
+  return { onNetwork: gatewayOnNetwork(addr), urls: shareUrls(interfaces, port, tailnet) }
 }
 
 /** The magpie CLI: on PATH, else where its installer links it, else inside the app. */

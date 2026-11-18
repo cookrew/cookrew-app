@@ -51,7 +51,7 @@ describe('plainRemoteProviders', () => {
       { id: 'public', preset: 'remote-magpie', chat: 'http://gw.example.com:3425/v1' },
       { id: 'ollama', preset: 'ollama', chat: 'http://192.168.1.30:11434/v1' }
     ])
-    expect(plainRemoteProviders(env, () => json)).toEqual([
+    expect(plainRemoteProviders(env, () => json, { self: [], peers: ['100.101.102.103', 'mac.tail1234.ts.net'] })).toEqual([
       { id: 'office', host: '192.168.1.20:3425' },
       { id: 'public', host: 'gw.example.com:3425' }
     ])

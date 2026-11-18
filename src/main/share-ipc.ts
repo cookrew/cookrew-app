@@ -6,6 +6,7 @@ import { defaultDiscoveryEnv, type DiscoveryEnv } from './route/discovery'
 import { magpieBinary, magpieRunner, ShareKeys, shareWhere } from './route/share-keys'
 import { fileIntentStore, INTENT_FILE } from './route/share-intents'
 import { remoteSwitchedOn } from './magpie-remote/switches'
+import type { Tailnet } from './route/tailnet'
 
 /**
  * The owner-only channels behind "Share with my devices". Registered through
@@ -27,6 +28,8 @@ export interface ShareIpcDeps {
   /** Optional factory for testing the production lazy initialization. */
   makeKeys?: () => ShareKeys | null
   interfaces?: () => ReturnType<typeof os.networkInterfaces>
+  /** What this computer's Tailscale names (route/tailnet.ts); absent or null: nothing is a tailnet. */
+  tailnet?: () => Tailnet | null
   /** Read on each issue; unavailable or disabled must never mint a key. */
   enabled?: () => LiveValues | null
 }
@@ -69,7 +72,7 @@ export function shareHandlers(deps: ShareIpcDeps = {}): {
     }
   }
   return {
-    list: () => guarded(async (k) => ({ ok: true as const, ...(await k.list()), where: shareWhere(env, interfaces()) })),
+    list: () => guarded(async (k) => ({ ok: true as const, ...(await k.list()), where: shareWhere(env, interfaces(), undefined, deps.tailnet?.() ?? null) })),
     issue: (input) => {
       if (!permitted()) return Promise.resolve({ ok: false, why: SWITCHED_OFF })
       const form = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>

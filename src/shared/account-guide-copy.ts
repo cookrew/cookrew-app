@@ -53,7 +53,7 @@ export const SHARE_COPY = {
   CHECK: 'Check again',
   ADDRESSES: 'Other devices reach it at',
   NO_ADDRESS: 'No LAN or tailnet address found on this computer.',
-  PLAIN: 'Plain http only on a tailnet (100.x), which is encrypted underneath. A LAN address is given as https: turn on https in Magpie first (Settings › Gateway, or `magpie https on`) and give the other computer Magpie’s CA.',
+  PLAIN: 'Plain http only on this computer’s own tailnet address, as Tailscale reports it, which is encrypted underneath. Every other address is given as https: turn on https in Magpie first (Settings › Gateway, or `magpie https on`) and give the other computer Magpie’s CA. Your other computers need neither: Your computers connects them over an encrypted link.',
   PLAIN_REMOTE: (id: string, host: string): string => `“${id}” is reached by plain http at ${host}, off a tailnet: its key and every request cross that network unencrypted. Give it its tailnet address, or https, in Magpie’s settings.`,
   PLAIN_HEAD: 'A Remote magpie on plain http',
   LOOPBACK_HEAD: 'A Remote magpie on this computer’s loopback',

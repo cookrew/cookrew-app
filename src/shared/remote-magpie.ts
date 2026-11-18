@@ -37,12 +37,7 @@ export function privateHost(host: string): boolean {
   return LAN_SUFFIXES.some((suffix) => name.endsWith(suffix))
 }
 
-/** A tailnet address or name: WireGuard under the http, so the key never crosses in the clear. */
-export function tailnetHost(host: string): boolean {
-  const ip = ipv4(host)
-  if (ip !== null) return ip[0] === 100 && ip[1] >= 64 && ip[1] <= 127
-  return host.toLowerCase().endsWith('.ts.net')
-}
+/** Whether an address is on a tailnet is Tailscale's word, not the address's look: main/route/tailnet.ts. */
 
 /**
  * MAGPIE OVER THE SEAL (lane Magpie). Another computer of the account uses this

@@ -309,7 +309,7 @@ describe('where another device reaches this Magpie', () => {
       utun4: [{ address: '100.101.102.103', family: 'IPv4', internal: false }],
       en9: [{ address: '8.8.8.8', family: 'IPv4', internal: false }]
     }
-    expect(shareUrls(interfaces, 3425)).toEqual(['https://192.168.1.20:3425', 'http://100.101.102.103:3425'])
+    expect(shareUrls(interfaces, 3425, { self: ['100.101.102.103'], peers: [] })).toEqual(['https://192.168.1.20:3425', 'http://100.101.102.103:3425'])
   })
 })
 

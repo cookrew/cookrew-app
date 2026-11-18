@@ -156,7 +156,7 @@ describe('Share with my devices on plain http', () => {
   it('says what plain http risks beside the addresses', () => {
     const html = renderToStaticMarkup(<ShareDevicesView keys={[]} where={{ onNetwork: true, urls: ['http://192.168.1.20:3425'] }} problem={null} issued={null} busy={false} onIssue={() => {}} onRevoke={() => {}} onCheck={() => {}} onDone={() => {}} />)
     expect(html).toContain('data-note="plain-http"')
-    expect(html).toContain('Plain http only on a tailnet')
+    expect(html).toContain('Plain http only on this computer’s own tailnet address, as Tailscale reports it')
     expect(html).toContain('magpie https on')
   })
 })

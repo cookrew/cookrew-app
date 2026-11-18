@@ -331,6 +331,7 @@ import { magpieBinary, magpieRunner, ShareKeys } from './route/share-keys'
 import { fileIntentStore, INTENT_FILE } from './route/share-intents'
 import { createMagpieRemote } from './magpie-remote/setup'
 import { callerIsMagpie } from './magpie-remote/caller'
+import { createTailnetView } from './route/tailnet'
 import { MAGPIE_REMOTE_KIND } from '../shared/remote-magpie'
 import { AccessStore, probeEndpoint } from './agent-access'
 import { macKeychain } from './pane-keychain'
@@ -1021,6 +1022,10 @@ const routeBus = new EventEmitter()
 /** The owner's live Magpie switches (launch settings), set once the store exists; until then nothing routes. */
 let launchLive: (() => LiveValues) | null = null
 /** Magpie's own settings page, opened in a browser card (route/magpie-web.ts). */
+/** What this computer's Tailscale names, read in the background (route/tailnet.ts): plain http is let be only there. */
+const tailnetView = createTailnetView()
+void tailnetView.refresh()
+setInterval(() => void tailnetView.refresh(), 60_000).unref()
 const magpieWeb = new MagpieWeb({ bin: () => magpieBinary(defaultDiscoveryEnv()), file: path.join(homedir(), '.cookrew', MAGPIE_WEB_FILE) })
 /** The cards signed in to Magpie's page: only these are reused (magpie-card-open.ts). */
 const magpieCards = fileSignedCards(path.join(homedir(), '.cookrew', MAGPIE_CARDS_FILE))
@@ -1029,7 +1034,7 @@ const routeService = new RouteService({
   switches: () => launchLive?.() ?? null,
   remotePorts: () => remoteLoopbackPorts(defaultDiscoveryEnv()),
   remoteLoopback: () => remoteLoopbackProviders(defaultDiscoveryEnv()),
-  plainRemotes: () => plainRemoteProviders(defaultDiscoveryEnv()),
+  plainRemotes: () => plainRemoteProviders(defaultDiscoveryEnv(), undefined, tailnetView.known()),
   // PATH, ~/.local/bin (the installer's symlink, off a GUI app's PATH) and the app bundle.
   monitor: new GatewayMonitor({ hasBinary: () => magpieInstalled({ home: homedir(), env: process.env }, existsSync) }),
   fetch: (input, init) => fetch(input, init),
@@ -9111,7 +9116,8 @@ function registerIpc(handlers: RestoreHandlers): void {
   // a key is minted on the owner's gateway, so only the owner's top frame may ask.
   registerShareIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
     enabled: () => launchLive?.() ?? null,
-    makeKeys: shareKeysNow
+    makeKeys: shareKeysNow,
+    tailnet: () => tailnetView.known()
   })
   // Another computer's Magpie over the seal (magpie-remote/setup.ts): owner's window only.
   ipcMain.handle('magpie-remote:list', ownerOnly(() => magpieRemote.list()))

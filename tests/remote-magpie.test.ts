@@ -1,19 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { privateHost, tailnetHost } from '../src/shared/remote-magpie'
+import { privateHost } from '../src/shared/remote-magpie'
 import { setupLineAllowed } from '../src/shared/route-lines'
 
-describe('privateHost and tailnetHost', () => {
+describe('privateHost', () => {
   it('tell a private range, a tailnet and a LAN name from the open internet', () => {
     for (const host of ['10.0.0.2', '172.16.4.1', '192.168.1.20', '100.101.102.103', 'studio.local', 'mac.tail1234.ts.net']) expect(privateHost(host), host).toBe(true)
     for (const host of ['8.8.8.8', '172.32.0.1', 'gw.example.com', 'studio', '100.128.0.1']) expect(privateHost(host), host).toBe(false)
   })
 
-  it('call only a tailnet encrypted', () => {
-    expect(tailnetHost('100.101.102.103')).toBe(true)
-    expect(tailnetHost('mac.tail1234.ts.net')).toBe(true)
-    expect(tailnetHost('192.168.1.20')).toBe(false)
-    expect(tailnetHost('studio.local')).toBe(false)
-  })
 })
 
 describe('the Setup terminal no longer types a Remote magpie key line', () => {
