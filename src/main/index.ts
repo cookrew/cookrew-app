@@ -9106,14 +9106,8 @@ function registerIpc(handlers: RestoreHandlers): void {
   registerShareIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
     enabled: () => launchLive?.() ?? null,
     makeKeys: shareKeysNow,
-    // A key revoked here is forgotten by the sealed path too (magpie-remote/bound-keys.ts).
-    onRevoked: (id) => {
-      try {
-        magpieRemote.boundKeys.remove(id)
-      } catch {
-        // Unreadable list: the key is already refused there, since Magpie no longer lists it.
-      }
-    }
+    // A key about to be revoked here stops being honoured over the seal first, its streams cut.
+    beforeRevoke: (id) => magpieRemote.unbind(id)
   })
   // Another computer's Magpie over the seal (magpie-remote/setup.ts): owner's window only.
   ipcMain.handle('magpie-remote:list', ownerOnly(() => magpieRemote.list()))
@@ -9857,7 +9851,8 @@ function registerIpc(handlers: RestoreHandlers): void {
         session.fromPartition(partition).webRequest.onBeforeSendHeaders({ urls: ['http://127.0.0.1/*', 'https://127.0.0.1/*', 'ws://127.0.0.1/*', 'wss://127.0.0.1/*'] }, (details, done) => {
           const headers = { ...details.requestHeaders }
           for (const name of Object.keys(headers)) {
-            if (name.toLowerCase() !== 'cookie' || cookieAllowedFor(details.url, port)) continue
+            const site = Object.entries(details.requestHeaders).find(([n]) => n.toLowerCase() === 'sec-fetch-site')?.[1]
+            if (name.toLowerCase() !== 'cookie' || cookieAllowedFor(details.url, port, site)) continue
             const kept = stripMagpieCookies(headers[name])
             if (kept === '') delete headers[name]
             else headers[name] = kept

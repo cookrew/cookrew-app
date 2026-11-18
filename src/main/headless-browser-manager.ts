@@ -284,7 +284,6 @@ export class HeadlessBrowserManager {
     if (pending) return pending
     this.desired.delete(browserId)
     this.lastUsed.delete(browserId)
-    this.primed.delete(browserId)
     const operation = (async (): Promise<void> => {
       const stopping: Array<Promise<unknown>> = []
       const starting = this.starting.get(browserId)
@@ -312,6 +311,8 @@ export class HeadlessBrowserManager {
 
   /** Permanent node deletion: stop first, then remove its persistent profile. */
   async discard(browserId: string): Promise<void> {
+    // Signed in for good only while the card exists: a stop or a workspace switch keeps it.
+    this.primed.delete(browserId)
     await this.remove(browserId)
     await this.deps.deleteProfile?.(browserId)
   }

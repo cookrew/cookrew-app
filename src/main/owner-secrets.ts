@@ -221,10 +221,13 @@ export function ownerSecretPaths(
     // keys given to the owner's other computers (magpie-remote/bound-keys.ts); and
     // the keys other computers gave this one, sealed (magpie-remote/remotes.ts).
     path.join(base, 'share-intents.json'),
+    path.join(base, 'share-intents.json.tmp'),
     path.join(base, 'magpie-bound-keys.json'),
+    path.join(base, 'magpie-bound-keys.json.tmp'),
     path.join(base, 'magpie-remotes.json'),
     path.join(base, 'magpie-remotes.json.tmp'),
     // Which browser cards are signed in to Magpie's page (magpie-card-open.ts).
-    path.join(base, 'magpie-cards.json')
+    path.join(base, 'magpie-cards.json'),
+    path.join(base, 'magpie-cards.json.tmp')
   ]
 }

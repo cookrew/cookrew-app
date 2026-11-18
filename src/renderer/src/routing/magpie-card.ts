@@ -10,6 +10,13 @@ import type { BrowserNodeData, CanvasNode } from '../../../shared/model'
  */
 export const MAGPIE_CARD_NAME = 'Magpie'
 
+/** The card pointed at the page: its url, and the tab it shows, since a card with tabs shows its active tab. */
+function pointedAt(card: BrowserNodeData, url: string): Partial<BrowserNodeData> {
+  if (!card.tabs || card.tabs.length === 0) return { url }
+  const active = card.tabs.find((t) => t.id === card.activeTabId) ?? card.tabs[0]
+  return { url, tabs: card.tabs.map((t) => (t.id === active.id ? { ...t, url } : t)) }
+}
+
 /** What main may hand back: Magpie's page on loopback, with no query, fragment or credentials. */
 const BARE_RE = /^http:\/\/127\.0\.0\.1:\d{2,5}\/$/
 
@@ -25,13 +32,14 @@ export async function openMagpieSettings(): Promise<string | null> {
   if (typeof open !== 'function') return 'Magpie’s settings open from the desktop app.'
   try {
     const state = await api.getWorkspace()
-    // Every card named "Magpie" is offered; main reuses one only if it signed that card in before.
-    const named = state.nodes.filter((n): n is BrowserNodeData => n.kind === 'browser' && n.name === MAGPIE_CARD_NAME)
-    const answer = await open(named.map((n) => n.id))
+    // Every browser card is offered; main reuses one only if it signed that card in before, whatever it is called now.
+    const browsers = state.nodes.filter((n): n is BrowserNodeData => n.kind === 'browser')
+    const answer = await open(browsers.map((n) => n.id))
     if (!answer.ok) return answer.why
     if (!BARE_RE.test(answer.url)) return 'Could not open Magpie’s settings.'
-    if (!answer.fresh) {
-      await api.updateNode(answer.cardId, { url: answer.url } as Partial<CanvasNode>)
+    const held = browsers.find((n) => n.id === answer.cardId)
+    if (!answer.fresh && held) {
+      await api.updateNode(held.id, pointedAt(held, answer.url) as Partial<CanvasNode>)
       return null
     }
     const right = state.nodes.reduce((edge, n) => Math.max(edge, n.position.x + n.size.width), 0)

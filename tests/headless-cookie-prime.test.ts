@@ -67,7 +67,7 @@ describe('primeCookies', () => {
     expect(instance.setCookies).toHaveBeenCalledWith([COOKIE])
   })
 
-  it('gives no other card the cookie, and forgets it with the card', async () => {
+  it('gives no other card the cookie, keeps it across a stop, and forgets it with the card', async () => {
     const made: HeadlessOptions[] = []
     const m = manager((o) => {
       made.push(o)
@@ -77,6 +77,9 @@ describe('primeCookies', () => {
     await m.syncNode(card('another'))
     expect(made[0].cookies).toBeUndefined()
     await m.remove(card().id)
+    await m.syncNode(card())
+    expect(made.at(-1)?.cookies).toEqual([COOKIE])
+    await m.discard(card().id)
     await m.syncNode(card())
     expect(made.at(-1)?.cookies).toBeUndefined()
   })

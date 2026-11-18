@@ -37,17 +37,38 @@ export const keyHash = (key: string): string => createHash('sha256').update(key,
 
 const HEX64 = /^[0-9a-f]{64}$/
 
-function parse(text: string): BoundKey[] {
-  const parsed = JSON.parse(text) as { v?: unknown; keys?: unknown }
+/** When a key was made for a computer: how often one computer may be given a new key. */
+export interface IssuedAt {
+  readonly peer: string
+  readonly at: number
+}
+
+interface Stored {
+  readonly keys: BoundKey[]
+  readonly issued: IssuedAt[]
+}
+
+function parse(text: string): Stored {
+  const parsed = JSON.parse(text) as { v?: unknown; keys?: unknown; issued?: unknown }
   if (parsed?.v !== 1 || !Array.isArray(parsed.keys)) throw new Error('The list of keys given to other computers is not readable.')
-  return parsed.keys.map((raw) => {
+  if (parsed.issued !== undefined && !Array.isArray(parsed.issued)) throw new Error('The list of keys given to other computers is not readable.')
+  const issued = ((parsed.issued as unknown[] | undefined) ?? []).map((raw) => {
+    const r = raw as Record<string, unknown>
+    if (typeof r?.peer !== 'string' || typeof r.at !== 'number') throw new Error('A key given to another computer is not readable.')
+    return { peer: r.peer, at: r.at }
+  })
+  const keys = parsed.keys.map((raw) => {
     const k = raw as Record<string, unknown>
     if (typeof k?.id !== 'string' || typeof k.tail !== 'string' || typeof k.hash !== 'string' || !HEX64.test(k.hash) || typeof k.peer !== 'string' || typeof k.device !== 'string' || typeof k.at !== 'string') {
       throw new Error('A key given to another computer is not readable.')
     }
     return { id: k.id, tail: k.tail, hash: k.hash, peer: k.peer, device: k.device, at: k.at }
   })
+  return { keys, issued }
 }
+
+/** How far back the issue log is kept, and so the window the per-computer limit counts over. */
+export const ISSUE_WINDOW_MS = 24 * 60 * 60 * 1000
 
 export interface BoundKeys {
   /** Throws when the list cannot be read. */
@@ -57,6 +78,10 @@ export interface BoundKeys {
   remove(id: string): void
   /** The entry for this key from this device, or null: constant-time on the hash. */
   find(peer: string, key: string): BoundKey | null
+  /** Keys made for this computer since `since` (epoch ms). */
+  issuedSince(peer: string, since: number): number
+  /** A key was made for this computer at `at`; entries older than the window are dropped. */
+  noteIssued(peer: string, at: number): void
 }
 
 export interface BoundKeysStorage {
@@ -77,7 +102,8 @@ export function fileStorage(file: string): BoundKeysStorage {
     write: (text) => {
       const dir = path.dirname(file)
       mkdirSync(dir, { recursive: true, mode: 0o700 })
-      const tmp = `${file}.${process.pid}.tmp`
+      // A fixed name, so the served sandbox's deny list can name it (owner-secrets.ts).
+      const tmp = `${file}.tmp`
       const fd = openSync(tmp, 'w', 0o600)
       try {
         writeSync(fd, text)
@@ -90,21 +116,34 @@ export function fileStorage(file: string): BoundKeysStorage {
   }
 }
 
+
 export function memoryStorage(): BoundKeysStorage {
   let held: string | null = null
   return { read: () => held, write: (text) => void (held = text) }
 }
 
 export function createBoundKeys(storage: BoundKeysStorage): BoundKeys {
-  const list = (): readonly BoundKey[] => {
+  const read = (): Stored => {
     const text = storage.read()
-    return text === null ? [] : parse(text)
+    return text === null ? { keys: [], issued: [] } : parse(text)
   }
-  const save = (keys: readonly BoundKey[]): void => storage.write(`${JSON.stringify({ v: 1, keys })}\n`)
+  const list = (): readonly BoundKey[] => read().keys
+  const save = (next: Stored): void => storage.write(`${JSON.stringify({ v: 1, ...next })}\n`)
   return {
     list,
-    add: (key) => save([...list().filter((k) => k.id !== key.id), key]),
-    remove: (id) => save(list().filter((k) => k.id !== id)),
+    add: (key) => {
+      const now = read()
+      save({ ...now, keys: [...now.keys.filter((k) => k.id !== key.id), key] })
+    },
+    remove: (id) => {
+      const now = read()
+      save({ ...now, keys: now.keys.filter((k) => k.id !== id) })
+    },
+    issuedSince: (peer, since) => read().issued.filter((i) => i.peer === peer && i.at >= since).length,
+    noteIssued: (peer, at) => {
+      const now = read()
+      save({ ...now, issued: [...now.issued.filter((i) => i.at >= at - ISSUE_WINDOW_MS), { peer, at }] })
+    },
     find: (peer, key) => {
       const want = Buffer.from(keyHash(key), 'hex')
       let found: BoundKey | null = null

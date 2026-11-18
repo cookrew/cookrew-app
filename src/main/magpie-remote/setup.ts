@@ -44,6 +44,8 @@ export interface MagpieRemoteDeps {
 
 export interface MagpieRemote {
   readonly serve: SealStreamHandler
+  /** Stop honouring a key over the seal and cut its streams, before it is revoked (serve.ts). */
+  unbind(id: string): void
   readonly boundKeys: BoundKeys
   start(): Promise<void>
   stop(): Promise<void>
@@ -97,6 +99,7 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
 
   return {
     serve,
+    unbind: (id) => serve.unbind(id),
     boundKeys,
     start: async () => {
       // One port, always the same: Magpie's providers name it, so taking another would send them elsewhere.
@@ -132,8 +135,9 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
         desktopsKnown: desktops !== null
       }
     },
+    // One lane for every computer: two computers of one name must not both take one provider id.
     connect: (peer, name) =>
-      lane(typeof peer === 'string' ? peer : '', () => connectRemote(peer, name, {
+      lane('connect', () => connectRemote(peer, name, {
         switches: () => deps.switches(),
         store: remotes,
         askKey,
@@ -141,10 +145,10 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
         addProvider: (id, url) => providers.add(id, url),
         setProvider: (id, url) => providers.set(id, url),
         removeProvider: (id) => providers.remove(id),
-        providerIds: () => providers.ids(),
+        providers: () => providers.entries(),
         forwarderPort: () => forwarder.port(),
         myName
       })),
-    disconnect: (peer) => lane(typeof peer === 'string' ? peer : '', () => disconnectRemote(peer, { store: remotes, returnKey, removeProvider: (id) => providers.remove(id) }))
+    disconnect: (peer) => lane('connect', () => disconnectRemote(peer, { store: remotes, returnKey, removeProvider: (id) => providers.remove(id) }))
   }
 }

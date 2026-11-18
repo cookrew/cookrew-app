@@ -224,3 +224,20 @@ describe('review fixes: recovery waits its turn behind a key being made', () => 
     expect(await resolving).toMatchObject({ ok: false })
   })
 })
+
+describe('review round 2: a key made for another computer is not this panel\'s work', () => {
+  it('does not show as issuing on the owner\'s panel', async () => {
+    const magpie = fakeMagpie()
+    let release: () => void = () => {}
+    const run: MagpieRun = async (args) => {
+      if (args[1] === 'add') await new Promise<void>((r) => (release = r))
+      return magpie.run(args)
+    }
+    const keys = keysWith(run, memoryIntentStore())
+    const sealed = keys.issue({ device: 'other-mac', dailyUsd: 5 }, () => true, { handover: false })
+    await new Promise((r) => setTimeout(r, 10))
+    expect((await keys.list()).issuing).toBe(false)
+    release()
+    expect((await sealed).ok).toBe(true)
+  })
+})

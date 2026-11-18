@@ -10,7 +10,7 @@ import type { SealPeer } from '../src/main/canvas-seal-terminus'
 import { createBoundKeys, keyHash, memoryStorage, type BoundKeys } from '../src/main/magpie-remote/bound-keys'
 import { createMagpieForwarder } from '../src/main/magpie-remote/forward'
 import { createMagpieServe, presentedKey } from '../src/main/magpie-remote/serve'
-import { modelRoute } from '../src/shared/remote-magpie'
+import { magpieHeaders, modelRoute } from '../src/shared/remote-magpie'
 import type { KeyRow } from '../src/main/route/share-keys'
 import type { LiveValues } from '../src/shared/launch-settings'
 import { MAGPIE_KEY_PATH, MAGPIE_REMOTE_KIND, SEALED_PLACEHOLDER_KEY } from '../src/shared/remote-magpie'
@@ -55,6 +55,7 @@ interface World {
   b: { switches: LiveValues | null; listed: KeyRow[]; keys: BoundKeys; peer: SealPeer; issued: string[]; revoked: string[] }
   a: { switches: LiveValues | null; key: string | null }
   pair: Awaited<ReturnType<typeof seal2Pair>>
+  serve: ReturnType<typeof createMagpieServe>
   close(): Promise<void>
 }
 
@@ -97,6 +98,7 @@ async function build(): Promise<World> {
     b,
     a,
     pair,
+    serve,
     close: async () => {
       await forwarder.close()
       pair.close()
@@ -377,5 +379,68 @@ describe('review fixes: one key per computer, and only an enabled one', () => {
     world = await build()
     world.b.listed = listed
     expect((await call('/v1/messages')).status).toBe(401)
+  })
+})
+
+describe('review round 2: nothing but the checked key reaches Magpie as a credential', () => {
+  it('refuses a query Magpie could read a key from, and keeps the ones agents send', () => {
+    expect(modelRoute('POST', '/v1/messages?beta=true')).toBe(true)
+    expect(modelRoute('GET', '/v1/models?limit=50&after_id=x')).toBe(true)
+    for (const q of ['key=junk', 'api_key=x', 'beta=true&key=x', 'token=x']) expect(modelRoute('POST', `/v1/messages?${q}`), q).toBe(false)
+  })
+
+  it('forwards only the allowed headers, with the verified key in both credential headers', () => {
+    const out = magpieHeaders({ 'content-type': 'application/json', 'anthropic-version': '2023-06-01', 'x-stainless-os': 'MacOS', 'x-goog-api-key': 'junk', 'x-magpie-account': 'claude/other', cookie: 'a=1', 'x-api-key': 'placeholder', authorization: 'Bearer placeholder' }, KEY)
+    expect(out).toEqual({ 'content-type': 'application/json', 'anthropic-version': '2023-06-01', 'x-stainless-os': 'MacOS', authorization: `Bearer ${KEY}`, 'x-api-key': KEY })
+  })
+
+  it('end to end: B’s Magpie never sees a second credential or a steering header', async () => {
+    expect((await call('/v1/messages', { headers: { 'x-goog-api-key': 'junk', 'x-magpie-provider': 'claude' } })).status).toBe(200)
+    const seen = world.magpie.seen.at(-1)
+    expect(seen?.headers['x-goog-api-key']).toBeUndefined()
+    expect(seen?.headers['x-magpie-provider']).toBeUndefined()
+    expect(seen?.headers.authorization).toBe(`Bearer ${KEY}`)
+    expect(seen?.headers['x-api-key']).toBe(KEY)
+  })
+})
+
+describe('review round 2: a key revoked while a body is held never reaches Magpie', () => {
+  const send = (headers: Record<string, string>) => world.pair.a.openStream(MAGPIE_REMOTE_KIND, requestFields('POST', '/v1/messages', { 'content-type': 'application/json', ...headers }))
+
+  it('checks the key again once the body is in, so a revocation meanwhile refuses it', async () => {
+    const stream = send({ 'x-api-key': KEY })
+    const writer = stream.writable.getWriter()
+    await writer.write(new TextEncoder().encode('{"model":"claude/claude-opus-5-5",'))
+    await new Promise((r) => setTimeout(r, 30))
+    // The key stops being honoured (asked again, given back, or revoked in the panel).
+    world.serve.unbind('id-of-a-key-00000001')
+    await writer.write(new TextEncoder().encode('"stream":true}'))
+    await writer.close()
+    expect((await stream.head).status).toBe(401)
+    expect(world.magpie.seen).toEqual([])
+  })
+
+  it('cuts an answer still streaming with a key that is unbound', async () => {
+    const stream = send({ 'x-api-key': KEY })
+    const writer = stream.writable.getWriter()
+    await writer.write(new TextEncoder().encode('{"model":"claude/claude-opus-5-5","stream":true}'))
+    await writer.close()
+    await stream.head
+    world.serve.unbind('id-of-a-key-00000001')
+    await expect(stream.closed).rejects.toBeDefined()
+  })
+
+  it('gives one computer at most three keys a day', async () => {
+    world.b.listed = []
+    const handler = world.serve
+    const { a } = await seal2Pair((s) => handler(s, { mode: 'device', deviceId: A }, {} as never))
+    const ask = async (): Promise<number> => {
+      const stream = a.openStream(MAGPIE_REMOTE_KIND, requestFields('POST', MAGPIE_KEY_PATH, { 'content-type': 'application/json' }))
+      const writer = stream.writable.getWriter()
+      await writer.write(new TextEncoder().encode(JSON.stringify({ name: 'laptop' })))
+      await writer.close()
+      return (await stream.head).status
+    }
+    expect([await ask(), await ask(), await ask(), await ask()]).toEqual([200, 200, 200, 429])
   })
 })

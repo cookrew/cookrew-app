@@ -70,7 +70,7 @@ function deps(over: Partial<ConnectDeps> = {}): ConnectDeps & { returned: string
       return { ok: true }
     },
     removeProvider: async () => {},
-    providerIds: async () => ['solis'],
+    providers: async () => [{ id: 'solis', preset: 'remote-magpie', urls: ['http://127.0.0.1:13425'] }],
     forwarderPort: () => 3428,
     myName: () => 'drej-mac',
     returned,
@@ -122,18 +122,29 @@ describe('connecting to another computer’s Magpie', () => {
 
 describe('review fixes: never repoint a provider that is not ours, and one connect per computer', () => {
   it('fails rather than guess when Magpie’s provider list cannot be read', async () => {
-    const d = deps({ providerIds: async () => null })
+    const d = deps({ providers: async () => null })
     expect(await connectRemote(PEER, 'Solis Core', d)).toMatchObject({ ok: false })
     expect(d.added).toEqual([])
   })
 
   it('adds under a free id when the owner has a provider of that name, and points only our own one again', async () => {
-    const d = deps({ providerIds: async () => ['solis-core'] })
+    const owners = { id: 'solis-core', preset: 'deepseek', urls: ['https://api.deepseek.com'] }
+    const d = deps({ providers: async () => [owners] })
     expect(await connectRemote(PEER, 'Solis Core', d)).toEqual({ ok: true, providerId: 'solis-core-2' })
     expect(d.added).toEqual([['solis-core-2', `http://127.0.0.1:3428/peer/${PEER}`]])
-    const again = deps({ store: d.store, providerIds: async () => ['solis-core', 'solis-core-2'] })
+    const ours = { id: 'solis-core-2', preset: 'remote-magpie', urls: [`http://127.0.0.1:3428/peer/${PEER}`] }
+    const again = deps({ store: d.store, providers: async () => [owners, ours] })
     expect(await connectRemote(PEER, 'Solis Core', again)).toEqual({ ok: true, providerId: 'solis-core-2' })
     expect(again.added).toEqual([['set:solis-core-2', `http://127.0.0.1:3428/peer/${PEER}`]])
+  })
+
+  it('never repoints a provider the owner made under the id this app used before', async () => {
+    const d = deps({ providers: async () => [] })
+    await connectRemote(PEER, 'Solis Core', d)
+    const theirs = { id: 'solis-core', preset: 'openai', urls: ['https://api.example.com/v1'] }
+    const again = deps({ store: d.store, providers: async () => [theirs] })
+    expect(await connectRemote(PEER, 'Solis Core', again)).toEqual({ ok: true, providerId: 'solis-core-2' })
+    expect(again.added).toEqual([['solis-core-2', `http://127.0.0.1:3428/peer/${PEER}`]])
   })
 
   it('never names a provider group, which Magpie reads as its own routing groups', () => {

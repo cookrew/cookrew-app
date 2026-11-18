@@ -129,6 +129,12 @@ export function providerIdFor(name: string, taken: readonly string[]): string {
   for (let n = 2; ; n += 1) if (!taken.includes(`${base}-${n}`)) return `${base}-${n}`
 }
 
+export interface ProviderEntry {
+  readonly id: string
+  readonly preset: string | null
+  readonly urls: readonly string[]
+}
+
 export interface ConnectDeps {
   switches(): LiveValues | null
   readonly store: RemotesStore
@@ -141,8 +147,8 @@ export interface ConnectDeps {
   /** Point a provider THIS store made at the forwarder again. */
   setProvider(providerId: string, url: string): Promise<{ ok: true } | { ok: false; why: string }>
   removeProvider(providerId: string): Promise<void>
-  /** Magpie's own provider ids now, so a new one does not take an owner's; null when they cannot be read. */
-  providerIds(): Promise<string[] | null>
+  /** Magpie's own providers now (id, preset, endpoint addresses; never a key); null when they cannot be read. */
+  providers(): Promise<ProviderEntry[] | null>
   forwarderPort(): number | null
   myName(): string
   now?(): Date
@@ -163,10 +169,14 @@ export async function connectRemote(peer: unknown, peerName: unknown, deps: Conn
   }
   const existing = known.find((r) => r.peer === peer)
   // Unreadable is not empty: a guess could take, and then repoint, one of the owner's own providers.
-  const ids = await deps.providerIds().catch(() => null)
-  if (ids === null) return { ok: false, why: 'This computer’s Magpie providers could not be read.' }
-  const providerId = existing?.providerId ?? providerIdFor(peerName, [...known.map((r) => r.providerId), ...ids])
-  const ours = existing !== undefined && ids.includes(providerId)
+  const entries = await deps.providers().catch(() => null)
+  if (entries === null) return { ok: false, why: 'This computer’s Magpie providers could not be read.' }
+  const ids = entries.map((e) => e.id)
+  const recorded = existing === undefined ? undefined : entries.find((e) => e.id === existing.providerId)
+  // Repointed only while it is still the provider this app made: a Remote magpie aimed at the forwarder.
+  // An id the owner has since reused for a provider of their own gets a new id instead.
+  const ours = recorded !== undefined && recorded.preset === 'remote-magpie' && recorded.urls.some((u) => u.startsWith(`http://127.0.0.1:${port}/peer/`))
+  const providerId = ours ? recorded.id : providerIdFor(peerName, [...known.map((r) => r.providerId), ...ids])
   const answer = await deps.askKey(peer, deps.myName()).catch((error: unknown): MagpieKeyAnswer => ({ ok: false, why: error instanceof Error ? error.message : 'The other computer did not answer.' }))
   if (!answer.ok) return { ok: false, why: answer.why }
   try {

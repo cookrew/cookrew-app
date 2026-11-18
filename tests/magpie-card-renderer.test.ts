@@ -70,3 +70,22 @@ describe('openMagpieSettings', () => {
     expect(added).toEqual([])
   })
 })
+
+describe('review round 2: no pile of Magpie cards, and a reused card shows the page', () => {
+  it('offers every browser card, so a signed card that was renamed is found again', async () => {
+    const renamed: BrowserNodeData = { kind: 'browser', id: 'signed-card', name: 'Magpie (2)', url: 'http://127.0.0.1:3431/', position: { x: 0, y: 0 }, size: { width: 1, height: 1 } }
+    const { api, added } = install([renamed as CanvasNode], async () => ({ ok: true, url: BARE, port: 3433, cardId: 'signed-card', fresh: false }))
+    const { openMagpieSettings } = await import('../src/renderer/src/routing/magpie-card')
+    expect(await openMagpieSettings()).toBeNull()
+    expect(api.magpieWebOpen).toHaveBeenCalledWith(['signed-card'])
+    expect(added).toEqual([])
+  })
+
+  it('moves the active tab of a reused card to the page too', async () => {
+    const tabbed: BrowserNodeData = { kind: 'browser', id: 'held-card', name: 'Magpie', url: 'http://127.0.0.1:3431/', tabs: [{ id: 't1', url: 'http://127.0.0.1:3431/', title: '' }, { id: 't2', url: 'https://example.com/', title: '' }], activeTabId: 't1', position: { x: 0, y: 0 }, size: { width: 1, height: 1 } }
+    const { updated } = install([tabbed as CanvasNode], async () => ({ ok: true, url: BARE, port: 3433, cardId: 'held-card', fresh: false }))
+    const { openMagpieSettings } = await import('../src/renderer/src/routing/magpie-card')
+    expect(await openMagpieSettings()).toBeNull()
+    expect(updated[0].patch).toMatchObject({ url: BARE, tabs: [{ id: 't1', url: BARE }, { id: 't2', url: 'https://example.com/' }] })
+  })
+})

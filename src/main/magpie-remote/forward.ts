@@ -1,6 +1,6 @@
 import http from 'node:http'
 import type { LiveValues } from '../../shared/launch-settings'
-import { MAGPIE_REMOTE_KIND, modelRoute } from '../../shared/remote-magpie'
+import { MAGPIE_REMOTE_KIND, magpieHeaders, modelRoute } from '../../shared/remote-magpie'
 import type { Fields } from '../../shared/seal2/frames'
 import { plainHeaders, requestFields } from '../../shared/seal2/http'
 import { ABORT } from '../../shared/seal2/spec'
@@ -45,7 +45,6 @@ export interface ForwardDeps {
 const PEER_PATH = /^\/peer\/([A-Za-z0-9_-]{8,128})(\/.*)$/
 /** How long a whole answer waits for its stream to close by itself before it is let go. */
 const SETTLE_MS = 1_000
-const HOP = new Set(['host', 'connection', 'keep-alive', 'proxy-authorization', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'cookie', 'origin', 'referer', 'content-length', 'expect'])
 
 function refuse(response: http.ServerResponse, status: number, message: string): void {
   if (response.headersSent) return void response.destroy()
@@ -54,18 +53,16 @@ function refuse(response: http.ServerResponse, status: number, message: string):
   response.end(body)
 }
 
-/** The request's headers for the far Magpie, with the real key in each credential header the request used. */
+/** The request's headers for the far Magpie: the allowed ones and the real key (remote-magpie.ts · magpieHeaders). */
 export function sealedHeaders(raw: http.IncomingHttpHeaders, key: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const [name, value] of Object.entries(raw)) {
-    if (value === undefined || HOP.has(name) || name.startsWith('x-cookrew-')) continue
-    out[name] = Array.isArray(value) ? value.join(', ') : value
-  }
-  const usedApiKey = out['x-api-key'] !== undefined
-  const usedAuth = out.authorization !== undefined
-  if (usedApiKey) out['x-api-key'] = key
-  if (usedAuth || !usedApiKey) out.authorization = `Bearer ${key}`
-  return out
+  const flat = Object.fromEntries(Object.entries(raw).flatMap(([name, value]) => (value === undefined ? [] : [[name, Array.isArray(value) ? value.join(', ') : value]])))
+  return magpieHeaders(flat, key)
+}
+
+/** An answer's headers for Node: several Set-Cookie arrive joined by a newline, which Node refuses in one value. */
+function answerHeaders(headers: Record<string, string>): http.OutgoingHttpHeaders {
+  const { 'content-length': _length, 'transfer-encoding': _te, connection: _c, ...kept } = headers
+  return Object.fromEntries(Object.entries(kept).map(([name, value]) => [name, name === 'set-cookie' ? value.split('\n') : value]))
 }
 
 function hostIsOurs(host: string | undefined, port: number): boolean {
@@ -120,6 +117,22 @@ export function createMagpieForwarder(deps: ForwardDeps): {
       return refuse(response, 502, 'The other computer could not be reached over the sealed relay.')
     }
     if (gone) return stream.abort(ABORT.cancel, 'the caller went away')
+    const open = stream
+    let closed = false
+    void open.closed.then(() => void (closed = true), () => void (closed = true))
+    try {
+      await carry(request, response, open)
+      // The answer is whole; a request body the far end never read (a refusal) would hold the stream open
+      // on both ends for good, each of them a slot of the session's few. Let it go.
+      await Promise.race([open.closed.catch(() => undefined), new Promise<void>((r) => setTimeout(r, SETTLE_MS))])
+    } finally {
+      // Whatever ended this (a throw included), the stream is not left holding a slot at either end.
+      if (!closed) open.abort(ABORT.cancel, 'answered')
+    }
+  }
+
+  /** The request body up, the answer down. */
+  const carry = async (request: http.IncomingMessage, response: http.ServerResponse, stream: Seal2Stream): Promise<void> => {
     void pumpBody(request, stream).catch(() => stream.abort(ABORT.cancel, 'the request body stopped'))
     let head: Awaited<Seal2Stream['head']>
     try {
@@ -128,17 +141,9 @@ export function createMagpieForwarder(deps: ForwardDeps): {
       return refuse(response, 502, 'The other computer stopped answering.')
     }
     const headers = plainHeaders(head.fields, true)
-    if (headers === null) {
-      stream.abort(ABORT.protocol, 'unreadable answer')
-      return refuse(response, 502, 'The other computer answered with headers that cannot be read.')
-    }
-    const { 'content-length': _length, 'transfer-encoding': _te, connection: _c, ...kept } = headers
-    response.writeHead(head.status, kept)
+    if (headers === null) return refuse(response, 502, 'The other computer answered with headers that cannot be read.')
+    response.writeHead(head.status, answerHeaders(headers))
     await pumpAnswer(stream, response)
-    // The answer is whole; a request body the far end never read (a refusal) would hold the stream open
-    // on both ends for good, each of them a slot of the session's few. Let it go.
-    const settled = await Promise.race([stream.closed.then(() => true, () => true), new Promise<false>((r) => setTimeout(() => r(false), SETTLE_MS))])
-    if (!settled) stream.abort(ABORT.cancel, 'answered')
   }
 
   return {
@@ -187,8 +192,13 @@ async function pumpAnswer(stream: Seal2Stream, response: http.ServerResponse): P
       if (done) break
       if (!response.write(value)) {
         await new Promise<void>((resolve) => {
-          response.once('drain', resolve)
-          response.once('close', resolve)
+          const done = (): void => {
+            response.off('drain', done)
+            response.off('close', done)
+            resolve()
+          }
+          response.on('drain', done)
+          response.on('close', done)
         })
       }
       if (response.destroyed) throw new Error('the caller went away')

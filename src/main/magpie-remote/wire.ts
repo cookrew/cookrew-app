@@ -6,6 +6,7 @@ import { readBody, requestFields } from '../../shared/seal2/http'
 import type { Seal2Stream } from '../../shared/seal2/stream'
 import type { DiscoveryEnv } from '../route/discovery'
 import { providersFile } from '../route/remote-ports'
+import type { ProviderEntry } from './remotes'
 
 /**
  * THE TWO ENDS' SMALL TALK, AND THIS COMPUTER'S MAGPIE CLI (lane Magpie).
@@ -68,8 +69,10 @@ const lastLine = (text: string): string =>
     ?.replace(/^magpie:\s*/, '')
     .slice(0, 200) ?? 'Magpie did not add the provider.'
 
-/** Provider ids in this computer's Magpie (ids only); [] when there is no list yet, null when it cannot be read. */
-export function providerIds(d: DiscoveryEnv, read: (file: string) => string = (file) => readFileSync(file, 'utf8')): string[] | null {
+const URL_FIELDS = ['url', 'anthropic', 'chat', 'responses', 'decide'] as const
+
+/** Providers in this computer's Magpie: id, preset and endpoint addresses only (never a key); [] with no list yet, null unreadable. */
+export function providerEntries(d: DiscoveryEnv, read: (file: string) => string = (file) => readFileSync(file, 'utf8')): ProviderEntry[] | null {
   let text: string
   try {
     text = read(providersFile(d))
@@ -80,7 +83,12 @@ export function providerIds(d: DiscoveryEnv, read: (file: string) => string = (f
     const parsed = JSON.parse(text) as { providers?: unknown }
     if (parsed.providers === undefined) return []
     if (!Array.isArray(parsed.providers)) return null
-    return parsed.providers.flatMap((p) => (typeof (p as { id?: unknown })?.id === 'string' ? [(p as { id: string }).id] : []))
+    return parsed.providers.flatMap((raw) => {
+      const p = raw as Record<string, unknown> | null
+      if (typeof p?.id !== 'string') return []
+      const urls = URL_FIELDS.flatMap((f) => (typeof p[f] === 'string' ? [p[f] as string] : []))
+      return [{ id: p.id, preset: typeof p.preset === 'string' ? p.preset : null, urls }]
+    })
   } catch {
     return null
   }
@@ -90,7 +98,7 @@ export function magpieProviders(bin: () => string | null, env: () => DiscoveryEn
   add(providerId: string, url: string): Promise<{ ok: true } | { ok: false; why: string }>
   set(providerId: string, url: string): Promise<{ ok: true } | { ok: false; why: string }>
   remove(providerId: string): Promise<void>
-  ids(): Promise<string[] | null>
+  entries(): Promise<ProviderEntry[] | null>
 } {
   const magpie = async (args: string[]): Promise<{ ok: true } | { ok: false; why: string }> => {
     const b = bin()
@@ -105,6 +113,6 @@ export function magpieProviders(bin: () => string | null, env: () => DiscoveryEn
       const b = bin()
       if (b !== null) await run(b, ['provider', 'rm', providerId])
     },
-    ids: async () => providerIds(env())
+    entries: async () => providerEntries(env())
   }
 }

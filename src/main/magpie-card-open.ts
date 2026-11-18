@@ -68,13 +68,15 @@ export type MagpieCardAnswer =
   | { readonly ok: true; readonly url: string; readonly port: number; readonly cardId: string; readonly fresh: boolean }
   | { readonly ok: false; readonly why: string }
 
-/** At most this many cards named "Magpie" are offered. */
-const OFFER_MAX = 20
+/** At most this many card ids are offered (every browser card of the workspace). */
+const OFFER_MAX = 2000
+/** How many signed card ids are remembered. */
+const KEEP_SIGNED = 20
 
 /**
- * Sign a card in to Magpie's page. The renderer offers the ids of its cards named "Magpie";
- * main reuses one only if it signed that one before, else it mints a new card id. A card an
- * agent made and named "Magpie" is never handed the cookie.
+ * Sign a card in to Magpie's page. The renderer offers the ids of its browser cards; main reuses
+ * one only if it signed that one before (whatever it is called now), else it mints a new card id.
+ * A card an agent made and named "Magpie" is never handed the cookie.
  */
 export async function openMagpieCardSession(offered: unknown, deps: MagpieCardDeps): Promise<MagpieCardAnswer> {
   if (!Array.isArray(offered) || offered.length > OFFER_MAX || !offered.every((id) => typeof id === 'string' && CARD_ID_RE.test(id))) return { ok: false, why: 'Not a card.' }
@@ -104,8 +106,14 @@ export async function openMagpieCardSession(offered: unknown, deps: MagpieCardDe
   return { ok: true, url: page.url, port: page.port, cardId: browserId, fresh: known === undefined }
 }
 
-/** A request that may carry Magpie's page cookie: only to the page's own address and port. */
-export function cookieAllowedFor(url: string, port: number): boolean {
+/**
+ * A request that may carry Magpie's page cookie: only to the page's own address and port, and
+ * only one the page itself (or the person, typing or opening it) started. SameSite=Lax counts
+ * every 127.0.0.1 port as one site, so a page on another port could otherwise post to Magpie's
+ * settings with the cookie (Sec-Fetch-Site: same-site).
+ */
+export function cookieAllowedFor(url: string, port: number, fetchSite?: string): boolean {
+  if (fetchSite !== undefined && fetchSite !== 'same-origin' && fetchSite !== 'none') return false
   try {
     const u = new URL(url)
     return u.hostname === '127.0.0.1' && Number(u.port) === port
@@ -138,7 +146,7 @@ export function fileSignedCards(file: string): { has(id: string): boolean; add(i
   return {
     has: (id) => read().includes(id),
     add: (id) => {
-      const cards = [...read().filter((c) => c !== id), id].slice(-OFFER_MAX)
+      const cards = [...read().filter((c) => c !== id), id].slice(-KEEP_SIGNED)
       mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
       writeFileAtomic(file, `${JSON.stringify({ cards })}\n`)
     }

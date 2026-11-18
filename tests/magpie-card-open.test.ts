@@ -52,7 +52,7 @@ describe('openMagpieCardSession', () => {
 
   it('refuses offers that are not card ids, before starting anything', async () => {
     const open = vi.fn()
-    for (const bad of ['x', ['../x'], ['a'.repeat(200)], [42], null, Array.from({ length: 50 }, (_, i) => `c${i}`)]) {
+    for (const bad of ['x', ['../x'], ['a'.repeat(200)], [42], null, Array.from({ length: 2001 }, (_, i) => `c${i}`)]) {
       expect(await openMagpieCardSession(bad, deps({ open }))).toMatchObject({ ok: false })
     }
     expect(open).not.toHaveBeenCalled()
@@ -78,6 +78,13 @@ describe('the cookie stays on its own port', () => {
     expect(cookieAllowedFor('http://127.0.0.1:8080/', 3433)).toBe(false)
     expect(cookieAllowedFor('http://localhost:3433/', 3433)).toBe(false)
     expect(cookieAllowedFor('not a url', 3433)).toBe(false)
+  })
+
+  it('holds it back from a request another origin started (another loopback port is the same site)', () => {
+    expect(cookieAllowedFor('http://127.0.0.1:3433/api', 3433, 'same-origin')).toBe(true)
+    expect(cookieAllowedFor('http://127.0.0.1:3433/', 3433, 'none')).toBe(true)
+    expect(cookieAllowedFor('http://127.0.0.1:3433/api', 3433, 'same-site')).toBe(false)
+    expect(cookieAllowedFor('http://127.0.0.1:3433/api', 3433, 'cross-site')).toBe(false)
   })
 
   it('takes every magpie_web cookie out of a Cookie header, and keeps the rest', () => {

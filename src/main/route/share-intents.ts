@@ -76,7 +76,8 @@ export function parseIntents(text: string): ShareIntent[] {
 function writeDurably(file: string, content: string): void {
   const dir = path.dirname(file)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
-  const tmp = `${file}.${process.pid}.tmp`
+  // A fixed name, so the served sandbox's deny list can name it (owner-secrets.ts).
+  const tmp = `${file}.tmp`
   const fd = openSync(tmp, 'w', 0o600)
   try {
     writeSync(fd, content)

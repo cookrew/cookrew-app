@@ -156,9 +156,11 @@ export class ShareKeys {
    * it goes to that computer, and is never held for this one's window.
    */
   issue(input: { device: unknown; dailyUsd: unknown }, permitted: () => boolean = () => true, options: { handover?: boolean } = {}): Promise<ShareIssueAnswer> {
-    this.busy += 1
-    const next = this.queue.then(() => this.issueNow(input, permitted, options.handover !== false)).finally(() => {
-      this.busy -= 1
+    // Only the owner's own Make a key shows as "making a key" on this computer's panel.
+    const mine = options.handover !== false
+    if (mine) this.busy += 1
+    const next = this.queue.then(() => this.issueNow(input, permitted, mine)).finally(() => {
+      if (mine) this.busy -= 1
     })
     this.queue = next.catch(() => undefined)
     return next

@@ -100,11 +100,31 @@ export const MAGPIE_REMOTE_ROUTES: Readonly<Record<string, readonly string[]>> =
 
 /** A plain query: names, values, `=`, `&` and a few safe marks; never an escape. */
 const PLAIN_QUERY = /^[A-Za-z0-9_.,:=&-]*$/
+/**
+ * The query names a model request may carry (Claude Code sends `?beta=true`, a model list pages).
+ * Nothing else: Magpie also reads credentials from a query (`?key=`), which would stand beside
+ * the checked key unchecked.
+ */
+const QUERY_NAMES = new Set(['beta', 'limit', 'after_id', 'before_id'])
 
 export function modelRoute(method: string, path: string): boolean {
   const at = path.indexOf('?')
   const bare = at < 0 ? path : path.slice(0, at)
   const query = at < 0 ? '' : path.slice(at + 1)
   if (!PLAIN_QUERY.test(query) || /[%\\]/.test(bare)) return false
+  if (query !== '' && !query.split('&').every((pair) => QUERY_NAMES.has(pair.split('=')[0]))) return false
   return (MAGPIE_REMOTE_ROUTES[method] ?? []).includes(bare)
+}
+
+/**
+ * The request headers that cross to another computer's Magpie, by name. Everything else is
+ * dropped: other credential headers (`x-goog-api-key`, which Magpie also reads), Magpie's own
+ * steering headers (`x-magpie-*`), cookies, hop-by-hop and forwarding headers.
+ */
+const FORWARD_HEADERS = new Set(['content-type', 'accept', 'anthropic-version', 'anthropic-beta', 'openai-beta', 'user-agent', 'x-request-id', 'session_id', 'originator', 'x-claude-code-session-id'])
+
+/** The headers for the far Magpie: the allowed ones, and the one verified key in BOTH credential headers. */
+export function magpieHeaders(asked: Readonly<Record<string, string>>, key: string): Record<string, string> {
+  const kept = Object.entries(asked).filter(([name]) => FORWARD_HEADERS.has(name.toLowerCase()) || name.toLowerCase().startsWith('x-stainless-'))
+  return { ...Object.fromEntries(kept.map(([name, value]) => [name.toLowerCase(), value])), authorization: `Bearer ${key}`, 'x-api-key': key }
 }
