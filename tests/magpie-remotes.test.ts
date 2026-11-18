@@ -173,3 +173,45 @@ describe('review fixes: never repoint a provider that is not ours, and one conne
     expect(order).toEqual(['ask', 'return'])
   })
 })
+
+describe('the served-seat gate (lane Seatbelt)', () => {
+  it('refuses to connect while the gate fails or cannot answer, asking the other computer nothing', async () => {
+    const askKey = vi.fn()
+    for (const seatGate of [async () => false, async () => { throw new Error('lsof missing') }]) {
+      expect(await connectRemote(PEER, 'Solis', deps({ askKey, seatGate }))).toMatchObject({ ok: false, why: expect.stringContaining('older sandbox') })
+    }
+    expect(askKey).not.toHaveBeenCalled()
+    expect(await connectRemote(PEER, 'Solis', deps({ seatGate: async () => true }))).toMatchObject({ ok: true })
+  })
+})
+
+describe('the forwarder waits on the served-seat gate', () => {
+  it('stays shut when the gate fails, and opens when it passes', async () => {
+    const { createMagpieRemote } = await import('../src/main/magpie-remote/setup')
+    const make = (gate: () => Promise<boolean>) =>
+      createMagpieRemote({
+        base: dir,
+        switches: () => ({ magpie: true, magpieRemote: true }),
+        shareKeys: () => null,
+        gatewayPort: () => null,
+        openStream: async () => { throw new Error('none') },
+        desktops: async () => [],
+        selfId: () => null,
+        sealer: null,
+        magpieBin: () => null,
+        env: () => ({ home: dir, env: {} }),
+        log: () => undefined,
+        seatGate: gate
+      })
+    const shut = make(async () => false)
+    await shut.start()
+    expect(shut.port()).toBeNull()
+    const open = make(async () => true)
+    await open.start()
+    try {
+      expect(open.port()).not.toBeNull()
+    } finally {
+      await open.stop()
+    }
+  })
+})

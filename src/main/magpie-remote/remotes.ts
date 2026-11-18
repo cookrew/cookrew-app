@@ -150,6 +150,11 @@ export interface ConnectDeps {
   /** Magpie's own providers now (id, preset, endpoint addresses; never a key); null when they cannot be read. */
   providers(): Promise<ProviderEntry[] | null>
   forwarderPort(): number | null
+  /**
+   * The Seatbelt lane's served-seat gate (servedSeatGate): every served seat runs today's profile.
+   * Absent: no gate to ask. Asked before a provider is pointed at the forwarder; false or a throw refuses.
+   */
+  seatGate?(): Promise<boolean>
   myName(): string
   now?(): Date
 }
@@ -159,6 +164,9 @@ export type ConnectAnswer = { readonly ok: true; readonly providerId: string } |
 export async function connectRemote(peer: unknown, peerName: unknown, deps: ConnectDeps): Promise<ConnectAnswer> {
   if (typeof peer !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(peer) || typeof peerName !== 'string' || peerName.trim() === '') return { ok: false, why: 'Not one of your computers.' }
   if (!remoteSwitchedOn(() => deps.switches())) return { ok: false, why: 'Turn on Magpie and Magpie remote in Launch settings first.' }
+  if (deps.seatGate !== undefined && !(await deps.seatGate().catch(() => false))) {
+    return { ok: false, why: 'A served session still runs under an older sandbox. Restart it, then connect again.' }
+  }
   const port = deps.forwarderPort()
   if (port === null) return { ok: false, why: 'This computer’s forwarder to other Magpies is not running: another program holds its port.' }
   let known: readonly RemoteMagpie[]

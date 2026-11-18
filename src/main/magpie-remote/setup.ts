@@ -38,6 +38,8 @@ export interface MagpieRemoteDeps {
   selfId(): string | null
   readonly sealer: SecretSealer | null
   magpieBin(): string | null
+  /** The Seatbelt lane's served-seat gate: asked before the forwarder opens and before every connect. */
+  seatGate?(): Promise<boolean>
   env(): DiscoveryEnv
   log(line: string): void
 }
@@ -102,6 +104,11 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
     unbind: (id) => serve.unbind(id),
     boundKeys,
     start: async () => {
+      // A served seat on an old profile could dial the forwarder: it stays shut until the gate passes.
+      if (deps.seatGate !== undefined && !(await deps.seatGate().catch(() => false))) {
+        deps.log('magpie remote: the forwarder stays shut: a served session runs under an older sandbox')
+        return
+      }
       // One port, always the same: Magpie's providers name it, so taking another would send them elsewhere.
       try {
         await forwarder.listen(MAGPIE_FORWARD_PORTS[0])
@@ -147,6 +154,7 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
         removeProvider: (id) => providers.remove(id),
         providers: () => providers.entries(),
         forwarderPort: () => forwarder.port(),
+        ...(deps.seatGate ? { seatGate: deps.seatGate } : {}),
         myName
       })),
     disconnect: (peer) => lane('connect', () => disconnectRemote(peer, { store: remotes, returnKey, removeProvider: (id) => providers.remove(id) }))
