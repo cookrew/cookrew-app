@@ -79,7 +79,7 @@ describe('the files', () => {
         for (const [, id] of html.matchAll(/\shref="\/#([^"]+)"/g)) expect(home, `${path} links /#${id}`).toContain(`id="${id}"`)
       }
     }
-    expect(text(buildStaticSite(input({ commits })), 'index.html')).toContain('href="#built"')
+    expect(text(buildStaticSite(input({ commits })), 'index.html')).not.toContain('id="built"')
   })
 
   it('leave no static mode behind once the build is over, also when it stops halfway', () => {
@@ -154,15 +154,15 @@ describe('the files', () => {
     }
   })
 
-  it('link a commit only at this project on github.com', () => {
+  it('list no commits on the front page: the site shows what Cookrew does, not its progress (owner 2026-11-18)', () => {
     const commits: Commit[] = [
       { sha: 'abc1234', title: 'feat: a thing', date: '2026-11-10', url: 'https://evil.example/commit/abc1234' },
       { sha: 'def5678', title: 'fix: another', date: '2026-11-09', url: 'https://github.com/cookrew/cookrew-app/commit/def5678' }
     ]
     const home = text(buildStaticSite(input({ commits })), 'index.html')
     expect(home).not.toContain('evil.example')
-    expect(home).toContain('feat: a thing')
-    expect(home).toContain('https://github.com/cookrew/cookrew-app/commit/def5678')
+    expect(home).not.toContain('feat: a thing')
+    expect(home).not.toContain('/commit/def5678')
   })
 })
 

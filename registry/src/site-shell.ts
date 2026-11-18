@@ -456,20 +456,6 @@ code,.mono{font-family:var(--font-mono);font-size:.88em}
 .note{background:var(--note-bg);border:1px solid var(--hair);box-shadow:var(--lift-sm);padding:12px 14px;font-size:14px;transform:rotate(-.6deg)}
 .grid{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
 .grid .card p{color:var(--muted);font-size:14.5px;margin:0}
-/* the pillars (site-pillars.ts): a status pill beside every claim. Shape tells the status as well as colour:
-   a filled dot is in a release, a half dot in dev, an open dot tried by hand, a dashed outline only planned. */
-.st{display:inline-flex;align-items:center;gap:6px;justify-self:start;align-self:start;font:600 9px/1.3 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;padding:3px 9px 3px 7px;border:1px solid currentColor;border-radius:999px;white-space:nowrap;background:var(--cream-hi)}
-.st::before{content:'';width:7px;height:7px;border-radius:50%;background:currentColor;flex:0 0 auto}
-.st-shipped{color:var(--hp)}
-.st-in-dev{color:var(--amber-deep)}.st-in-dev::before{background:linear-gradient(90deg,currentColor 50%,transparent 50%);box-shadow:inset 0 0 0 1px currentColor}
-.st-beta{color:var(--violet)}
-.st-experiment{color:#3f6a8f}.st-experiment::before{background:none;box-shadow:inset 0 0 0 1.5px currentColor}
-.st-planned{color:var(--muted);border-style:dashed}.st-planned::before{background:none;box-shadow:inset 0 0 0 1px currentColor}
-@media (prefers-color-scheme:dark){.st-experiment{color:#8fb4d6}}
-.st-legend{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center}
-.st-legend>div{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted)}
-section.pillars-intro{padding:26px 0 0;border-bottom:none}
-section.pillars-intro::before{display:none}
 .pillar{padding:64px 0}
 .pillar h2{font-size:clamp(28px,3.4vw,42px);line-height:1.1;letter-spacing:-.01em;margin:0 0 12px;max-width:22ch}
 .pillar .lede{max-width:58ch;margin-bottom:28px}
@@ -481,23 +467,15 @@ ul.claims{list-style:none;margin:0;padding:0;border-top:1px solid var(--hair);di
 .claim{display:grid;gap:7px;padding:16px 0;border-bottom:1px solid var(--line-soft)}
 .claim b{font:600 16.5px/1.3 var(--font-serif)}
 .claim p{margin:3px 0 0;color:var(--muted);font-size:14.5px;line-height:1.5}
-.claim[data-status=planned] b,.claim[data-status=planned] p{color:var(--dim)}
 .route-diagram{margin:0;padding:16px;border:1px solid var(--hair);background:var(--cream-hi);display:grid;gap:12px}
 .route-diagram ol{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px;position:relative}
 .route-diagram ol>li{position:relative;display:grid;gap:2px;padding:9px 10px;border:1px solid var(--line);background:var(--cream)}
 .route-diagram ol>li+li::before{content:'→';position:absolute;left:-18px;top:50%;transform:translateY(-50%);color:var(--ink-soft);font:14px var(--font-mono)}
 .route-diagram b{font:600 13px/1.25 var(--font-serif)}.route-diagram span{font:10.5px/1.35 var(--font-mono);color:var(--muted)}
-.route-diagram ol.exp>li{border-color:#3f6a8f}.route-diagram ol.exp>li.dashed{border-style:dashed}
 .route-diagram figcaption{font-size:12.5px;color:var(--muted)}
-.route-row{display:flex;gap:10px;align-items:center;margin:2px 0 -4px;font-size:12.5px;color:var(--muted)}
-.roadmap{list-style:none;margin:16px 0 0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
-.roadmap>li{padding:14px 16px;border:1px solid var(--hair);background:var(--cream-hi)}
-.roadmap-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:8px}
-.roadmap-head b{font:600 20px var(--font-serif)}
-.roadmap ul{margin:0;padding-left:16px;color:var(--muted);font-size:14px}.roadmap ul li{margin:4px 0}
 .hero-sub{font:500 clamp(17px,1.7vw,21px)/1.35 var(--font-serif);color:var(--amber-deep);margin:0 0 14px;max-width:34ch}
-@media (max-width:860px){ul.claims{grid-template-columns:minmax(0,1fr)}.pillar-media>[class*=span-]{grid-column:1/-1}.roadmap{grid-template-columns:1fr 1fr}}
-@media (max-width:520px){.roadmap{grid-template-columns:1fr}.route-diagram ol{grid-template-columns:1fr;gap:18px}.route-diagram ol>li+li::before{content:'↓';left:50%;top:-16px;transform:translateX(-50%)}}
+@media (max-width:860px){ul.claims{grid-template-columns:minmax(0,1fr)}.pillar-media>[class*=span-]{grid-column:1/-1}}
+@media (max-width:520px){.route-diagram ol{grid-template-columns:1fr;gap:18px}.route-diagram ol>li+li::before{content:'↓';left:50%;top:-16px;transform:translateX(-50%)}}
 /* a frame as a card's face (the features index): a 16:10 window onto the
    top-left of the recording, never the image at its own pixel size — the
    only img rule above is scoped to figure.shot, and a 1400px frame dropped

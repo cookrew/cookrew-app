@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { buildStaticSite } from '../registry/src/site-static'
 import { SITE_STYLE } from '../registry/src/site-shell'
-import { FEATURES, PILLARS, ROADMAP, STATUS, llmsText } from '../registry/src/site-content'
+import { FEATURES, PILLARS, llmsText } from '../registry/src/site-content'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { DEMO, PHONE_MEDIA } from '../registry/src/site-frames'
 import { CANVAS_CLIP } from '../registry/src/site-motion'
 
 /**
- * THE FRONT PAGE KEEPS WHAT IS SHIPPED APART FROM WHAT IS NOT (2026-11-16).
- * Every pillar claim wears its status beside it; a thing that is planned,
- * tried once by hand, in beta or only on the dev branch can never read as
- * shipped. And every picture is a recording of the running app: the one
- * drawing on the page says it is a diagram.
+ * THE FRONT PAGE SAYS WHAT COOKREW DOES, AND NOTHING ELSE (owner 2026-11-18).
+ * No status label, legend, roadmap or word of progress on any page: every
+ * pillar claim keeps its status in site-content.ts, and only the shipped ones
+ * are drawn, so a thing that is planned, tried once by hand, in beta or only
+ * on the dev branch is never on the page at all.
  */
 
 const site = (): ReadonlyMap<string, string | Uint8Array> =>
@@ -44,48 +44,45 @@ const jpegSize = (file: string): [number, number] => {
   throw new Error(`no size in ${file}`)
 }
 
-describe('the pillars say where every claim stands', () => {
-  it('each claim is drawn with its own status label beside it', () => {
+describe('the pillars draw only what is shipped, with no word of progress', () => {
+  const shipped = claims.filter((c) => c.status === 'shipped')
+  const words = (html: string): string => html.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/g, '').replace(/<[^>]+>/g, ' ')
+
+  it('draws every shipped claim, plain, and no other', () => {
     const body = home()
-    const drawn = [...body.matchAll(/<li class="claim" data-status="([a-z-]+)"><span class="st st-([a-z-]+)">([^<]+)<\/span>/g)]
-    expect(drawn).toHaveLength(claims.length)
-    for (const [, status, pill, label] of drawn) {
-      expect(pill).toBe(status)
-      expect(label).toBe(STATUS[status as keyof typeof STATUS].label)
-    }
+    expect([...body.matchAll(/<li class="claim">/g)]).toHaveLength(shipped.length)
+    for (const c of shipped) expect(body).toContain(`<b>${c.title.replace(/'/g, '&#39;')}</b>`)
+    for (const c of claims.filter((c) => c.status !== 'shipped')) expect(body, c.title).not.toContain(c.text)
+    expect(body).not.toMatch(/class="st |st-legend|id="roadmap"|id="status"|id="built"/)
   })
 
-  it('the legend explains every label on the page', () => {
-    const body = home()
-    for (const s of Object.values(STATUS)) expect(body).toContain(s.meaning)
+  it('no page a reader is pointed at says shipped, in dev, beta, planned, roadmap or not yet, in English or Chinese', () => {
+    const files = site()
+    const en = /\b(shipped|in dev|beta|planned|manual experiment|roadmap|not yet|not built|preview|on the dev branch)\b/i
+    const zh = /已上线|开发中|规划中|手动实验|路线图|尚未|还不|还没|预览版|下一步|Beta/
+    for (const [name, body] of files) {
+      if (typeof body !== 'string' || !/^(zh\/)?(index|features\/(?!marketplace)[a-z-]+)\.html$/.test(name)) continue
+      expect(words(body), name).not.toMatch(name.startsWith('zh/') ? zh : en)
+    }
+    expect(llmsText()).not.toMatch(en)
   })
 
   it('what is not built is never shipped: Cloud Workspace, other people, the official or cross-machine gateway', () => {
     const unbuilt = claims.filter((c) => /Cloud Workspace|teammates|clients|family|official|across your machines|every machine of the account/i.test(`${c.title} ${c.text}`))
     expect(unbuilt.length).toBeGreaterThanOrEqual(4)
-    for (const c of unbuilt) {
-      expect(c.status, c.title).toBe('planned')
-    }
+    for (const c of unbuilt) expect(c.status, c.title).toBe('planned')
   })
 
-  it('borrowing another machine’s model is the manual experiment, and says how it was done', () => {
+  it('borrowing another machine’s model stays the manual experiment, so it is not drawn', () => {
     const borrowed = claims.filter((c) => /another machine’s/i.test(c.title))
     expect(borrowed).toHaveLength(1)
     expect(borrowed[0].status).toBe('experiment')
-    expect(borrowed[0].text).toMatch(/SSH tunnel set up by hand/)
-    expect(borrowed[0].text).toMatch(/12 November 2026/)
+    expect(home()).not.toMatch(/ssh -L|SSH tunnel/)
   })
 
-  it('the watch is beta; the cross-workspace bar shipped in 0.6.20, the bar across machines in 0.6.23', () => {
+  it('the watch stays beta, so its claim is not drawn; both bars are shipped', () => {
     for (const c of claims.filter((c) => /watch|wrist/i.test(`${c.title} ${c.text}`))) expect(c.status, c.title).toBe('beta')
-    for (const c of claims.filter((c) => /one bar/i.test(c.title))) expect(c.status, c.title).toBe('shipped')
-    for (const c of claims.filter((c) => /^The bar on all your machines/.test(c.title))) expect(c.status, c.title).toBe('shipped')
-  })
-
-  it('the roadmap labels every phase, and anything not built is planned', () => {
-    const body = home()
-    for (const r of ROADMAP) expect(body).toContain(`<b>${r.phase}</b><span class="st st-${r.status}">`)
-    for (const r of ROADMAP.filter((r) => r.items.some((i) => /Cloud Workspace|official|between workspaces/i.test(i)))) expect(r.status).toBe('planned')
+    for (const c of claims.filter((c) => /one bar|^The bar on all your machines/i.test(c.title))) expect(c.status, c.title).toBe('shipped')
   })
 
   it('llms.txt and the structured data carry only what is shipped: a label does not travel with a lifted sentence', () => {
@@ -257,10 +254,10 @@ describe('the site in Chinese (owner 2026-11-18)', () => {
     expect(zh).toContain('<html lang="zh-CN">')
     expect(zh).toContain('<h1><span class="hl">任何设备。</span> <span class="hl">任何 harness。</span> <span class="hl">任何模型。</span></h1>')
     expect(zh).toContain('<link rel="canonical" href="https://cookrew.dev/zh/">')
-    // As many claims, each with its label, as the English page.
-    const claimsIn = (html: string): string[] => [...html.matchAll(/<li class="claim" data-status="([a-z-]+)">/g)].map((m) => m[1]!)
-    expect(claimsIn(zh)).toEqual(claimsIn(read('index.html')))
-    expect(zh).toContain('<span class="st st-planned">规划中</span>')
+    // As many claims as the English page.
+    const claimsIn = (html: string): number => [...html.matchAll(/<li class="claim">/g)].length
+    expect(claimsIn(zh)).toBe(claimsIn(read('index.html')))
+    expect(claimsIn(zh)).toBeGreaterThan(0)
     for (const f of FEATURES) expect(read(`zh/features/${f.slug}.html`)).toContain('<html lang="zh-CN">')
   })
 

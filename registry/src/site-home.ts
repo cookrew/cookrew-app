@@ -3,19 +3,20 @@ import { esc, icon, page, type Page } from './site-shell'
 import { RELEASES_PAGE, pickAsset, type Release } from './releases'
 import { definition, FACTS, faq, headline, headlineSub, pillars, startFaq, startHowto } from './site-content'
 import { currentLang, local, tr } from './site-lang'
-import { commitsSection, compareTable, featuresGrid } from './site-features'
+import { compareTable, featuresGrid } from './site-features'
 import { faqPage, organization, softwareApplication, webPage } from './site-seo'
 import { BRAND_LOCKUP_CSS, BRAND_LOCKUP_HTML } from './site-brand'
 import { DEMO, figure } from './site-frames'
-import { pillarsSection, roadmapSection } from './site-pillars'
+import { pillarsSection } from './site-pillars'
 
 /**
  * THE FRONT PAGE OF THE STATIC SITE (0.6.0, site-static.ts) — one page, top to
  * bottom: the hero (the claim, the download, the way to the console and the
- * hero clip), the three pillars (site-pillars.ts: every claim with its
- * status, and pictures of the current UI on demo data), the roadmap, GET STARTED (the two steps and the commands the
- * orch runs) and the FEATURES (every one as a card, the comparison, the
- * questions, the commits). The page's sections are
+ * hero clip), the three pillars (site-pillars.ts: what the released app does,
+ * with pictures of the current UI on demo data; no status labels, legend,
+ * roadmap or commit list since 2026-11-18), GET STARTED (the two steps and the
+ * commands the orch runs) and the FEATURES (every one as a card, the
+ * comparison, the questions). The page's sections are
  * its catalog, on the right rail. A feature's own page (/features/<slug>) is
  * the long tail, and the cards lead there.
  *
@@ -60,8 +61,8 @@ $ cookrew orch "Forge"</code>
 </div></section>`
 }
 
-/** FEATURES: every one as a card, then what each thing can do, the questions, the proof. */
-function featuresSection(commits: readonly Commit[] | null): string {
+/** FEATURES: every one as a card, then what each thing can do, and the questions. */
+function featuresSection(): string {
   return `<section id="features"><div class="wrap">
 <p class="kicker"><span class="no">${tr('FEATURES', '功能')}</span>${tr('what each part does', '每个部分做什么')}</p>
 <h2>${tr('What Cookrew does', 'Cookrew 能做什么')}</h2>
@@ -69,12 +70,12 @@ function featuresSection(commits: readonly Commit[] | null): string {
 ${featuresGrid()}
 <h3 id="compare" style="margin-top:32px">${tr('A chat tab, one CLI agent, or a team', '聊天标签页、单个 CLI agent，还是一个团队')}</h3>${compareTable()}
 <h3 id="faq" style="margin-top:32px">${tr('Questions and answers', '常见问题')}</h3><div class="faq">${faq().map((f) => `<details><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')}</div>
-</div></section>
-${commitsSection(commits)}`
+</div></section>`
 }
 
 export interface StaticHomeInput {
   release: Release | null
+  /** Read by the build; the page no longer lists commits (owner 2026-11-18). */
   commits?: readonly Commit[] | null
   /** The console's origin. */
   console: string
@@ -85,7 +86,7 @@ function staticHeroButtons(release: Release | null, console: string): string {
   const win = release ? pickAsset(release, 'windows') : null
   const date = release?.publishedAt ? release.publishedAt.slice(0, 10) : ''
   return `<p class="row" id="download"><a class="btn primary lg" href="${esc(mac?.url ?? release?.url ?? RELEASES_PAGE)}">${icon('download')} ${tr('Download for Mac', '下载 Mac 版')}</a><a class="btn lg" href="${esc(console)}/">${icon('mac')} ${tr('Open console', '打开控制台')}</a></p>
-<p class="meta">${release ? `v${esc(release.version)}${date ? ` · ${esc(date)}` : ''}` : `<a href="${RELEASES_PAGE}">${tr('latest release', '最新版本')}</a>`} · ${FACTS.license} · Apple Silicon${win ? ` · <a href="${esc(win.url)}">${tr('Windows preview', 'Windows 预览版')}</a>` : tr(', Windows preview', '，Windows 预览版')}</p>`
+<p class="meta">${release ? `v${esc(release.version)}${date ? ` · ${esc(date)}` : ''}` : `<a href="${RELEASES_PAGE}">${tr('latest release', '最新版本')}</a>`} · ${FACTS.license} · Apple Silicon${win ? ` · <a href="${esc(win.url)}">Windows</a>` : ', Windows'}</p>`
 }
 
 /** The three pillars, one link each: the page's argument in one row. */
@@ -96,21 +97,18 @@ ${pillars().map((p) => `<a href="#${p.id}"><span class="ico">${icon(icons[p.id])
 </nav>`
 }
 
-function staticCatalog(console: string, built: boolean): string {
+function staticCatalog(console: string): string {
   const listed: [string, string, boolean][] = [
-    ['#status', tr('What is shipped', '已上线的内容'), false],
+    [`#${pillars()[0]!.id}`, tr('What it does', '它能做什么'), false],
     ...pillars().map((p): [string, string, boolean] => [`#${p.id}`, p.title, true]),
-    ['#roadmap', tr('Roadmap', '路线图'), true],
     ['#start', tr('Get started', '开始使用'), false],
     ['#serve', tr('Save the team', '保存团队'), true],
     ['#build', tr('What your orch runs', '编排者运行的命令'), true],
     ['#features', tr('Features', '功能'), false],
     ['#compare', tr('Chat tab, one agent, or a team', '聊天、单个 agent 还是团队'), true],
-    ['#faq', tr('Questions', '常见问题'), true],
-    ['#built', tr('What landed on dev', 'dev 分支的最新提交'), true]
+    ['#faq', tr('Questions', '常见问题'), true]
   ]
-  // The list of commits is on the page only when GitHub was read at build time.
-  const items = listed.filter(([href]) => built || href !== '#built')
+  const items = listed
   return `<aside class="toc" aria-label="${tr('On this page', '本页内容')}">
 <div class="jump"><a class="btn sm primary" href="#download">${icon('download')} ${tr('Get the app', '获取应用')}</a><a class="btn sm" href="${esc(console)}/">${icon('mac')} ${tr('Open console', '打开控制台')}</a></div>
 <p class="kicker"><span class="no">${tr('ON THIS PAGE', '本页内容')}</span></p><ol>${items
@@ -155,13 +153,11 @@ ${hero()}
 
 ${pillarsSection()}
 
-${roadmapSection()}
-
 ${startSection()}
 
-${featuresSection(input.commits ?? null)}
+${featuresSection()}
 </div>
-${staticCatalog(input.console, (input.commits?.length ?? 0) > 0)}
+${staticCatalog(input.console)}
 </div>`
   )
 }
