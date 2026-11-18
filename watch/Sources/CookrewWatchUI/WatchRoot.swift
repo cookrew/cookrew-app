@@ -112,7 +112,11 @@ final class WatchApp {
     }
     retireSealer()
     liveSealer = sealer
-    store = WatchStore(api: HTTPWatchAPI(bases: urls, token: session.token, relay: pass, guarded: roams, sealer: sealer), feel: feel)
+    let api = HTTPWatchAPI(
+      bases: urls, token: session.token, relay: pass, guarded: roams, sealer: sealer,
+      rekeyed: session.sealRekeyed, onToken: { vault.traded(key, token: $0) }
+    )
+    store = WatchStore(api: api, feel: feel)
   }
 
   private func retireSealer() {

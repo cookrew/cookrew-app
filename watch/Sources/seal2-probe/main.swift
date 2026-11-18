@@ -32,10 +32,12 @@ if args[1] == "app" {
   let pass = FixedPass(host: base.host() ?? "", port: base.port, session: args[4])
   let peer = SealPeer(deviceId: args[5], x: args[6], words: Seal2.keyWords(args[6], args[6], nonce: Data(count: 16)))
   let sealer = WatchSealer(peer: peer, device: WatchDevice(id: args[7], seed: seed), relay: pass, pinned: false)
-  let api = HTTPWatchAPI(bases: [base], token: "watch-token", relay: pass, sealer: sealer)
+  let api = HTTPWatchAPI(bases: [base], token: args.count > 9 ? args[9] : "watch-token", relay: pass, sealer: sealer)
   var out: [String: Any] = [:]
   do {
     try await api.send("hello from the wrist", to: "t1")
+    // Pinned by now if the road went sealed: the next call trades the claim's token first, and goes on the new one.
+    if await sealer.isPinned { try await api.send("again, on the traded token", to: "t1") }
     out["sent"] = true
   } catch {
     out["sent"] = String(describing: error)

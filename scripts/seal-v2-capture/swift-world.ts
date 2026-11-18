@@ -5,7 +5,12 @@
 //   npx vite-node scripts/seal-v2-capture/swift-world.ts
 import { createServer, type Server } from 'node:http'
 import { loopbackDialer } from '../../src/main/canvas-bridge'
-import { cameOverRelayLine } from '../../src/main/seal-proof'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { cameOverRelayLine, carriesSealProof, sealProofHeaders } from '../../src/main/seal-proof'
+import { createSealMarks } from '../../src/main/seal-marks'
+import { takeRelayDevice } from '../../src/main/relay-device'
 import { isSealPath, routeSeal, type SealTerminus } from '../../src/main/canvas-seal-terminus'
 import { connectCodeId, newConnectCode } from '../../src/shared/canvas-seal'
 import { RELAY_SESSION_HEADER } from '../../src/shared/machine-relay'
@@ -19,11 +24,40 @@ const PICTURE = Buffer.from(Array.from({ length: 3_000_000 }, (_, i) => i % 251)
 /** Every request that reached the Mac, and whether it came down the relay line in the clear. */
 const seen: Array<{ path: string; plain: boolean }> = []
 
+/** As the Mac does it (seal-marks.ts, watch-routes.ts · handleWatchRekey): marks, the watch's token, its trade. */
+const marks = createSealMarks(path.join(mkdtempSync(path.join(tmpdir(), 'swift-world-')), 'marks.json'))
+const claimToken = `claim-token-${randomBytes(12).toString('base64url')}`
+let watchToken = claimToken
+
 const companion = (terminus: () => SealTerminus | undefined): Server =>
   createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://mac')
     if (isSealPath(url.pathname)) return void routeSeal(request, response, terminus())
-    seen.push({ path: url.pathname, plain: cameOverRelayLine(request) })
+    const device = takeRelayDevice(request)
+    const plain = cameOverRelayLine(request)
+    if (plain && marks.refuses(device?.deviceId ?? null)) {
+      response.writeHead(403, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: 'sealed-only' }))
+      return
+    }
+    seen.push({ path: url.pathname, plain })
+    const watchRoute = url.pathname.startsWith('/api/terminal/') || url.pathname.startsWith('/api/watch/')
+    if (watchRoute && request.headers.authorization !== `Bearer ${watchToken}`) {
+      response.writeHead(401, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: 'unpaired' }))
+      return
+    }
+    if (url.pathname === '/api/watch/rekey') {
+      if (!carriesSealProof(request)) {
+        response.writeHead(404)
+        response.end()
+        return
+      }
+      watchToken = `traded-${randomBytes(12).toString('base64url')}`
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ ok: true, token: watchToken }))
+      return
+    }
     if (url.pathname === '/api/picture') {
       response.writeHead(200, { 'content-type': 'image/png' })
       response.end(PICTURE)
@@ -49,7 +83,11 @@ let confirmed = false
 let watchId = ''
 const world = await startRelayWorld(companion, (port, mac) => ({
   codeFor: (asked) => (asked === id ? code : null),
-  dial: loopbackDialer(port),
+  dial: loopbackDialer(port, undefined, sealProofHeaders()),
+  deviceHttp: (deviceId) => confirmed && deviceId === watchId,
+  onSealed: ({ peer }) => {
+    if (peer.mode === 'device' && confirmed && peer.deviceId === watchId) marks.mark(peer.deviceId)
+  },
   device: {
     self: () => mac.signer,
     verify: verifyDevice,
@@ -67,11 +105,12 @@ console.log(
     macId: world.macDevice.id,
     macX: world.macDevice.jwk.x,
     watchId,
-    watchSeed: seed.toString('hex')
+    watchSeed: seed.toString('hex'),
+    watchToken: claimToken
   })
 )
 createInterface({ input: process.stdin }).on('line', (line) => {
   if (line.trim() === 'confirm') confirmed = true
-  console.log(JSON.stringify({ confirmed, seen }))
+  console.log(JSON.stringify({ confirmed, seen, traded: watchToken !== claimToken }))
 })
 process.stdin.on('end', () => void world.close().then(() => process.exit(0)))

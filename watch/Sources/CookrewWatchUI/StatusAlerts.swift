@@ -76,7 +76,10 @@ public enum StatusAlerts {
       let sealer = pass.flatMap { relay in
         session.seal.map { peer in WatchSealer(peer: peer, device: vault.device(), relay: relay, pinned: session.sealPinned, onPinned: { vault.markSealed(key) }) }
       }
-      let api = HTTPWatchAPI(bases: urls, token: session.token, relay: pass, guarded: session.bases.contains { $0.kind == "relay" }, sealer: sealer)
+      let api = HTTPWatchAPI(
+        bases: urls, token: session.token, relay: pass, guarded: session.bases.contains { $0.kind == "relay" }, sealer: sealer,
+        rekeyed: session.sealRekeyed, onToken: { vault.traded(key, token: $0) }
+      )
       let answered = try? await api.cards(tag: nil)
       await sealer?.close()
       guard case .new(let reply, _)? = answered else { continue }

@@ -55,7 +55,7 @@ import { lightenCanvas } from "../shared/wire-canvas";
 import { machineCopy } from "../shared/machine-words";
 import { SEAT_GONE, type WorkspaceCheck, type WorkspaceRemovePlan } from "../shared/workspace-door";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
-import { cardCheckpoint, handleWatchClaim, handleWatchHello, handleWatchRoutes, watchRouteAllowed, watchTokenAccepted, watchWriteRefusal } from "./watch-routes";
+import { cardCheckpoint, handleWatchClaim, handleWatchHello, handleWatchRekey, handleWatchRoutes, watchRouteAllowed, watchTokenAccepted, watchWriteRefusal } from "./watch-routes";
 import { handlePhoneInviteRoute } from "./phone-invite";
 import { bridgeablePath, SOCKET_BRIDGE_MESSAGE_MAX, SOCKET_BRIDGE_PATH, SOCKET_BRIDGE_POST_MESSAGES, type SocketBridge } from "./socket-bridge";
 import { dynamicCompressionStats } from "./http-compress";
@@ -771,6 +771,7 @@ export async function handleMobileApi(
   // Six digits for a watch's token: open, as this route must be, and bounded.
   if (await handleWatchClaim(request, response, method, p, deps.bridgedDeviceId ?? null)) return true;
   if (handleWatchHello(response, url, method, p)) return true;
+  if (handleWatchRekey(response, method, p, carriesSealProof(request), presentedToken(request, url))) return true;
   const watchRefusal = watchCleared ? watchWriteRefusal(p) : null;
   if (watchRefusal) {
     respondJson(response, watchRefusal.status, { error: watchRefusal.error });

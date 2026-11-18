@@ -13,8 +13,11 @@ public struct WatchSession: Equatable, Sendable {
   public let sealPinned: Bool
   /** What the claim just answered, not believed until the owner says the words match. Never kept. */
   public let offer: SealOffer?
+  /** The claim's token was traded for one inside the sealed session (HTTPWatchAPI · tradeToken). */
+  public let sealRekeyed: Bool
 
-  public init(desktop: String, bases: [Base], token: String, seal: SealPeer? = nil, sealPinned: Bool = false, offer: SealOffer? = nil) {
+  public init(desktop: String, bases: [Base], token: String, seal: SealPeer? = nil, sealPinned: Bool = false, offer: SealOffer? = nil, sealRekeyed: Bool = false) {
+    self.sealRekeyed = sealRekeyed
     self.desktop = desktop
     self.bases = bases
     self.token = token
@@ -54,6 +57,7 @@ public struct SessionShelf: Codable, Equatable, Sendable {
     /** Absent in what a watch from before sealing kept: it reads as no seal. */
     public var seal: SealPeer?
     public var sealPinned: Bool?
+    public var sealRekeyed: Bool?
   }
 
   public private(set) var entries: [Entry] = []
@@ -72,7 +76,8 @@ public struct SessionShelf: Codable, Equatable, Sendable {
     let seal = session.seal ?? was?.seal
     let samePeer = session.seal == nil || session.seal?.x == was?.seal?.x
     let pinned = session.sealPinned || (was?.sealPinned == true && samePeer)
-    let entry = Entry(key: key, desktop: session.desktop, bases: session.bases, seal: seal, sealPinned: pinned)
+    // A new claim is a new token, the claim's: it is traded again.
+    let entry = Entry(key: key, desktop: session.desktop, bases: session.bases, seal: seal, sealPinned: pinned, sealRekeyed: session.sealRekeyed)
     if let at = entries.firstIndex(where: { $0.key == key }) { entries[at] = entry } else { entries.append(entry) }
     if goIn || active == nil { active = key }
     return key
@@ -91,6 +96,11 @@ public struct SessionShelf: Codable, Equatable, Sendable {
   }
 
   public func entry(_ key: String?) -> Entry? { entries.first { $0.key == key } }
+
+  public mutating func markRekeyed(_ key: String) {
+    guard let at = entries.firstIndex(where: { $0.key == key }) else { return }
+    entries[at].sealRekeyed = true
+  }
 
   /** This machine's relay road went sealed: from now on it is sealed only. */
   public mutating func markSealed(_ key: String) {
@@ -244,7 +254,15 @@ public struct SessionVault: Sendable {
 
   public func session(_ key: String?) -> WatchSession? {
     guard let entry = shelf().entry(key), let token = token(entry.key) else { return nil }
-    return WatchSession(desktop: entry.desktop, bases: entry.bases, token: token, seal: entry.seal, sealPinned: entry.sealPinned ?? false)
+    return WatchSession(desktop: entry.desktop, bases: entry.bases, token: token, seal: entry.seal, sealPinned: entry.sealPinned ?? false, sealRekeyed: entry.sealRekeyed ?? false)
+  }
+
+  /** The sealed session gave this machine's watch a new token: kept, and the claim's is gone. */
+  public func traded(_ key: String, token: String) {
+    var shelf = shelf()
+    shelf.markRekeyed(key)
+    write(Data(token.utf8), to: "token:\(key)")
+    store(shelf)
   }
 
   /** Kept the moment the first sealed session to this machine opens (WatchSealer's onPinned). */

@@ -305,7 +305,7 @@ import { createBrowserCast } from './browser-cast'
 import { createBrowserCastIpc } from './browser-cast-ipc'
 import { WatchPairing } from './watch-pairing'
 import { createWatchHost } from './watch-host'
-import { inviteWatch, setWatchHost } from './watch-routes'
+import { inviteWatch, setWatchHost, watchSealedRouteAllowed } from './watch-routes'
 import { BrowserThumbCache } from './browser-thumb-cache'
 import { createTileWake } from './browser-tile-wake'
 import { browserThumbKeep } from './browser-thumb-keep'
@@ -1876,9 +1876,15 @@ const sealTerminus = createSealTerminus({
   // Desktops are not marked: their own machine calls still go in the clear until they move onto sealPeers.
   onSealed: ({ peer, outer }) => {
     if (peer.mode === 'code' && outer.device !== undefined) sealMarks.mark(outer.device)
+    if (peer.mode !== 'device') return
+    // A watch the owner confirmed by its words speaks sealed from now on: its plain relay requests are refused,
+    // as a v2 phone's are (seal-marks.ts). Its words were its own; it is not a desktop met for the first time.
+    if (sealWatchKeys.keyOf(peer.deviceId) !== null) return sealMarks.mark(peer.deviceId)
     // Another desktop met for the first time: its words wait for the owner on both screens (seal-pins.ts).
-    if (peer.mode === 'device') sealPins.contact(peer.deviceId)
+    sealPins.contact(peer.deviceId)
   },
+  // Owner ruling 2026-11-19: no route for a desktop peer by default. A confirmed watch reaches its own routes.
+  deviceHttp: (deviceId, method, path) => sealWatchKeys.keyOf(deviceId) !== null && watchSealedRouteAllowed(method, path),
   dial: loopbackDialer(MOBILE_PORT, undefined, sealProofHeaders()),
   // What the paced uplink still holds counts too: since relay-uplink.ts, an
   // answer waits there rather than in Node's socket buffer.

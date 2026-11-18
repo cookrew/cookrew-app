@@ -270,6 +270,32 @@ export async function handleWatchClaim(
   return true
 }
 
+/** The one route a watch asks only inside its sealed session: a fresh token for the one the claim gave. */
+export const WATCH_REKEY_PATH = '/api/watch/rekey'
+
+/**
+ * A NEW TOKEN, SEALED. The claim's answer carried the watch's token in the clear (over the LAN, or
+ * the relay on the relay path), so once the watch's sealed session is open it trades that token for
+ * one nobody has seen. Only inside a sealed session (`sealed`: the terminus's proof is on the
+ * request), and only for the token now held: everything else answers 404, as if there were no route.
+ */
+export function handleWatchRekey(response: http.ServerResponse, method: string, path: string, sealed: boolean, presented: string | null): boolean {
+  if (method !== 'POST' || path !== WATCH_REKEY_PATH || !host) return false
+  if (!sealed || !host.pairing.accepts(presented)) {
+    respondJson(response, 404, { error: 'not found' })
+    return true
+  }
+  const token = host.pairing.rekey()
+  respondJson(response, token === null ? 404 : 200, token === null ? { error: 'not found' } : { ok: true, token })
+  return true
+}
+
+/** May a watch's SEALED session reach this route (canvas-seal-terminus.ts · deviceHttp)? Its own routes, and the rekey. */
+export const watchSealedRouteAllowed = (method: string, path: string): boolean => {
+  const pathname = path.split('?')[0]
+  return (method === 'POST' && pathname === WATCH_REKEY_PATH) || watchRouteAllowed(method, pathname)
+}
+
 /** Long enough to be unguessable, short enough to sign without thinking. */
 const HELLO_NONCE = /^[A-Za-z0-9_-]{16,64}$/
 

@@ -1,3 +1,5 @@
+import { sealProofHeaders } from '../src/main/seal-proof'
+import { SEALED_MARKER } from '../src/shared/remote-unlock'
 import { readFileSync, writeFileSync, existsSync, mkdtempSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -374,6 +376,20 @@ describe('through the real gate', () => {
       expect(claimed.seal).toBeUndefined()
     }
     expect(asked).toBe(0)
+  })
+
+  it('the claim\'s token is traded for a new one only inside a sealed session, and the old one stops working', async () => {
+    const old = await paired()
+    // In the clear (no seal proof): no such route.
+    expect((await post('/api/watch/rekey', old)).status).toBe(404)
+    const sealed = { [SEALED_MARKER]: sealProofHeaders()[SEALED_MARKER] }
+    expect((await call('/api/watch/rekey', 'not-the-token', { method: 'POST', body: '{}', headers: sealed })).status).toBe(404)
+    const traded = await call('/api/watch/rekey', old, { method: 'POST', body: '{}', headers: sealed })
+    const { token } = (await traded.json()) as { token: string }
+    expect(token).toMatch(/.{16,}/)
+    expect(token).not.toBe(old)
+    expect((await call('/api/watch/cards', old)).status).toBe(401)
+    expect((await call('/api/watch/cards', token)).status).toBe(200)
   })
 
   it('only the owner mints a code or asks after the pairing', async () => {

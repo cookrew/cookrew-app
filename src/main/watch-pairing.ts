@@ -190,6 +190,19 @@ export class WatchPairing {
   }
 
   /**
+   * A new token for the watch holding the current one, asked only inside a sealed session
+   * (watch-routes.ts · handleWatchRekey): the token its claim was given crossed the network in
+   * the clear, and stops working now. Null with no watch paired.
+   */
+  rekey(): string | null {
+    if (this.token === null) return null
+    const token = randomBytes(24).toString('base64url')
+    this.token = token
+    this.write(token)
+    return token
+  }
+
+  /**
    * The account revoked these devices: if the watch let in by its pass is one,
    * it stops here too, as a revoked phone's admission does. True when it was.
    */
