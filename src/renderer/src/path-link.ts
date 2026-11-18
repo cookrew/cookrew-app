@@ -4,6 +4,7 @@ import { dataPlane } from './data-plane'
 import {
   classifyOrigin,
   pathBadgeView,
+  type DirectHeld,
   type PathLink,
   type PathBadgeView,
   type PathState
@@ -33,9 +34,11 @@ export type PathLinkState = {
   readonly desktopName: string | null
   /** A better path is being raced right now. See path/switch.ts. */
   readonly probing: boolean
+  /** A direct link answered and was refused, and why (path/companion.ts). Null when none was. */
+  readonly held: DirectHeld | null
 }
 
-const IDLE: PathLinkState = { link: 'live', latencyMs: null, desktopName: null, probing: false }
+const IDLE: PathLinkState = { link: 'live', latencyMs: null, desktopName: null, probing: false, held: null }
 
 let state: PathLinkState = IDLE
 const listeners = new Set<(next: PathLinkState) => void>()
@@ -89,6 +92,18 @@ export const forgetLatency = (): void => {
 export const setProbing = (on: boolean): void => {
   if (state.probing === on) return
   state = { ...state, probing: on }
+  announce()
+}
+
+/**
+ * WHY THE PLANE STAYS ON THE RELAY: the companion sets it when a direct
+ * link's answer is refused and puts it down (null) when one is adopted. The
+ * word stays RELAY either way; only the sentence stops promising a link that
+ * was reached and turned down on purpose.
+ */
+export const setDirectHeld = (held: DirectHeld | null): void => {
+  if (state.held === held) return
+  state = { ...state, held }
   announce()
 }
 
@@ -182,6 +197,7 @@ export const currentPathBadge = (): PathBadgeView =>
     link: state.link,
     latencyMs: state.latencyMs,
     probing: state.probing,
+    held: state.held,
     relayed: relayed(),
     ...(relayed()
       ? {

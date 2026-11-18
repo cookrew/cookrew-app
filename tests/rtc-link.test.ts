@@ -11,7 +11,10 @@ import {
 } from '../src/renderer/src/path/rtc-link'
 import { decodeFrame, encodeFrame, type RelayFrame } from '../src/shared/relay-frame'
 
-type Answer = (frame: RelayFrame, reply: (frame: RelayFrame) => void) => void
+/** The binding is shared/rtc-bind.ts's to check (tests/rtc-bind.test.ts); here it holds. */
+const trusted = async () => ({ ok: true, by: 'device' }) as const
+
+type Answer =(frame: RelayFrame, reply: (frame: RelayFrame) => void) => void
 
 class FakeChannel extends EventTarget {
   readyState: RTCDataChannelState = 'connecting'
@@ -81,9 +84,23 @@ const answering =
 
 const open = async (mac: Answer, via?: string | null): Promise<{ link: RtcLink; rig: Rig }> => {
   const r = rig(mac, via)
-  const link = await connectRtcLink({ offer: async () => 'v=0 answer', peer: r.peer, gatherMs: 5, openMs: 50 })
+  const link = await connectRtcLink({ offer: async () => 'v=0 answer', trust: trusted, peer: r.peer, gatherMs: 5, openMs: 50 })
   if (!link) throw new Error('no link')
   return { link, rig: r }
+}
+
+/** A peer from `rig` that counts the answers set on it. */
+const counting = (r: Rig): { readonly peer: RTCPeerConnection; readonly set: () => number } => {
+  const peer = r.peer()
+  const original = (peer as unknown as { setRemoteDescription: () => Promise<void> }).setRemoteDescription
+  let set = 0
+  Object.assign(peer, {
+    setRemoteDescription: async () => {
+      set += 1
+      return original()
+    }
+  })
+  return { peer, set: () => set }
 }
 
 describe('connecting', () => {
@@ -95,19 +112,98 @@ describe('connecting', () => {
 
   it('is nothing when the Mac offers no link', async () => {
     const r = rig(answering(200, []))
-    expect(await connectRtcLink({ offer: async () => null, peer: r.peer, gatherMs: 5 })).toBeNull()
+    expect(await connectRtcLink({ offer: async () => null, trust: trusted, peer: r.peer, gatherMs: 5 })).toBeNull()
   })
 
   it('is nothing when the channel opens and the Mac never says where it is', async () => {
     const r = rig(answering(200, []), null)
-    expect(await connectRtcLink({ offer: async () => 'v=0', peer: r.peer, gatherMs: 5, openMs: 30 })).toBeNull()
+    expect(await connectRtcLink({ offer: async () => 'v=0', trust: trusted, peer: r.peer, gatherMs: 5, openMs: 30 })).toBeNull()
   })
 
   it('is nothing when the offer cannot even be sent', async () => {
     const r = rig(answering(200, []))
     expect(
-      await connectRtcLink({ offer: () => Promise.reject(new Error('relay down')), peer: r.peer, gatherMs: 5 })
+      await connectRtcLink({ offer: () => Promise.reject(new Error('relay down')), trust: trusted, peer: r.peer, gatherMs: 5 })
     ).toBeNull()
+  })
+})
+
+describe('the answer crosses the relay: nothing is set until its binding verifies', () => {
+  it('checks the binding over its OWN offer and the answer exactly as it will be set', async () => {
+    const r = rig(answering(200, []))
+    const asked: unknown[] = []
+    const link = await connectRtcLink({
+      offer: async () => ({ sdp: 'v=0 answer', bind: { v: 1 } }),
+      trust: async (offerSdp, answer) => {
+        asked.push([offerSdp, answer])
+        return { ok: true, by: 'device' }
+      },
+      peer: r.peer,
+      gatherMs: 5,
+      openMs: 50
+    })
+    expect(link?.via).toBe('192.168.2.40')
+    expect(asked).toEqual([['v=0 offer', { sdp: 'v=0 answer', bind: { v: 1 } }]])
+  })
+
+  it('a bare SDP (an older Mac) is an answer with no binding, and is checked like any other', async () => {
+    const r = rig(answering(200, []))
+    const asked: unknown[] = []
+    await connectRtcLink({
+      offer: async () => 'v=0 bare',
+      trust: async (_, answer) => {
+        asked.push(answer)
+        return { ok: false, why: 'no binding' }
+      },
+      peer: r.peer,
+      gatherMs: 5
+    })
+    expect(asked).toEqual([{ sdp: 'v=0 bare' }])
+  })
+
+  it('never sets an answer whose binding does not verify, closes the peer, and says why', async () => {
+    const r = rig(answering(200, []))
+    const { peer, set } = counting(r)
+    const why: string[] = []
+    const link = await connectRtcLink({
+      offer: async () => ({ sdp: 'v=0 relay answer', bind: { v: 1 } }),
+      trust: async () => ({ ok: false, why: 'binding did not verify' }),
+      refused: (reason) => void why.push(reason),
+      peer: () => peer,
+      gatherMs: 5,
+      openMs: 50
+    })
+    expect(link).toBeNull()
+    expect(set()).toBe(0)
+    expect(why).toEqual(['binding did not verify'])
+    expect(r.channel().readyState).toBe('closed')
+  })
+
+  it('a check that throws is a refusal, not a link', async () => {
+    const r = rig(answering(200, []))
+    const { peer, set } = counting(r)
+    const why: string[] = []
+    const link = await connectRtcLink({
+      offer: async () => 'v=0 answer',
+      trust: () => Promise.reject(new Error('no Ed25519 in this browser')),
+      refused: (reason) => void why.push(reason),
+      peer: () => peer,
+      gatherMs: 5
+    })
+    expect(link).toBeNull()
+    expect(set()).toBe(0)
+    expect(why).toEqual(['binding check failed'])
+  })
+
+  it('a caller that brings no check at all gets no link (fails closed)', async () => {
+    const r = rig(answering(200, []))
+    const { peer, set } = counting(r)
+    const why: string[] = []
+    const deps = { offer: async () => 'v=0 answer', refused: (reason: string) => void why.push(reason), peer: () => peer, gatherMs: 5 }
+    const link = await connectRtcLink(deps as unknown as Parameters<typeof connectRtcLink>[0])
+    expect(link).toBeNull()
+    expect(set()).toBe(0)
+    expect(why).toEqual(['binding check failed'])
   })
 })
 

@@ -76,7 +76,20 @@ export type PathBadgeInput = {
    * plane that has not moved has not moved.
    */
   readonly plane?: 'LAN' | 'TAILNET' | 'RELAY'
+  /**
+   * WHY THE PLANE STAYS ON THE RELAY although the Mac answered a direct link
+   * (path/companion.ts): its answer did not prove itself (shared/rtc-bind.ts).
+   * Read only while the word is RELAY; absent when nothing was refused.
+   */
+  readonly held?: DirectHeld | null
 }
+
+/**
+ * A direct link that answered and was not taken: the Mac's Cookrew sends no
+ * binding (`old-mac`), this browser cannot check one (`browser`), or the
+ * binding did not prove the answer is the Mac's (`unproved`).
+ */
+export type DirectHeld = 'old-mac' | 'browser' | 'unproved'
 
 export type PathBadgeView = {
   readonly state: PathState
@@ -108,6 +121,17 @@ const PATH_SENTENCES: Record<PathState, string> = {
   RELAY: 'Via cookrew.dev relay. It goes direct by itself when your Mac can be reached from here.',
   OFFLINE: 'Not reachable right now.',
   PROBING: 'Looking for the best way to your Mac.'
+}
+
+/**
+ * The relay's sentence when a direct link answered and was refused. The
+ * default one promises to go direct "when your Mac can be reached", which is
+ * untrue here: it was reached, and the link was not taken on purpose.
+ */
+const HELD_SENTENCES: Record<DirectHeld, string> = {
+  'old-mac': 'Via cookrew.dev relay. Update Cookrew on your Mac to go direct: this version cannot prove a direct link is its own.',
+  browser: 'Via cookrew.dev relay. This browser cannot check your Mac\'s signature, so it does not go direct.',
+  unproved: 'Via cookrew.dev relay. A direct link answered but could not prove it was your Mac, so it was not used.'
 }
 
 /** Strip brackets so an IPv6 literal from a URL can be matched as an address. */
@@ -207,7 +231,7 @@ export const pathBadgeView = (input: PathBadgeInput): PathBadgeView => {
     state,
     word: state,
     pulsing: state === 'PROBING',
-    sentence: PATH_SENTENCES[state],
+    sentence: state === 'RELAY' && input.held ? HELD_SENTENCES[input.held] : PATH_SENTENCES[state],
     desktopName: input.desktopName ?? null,
     latencyMs: typeof input.latencyMs === 'number' ? input.latencyMs : null,
     switchDesktopUrl: input.machinesUrl ?? null

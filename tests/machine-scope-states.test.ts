@@ -167,11 +167,12 @@ describe('entering another machine lets go of', () => {
     link.setDesktopName('Studio Mac')
     link.recordLatency(42)
     link.setPathLink('failed')
+    link.setDirectHeld('unproved')
     gate.offerLocalNetwork(async () => undefined)
     expect(gate.localNetworkOffered()).toBe(true)
 
     scope.enterMachine(B)
-    expect(link.pathLinkState()).toEqual({ link: 'live', latencyMs: null, desktopName: null, probing: false })
+    expect(link.pathLinkState()).toEqual({ link: 'live', latencyMs: null, desktopName: null, probing: false, held: null })
     expect(heard.at(-1)).toBeNull()
     expect(gate.localNetworkOffered()).toBe(false)
     // Still listening, for the next machine's name.

@@ -5,8 +5,10 @@ import { authHeaders, authStore } from '../auth-gate'
 import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
 import { currentBrowser } from '../browser-family'
 import { createPathReporter, postPathReport, reportedAttempts } from './report'
-import { adoptRtcLink, type RtcRow } from './rtc-adopt'
-import { connectRtcLink } from './rtc-link'
+import { adoptRtcLink, type RtcRow, type RtcUnbound } from './rtc-adopt'
+import { connectRtcLink, type RtcLink } from './rtc-link'
+import { heldFor, readRtcAnswer, trustRtcAnswer } from './rtc-trust'
+import { RTC_NO_ED25519, ed25519Available } from '../../../shared/rtc-bind'
 import { heldRtcLink, rtcLink, setRtcLink } from '../rtc-plane'
 import { isLanHostname, isTailnetHostname } from '../../../shared/path-badge'
 import { pageContext } from './page-context'
@@ -23,7 +25,7 @@ import { HOLD_REPEAT_WINDOW_MS, KEEPS_PER_WINDOW, planeHealth, setPlaneLiveProbe
 import { followDataPlane } from '../plane-streams'
 import { onStreamDeath } from '../stream-watch'
 import { tailnetWorthIt, warmRoundTrip } from './plane-quality'
-import { currentOriginState, forgetLatency, pathLinkState, setProbing, subscribePathLink } from '../path-link'
+import { currentOriginState, forgetLatency, pathLinkState, setDirectHeld, setProbing, subscribePathLink } from '../path-link'
 import {
   PLANE_PROBE_EVERY_MS,
   planeCandidates,
@@ -289,18 +291,35 @@ const rtcKnock = async (onEnd: () => void, live: () => boolean): Promise<RtcRow[
   const at = Date.now()
   if (at - lastRtcAt < RTC_EVERY_MS) return []
   lastRtcAt = at
-  const connect = () => connectRtcLink({
-    offer: async (sdp) => {
-      const response = await planeFetch(apiPath('/api/rtc/offer'), {
-        method: 'POST',
-        headers: { ...authHeaders(), 'content-type': 'application/json' },
-        body: JSON.stringify({ sdp })
-      })
-      if (!response.ok) return null
-      const body = (await response.json()) as { sdp?: unknown }
-      return typeof body.sdp === 'string' ? body.sdp : null
+  // THE ANSWER CROSSES THE RELAY: it is set only when the Mac's device
+  // signature verifies over this page's offer (path/rtc-trust.ts), for the
+  // machine in scope AS THIS KNOCK STARTS. One that does not is no link, and a row.
+  const trust = trustRtcAnswer({ machineId: machineScope().machineId })
+  // Why this knock's answer was refused, for the badge; null while none was.
+  let refused: string | null = null
+  const connect = async (): Promise<RtcLink | RtcUnbound | null> => {
+    // A page that could never check the answer sends no offer: its addresses stay off the relay.
+    if (!(await ed25519Available())) {
+      refused = RTC_NO_ED25519
+      return { unbound: RTC_NO_ED25519 }
     }
-  })
+    let unbound: string | null = null
+    const link = await connectRtcLink({
+      offer: async (sdp) => {
+        const response = await planeFetch(apiPath('/api/rtc/offer'), {
+          method: 'POST',
+          headers: { ...authHeaders(), 'content-type': 'application/json' },
+          body: JSON.stringify({ sdp })
+        })
+        if (!response.ok) return null
+        return readRtcAnswer(await response.json())
+      },
+      trust,
+      refused: (why) => void (unbound = why)
+    })
+    refused = unbound
+    return link ?? (unbound === null ? null : { unbound })
+  }
   const probe = await adoptRtcLink({
     connect,
     live,
@@ -327,6 +346,13 @@ const rtcKnock = async (onEnd: () => void, live: () => boolean): Promise<RtcRow[
     },
     classify: (address) => (isTailnetHostname(address) ? 'tailnet' : isLanHostname(address) ? 'lan' : 'other')
   }).catch(() => null)
+  // The badge's reason for the relay (path-link.ts): set by a refused answer, put down by a link,
+  // and left alone by a Mac that did not answer (that says nothing about proof). Only for the
+  // machine this knock was for.
+  if (probe !== null && live()) {
+    if (probe.outcome === 'answered') setDirectHeld(null)
+    if (probe.outcome === 'unbound' && refused !== null) setDirectHeld(heldFor(refused))
+  }
   return probe ? [probe] : []
 }
 

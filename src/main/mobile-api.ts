@@ -84,6 +84,7 @@ import { wallProjection, type InboxRow } from "../shared/inbox-rank";
 import type { Surface as SousSurface } from "../shared/sous-intent";
 import type { UiCommandEvent } from "../shared/sous-ui";
 import { HEAR_MAX_BYTES, type Heard } from "./hear-file";
+import type { RtcBind } from "../shared/rtc-bind";
 import { SpeakError, type LocalVoice } from "./local-voice";
 import type { EventEmitter } from "node:events";
 import type { SecretsStore } from "./secrets-store";
@@ -302,7 +303,11 @@ export interface MobileApiDeps {
    * candidates on this Mac's published addresses. Owner token only — the
    * write gate above refuses a POST without pairing.
    */
-  rtc?: { answer: (offerSdp: string) => Promise<string | null> };
+  rtc?: {
+    answer: (offerSdp: string) => Promise<string | null>;
+    /** What binds the answer to this Mac against the relay (shared/rtc-bind.ts). */
+    bind?: (offerSdp: string, answerSdp: string) => RtcBind | null;
+  };
   /** The browser card's socket over plain HTTP, for the relay (socket-bridge.ts). */
   socketBridge?: SocketBridge;
   /** The build this Mac serves (build-id.ts): sent on every stream, and again when it changes. */
@@ -679,6 +684,15 @@ function deviceSeat(url: URL, store: MobileApiDeps["store"]): string | null {
   return store.list().workspaces.some((w) => w.id === seat) ? seat : null;
 }
 
+/** The binding beside an answer (shared/rtc-bind.ts), or null: none to make, or making it failed. */
+async function bindRtcAnswer(rtc: MobileApiDeps["rtc"], offerSdp: string, answerSdp: string): Promise<RtcBind | null> {
+  try {
+    return (await rtc?.bind?.(offerSdp, answerSdp)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function handleMobileApi(
   request: http.IncomingMessage,
   response: http.ServerResponse,
@@ -1014,7 +1028,15 @@ export async function handleMobileApi(
     }
     try {
       const sdp = await deps.rtc.answer(body.sdp);
-      respondJson(response, sdp === null ? 503 : 200, sdp === null ? { error: "no direct link offered" } : { sdp });
+      if (sdp === null) {
+        respondJson(response, 503, { error: "no direct link offered" });
+        return true;
+      }
+      // `bind` ties the answer's fingerprint and the offer's, as received, to
+      // this Mac's device key. Additive: a console that does not read it still
+      // finds `sdp`, and one that does refuses an answer that has none.
+      const bind = await bindRtcAnswer(deps.rtc, body.sdp, sdp);
+      respondJson(response, 200, bind === null ? { sdp } : { sdp, bind });
     } catch {
       respondJson(response, 400, { error: "offer not accepted" });
     }

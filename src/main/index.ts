@@ -745,6 +745,13 @@ const rtcHost = createRtcHost({
     return [...new Set([...v4('lan'), ...v4('tailscale')])]
   },
   deviceId: () => accounts.account()?.deviceId ?? null,
+  // THE BINDING (shared/rtc-bind.ts): the offer's and the answer's DTLS
+  // fingerprints under this Mac's device key, so the relay that carries the
+  // SDPs cannot put itself in the middle of the link. No connect code.
+  signer: () => {
+    const account = accounts.account()
+    return account ? { jwk: account.publicKeyJwk, sign: (message: string) => signWithDevice(account, message) } : null
+  },
   log: (message) => console.error(`[cookrew] ${message}`)
 })
 /**

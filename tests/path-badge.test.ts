@@ -120,3 +120,30 @@ describe('path badge view model', () => {
     expect(pathBadgeView({ ...live, latencyMs: 0 }).latencyMs).toBe(0)
   })
 })
+
+describe('the relay, when a direct link answered and was not taken (shared/rtc-bind.ts)', () => {
+  const relay = { origin: 'https://cookrew.dev', link: 'live' as const, relayed: true, plane: 'RELAY' as const }
+
+  it('still reads RELAY, and says why it stays there instead of promising to go direct', () => {
+    const plain = pathBadgeView(relay)
+    for (const held of ['old-mac', 'browser', 'unproved'] as const) {
+      const view = pathBadgeView({ ...relay, held })
+      expect(view.word, held).toBe('RELAY')
+      expect(view.sentence, held).not.toBe(plain.sentence)
+      expect(view.sentence, held).toMatch(/^Via cookrew\.dev relay\./)
+      expect(view.sentence, held).not.toMatch(/goes direct by itself/)
+    }
+  })
+
+  it('tells an older Mac to update, a browser it cannot check, and anything else that the link was not proved', () => {
+    expect(pathBadgeView({ ...relay, held: 'old-mac' }).sentence).toMatch(/update Cookrew on your Mac/i)
+    expect(pathBadgeView({ ...relay, held: 'browser' }).sentence).toMatch(/this browser cannot check/i)
+    expect(pathBadgeView({ ...relay, held: 'unproved' }).sentence).toMatch(/could not prove/i)
+  })
+
+  it('says nothing of it once the plane is direct, or while the link is down', () => {
+    expect(pathBadgeView({ ...relay, plane: 'LAN', held: 'unproved' }).sentence).toBe(pathBadgeView({ ...relay, plane: 'LAN' }).sentence)
+    expect(pathBadgeView({ ...relay, link: 'failed', held: 'unproved' }).state).toBe('OFFLINE')
+    expect(pathBadgeView({ ...relay, link: 'failed', held: 'unproved' }).sentence).toBe(pathBadgeView({ ...relay, link: 'failed' }).sentence)
+  })
+})

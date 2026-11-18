@@ -13,8 +13,8 @@ describe('POST /api/rtc/offer', () => {
   const cleanup: Array<() => void> = []
   afterEach(() => cleanup.splice(0).forEach((run) => run()))
 
-  const start = async (answer: (sdp: string) => Promise<string | null>) => {
-    const deps = { pairingToken: TOKEN, turns: { list: () => [] }, rtc: { answer } } as unknown as MobileApiDeps
+  const start = async (answer: (sdp: string) => Promise<string | null>, bind?: (offerSdp: string, answerSdp: string) => unknown) => {
+    const deps = { pairingToken: TOKEN, turns: { list: () => [] }, rtc: bind ? { answer, bind } : { answer } } as unknown as MobileApiDeps
     const server = http.createServer((req, res) => {
       const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
       void handleMobileApi(req, res, url, deps).then((handled) => { if (!handled) res.writeHead(404).end() })
@@ -47,6 +47,38 @@ describe('POST /api/rtc/offer', () => {
   it('a throwing answer is a 400, not a crash', async () => {
     const post = await start(async () => { throw new Error('bad sdp') })
     expect((await post({ sdp: 'garbage' })).status).toBe(400)
+  })
+
+  it('sends the binding beside the answer, made over the offer as it arrived and the answer as sent', async () => {
+    const asked: unknown[] = []
+    const post = await start(
+      async (sdp) => `answer-to:${sdp}`,
+      (offerSdp, answerSdp) => {
+        asked.push([offerSdp, answerSdp])
+        return { v: 1, device: 'mac-1', jwk: { kty: 'OKP', crv: 'Ed25519', x: 'x' }, sig: 'sig' }
+      }
+    )
+    const res = await post({ sdp: 'v=0 offer' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ sdp: 'answer-to:v=0 offer', bind: { v: 1, device: 'mac-1', jwk: { kty: 'OKP', crv: 'Ed25519', x: 'x' }, sig: 'sig' } })
+    expect(asked).toEqual([['v=0 offer', 'answer-to:v=0 offer']])
+  })
+
+  it('still answers, with no binding, when there is nothing to bind by or binding fails', async () => {
+    // The console then refuses the answer and stays on the relay; the route itself stays additive.
+    for (const bind of [() => null, () => { throw new Error('locked') }, async () => { throw new Error('locked') }]) {
+      const post = await start(async () => 'answer', bind)
+      const res = await post({ sdp: 'v=0' })
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ sdp: 'answer' })
+    }
+  })
+
+  it('binds nothing when the Mac offers no link', async () => {
+    let bound = 0
+    const post = await start(async () => null, () => ((bound += 1), null))
+    expect((await post({ sdp: 'v=0' })).status).toBe(503)
+    expect(bound).toBe(0)
   })
 })
 
