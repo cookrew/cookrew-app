@@ -30,9 +30,7 @@ describe('the profile', () => {
     const unixDeny = text.indexOf('(deny network-outbound (subpath "/"))')
     const unixAllow = text.indexOf('(allow network-outbound (subpath "/s/svc/sess"))')
     const resolver = text.indexOf('(allow network-outbound (literal "/private/var/run/mDNSResponder"))')
-    // IPv6 loopback only: the blanket IPv6 deny is deferred (owner, 2026-11-19).
-    const ipv6Deny = text.indexOf('(deny network-outbound (remote ip6 "localhost:*"))')
-    expect(text).not.toContain('(remote ip6 "*:*")')
+    const ipv6Deny = text.indexOf('(deny network-outbound (remote ip6 "*:*"))')
     expect(unixDeny).toBeGreaterThan(text.indexOf('(allow network*)'))
     expect(unixAllow).toBeGreaterThan(unixDeny)
     expect(resolver).toBeGreaterThan(unixDeny)
@@ -182,7 +180,7 @@ describe.runIf(process.platform === 'darwin')('in a real Seatbelt sandbox', () =
     }
   }, 60000)
 
-  it('denies loopback on both families, opens the lent port, and keeps a lent gateway port shut; pins the mapped-address gap the owner deferred', async () => {
+  it('denies loopback on both families, opens the lent port, and keeps a lent gateway port shut', async () => {
     const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'served-loopback-')))
     const v4 = await listen('127.0.0.1')
     const lent = await listen('127.0.0.1')
@@ -198,16 +196,14 @@ describe.runIf(process.platform === 'darwin')('in a real Seatbelt sandbox', () =
       // Prove mapped addresses actually reach this loopback-only listener without confinement.
       for (const host of ['::ffff:127.0.0.1', '::ffff:0.0.0.0', '::ffff:0:0']) {
         expect(await dial(control, host, v4.port), `control ${host}`).toBe('OPEN')
-        // The gateway's deny names the port on any host, so no spelling reaches it.
+        expect(await dial(file, host, v4.port), `confined ${host}`).toBe('DENIED')
         expect(await dial(file, host, gateway.port), `guarded ${host}`).toBe('DENIED')
+        expect(await dial(file, host, lent.port), `lent IPv4 only ${host}`).toBe('DENIED')
       }
-      expect(await dial(file, '::ffff:127.0.0.1', v4.port)).toBe('DENIED')
       expect(await dial(file, '127.0.0.1', v4.port)).toBe('DENIED')
-      // KNOWN GAP, deferred by the owner on 2026-11-19 to the next release: the
-      // blanket IPv6 deny was left out of the hotfix, so an IPv4-mapped any-address
-      // still reaches an IPv4 loopback listener. Pinned so the fix flips it on purpose.
-      expect(await dial(file, '::ffff:0.0.0.0', v4.port), 'deferred gap').toBe('OPEN')
-      expect(await dial(file, '::ffff:0:0', v4.port), 'deferred gap').toBe('OPEN')
+      expect(await dial(file, '::ffff:0.0.0.0', v4.port)).toBe('DENIED')
+      expect(await dial(file, '::ffff:0:0', v4.port)).toBe('DENIED')
+      expect(await dial(file, '::ffff:0.0.0.0', gateway.port)).toBe('DENIED')
       expect(await dial(file, '::1', v6.port)).toBe('DENIED')
       expect(await dial(file, '127.0.0.1', lent.port)).toBe('OPEN')
       expect(await dial(file, '127.0.0.1', gateway.port)).toBe('DENIED')

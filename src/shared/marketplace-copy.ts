@@ -779,7 +779,7 @@ export const MKT_SERVE = {
     "Callers never touch your workspace. Each one gets a fresh copy of the template you pinned, in its own folder. Keep working exactly as you did before — they can't see it, and nothing you do now reaches them.",
   /** Restrictions on newly spawned macOS served processes (main/session-sandbox.ts). */
   'mkt.serve.seat-limits':
-    "New macOS served sessions cannot listen on IP ports or connect to Unix sockets outside their own folder (except the system resolver). Temporary servers, OAuth callbacks, browser debugging, Docker, local databases and some UDP tools may fail. A lent local endpoint must be reachable over IPv4 at 127.0.0.1. Already running processes keep their existing restrictions.",
+    "New macOS served sessions cannot listen on IP ports, use outbound IPv6, or connect to Unix sockets outside their own folder (except the system resolver). Temporary servers, OAuth callbacks, browser debugging, Docker, local databases and some UDP tools may fail. A lent local endpoint must be reachable over IPv4 at 127.0.0.1. Already running processes keep their existing restrictions.",
   'mkt.serve.live': '{templateName} is taking calls.',
   'mkt.serve.live.address': 'Callers land on {orch} · {priceLine}',
   /** The hand-off: what the owner DOES with the address they were just shown. */

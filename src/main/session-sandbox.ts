@@ -320,12 +320,9 @@ export function seatbeltProfile(input: ProfileInput): string {
     // and every other loopback port stayed shut. So the gateway goes first, and a
     // guarded port is never lent at all (loopbackAllowClauses filters it): the
     // loopback deny is what keeps it shut, whatever order Seatbelt reads.
-    // IPv6 LOOPBACK ONLY, BY THE OWNER'S CHOICE (2026-11-19). ::1 and
-    // ::ffff:127.0.0.1 are denied here. An IPv4-mapped ANY-address
-    // (::ffff:0.0.0.0, ::ffff:0:0) still reaches an IPv4 loopback listener past
-    // `ip6 localhost`; denying all outbound IPv6 closes it but cuts IPv6-only
-    // vendors, and the owner deferred that to the next release. The gateway stays
-    // shut either way (its deny names the port on any host). Lent ports are ip4.
+    // IPv4-mapped IPv6 can reach IPv4 loopback while bypassing `ip localhost`.
+    // Until a narrower rule is proven, deny all outbound IPv6; IPv6-only vendors
+    // are unavailable to served seats. Explicitly use ip4 for IPv4 rules.
     // Unix socket connects are network operations, not covered by file-read denies.
     // A served process may connect only to sockets inside its own sandbox.
     '(deny network-outbound (subpath "/"))',
@@ -351,7 +348,7 @@ export function seatbeltProfile(input: ProfileInput): string {
     // listen() without an explicit bind can otherwise acquire an ephemeral IP port.
     '(deny network-inbound (local tcp "*:*"))',
     '(deny network-outbound (remote ip4 "localhost:*"))',
-    '(deny network-outbound (remote ip6 "localhost:*"))',
+    '(deny network-outbound (remote ip6 "*:*"))',
     ...loopbackAllowClauses(input.loopbackAllow ?? [], input.gatewayPorts ?? []),
     // TRAVERSAL. Found by running it: denying the service root outright made a
     // session unable to reach its OWN sandbox — `cd` into it failed with "Not a
