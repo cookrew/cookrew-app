@@ -186,7 +186,8 @@ import { createSealDevice } from './seal-device'
 import { createSealPeers } from './seal-peers'
 import { createSealPinStore } from './seal-pins'
 import { answerPeer, createBlockedLanes, forgetBlocked } from './seal-blocked'
-import { deviceWords } from '../shared/seal2/handshake'
+import { createSealWatchKeys } from './seal-watch-keys'
+import { deviceWords, keyWords, type DeviceKey } from '../shared/seal2/handshake'
 import { sealedSwitchMemory } from './remote-switch-memory'
 import { singleConfirm } from './remote-switch-confirm'
 import { createConnectCodes } from './connect-code'
@@ -1835,7 +1836,10 @@ const canvasLink = canvasRelay.link
 // paused this stream) the loopback response's own buffer.
 const connectCodes = createConnectCodes(path.join(homedir(), '.cookrew', 'connect-code'))
 // cookrew-seal/2 device mode: this desktop and the account's others (seal-device.ts, seal-pins.ts).
+// Watches whose words the owner confirmed here (seal-watch-keys.ts): a watch's id is not its key's.
+const sealWatchKeys = createSealWatchKeys(path.join(homedir(), '.cookrew', 'seal-watch-keys.json'))
 const sealDevice = createSealDevice({
+  watchKeys: sealWatchKeys,
   account: () => accounts.account(),
   desktops: async () => {
     const answer = await accounts.authed<unknown>('/v2/me/desktops')
@@ -9970,7 +9974,37 @@ function registerIpc(handlers: RestoreHandlers): void {
       accountKind: () => (accounts.account() === null ? 'none' : accounts.isPasswordless() ? 'passwordless' : 'password'),
       invite: (current, here) => mintWatchInvite({ accounts, lock: ownerLock }, current, here)
     })
-  setWatchHost(watchHost)
+  setWatchHost({
+    ...watchHost,
+    seal: {
+      async offer(deviceId: string, jwk: DeviceKey) {
+        const self = sealDevice.self()
+        if (self === null) return null
+        sealWatchKeys.offer(deviceId, jwk)
+        return { deviceId: self.deviceId, jwk: self.jwk, words: (await keyWords(jwk, self.jwk)).words }
+      }
+    }
+  })
+  // A watch's key waits for the owner to see the same six words on the watch and here (seal-watch-keys.ts).
+  ipcMain.handle(
+    'watch:seal-pending',
+    ownerOnly(async () => {
+      const self = sealDevice.self()
+      if (self === null) return []
+      return Promise.all(sealWatchKeys.pending().map(async (row) => ({ deviceId: row.deviceId, x: row.jwk.x, words: (await keyWords(row.jwk, self.jwk)).words })))
+    })
+  )
+  ipcMain.handle(
+    'watch:seal-confirm',
+    ownerOnly((deviceId: unknown, x: unknown) => typeof deviceId === 'string' && typeof x === 'string' && sealWatchKeys.confirm(deviceId, x))
+  )
+  ipcMain.handle(
+    'watch:seal-forget',
+    ownerOnly((deviceId: unknown) => {
+      if (typeof deviceId === 'string') sealWatchKeys.forget(deviceId)
+      return true
+    })
+  )
   ipcMain.handle(
     'watch:code',
     ownerOnly(() => ({ ...watchPairing.mintCode(), bases: watchHost.bases(), claims: watchPairing.claims }))

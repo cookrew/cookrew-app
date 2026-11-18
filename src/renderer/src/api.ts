@@ -911,6 +911,11 @@ export interface CookrewApi {
   /** Refuse every plain request over the relay (main/seal-marks.ts): the owner's switch, off by default. */
   sealedOnly?: () => Promise<boolean>;
   setSealedOnly?: (on: boolean) => Promise<boolean>;
+  /** Watches whose sealed key waits for the owner to compare six words (main/seal-watch-keys.ts). Owner's Mac only. */
+  watchSealPending?: () => Promise<Array<{ deviceId: string; x: string; words: string[] }>>;
+  /** The watch shows the same words: let this key in. False when it is not the key that waits. */
+  watchSealConfirm?: (deviceId: string, x: string) => Promise<boolean>;
+  watchSealForget?: (deviceId: string) => Promise<boolean>;
   /** A phone's join code and the link its QR holds, under the account's step-up. No menu offers it until the phone app ships. Absent in the demo. */
   phoneInvite?: (current: string) => Promise<PhoneInvite>;
   /** Phones that joined with a code this Mac showed, waiting for its Keep (owner 2026-11-17). */

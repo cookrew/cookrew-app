@@ -350,6 +350,37 @@ public struct ClaimReply: Decodable, Sendable {
   public let token: String
   public let desktop: String
   public let bases: [Base]
+  /** A Mac that can seal with this watch: its device, its key, and the six words both screens show. */
+  public let seal: SealPeer?
+
+  private struct SealWire: Decodable {
+    struct Key: Decodable {
+      let x: String
+    }
+
+    let deviceId: String
+    let jwk: Key
+    let words: [String]
+  }
+
+  private enum Keys: String, CodingKey { case token, desktop, bases, seal }
+
+  public init(token: String, desktop: String, bases: [Base], seal: SealPeer? = nil) {
+    self.token = token
+    self.desktop = desktop
+    self.bases = bases
+    self.seal = seal
+  }
+
+  public init(from decoder: Decoder) throws {
+    let held = try decoder.container(keyedBy: Keys.self)
+    token = try held.decode(String.self, forKey: .token)
+    desktop = try held.decode(String.self, forKey: .desktop)
+    bases = try held.decode([Base].self, forKey: .bases)
+    // A seal this watch cannot read is no seal: the claim still stands, the old way.
+    let wire = try? held.decodeIfPresent(SealWire.self, forKey: .seal)
+    seal = wire.flatMap { $0.words.count == 6 ? SealPeer(deviceId: $0.deviceId.lowercased(), x: $0.jwk.x, words: $0.words) : nil }
+  }
 }
 
 public struct NoteBody: Decodable, Equatable, Sendable {

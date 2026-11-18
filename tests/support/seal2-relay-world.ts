@@ -66,6 +66,8 @@ export interface RelayWorld {
   readonly otherDesktop: Device & { readonly session: Record<string, string> }
   /** A phone of the account, signed in. */
   readonly phoneSession: Record<string, string>
+  /** That phone's account device id: a random uuid, as a watch's is. */
+  readonly phoneDeviceId: string
   /** Every line between the registry and the Mac. */
   readonly lines: string[]
   /** Every exchange a caller had with the registry, through `capture`. */
@@ -97,7 +99,7 @@ export async function startRelayWorld(companion: (terminus: () => SealTerminus |
   )
   const macDevice = newDevice()
   const other = newDevice()
-  const { desktopToken, otherSession, phoneSession } = await signUp(site, macDevice, other)
+  const { desktopToken, otherSession, phoneSession, phoneDeviceId } = await signUp(site, macDevice, other)
   const port = Number(new URL(mac.origin).port)
   terminus = createSealTerminus(terminusDeps(port, macDevice, other))
   const lines: string[] = []
@@ -155,6 +157,7 @@ export async function startRelayWorld(companion: (terminus: () => SealTerminus |
     macDevice,
     otherDesktop: { ...other, session: { [RELAY_SESSION_HEADER]: otherSession } },
     phoneSession: { [RELAY_SESSION_HEADER]: phoneSession },
+    phoneDeviceId,
     lines,
     exchanges,
     terminus: () => terminus as SealTerminus,

@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { deviceIdFor } from '../src/main/account-v2'
 import { createInbox } from '../src/shared/canvas-seal-wire'
-import { acceptCodeHandshake, acceptDeviceHandshake, deviceIdOf, pairWords, startCodeHandshake, startDeviceHandshake, type DeviceKey, type DeviceSigner, type DeviceVerifier } from '../src/shared/seal2/handshake'
+import { acceptCodeHandshake, acceptDeviceHandshake, deviceIdOf, keyWords, pairWords, startCodeHandshake, startDeviceHandshake, type DeviceKey, type DeviceSigner, type DeviceVerifier } from '../src/shared/seal2/handshake'
 import { decodeFrame2, encodeFrame2, type Frame2 } from '../src/shared/seal2/frames'
 import { createSeal2Session, epochKeyBytes, nextEpochSecret } from '../src/shared/seal2/records'
 import { fingerprintOfDigest } from '../src/shared/key-fingerprint'
@@ -117,6 +117,14 @@ describe('cookrew-seal/2 device mode, against node:crypto', () => {
     expect(await deviceWords(v.from)).toEqual(a)
     expect(await deviceWords(v.to)).not.toEqual(a)
     expect(a.words).toHaveLength(6)
+  })
+
+  it('speaks the same words for a pair of keys from either side, and other words for another key', async () => {
+    const words = fingerprintOfDigest(bytes(v.keyWordsDigest))
+    expect(await keyWords(v.initiatorJwk, v.responderJwk)).toEqual(words)
+    expect(await keyWords(v.responderJwk, v.initiatorJwk)).toEqual(words)
+    const other = { kty: 'OKP' as const, crv: 'Ed25519' as const, x: Buffer.alloc(32, 9).toString('base64url') }
+    expect(await keyWords(v.initiatorJwk, other)).not.toEqual(words)
   })
 
   it('speaks the same words for the pair from either side', async () => {

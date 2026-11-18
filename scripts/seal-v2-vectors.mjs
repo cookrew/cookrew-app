@@ -176,6 +176,10 @@ const sigOf = (raw, who) => sign(null, Buffer.from(signed(who, deviceTranscript)
 const sorted = [fromId, toId].sort()
 const wordsDigest = sha256(Buffer.from(`${LABEL} words`), u8(0), uuidBytes(sorted[0]), uuidBytes(sorted[1]))
 
+// ── words for a pair of KEYS (a watch, whose id is not its key's) ──────────
+const keyThumbs = [thumbprint(jwkA), thumbprint(jwkB)].sort(Buffer.compare)
+const keyWordsDigest = sha256(Buffer.from(`${LABEL} key words`), u8(0), keyThumbs[0], keyThumbs[1])
+
 const vectors = {
   label: LABEL,
   epochRecords: EPOCH_RECORDS,
@@ -223,7 +227,8 @@ const vectors = {
     secretToInitiator: hex(deviceKeys.toInitiator),
     confirm: hex(deviceKeys.confirm),
     record: { seq: 0, plain: frames[6].bytes, toResponder: hex(sealRecord(deviceKeys.toResponder, 'toResponder', 0, Buffer.from(frames[6].bytes, 'hex')).wire) },
-    wordsDigest: hex(wordsDigest)
+    wordsDigest: hex(wordsDigest),
+    keyWordsDigest: hex(keyWordsDigest)
   }
 }
 writeFileSync(fileURLToPath(new URL('../tests/fixtures/seal-v2-vectors.json', import.meta.url)), `${JSON.stringify(vectors, null, 2)}\n`)

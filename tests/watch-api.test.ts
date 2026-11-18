@@ -341,6 +341,41 @@ describe('through the real gate', () => {
     expect(await paired()).toMatch(/.{16,}/)
   })
 
+  it('a claim that brings a watch key gets this Mac\'s key and the words, and only once the claim stood', async () => {
+    const offered: Array<{ deviceId: string; x: string }> = []
+    const macKey = { kty: 'OKP' as const, crv: 'Ed25519' as const, x: Buffer.alloc(32, 7).toString('base64url') }
+    setWatchHost({
+      ...host(pairing),
+      seal: {
+        offer: async (deviceId, jwk) => {
+          offered.push({ deviceId, x: jwk.x })
+          return { deviceId: 'mac-device', jwk: macKey, words: ['able', 'baby', 'cable', 'dance', 'eagle', 'fabric'] }
+        }
+      }
+    })
+    const watchId = '0f0e0d0c-0b0a-4908-8706-050403020100'
+    const jwk = { kty: 'OKP', crv: 'Ed25519', x: Buffer.alloc(32, 3).toString('base64url') }
+    await post('/api/watch/code', PAIRING)
+    expect((await post('/api/watch/claim', null, { code: 'nope', deviceId: watchId, jwk })).status).toBe(403)
+    expect(offered).toEqual([])
+    const { code } = (await (await post('/api/watch/code', PAIRING)).json()) as { code: string }
+    const claimed = (await (await post('/api/watch/claim', null, { code, deviceId: watchId.toUpperCase(), jwk })).json()) as { seal?: unknown }
+    expect(claimed.seal).toEqual({ deviceId: 'mac-device', jwk: macKey, words: ['able', 'baby', 'cable', 'dance', 'eagle', 'fabric'] })
+    expect(offered).toEqual([{ deviceId: watchId, x: jwk.x }])
+  })
+
+  it('a claim with no key, or a key that is not an Ed25519 one, is the old claim', async () => {
+    let asked = 0
+    setWatchHost({ ...host(pairing), seal: { offer: async () => (asked++, null) } })
+    for (const extra of [{}, { deviceId: '0f0e0d0c-0b0a-4908-8706-050403020100', jwk: { kty: 'EC', crv: 'P-256', x: 'a' } }]) {
+      const { code } = (await (await post('/api/watch/code', PAIRING)).json()) as { code: string }
+      const claimed = (await (await post('/api/watch/claim', null, { code, ...extra })).json()) as { ok: boolean; seal?: unknown }
+      expect(claimed.ok).toBe(true)
+      expect(claimed.seal).toBeUndefined()
+    }
+    expect(asked).toBe(0)
+  })
+
   it('only the owner mints a code or asks after the pairing', async () => {
     const token = await paired()
     expect((await post('/api/watch/code', token)).status).toBe(401)

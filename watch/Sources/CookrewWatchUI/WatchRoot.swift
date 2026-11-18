@@ -25,6 +25,8 @@ enum PairStage: Equatable {
   case digits
   case working(JoinStep)
   case paired(String)
+  /** The six words the Mac shows too: the owner compares them there, and the relay road goes sealed. */
+  case words(String, [String])
   case notice(PairNotice)
 }
 
@@ -41,6 +43,8 @@ enum PairNotice: Equatable {
 
 /** How long the tick stays up before the cards. */
 private let pairedSeconds = 1.2
+/** Long enough to read six words aloud and look at the Mac. */
+private let wordsSeconds = 20.0
 
 /** Paired or not, and everything that goes with being paired. */
 @MainActor
@@ -97,7 +101,12 @@ final class WatchApp {
     // With no account the relay would only refuse, and read as the Mac forgetting this watch.
     let urls = session.bases.filter { held != nil || $0.kind != "relay" }.compactMap { URL(string: $0.url) }
     let roams = session.bases.contains { $0.kind == "relay" }
-    store = WatchStore(api: HTTPWatchAPI(bases: urls, token: session.token, relay: pass, guarded: roams), feel: feel)
+    // The relay road, sealed once the owner confirmed this watch's words on the Mac (WatchSeal.swift).
+    let key = sessionKey(session)
+    let sealer = pass.flatMap { relay in
+      session.seal.map { peer in WatchSealer(peer: peer, device: vault.device(), relay: relay, pinned: session.sealPinned, onPinned: { vault.markSealed(key) }) }
+    }
+    store = WatchStore(api: HTTPWatchAPI(bases: urls, token: session.token, relay: pass, guarded: roams, sealer: sealer), feel: feel)
   }
 
   /** The paired Mac as the account lists it: by its id, or by its name. */
@@ -237,6 +246,18 @@ final class WatchApp {
     feel(.sent)
     stage = .paired(session.desktop)
     try? await Task.sleep(nanoseconds: UInt64(pairedSeconds * 1_000_000_000))
+    if let words = session.seal?.words {
+      stage = .words(session.desktop, words)
+      try? await Task.sleep(nanoseconds: UInt64(wordsSeconds * 1_000_000_000))
+      guard case .words = stage else { return }
+    }
+    typed = ""
+    open(session)
+  }
+
+  /** Past the words: the watch goes in, and its relay road seals once the owner confirms them on the Mac. */
+  func wordsSeen() {
+    guard case .words = stage, let session = vault.load() else { return }
     typed = ""
     open(session)
   }
@@ -286,12 +307,11 @@ final class WatchApp {
     busy = true
     defer { busy = false }
     do {
-      let reply = try await claimWatch(base: base, code: digits)
+      let reply = try await claimWatch(base: base, code: digits, device: vault.device())
       let bases = basesAfterClaim(typed: Base(kind: "typed", url: base.absoluteString), named: reply.bases)
-      let session = WatchSession(desktop: reply.desktop, bases: bases, token: reply.token)
-      vault.save(session)
+      let session = WatchSession(desktop: reply.desktop, bases: bases, token: reply.token, seal: reply.seal)
       digits = ""
-      open(session)
+      await finish(session)
     } catch WatchError.refused(let reason) {
       digits = ""
       failure = .refused(reason)
@@ -561,6 +581,7 @@ private struct PairingView: View {
     case .working(.joining): JoinSteps(done: [], now: "Joining your account…")
     case .working(.finding): JoinSteps(done: ["Joined your account"], now: "Finding your computer…")
     case .paired(let desktop): JoinSteps(done: ["Joined your account", "Paired with \(desktop)"], now: nil)
+    case .words(let desktop, let words): SealWordsView(desktop: desktop, words: words, onDone: app.wordsSeen)
     case .notice(let notice): noticeView(notice)
     }
   }
@@ -616,3 +637,26 @@ struct LinkChip: View {
     }
   }
 }
+
+/**
+ * SIX WORDS, ON THE WRIST AND ON THE MAC. The Mac shows the same six in its watch sheet,
+ * made from both keys; the owner says there that they match, and from then on this
+ * watch reaches that Mac through the relay end to end.
+ */
+private struct SealWordsView: View {
+  let desktop: String
+  let words: [String]
+  let onDone: () -> Void
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Same words on \(desktop)?").font(.headline)
+        Text(words.joined(separator: " ")).font(.system(.title3, design: .rounded)).fixedSize(horizontal: false, vertical: true)
+        Text("Confirm them on the computer, in Apple Watch.").font(.footnote).foregroundStyle(.secondary)
+        Button("Done", action: onDone)
+      }
+    }
+  }
+}
+

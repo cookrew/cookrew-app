@@ -3,6 +3,7 @@ import type { SealDeviceDeps } from './canvas-seal-terminus'
 import type { DeviceSigner, DeviceVerifier } from '../shared/seal2/handshake'
 import { isDeviceKey } from '../shared/seal2/handshake'
 import type { SealPinStore } from './seal-pins'
+import type { SealWatchKeys } from './seal-watch-keys'
 
 /**
  * THIS DESKTOP'S SIDE OF SEAL2 DEVICE MODE: its account device key as the
@@ -11,7 +12,9 @@ import type { SealPinStore } from './seal-pins'
  * WHO MAY DIAL IN: a device id cookrew.dev lists as one of this account's
  * desktops (asked at most once a minute, and once more for an id it has not
  * seen), and, with the pin policy at "pinned", only one the owner pinned. An
- * id the listing cannot be asked about is refused: unknown fails closed.
+ * id the listing cannot be asked about is refused: unknown fails closed. And a
+ * watch whose key the owner confirmed here by its words (seal-watch-keys.ts),
+ * with that key and no other.
  */
 
 const LISTING_MS = 60_000
@@ -21,6 +24,8 @@ export interface SealDeviceInput {
   /** The account's desktops' device ids; null when cookrew.dev could not be asked. */
   desktops(): Promise<readonly string[] | null>
   readonly pins: SealPinStore
+  /** Watches whose words the owner confirmed here (seal-watch-keys.ts). */
+  readonly watchKeys?: Pick<SealWatchKeys, 'keyOf'>
   now?(): number
 }
 
@@ -63,9 +68,12 @@ export function createSealDevice(input: SealDeviceInput): SealDevice {
     device: {
       self,
       verify: verifyDevice,
-      // Asked again after the listing: a NOT THE SAME while cookrew.dev was being asked (a relay can stall it) counts.
-      trusted: async (deviceId) => input.pins.allows(deviceId) && self() !== null && (await isListed(deviceId)) && input.pins.allows(deviceId),
-      admits: (deviceId) => self() !== null && input.pins.allows(deviceId)
+      // A watch the owner confirmed by its words is the owner's own pin; any other device is the account listing's, and
+      // the pins', asked again after the listing: a NOT THE SAME while cookrew.dev was being asked (a relay can stall it) counts.
+      trusted: async (deviceId) =>
+        self() !== null && (input.watchKeys?.keyOf(deviceId) != null || (input.pins.allows(deviceId) && (await isListed(deviceId)) && input.pins.allows(deviceId))),
+      admits: (deviceId) => self() !== null && (input.watchKeys?.keyOf(deviceId) != null || input.pins.allows(deviceId)),
+      keyOf: async (deviceId) => input.watchKeys?.keyOf(deviceId) ?? null
     }
   }
 }

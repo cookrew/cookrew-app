@@ -30,7 +30,7 @@ export const verifyDevice: DeviceVerifier = async (jwk, message, sig) =>
   verify(null, Buffer.from(message), createPublicKey({ key: jwk as never, format: 'jwk' }), Buffer.from(sig, 'base64url'))
 
 
-export async function signUp(site: { readonly origin: string }, mac: Device, other: Device): Promise<{ desktopToken: string; otherSession: string; phoneSession: string }> {
+export async function signUp(site: { readonly origin: string }, mac: Device, other: Device): Promise<{ desktopToken: string; otherSession: string; phoneSession: string; phoneDeviceId: string }> {
   const json = { 'content-type': 'application/json' }
   const claimed = await fetch(`${site.origin}/v2/accounts`, { method: 'POST', headers: json, body: JSON.stringify({ username: 'owner', password: PASSWORD, device: { id: mac.id, kind: 'desktop', name: 'This Mac', jwk: mac.jwk } }) })
   const desktopToken = ((await claimed.json()) as { session: { token: string } }).session.token
@@ -46,7 +46,8 @@ export async function signUp(site: { readonly origin: string }, mac: Device, oth
   }
   const otherSession = await attach({ id: other.id, kind: 'desktop', name: 'Other Mac', jwk: other.jwk })
   const phoneJwk = generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' })
-  const phoneSession = await attach({ id: randomUUID(), kind: 'phone', name: 'A phone', jwk: phoneJwk })
-  return { desktopToken, otherSession, phoneSession }
+  const phoneDeviceId = randomUUID()
+  const phoneSession = await attach({ id: phoneDeviceId, kind: 'phone', name: 'A phone', jwk: phoneJwk })
+  return { desktopToken, otherSession, phoneSession, phoneDeviceId }
 }
 

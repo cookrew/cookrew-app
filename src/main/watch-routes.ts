@@ -11,6 +11,7 @@
 // exactly as for no token at all.
 
 import { createHash } from 'node:crypto'
+import { isDeviceKey, type DeviceKey } from '../shared/seal2/handshake'
 import type http from 'node:http'
 import { sanitizeInput, sanitizePaste } from '../shared/cast-input'
 import { closingMessage } from '../shared/trace-blocks'
@@ -100,7 +101,21 @@ export interface WatchHost {
   readonly platform?: string
   /** Mint a join code under this password. `here`: asked on this Mac, where a provider trip can open. */
   invite(current: string, here: boolean): Promise<WatchInvite>
+  /**
+   * cookrew-seal/2 for a watch (seal-watch-keys.ts): keep the key a claim brought, pending until the owner
+   * confirms its words here, and say this Mac's own key and the words. Null with no account key on this Mac.
+   */
+  readonly seal?: { offer(deviceId: string, jwk: DeviceKey): Promise<WatchSealReply | null> }
 }
+
+/** What a claim's answer says of the sealed session: this Mac's device and key, and the six words both screens show. */
+export interface WatchSealReply {
+  readonly deviceId: string
+  readonly jwk: DeviceKey
+  readonly words: readonly string[]
+}
+
+const WATCH_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 let host: WatchHost | null = null
 
@@ -238,13 +253,18 @@ export async function handleWatchClaim(
   bridgedDeviceId: string | null = null
 ): Promise<boolean> {
   if (method !== 'POST' || path !== '/api/watch/claim' || !host) return false
-  const body = await readJson<{ code?: unknown }>(request)
+  const body = await readJson<{ code?: unknown; deviceId?: unknown; jwk?: unknown }>(request)
   const claim = host.pairing.claim(body.code, bridgedDeviceId)
   if (!claim.ok) {
     respondJson(response, claim.reason === 'paused' ? 429 : 403, { ok: false, reason: claim.reason })
     return true
   }
-  respondJson(response, 200, { ok: true, token: claim.token, desktop: host.desktopName(), bases: host.bases() })
+  // A watch that can seal sends its account device and key. Kept only once the claim stood, and only as
+  // pending: the claim crossed the LAN in the clear, so the owner compares the words before it counts.
+  const deviceId = typeof body.deviceId === 'string' ? body.deviceId.toLowerCase() : null
+  const named = deviceId !== null && WATCH_ID.test(deviceId) && isDeviceKey(body.jwk) && (bridgedDeviceId === null || bridgedDeviceId === deviceId)
+  const seal = named ? await host.seal?.offer(deviceId, { kty: 'OKP', crv: 'Ed25519', x: (body.jwk as DeviceKey).x }).catch(() => null) : null
+  respondJson(response, 200, { ok: true, token: claim.token, desktop: host.desktopName(), bases: host.bases(), ...(seal ? { seal } : {}) })
   return true
 }
 

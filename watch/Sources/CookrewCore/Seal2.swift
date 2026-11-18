@@ -117,6 +117,84 @@ public enum Seal2 {
     }
   }
 
+  // MARK: device mode (the watch dials its Mac with its account key)
+
+  /** RFC 7638 thumbprint of an Ed25519 key, as account-v2.ts and seal2/handshake.ts write it. */
+  public static func thumbprint(x: String) -> Data {
+    sha256(Data("{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"\(x)\"}".utf8))
+  }
+
+  /** The account device id a key makes: a desktop's id is this; a watch's is not. */
+  public static func deviceId(x: String) -> String {
+    var bytes = [UInt8](sha256(thumbprint(x: x)).prefix(16))
+    bytes[6] = (bytes[6] & 0x0f) | 0x80
+    bytes[8] = (bytes[8] & 0x3f) | 0x80
+    let hex = bytes.map { String(format: "%02x", $0) }.joined()
+    let at = { (from: Int, to: Int) in String(hex[hex.index(hex.startIndex, offsetBy: from) ..< hex.index(hex.startIndex, offsetBy: to)]) }
+    return [at(0, 8), at(8, 12), at(12, 16), at(16, 20), at(20, 32)].joined(separator: "-")
+  }
+
+  static func uuidBytes(_ id: String) -> Data {
+    let hex = id.replacingOccurrences(of: "-", with: "")
+    return Data(stride(from: 0, to: hex.count, by: 2).compactMap { UInt8(String(hex[hex.index(hex.startIndex, offsetBy: $0) ..< hex.index(hex.startIndex, offsetBy: $0 + 2)]), radix: 16) })
+  }
+
+  /** The six words the watch and its Mac both show for their two keys (seal2/handshake.ts · keyWords). */
+  public static func keyWords(_ a: String, _ b: String) -> [String] {
+    let thumbs = [thumbprint(x: a), thumbprint(x: b)].sorted { $0.lexicographicallyPrecedes($1) }
+    let digest = [UInt8](sha256(Data("\(label) key words".utf8), Data([0]), thumbs[0], thumbs[1]))
+    return (0 ..< 6).map { word in
+      let index = (0 ..< 11).reduce(0) { value, bit in
+        let position = word * 11 + bit
+        return (value << 1) | Int((digest[position >> 3] >> (7 - UInt8(position & 7))) & 1)
+      }
+      return FingerprintWords.all[index]
+    }
+  }
+
+  public struct DeviceHandshake {
+    let mine: Curve25519.KeyAgreement.PrivateKey
+    let signing: Curve25519.Signing.PrivateKey
+    let from: String
+    let to: String
+    let macX: String
+    public let hello: [String: Any]
+
+    /**
+     * `macX`: the Mac's key as its claim answer gave it, the one and only key accepted.
+     * `ephemeral` fixed only for the vectors.
+     */
+    public init(deviceId: String, signing: Curve25519.Signing.PrivateKey, to: String, macX: String, ephemeral: Data? = nil) throws {
+      self.signing = signing
+      from = deviceId.lowercased()
+      self.to = to.lowercased()
+      self.macX = macX
+      mine = try ephemeral.map { try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: $0) } ?? Curve25519.KeyAgreement.PrivateKey()
+      let x = base64urlEncoded(signing.publicKey.rawRepresentation)
+      hello = ["v": 2, "vs": [2], "mode": "device", "from": from, "to": self.to, "jwk": ["kty": "OKP", "crv": "Ed25519", "x": x], "e": base64urlEncoded(mine.publicKey.rawRepresentation)]
+    }
+
+    /** The session and the finish to send, once the answer is signed by the very Mac pinned at the claim. */
+    public func finish(accept: [String: Any]) throws -> (session: Session, finish: [String: String]) {
+      guard accept["v"] as? Int == 2, let jwk = accept["jwk"] as? [String: Any], let x = jwk["x"] as? String,
+            let e = accept["e"] as? String, let proof = accept["proof"] as? String, let sig = accept["sig"] as? String else { throw Failure.badAnswer }
+      guard x == macX, Seal2.deviceId(x: x) == to, let macKey = try? Curve25519.Signing.PublicKey(rawRepresentation: base64urlDecoded(x)) else { throw Failure.unproven }
+      let theirs = base64urlDecoded(e)
+      guard theirs.count == 32, let key = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: theirs) else { throw Failure.badAnswer }
+      let shared = try mine.sharedSecretFromKeyAgreement(with: key).withUnsafeBytes { Data($0) }
+      guard shared.contains(where: { $0 != 0 }) else { throw Failure.badAnswer }
+      let myX = base64urlEncoded(signing.publicKey.rawRepresentation)
+      let context = Seal2.uuidBytes(from) + Seal2.uuidBytes(to) + Seal2.thumbprint(x: myX) + Seal2.thumbprint(x: x)
+      let th = Seal2.transcript(mode: 2, offered: [2], context: context, initiator: mine.publicKey.rawRepresentation, responder: theirs)
+      let s = Seal2.schedule(ikm: shared, transcript: th)
+      guard s.check("responder", proof) else { throw Failure.unproven }
+      let signed = { (who: String) in Data("\(Seal2.label) \(who)\n\(base64urlEncoded(th))".utf8) }
+      guard macKey.isValidSignature(base64urlDecoded(sig), for: signed("responder")) else { throw Failure.unproven }
+      let mySig = base64urlEncoded(try signing.signature(for: signed("initiator")))
+      return (Session(id: s.sessionId, send: s.toResponder, open: s.toInitiator, sends: .toResponder), ["proof": base64urlEncoded(s.proof("initiator")), "sig": mySig])
+    }
+  }
+
   // MARK: records
 
   public enum Direction: UInt8 { case toResponder = 1, toInitiator = 2 }

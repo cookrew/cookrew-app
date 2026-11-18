@@ -157,4 +157,45 @@ struct Seal2VectorTests {
   func emptyData() {
     #expect(Seal2.decode(Data([3, 0, 0, 0, 1])) == nil)
   }
+
+  @Test("device mode as the initiator: the same hello, and a finish the vectors' Mac accepts")
+  func deviceInitiator() throws {
+    let v = try Vectors.load().device
+    let signing = try Curve25519.Signing.PrivateKey(rawRepresentation: hex(v["initiatorDevicePrivate"] as! String))
+    let macX = (v["responderJwk"] as! [String: String])["x"]!
+    let shake = try Seal2.DeviceHandshake(deviceId: v["from"] as! String, signing: signing, to: v["to"] as! String, macX: macX, ephemeral: hex(v["initiatorPrivate"] as! String))
+    let hello = v["hello"] as! [String: Any]
+    #expect(shake.hello["e"] as? String == hello["e"] as? String)
+    #expect(shake.hello["from"] as? String == hello["from"] as? String)
+    #expect((shake.hello["jwk"] as? [String: String]) == (hello["jwk"] as? [String: String]))
+    let done = try shake.finish(accept: v["accept"] as! [String: Any])
+    let finish = v["finish"] as! [String: String]
+    #expect(done.finish["proof"] == finish["proof"])
+    #expect(done.session.id == v["sessionId"] as! String)
+    let transcript = hex(v["transcript"] as! String)
+    let initiatorKey = try Curve25519.Signing.PublicKey(rawRepresentation: base64urlDecoded((v["initiatorJwk"] as! [String: String])["x"]!))
+    #expect(initiatorKey.isValidSignature(base64urlDecoded(done.finish["sig"]!), for: Data("\(Seal2.label) initiator\n\(base64urlEncoded(transcript))".utf8)))
+  }
+
+  @Test("device mode refuses an answer from any key but the Mac's pinned at the claim")
+  func deviceWrongMac() throws {
+    let v = try Vectors.load().device
+    let signing = try Curve25519.Signing.PrivateKey(rawRepresentation: hex(v["initiatorDevicePrivate"] as! String))
+    let shake = try Seal2.DeviceHandshake(deviceId: v["from"] as! String, signing: signing, to: v["to"] as! String, macX: base64urlEncoded(Data(repeating: 7, count: 32)), ephemeral: hex(v["initiatorPrivate"] as! String))
+    #expect(throws: Seal2.Failure.unproven) { try shake.finish(accept: v["accept"] as! [String: Any]) }
+  }
+
+  @Test("ids and words: a key's device id, and the six words both screens show")
+  func idsAndWords() throws {
+    let v = try Vectors.load().device
+    let a = (v["initiatorJwk"] as! [String: String])["x"]!
+    let b = (v["responderJwk"] as! [String: String])["x"]!
+    #expect(Seal2.deviceId(x: a) == v["from"] as! String)
+    #expect(Seal2.deviceId(x: b) == v["to"] as! String)
+    #expect(Seal2.keyWords(a, b) == ["pole", "oyster", "try", "split", "air", "prize"])
+    #expect(Seal2.keyWords(b, a) == Seal2.keyWords(a, b))
+    #expect(FingerprintWords.all.count == 2048)
+    let list = Data((FingerprintWords.all.joined(separator: "\n") + "\n").utf8)
+    #expect(Data(SHA256.hash(data: list)).map { String(format: "%02x", $0) }.joined() == "2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda")
+  }
 }

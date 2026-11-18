@@ -99,6 +99,24 @@ export const isDeviceKey = (jwk: unknown): jwk is DeviceKey =>
 
 const thumbprintOf = (jwk: DeviceKey): Promise<Bytes> => sha256(utf8(JSON.stringify({ crv: jwk.crv, kty: jwk.kty, x: jwk.x })))
 
+/** Lexicographic over the bytes, as every implementation compares them. */
+const byteOrder = (x: Uint8Array, y: Uint8Array): number => {
+  for (let i = 0; i < Math.min(x.length, y.length); i += 1) if (x[i] !== y[i]) return x[i] - y[i]
+  return x.length - y.length
+}
+
+/**
+ * The words two devices show for their two KEYS, the same on both screens and on
+ * no other pair of keys. For a device whose id is not made from its key (a watch):
+ * compared once by the owner, they are what lets that key in (main/seal-watch-keys.ts).
+ * A key swapped on its way, either way, gives other words.
+ */
+export async function keyWords(a: DeviceKey, b: DeviceKey): Promise<KeyFingerprint> {
+  if (!isDeviceKey(a) || !isDeviceKey(b)) throw new Error('Not a device key')
+  const [low, high] = [await thumbprintOf(a), await thumbprintOf(b)].sort(byteOrder)
+  return fingerprintOfDigest(await sha256(utf8(`${SEAL2_LABEL} key words`), u8(0), low, high))
+}
+
 /** The account device id of a key: the same uuid account-v2.ts · deviceIdFor gives. */
 export async function deviceIdOf(jwk: DeviceKey): Promise<string> {
   const bytes = (await sha256(await thumbprintOf(jwk))).slice(0, 16)
@@ -348,6 +366,12 @@ export interface AcceptedDeviceSeal2 extends AcceptedSeal2 {
 export interface DeviceAcceptInput extends HandshakeOptions {
   readonly self: DeviceSigner
   readonly verify: DeviceVerifier
+  /**
+   * The one key this side holds for a device whose id is not its key's own (a
+   * watch's id is a random uuid): only a hello carrying exactly that key is read.
+   * Absent, or null for that id: only an id made from its key is.
+   */
+  keyOf?(deviceId: string): Promise<DeviceKey | null>
 }
 
 /** The dialled desktop's side. Null for a hello that is not to this device, or whose key is not its sender's. */
@@ -359,7 +383,11 @@ export async function acceptDeviceHandshake(hello: unknown, input: DeviceAcceptI
   if (typeof hello.from !== 'string' || !UUID.test(hello.from) || !isDeviceKey(hello.jwk)) return null
   const jwk: DeviceKey = { kty: 'OKP', crv: 'Ed25519', x: hello.jwk.x }
   const from = hello.from
-  if ((await deviceIdOf(jwk)) !== from || from === self.deviceId) return null
+  if (from === self.deviceId) return null
+  if ((await deviceIdOf(jwk)) !== from) {
+    const held = (await input.keyOf?.(from).catch(() => null)) ?? null
+    if (held === null || held.x !== jwk.x) return null
+  }
   const theirs = fromB64u(hello.e)
   const mine = await ephemeralKey(input.ephemeral)
   const secret = await sharedSecret(mine.key, theirs)

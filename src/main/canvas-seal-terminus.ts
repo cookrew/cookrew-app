@@ -7,7 +7,7 @@ import { relayedRequest } from './host-gate'
 import { bodiless } from './http-compress'
 import { RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER } from './relay-device'
 import { DOOR_MARKER } from '../shared/remote-unlock'
-import { acceptCodeHandshake, acceptDeviceHandshake, offersSeal2, type AcceptedSeal2, type DeviceSigner, type DeviceVerifier } from '../shared/seal2/handshake'
+import { acceptCodeHandshake, acceptDeviceHandshake, offersSeal2, type AcceptedSeal2, type DeviceKey, type DeviceSigner, type DeviceVerifier } from '../shared/seal2/handshake'
 import { HTTP_KIND, readRequest } from '../shared/seal2/http'
 import { ABORT } from '../shared/seal2/spec'
 import type { Seal2Stream } from '../shared/seal2/stream'
@@ -87,6 +87,8 @@ export interface SealDeviceDeps {
    * not)? Asked again as its session is confirmed: the hello's `trusted` may have waited on cookrew.dev meanwhile.
    */
   admits?(deviceId: string): boolean
+  /** The one key held for a device whose id is not made from its key (a watch whose words the owner confirmed). */
+  keyOf?(deviceId: string): Promise<DeviceKey | null>
 }
 
 /** A v2 session was confirmed: from here that caller is expected to send nothing in the clear. */
@@ -556,8 +558,10 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
   const deviceHello = async (body: Record<string, unknown>, response: http.ServerResponse, outer: SealOuter): Promise<void> => {
     const self = deps.device?.self() ?? null
     if (deps.device === undefined || self === null) return reply(response, 403, { error: 'no device seal here' })
-    const accepted = await acceptDeviceHandshake(body, { self, verify: deps.device.verify })
-    if (accepted === null) return reply(response, 400, { error: 'not a hello' })
+    const accepted = await acceptDeviceHandshake(body, { self, verify: deps.device.verify, ...(deps.device.keyOf ? { keyOf: deps.device.keyOf } : {}) })
+    // A key this Mac does not hold for that id (a watch whose words the owner has not confirmed yet) is told no, as
+    // a refusal: the watch keeps its old way and asks again later.
+    if (accepted === null) return reply(response, 403, { error: 'not let in' })
     const { deviceId } = accepted.peer
     // The relay names who sent this; a hello in another device's name is not believed.
     if (outer.device !== undefined && outer.device !== deviceId) return reply(response, 403, { error: 'not that device' })

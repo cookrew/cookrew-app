@@ -71,11 +71,11 @@ private struct Refusal: Decodable {
 }
 
 /** The one pairing call: no token yet, one address. */
-public func claimWatch(base: URL, code: String, session: URLSession = .shared) async throws -> ClaimReply {
+public func claimWatch(base: URL, code: String, device: WatchDevice? = nil, session: URLSession = .shared) async throws -> ClaimReply {
   var request = URLRequest(url: base.appending(path: "api/watch/claim"), timeoutInterval: 12)
   request.httpMethod = "POST"
   request.setValue("application/json", forHTTPHeaderField: "content-type")
-  request.httpBody = try JSONSerialization.data(withJSONObject: ["code": code])
+  request.httpBody = try JSONSerialization.data(withJSONObject: ["code": code].merging(device?.sealFields ?? [:]) { first, _ in first })
   let (data, response): (Data, URLResponse)
   do {
     (data, response) = try await session.data(for: request)
@@ -137,7 +137,10 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   private var sticky = 0
   private var proven: [URL: Date] = [:]
 
-  public init(bases: [URL], token: String, session: URLSession = .shared, relay: RelayPass? = nil, guarded: Bool? = nil) {
+  private let sealer: WatchSealer?
+
+  public init(bases: [URL], token: String, session: URLSession = .shared, relay: RelayPass? = nil, guarded: Bool? = nil, sealer: WatchSealer? = nil) {
+    self.sealer = sealer
     self.guarded = guarded ?? (relay != nil)
     self.bases = bases
     self.token = token
@@ -280,6 +283,17 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
       if !query.isEmpty { url.append(queryItems: query) }
       let relayed = onRelay(url)
       do {
+        // The relay road, sealed once the Mac lets this watch in (WatchSeal.swift); nil is the old way.
+        if relayed, let sealer {
+          var headers = ["authorization": "Bearer \(token)"]
+          if let tag { headers["if-none-match"] = tag }
+          if payload != nil { headers["content-type"] = "application/json" }
+          let inner = "/\(path)" + (query.isEmpty ? "" : "?" + (url.query(percentEncoded: true) ?? ""))
+          if let answer = try await sealer.exchange(base: bases[index], method: method, path: inner, headers: headers, body: payload) {
+            stick(index)
+            return answer
+          }
+        }
         let relaySession = relayed ? await relay?.token() : nil
         guard var answer = try await exchange(request(url, method, payload: payload, tag: tag, relaySession: relaySession)) else { continue }
         if let relaySession, sessionRefused(answer) {

@@ -5,18 +5,25 @@
 //   npx vite-node scripts/seal-v2-capture/swift-world.ts
 import { createServer, type Server } from 'node:http'
 import { loopbackDialer } from '../../src/main/canvas-bridge'
+import { cameOverRelayLine } from '../../src/main/seal-proof'
 import { isSealPath, routeSeal, type SealTerminus } from '../../src/main/canvas-seal-terminus'
 import { connectCodeId, newConnectCode } from '../../src/shared/canvas-seal'
 import { RELAY_SESSION_HEADER } from '../../src/shared/machine-relay'
-import { startRelayWorld } from '../../tests/support/seal2-relay-world'
+import { createPrivateKey, createPublicKey, randomBytes } from 'node:crypto'
+import { createInterface } from 'node:readline'
+import { startRelayWorld, verifyDevice } from '../../tests/support/seal2-relay-world'
 
 // Past one stream's window (1 MiB) both ways, so credit has to flow.
 const PICTURE = Buffer.from(Array.from({ length: 3_000_000 }, (_, i) => i % 251))
+
+/** Every request that reached the Mac, and whether it came down the relay line in the clear. */
+const seen: Array<{ path: string; plain: boolean }> = []
 
 const companion = (terminus: () => SealTerminus | undefined): Server =>
   createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://mac')
     if (isSealPath(url.pathname)) return void routeSeal(request, response, terminus())
+    seen.push({ path: url.pathname, plain: cameOverRelayLine(request) })
     if (url.pathname === '/api/picture') {
       response.writeHead(200, { 'content-type': 'image/png' })
       response.end(PICTURE)
@@ -32,7 +39,39 @@ const companion = (terminus: () => SealTerminus | undefined): Server =>
 
 const code = newConnectCode()
 const id = await connectCodeId(code)
-const world = await startRelayWorld(companion, (port) => ({ codeFor: (asked) => (asked === id ? code : null), dial: loopbackDialer(port) }))
-console.log(JSON.stringify({ prefix: world.prefix(), header: RELAY_SESSION_HEADER, value: world.phoneSession[RELAY_SESSION_HEADER], code: Buffer.from(code).toString('base64url') }))
-process.stdin.resume()
+// A watch: an Ed25519 account key from a seed the Swift probe is handed, and the phone session's random
+// device id as its id (a watch's id is not its key's). Its key is let in only once "confirm" comes on stdin,
+// as the owner's click on the Mac's six words.
+const seed = randomBytes(32)
+const watchKey = createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), seed]), format: 'der', type: 'pkcs8' })
+const watchX = (createPublicKey(watchKey).export({ format: 'jwk' }) as { x: string }).x
+let confirmed = false
+let watchId = ''
+const world = await startRelayWorld(companion, (port, mac) => ({
+  codeFor: (asked) => (asked === id ? code : null),
+  dial: loopbackDialer(port),
+  device: {
+    self: () => mac.signer,
+    verify: verifyDevice,
+    trusted: async (deviceId) => confirmed && deviceId === watchId,
+    keyOf: async (deviceId) => (confirmed && deviceId === watchId ? { kty: 'OKP', crv: 'Ed25519', x: watchX } : null)
+  }
+}))
+watchId = world.phoneDeviceId
+console.log(
+  JSON.stringify({
+    prefix: world.prefix(),
+    header: RELAY_SESSION_HEADER,
+    value: world.phoneSession[RELAY_SESSION_HEADER],
+    code: Buffer.from(code).toString('base64url'),
+    macId: world.macDevice.id,
+    macX: world.macDevice.jwk.x,
+    watchId,
+    watchSeed: seed.toString('hex')
+  })
+)
+createInterface({ input: process.stdin }).on('line', (line) => {
+  if (line.trim() === 'confirm') confirmed = true
+  console.log(JSON.stringify({ confirmed, seen }))
+})
 process.stdin.on('end', () => void world.close().then(() => process.exit(0)))

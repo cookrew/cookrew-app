@@ -7,11 +7,17 @@ public struct WatchSession: Equatable, Sendable {
   public let desktop: String
   public let bases: [Base]
   public let token: String
+  /** The Mac's key and words from the claim, when it can seal with this watch (WatchSeal.swift). */
+  public let seal: SealPeer?
+  /** A sealed session to this Mac has opened once: its relay road is sealed only, from then on. */
+  public let sealPinned: Bool
 
-  public init(desktop: String, bases: [Base], token: String) {
+  public init(desktop: String, bases: [Base], token: String, seal: SealPeer? = nil, sealPinned: Bool = false) {
     self.desktop = desktop
     self.bases = bases
     self.token = token
+    self.seal = seal
+    self.sealPinned = sealPinned
   }
 
   public var urls: [URL] { bases.compactMap { URL(string: $0.url) } }
@@ -33,6 +39,9 @@ public struct SessionShelf: Codable, Equatable, Sendable {
     public let key: String
     public let desktop: String
     public let bases: [Base]
+    /** Absent in what a watch from before sealing kept: it reads as no seal. */
+    public var seal: SealPeer?
+    public var sealPinned: Bool?
   }
 
   public private(set) var entries: [Entry] = []
@@ -45,7 +54,10 @@ public struct SessionShelf: Codable, Equatable, Sendable {
   /** A session paired just now: added, or in its own place if the machine was held, and gone into. */
   @discardableResult public mutating func put(_ session: WatchSession, goIn: Bool = true) -> String {
     let key = sessionKey(session)
-    let entry = Entry(key: key, desktop: session.desktop, bases: session.bases)
+    // Pinned stays pinned for the same Mac key; a new key starts over, and waits for the owner's words.
+    let was = entries.first { $0.key == key }
+    let pinned = session.sealPinned || (was?.sealPinned == true && was?.seal?.x == session.seal?.x && session.seal != nil)
+    let entry = Entry(key: key, desktop: session.desktop, bases: session.bases, seal: session.seal ?? was?.seal, sealPinned: pinned)
     if let at = entries.firstIndex(where: { $0.key == key }) { entries[at] = entry } else { entries.append(entry) }
     if goIn || active == nil { active = key }
     return key
@@ -64,6 +76,12 @@ public struct SessionShelf: Codable, Equatable, Sendable {
   }
 
   public func entry(_ key: String?) -> Entry? { entries.first { $0.key == key } }
+
+  /** This machine's relay road went sealed: from now on it is sealed only. */
+  public mutating func markSealed(_ key: String) {
+    guard let at = entries.firstIndex(where: { $0.key == key }), entries[at].seal != nil else { return }
+    entries[at].sealPinned = true
+  }
 }
 
 /** An address that stays on the owner's own network or tailnet: the only place plain HTTP may go. */
@@ -211,7 +229,14 @@ public struct SessionVault: Sendable {
 
   public func session(_ key: String?) -> WatchSession? {
     guard let entry = shelf().entry(key), let token = token(entry.key) else { return nil }
-    return WatchSession(desktop: entry.desktop, bases: entry.bases, token: token)
+    return WatchSession(desktop: entry.desktop, bases: entry.bases, token: token, seal: entry.seal, sealPinned: entry.sealPinned ?? false)
+  }
+
+  /** Kept the moment the first sealed session to this machine opens (WatchSealer's onPinned). */
+  public func markSealed(_ key: String) {
+    var shelf = shelf()
+    shelf.markSealed(key)
+    store(shelf)
   }
 
   /** The machine the watch is in. */

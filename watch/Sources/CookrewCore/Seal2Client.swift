@@ -87,13 +87,32 @@ public actor Seal2Client {
   /** The handshake on the connect code, then the carrier. Throws `refused` for a code the Mac does not hold or cannot prove. */
   public static func open(route: Seal2Route, code: Data, http: URLSession = .shared) async throws -> Seal2Client {
     let shake = try Seal2.CodeHandshake(code: code)
-    let (status, said) = try await post(route, http, "/~seal/hello", json: shake.hello.json)
-    if status == 403 { throw Seal2ClientError.refused("code") }
-    guard status == 200, let session = said["session"] as? String, let accept = said["accept"] as? [String: Any],
-          let v = accept["v"] as? Int, let e = accept["e"] as? String, let proof = accept["proof"] as? String else { throw Seal2ClientError.badAnswer }
+    return try await open(route: route, http: http, hello: shake.hello.json) { accept in
+      guard let v = accept["v"] as? Int, let e = accept["e"] as? String, let proof = accept["proof"] as? String else { throw Seal2ClientError.badAnswer }
+      return try shake.finish(acceptV: v, e: e, proof: proof)
+    }
+  }
+
+  /**
+   * Device mode, as a watch: signed with the watch's account key, and only to the Mac whose key its
+   * claim answer gave (`macX`). The Mac lets it in only once the owner confirmed the words there.
+   */
+  public static func open(route: Seal2Route, device shake: Seal2.DeviceHandshake, http: URLSession = .shared) async throws -> Seal2Client {
+    try await open(route: route, http: http, hello: shake.hello) { accept in try shake.finish(accept: accept) }
+  }
+
+  private static func open(
+    route: Seal2Route,
+    http: URLSession,
+    hello: [String: Any],
+    finish: ([String: Any]) throws -> (session: Seal2.Session, finish: [String: String])
+  ) async throws -> Seal2Client {
+    let (status, said) = try await post(route, http, "/~seal/hello", json: hello)
+    if status == 403 { throw Seal2ClientError.refused((said["error"] as? String) ?? "code") }
+    guard status == 200, let session = said["session"] as? String, let accept = said["accept"] as? [String: Any] else { throw Seal2ClientError.badAnswer }
     let done: (session: Seal2.Session, finish: [String: String])
     do {
-      done = try shake.finish(acceptV: v, e: e, proof: proof)
+      done = try finish(accept)
     } catch {
       throw Seal2ClientError.refused("proof")
     }
@@ -187,6 +206,8 @@ public actor Seal2Client {
     }
     waiting[stream] = pending
   }
+
+  public func isOpen() -> Bool { ended == nil && !closing }
 
   /** Says goodbye, and lets the goodbye leave before the line is let go. */
   public func close() async {
