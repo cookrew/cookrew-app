@@ -1,6 +1,6 @@
 import type { CookrewApi } from '../api'
 import { SHARE_COPY } from '../../../shared/account-guide-copy'
-import type { SharedKey, ShareWhere } from '../../../shared/share-devices'
+import type { PendingKey, SharedKey, ShareWhere } from '../../../shared/share-devices'
 
 /**
  * SHARE WITH MY DEVICES, OUTSIDE REACT.
@@ -17,6 +17,11 @@ import type { SharedKey, ShareWhere } from '../../../shared/share-devices'
  * Failures stay on screen until what failed is answered: a read problem until
  * a read works, an issue problem until an issue works, a revoke problem until
  * that key is revoked or no longer listed. One kind never clears another.
+ *
+ * A window that reloads loses even this store, so main keeps what must survive
+ * it (share-keys.ts): whether an issue is still running (the store reads again
+ * until it is not), the key last made until Done, and every key left behind by
+ * a failed or crashed issue, which warns until the owner clears it.
  */
 
 export interface Issued {
@@ -29,6 +34,7 @@ export type ShareProblem =
   | { readonly from: 'read'; readonly text: string }
   | { readonly from: 'issue'; readonly text: string }
   | { readonly from: 'revoke'; readonly id: string; readonly text: string }
+  | { readonly from: 'pending'; readonly name: string; readonly text: string }
 
 export interface ShareDevicesState {
   readonly keys: readonly SharedKey[]
@@ -38,9 +44,13 @@ export interface ShareDevicesState {
   readonly issued: Issued | null
   readonly issuing: boolean
   readonly revoking: readonly string[]
+  /** Keys left behind by an issue that went wrong: warned of until cleared by hand. */
+  readonly pending: readonly PendingKey[]
+  /** Left-behind names with a revoke-and-check or a clear in flight. */
+  readonly resolving: readonly string[]
 }
 
-export type ShareBridge = Partial<Pick<CookrewApi, 'routeShareList' | 'routeShareIssue' | 'routeShareRevoke'>>
+export type ShareBridge = Partial<Pick<CookrewApi, 'routeShareList' | 'routeShareIssue' | 'routeShareRevoke' | 'routeShareResolve' | 'routeShareClear' | 'routeShareDone'>>
 
 export interface ShareDevicesStore {
   getSnapshot: () => ShareDevicesState
@@ -48,10 +58,16 @@ export interface ShareDevicesStore {
   read: () => Promise<void>
   issue: (device: string, dailyUsd: number) => Promise<void>
   revoke: (id: string) => Promise<void>
+  /** Revoke every key of a left-behind name and check no add of it is still running. */
+  resolve: (name: string) => Promise<void>
+  /** Clear a left-behind name main says may be cleared. */
+  clear: (name: string) => Promise<void>
   done: () => void
 }
 
-const EMPTY: ShareDevicesState = { keys: [], where: null, problems: [], issued: null, issuing: false, revoking: [] }
+const EMPTY: ShareDevicesState = { keys: [], where: null, problems: [], issued: null, issuing: false, revoking: [], pending: [], resolving: [] }
+/** While main is still making a key (a reloaded window), how often to look again. */
+const ISSUING_POLL_MS = 1000
 
 type Failed = { ok?: unknown; why?: unknown; reason?: unknown } | null | undefined
 
@@ -64,7 +80,8 @@ const problemOf = (answer: Failed): string => {
 /** A bridge call that throws before it returns a promise is a failure like any other. */
 const call = <T>(send: () => Promise<T>): Promise<T> => new Promise<T>((resolve) => resolve(send()))
 
-const sameSlot = (a: ShareProblem, b: ShareProblem): boolean => a.from === b.from && (a.from !== 'revoke' || (b.from === 'revoke' && a.id === b.id))
+const sameSlot = (a: ShareProblem, b: ShareProblem): boolean =>
+  a.from === b.from && (a.from !== 'revoke' || (b.from === 'revoke' && a.id === b.id)) && (a.from !== 'pending' || (b.from === 'pending' && a.name === b.name))
 
 const withProblem = (problems: readonly ShareProblem[], problem: ShareProblem): readonly ShareProblem[] => [...problems.filter((p) => !sameSlot(p, problem)), problem]
 
@@ -78,11 +95,28 @@ const isKey = (value: unknown): value is SharedKey => {
   return typeof k?.id === 'string' && typeof k.device === 'string'
 }
 
-type Listed = { ok: true; keys: readonly SharedKey[]; where: ShareWhere } | { ok: false; text: string }
+const isPending = (value: unknown): value is PendingKey => {
+  const p = value as Partial<PendingKey> | null | undefined
+  return typeof p?.name === 'string' && typeof p.device === 'string' && typeof p.clearable === 'boolean'
+}
 
+const isIssued = (value: unknown): value is Issued => {
+  const h = value as Partial<Issued> | null | undefined
+  return typeof h?.id === 'string' && typeof h.key === 'string' && h.key !== '' && typeof h.device === 'string'
+}
+
+type Listed =
+  | { ok: true; keys: readonly SharedKey[]; where: ShareWhere; pending: readonly PendingKey[]; issuing: boolean; handover: Issued | null }
+  | { ok: false; text: string }
+
+/** An older main sends no pending, issuing or handover: absent reads as none; present and malformed is a failure. */
 function listedFrom(answer: unknown): Listed {
-  const a = answer as { ok?: unknown; keys?: unknown; where?: unknown } | null | undefined
-  if (a?.ok === true && Array.isArray(a.keys) && a.keys.every(isKey) && isWhere(a.where)) return { ok: true, keys: a.keys, where: a.where }
+  const a = answer as { ok?: unknown; keys?: unknown; where?: unknown; pending?: unknown; issuing?: unknown; handover?: unknown } | null | undefined
+  const pendingOk = a?.pending === undefined || (Array.isArray(a.pending) && a.pending.every(isPending))
+  const handoverOk = a?.handover === undefined || a.handover === null || isIssued(a.handover)
+  if (a?.ok === true && Array.isArray(a.keys) && a.keys.every(isKey) && isWhere(a.where) && pendingOk && handoverOk && (a.issuing === undefined || typeof a.issuing === 'boolean')) {
+    return { ok: true, keys: a.keys, where: a.where, pending: (a.pending as PendingKey[] | undefined) ?? [], issuing: a.issuing === true, handover: (a.handover as Issued | null | undefined) ?? null }
+  }
   return { ok: false, text: a?.ok === true ? SHARE_COPY.UNAVAILABLE : problemOf(a as Failed) }
 }
 
@@ -96,8 +130,16 @@ function madeFrom(answer: unknown): Made {
   return { ok: false, text: a?.ok === true ? SHARE_COPY.UNAVAILABLE : problemOf(a as Failed) }
 }
 
-export function createShareDevicesStore(bridge: ShareBridge): ShareDevicesStore {
+export function createShareDevicesStore(
+  bridge: ShareBridge,
+  schedule: (fn: () => void, ms: number) => void = (fn, ms) => void setTimeout(fn, ms)
+): ShareDevicesStore {
   let state = EMPTY
+  /** Keys the owner said Done to here: a read that began before main heard it must not show them again. */
+  let doneIds: readonly string[] = []
+  let polling = false
+  /** An issue this store sent and is waiting on (as against one main reports from before a reload). */
+  let issuingHere = false
   const listeners = new Set<() => void>()
   /** The last read handed out, the newest read whose answer was applied, and the reads that began before a change landed. */
   let started = 0
@@ -116,9 +158,21 @@ export function createShareDevicesStore(bridge: ShareBridge): ShareDevicesStore 
     const listed = listedFrom(answer)
     if (!listed.ok) return fail({ from: 'read', text: listed.text })
     const listedIds = new Set(listed.keys.map((k) => k.id))
-    // A revoke that failed for a key no longer listed has nothing left to report.
-    const problems = state.problems.filter((p) => p.from === 'issue' || (p.from === 'revoke' && listedIds.has(p.id)))
-    set({ keys: listed.keys, where: listed.where, problems })
+    const pendingNames = new Set(listed.pending.map((p) => p.name))
+    // A revoke that failed for a key no longer listed has nothing left to report; the same for a cleared name.
+    const problems = state.problems.filter((p) => p.from === 'issue' || (p.from === 'revoke' && listedIds.has(p.id)) || (p.from === 'pending' && pendingNames.has(p.name)))
+    // Main still holds the key it made for a window that reloaded before it arrived.
+    const handover = listed.handover && !doneIds.includes(listed.handover.id) && listedIds.has(listed.handover.id) ? listed.handover : null
+    const issued = state.issued ?? handover
+    set({ keys: listed.keys, where: listed.where, problems, pending: listed.pending, issued, issuing: issuingHere || listed.issuing })
+    // Main is making a key this store did not ask for (the window reloaded mid-issue): look again until it is done.
+    if (listed.issuing && !issuingHere && !polling) {
+      polling = true
+      schedule(() => {
+        polling = false
+        void read()
+      }, ISSUING_POLL_MS)
+    }
   }
 
   const read = (): Promise<void> => {
@@ -147,14 +201,43 @@ export function createShareDevicesStore(bridge: ShareBridge): ShareDevicesStore 
       return Promise.resolve()
     }
     set({ issuing: true })
+    issuingHere = true
     return call(() => send({ device, dailyUsd })).then(
       (answer) => {
+        issuingHere = false
         const made = madeFrom(answer)
-        if (!made.ok) return fail({ from: 'issue', text: made.text }, { issuing: false })
+        // A failed issue may have left a key behind: the read brings its warning.
+        if (!made.ok) {
+          fail({ from: 'issue', text: made.text }, { issuing: false })
+          return void read()
+        }
         const keys = [...state.keys.filter((k) => k.id !== made.shared.id), made.shared]
         changed({ issuing: false, issued: made.issued, keys, problems: state.problems.filter((p) => p.from !== 'issue') })
       },
-      () => fail({ from: 'issue', text: SHARE_COPY.UNAVAILABLE }, { issuing: false })
+      () => {
+        issuingHere = false
+        fail({ from: 'issue', text: SHARE_COPY.UNAVAILABLE }, { issuing: false })
+        void read()
+      }
+    )
+  }
+
+  /** Revoke-and-check or clear for one left-behind name: one in flight per name, the answer kept across remounts. */
+  const onPending = (name: string, send: ((name: string) => Promise<unknown>) | undefined): Promise<void> => {
+    if (state.resolving.includes(name)) return Promise.resolve()
+    if (typeof send !== 'function') {
+      fail({ from: 'pending', name, text: SHARE_COPY.UNAVAILABLE })
+      return Promise.resolve()
+    }
+    set({ resolving: [...state.resolving, name] })
+    const settle = (): readonly string[] => state.resolving.filter((value) => value !== name)
+    return call(() => send(name)).then(
+      (answer) => {
+        const a = answer as Failed
+        if (a?.ok !== true) fail({ from: 'pending', name, text: problemOf(a) }, { resolving: settle() })
+        else changed({ resolving: settle(), problems: state.problems.filter((p) => !(p.from === 'pending' && p.name === name)) })
+      },
+      () => fail({ from: 'pending', name, text: SHARE_COPY.UNAVAILABLE }, { resolving: settle() })
     )
   }
 
@@ -193,7 +276,16 @@ export function createShareDevicesStore(bridge: ShareBridge): ShareDevicesStore 
     read,
     issue,
     revoke,
-    done: () => set({ issued: null })
+    resolve: (name) => onPending(name, bridge.routeShareResolve),
+    clear: (name) => onPending(name, bridge.routeShareClear),
+    done: () => {
+      const id = state.issued?.id
+      if (id === undefined) return
+      doneIds = [...doneIds, id]
+      set({ issued: null })
+      // Main forgets the key too; nothing to wait for, and a failure leaves only the copy in main's memory.
+      void call<unknown>(() => bridge.routeShareDone?.(id) ?? Promise.resolve()).catch(() => undefined)
+    }
   }
 }
 

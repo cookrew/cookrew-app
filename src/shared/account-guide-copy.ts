@@ -70,7 +70,17 @@ export const SHARE_COPY = {
   DONE: 'Done',
   REVOKE: 'Revoke',
   NONE: 'No device has a key yet.',
-  UNAVAILABLE: 'Sharing needs Magpie on this computer.'
+  UNAVAILABLE: 'Sharing needs Magpie on this computer.',
+  SWITCHED_OFF: 'Existing device keys still work. Revoke a key to cut off that device. To make a new one, turn on Magpie and Magpie remote in Launch settings.',
+  /** A key being made when something went wrong (share-intents.ts): it warns until cleared by hand. */
+  PENDING_HEAD: 'A key may have been left behind',
+  PENDING: (device: string, at: string): string => `Making a key for “${device}” did not finish (${at}). Magpie may hold a key of that name that nobody was given. Revoke and check takes back every key of that name and looks for a key still being made.`,
+  PENDING_RESOLVE: 'Revoke and check',
+  PENDING_RESOLVING: 'Checking…',
+  PENDING_LEFT: (left: number): string => `${left} key(s) of that name could not be revoked. Try again, or revoke them in Magpie.`,
+  PENDING_LIVE: (live: number): string => `${live} Magpie command(s) still making that key are running. Wait for them to end, then check again.`,
+  PENDING_CLEAR: 'Clear warning',
+  PENDING_CLEAR_NOTE: 'Clearing is offered once a revoke left no key of that name and no command was still making one. A request already inside Magpie could still finish after the check: that window is the known limit.'
 } as const
 
 /** The two Magpie switches: Launch settings and the first-run guide alike (routing/MagpieSwitches.tsx). */

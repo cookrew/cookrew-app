@@ -588,6 +588,9 @@ const api = {
   routeShareList: () => ipcRenderer.invoke('route:share-list'),
   routeShareIssue: (input: { device: string; dailyUsd: number }) => ipcRenderer.invoke('route:share-issue', input),
   routeShareRevoke: (id: string) => ipcRenderer.invoke('route:share-revoke', id),
+  routeShareResolve: (name: string) => ipcRenderer.invoke('route:share-resolve', name),
+  routeShareClear: (name: string) => ipcRenderer.invoke('route:share-clear', name),
+  routeShareDone: (id: string) => ipcRenderer.invoke('route:share-done', id),
   terminalRoute: (terminalId: string) => ipcRenderer.invoke('terminal:route', terminalId),
   terminalRouteSet: (terminalId: string, route: string) => ipcRenderer.invoke('terminal:route-set', terminalId, route),
   onRoute: (cb: (state: unknown) => void) => {

@@ -16,7 +16,7 @@ import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
 import type { CardRoute, CardRouteState, RouteState } from '../../shared/route';
-import type { ShareIssueAnswer, ShareListAnswer, ShareRevokeAnswer } from '../../shared/share-devices';
+import type { ShareIssueAnswer, ShareListAnswer, ShareResolveAnswer, ShareRevokeAnswer } from '../../shared/share-devices';
 import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
 import type { LaunchOffer, LaunchTune } from '../../shared/launch-tune'
 import type { TranslateResult } from '../../shared/translate'
@@ -575,6 +575,12 @@ export interface CookrewApi {
   routeShareList?: () => Promise<ShareListAnswer | { ok: false; reason: string }>;
   routeShareIssue?: (input: { device: string; dailyUsd: number }) => Promise<ShareIssueAnswer | { ok: false; reason: string }>;
   routeShareRevoke?: (id: string) => Promise<ShareRevokeAnswer | { ok: false; reason: string }>;
+  /** Revoke every key of a name a failed issue left behind, then check no add of it still runs (share-keys.ts). */
+  routeShareResolve?: (name: string) => Promise<ShareResolveAnswer | { ok: false; reason: string }>;
+  /** Clear a left-behind name once main allows it. */
+  routeShareClear?: (name: string) => Promise<ShareRevokeAnswer | { ok: false; reason: string }>;
+  /** The owner copied the key: main forgets its copy. */
+  routeShareDone?: (id: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
   terminalRoute?: (terminalId: string) => Promise<CardRouteState>;
   terminalRouteSet?: (terminalId: string, route: CardRoute) => Promise<CardRouteState | { error: string }>;
   onRoute?: (cb: (state: RouteState) => void) => () => void;

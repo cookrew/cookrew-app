@@ -510,7 +510,7 @@ export function createDemoApi(): CookrewApi {
     },
     magpieWebOpen: () => Promise.resolve({ ok: true as const, url: 'about:blank#magpie-settings-demo', port: 3431 }),
     // Share with my devices: a demo key list in memory, and a key that is plainly not one.
-    routeShareList: () => Promise.resolve({ ok: true as const, keys: demoShared, where: { onNetwork: false, urls: ['http://192.168.1.20:3425', 'http://100.101.102.103:3425'] } }),
+    routeShareList: () => Promise.resolve({ ok: true as const, keys: demoShared, where: { onNetwork: false, urls: ['http://192.168.1.20:3425', 'http://100.101.102.103:3425'] }, pending: [], issuing: false, handover: null }),
     routeShareIssue: ({ device }) => {
       const slug = device.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'device'
       const shared = { id: `demo${String(demoShared.length).padStart(20, '0')}`, name: `device-${slug}`, device: slug, limit: '$0.00/$20.00 per day' }
@@ -521,6 +521,9 @@ export function createDemoApi(): CookrewApi {
       demoShared = demoShared.filter((k) => k.id !== id)
       return Promise.resolve({ ok: true as const })
     },
+    routeShareResolve: () => Promise.resolve({ ok: true as const, left: 0, live: 0 }),
+    routeShareClear: () => Promise.resolve({ ok: true as const }),
+    routeShareDone: () => Promise.resolve({ ok: true as const }),
     terminalRoute: (terminalId) =>
       Promise.resolve(
         cardRoutes.get(terminalId) ??

@@ -24,8 +24,37 @@ export interface ShareWhere {
   readonly urls: readonly string[]
 }
 
-export type ShareListAnswer = { readonly ok: true; readonly keys: readonly SharedKey[]; readonly where: ShareWhere } | { readonly ok: false; readonly why: string }
+/**
+ * A key that was being made when something went wrong (main/route/share-intents.ts).
+ * It warns until cleared by hand, and can be cleared only once a revoke pass left
+ * none of its keys and a process check found no add of its name still running.
+ */
+export interface PendingKey {
+  readonly name: string
+  readonly device: string
+  readonly at: string
+  readonly revoked: { readonly at: string; readonly left: number } | null
+  readonly checked: { readonly at: string; readonly live: number } | null
+  readonly clearable: boolean
+}
 
-/** Issuance stays unavailable until crash-safe key ownership and recovery are implemented. */
-export const SHARE_ISSUANCE_AVAILABLE = false
+/** The key last made, held in main's memory until Done, so a reloaded window can still show it once more. */
+export interface ShareHandover {
+  readonly id: string
+  readonly device: string
+  readonly key: string
+}
+
+export type ShareListAnswer =
+  | {
+      readonly ok: true
+      readonly keys: readonly SharedKey[]
+      readonly where: ShareWhere
+      readonly pending: readonly PendingKey[]
+      readonly issuing: boolean
+      readonly handover: ShareHandover | null
+    }
+  | { readonly ok: false; readonly why: string }
+
+export type ShareResolveAnswer = { readonly ok: true; readonly left: number; readonly live: number } | { readonly ok: false; readonly why: string }
 export const DEFAULT_DAILY_USD = 20

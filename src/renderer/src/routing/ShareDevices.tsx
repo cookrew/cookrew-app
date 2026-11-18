@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { cookrew } from '../api'
 import { SHARE_COPY } from '../../../shared/account-guide-copy'
-import { DEFAULT_DAILY_USD, SHARE_ISSUANCE_AVAILABLE, type SharedKey, type ShareWhere } from '../../../shared/share-devices'
+import { DEFAULT_DAILY_USD, type PendingKey, type SharedKey, type ShareWhere } from '../../../shared/share-devices'
 import { problemText, shareDevicesStoreFor, type Issued, type ShareDevicesStore } from './share-devices-store'
 
 /**
@@ -31,6 +31,27 @@ function IssuedKey({ issued, onDone }: { issued: Issued; onDone: () => void }): 
   )
 }
 
+/** One key a failed issue may have left behind: it stays until cleared, and can be cleared only once main allows it. */
+function PendingRow({ pending, busy, onResolve, onClear }: { pending: PendingKey; busy: boolean; onResolve: () => void; onClear: () => void }): React.JSX.Element {
+  return (
+    <div className="cr-routing-bad" role="alert" data-pending={pending.name}>
+      <b>{SHARE_COPY.PENDING_HEAD}</b>
+      <p className="small">{SHARE_COPY.PENDING(pending.device, pending.at)}</p>
+      {pending.revoked && pending.revoked.left > 0 && <p className="small">{SHARE_COPY.PENDING_LEFT(pending.revoked.left)}</p>}
+      {pending.checked && pending.checked.live > 0 && <p className="small">{SHARE_COPY.PENDING_LIVE(pending.checked.live)}</p>}
+      <span>
+        <button type="button" className="cr-routing-btn" disabled={busy} onClick={onResolve}>
+          {busy ? SHARE_COPY.PENDING_RESOLVING : SHARE_COPY.PENDING_RESOLVE}
+        </button>{' '}
+        <button type="button" className="cr-routing-btn" disabled={busy || !pending.clearable} onClick={onClear}>
+          {SHARE_COPY.PENDING_CLEAR}
+        </button>
+      </span>
+      <small>{SHARE_COPY.PENDING_CLEAR_NOTE}</small>
+    </div>
+  )
+}
+
 export function ShareDevicesView({
   keys,
   where,
@@ -39,10 +60,14 @@ export function ShareDevicesView({
   busy,
   sharingEnabled = true,
   revoking = [],
+  pending = [],
+  resolving = [],
   onIssue,
   onRevoke,
   onCheck,
-  onDone
+  onDone,
+  onResolve = () => {},
+  onClear = () => {}
 }: {
   keys: readonly SharedKey[]
   where: ShareWhere | null
@@ -51,10 +76,14 @@ export function ShareDevicesView({
   busy: boolean
   sharingEnabled?: boolean
   revoking?: readonly string[]
+  pending?: readonly PendingKey[]
+  resolving?: readonly string[]
   onIssue: (device: string, dailyUsd: number) => void
   onRevoke: (id: string) => void
   onCheck: () => void
   onDone: () => void
+  onResolve?: (name: string) => void
+  onClear?: (name: string) => void
 }): React.JSX.Element {
   const [device, setDevice] = useState('')
   const [daily, setDaily] = useState(String(DEFAULT_DAILY_USD))
@@ -62,8 +91,10 @@ export function ShareDevicesView({
     <div className="cr-routing-share">
       <div className="cr-routing-seg">{SHARE_COPY.HEAD}</div>
       <p className="small">{SHARE_COPY.LEDE}</p>
-      {!SHARE_ISSUANCE_AVAILABLE && <p className="small">Creating device keys is temporarily unavailable. Existing keys can still be revoked.</p>}
-      {!sharingEnabled && <p className="small">Existing device keys still work. Revoke a key to cut off that device.</p>}
+      {pending.map((p) => (
+        <PendingRow key={p.name} pending={p} busy={resolving.includes(p.name)} onResolve={() => onResolve(p.name)} onClear={() => onClear(p.name)} />
+      ))}
+      {!sharingEnabled && <p className="small">{SHARE_COPY.SWITCHED_OFF}</p>}
       {where && !where.onNetwork && (
         <p className="cr-routing-bad">
           {SHARE_COPY.OFF_NETWORK}{' '}
@@ -85,7 +116,7 @@ export function ShareDevicesView({
       )}
       {issued ? (
         <IssuedKey key={issued.id} issued={issued} onDone={onDone} />
-      ) : sharingEnabled && SHARE_ISSUANCE_AVAILABLE ? (
+      ) : sharingEnabled ? (
         <form
           className="cr-share-form"
           onSubmit={(e) => {
@@ -139,6 +170,10 @@ export function ShareDevicesBound({ store, sharingEnabled }: { store: ShareDevic
       busy={state.issuing}
       sharingEnabled={sharingEnabled}
       revoking={state.revoking}
+      pending={state.pending}
+      resolving={state.resolving}
+      onResolve={(name) => void store.resolve(name)}
+      onClear={(name) => void store.clear(name)}
       onCheck={() => void store.read()}
       onDone={store.done}
       onIssue={(device, dailyUsd) => {

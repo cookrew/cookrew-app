@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { MAGPIE_PORT, privateHost, tailnetHost } from '../../shared/remote-magpie'
-import type { ShareIssueAnswer, SharedKey, ShareWhere } from '../../shared/share-devices'
+import type { PendingKey, ShareHandover, ShareIssueAnswer, SharedKey, ShareWhere } from '../../shared/share-devices'
 import type { DiscoveryEnv } from './discovery'
+import { INTENT_NAME_RE, type IntentStore, type ShareIntent } from './share-intents'
 
 /**
  * SHARING THIS COMPUTER'S MAGPIE WITH THE OWNER'S OTHER DEVICES.
@@ -15,8 +17,13 @@ import type { DiscoveryEnv } from './discovery'
  * gave it (both verbs take an id, not a name: magpie 0.1.3935). A cap that could
  * not be set takes the key back, so no uncapped key is ever left behind.
  *
- * Only keys this module made are listed or revoked: their names start with
- * `device-`. Keys the owner made by hand in Magpie (`solis-compare`) are theirs.
+ * Only keys this module made are listed or revoked: `device-<slug>--<32 hex>`
+ * (and `device-<slug>` from before recovery v1). Keys the owner made by hand in
+ * Magpie (`solis-compare`) are theirs.
+ *
+ * A key being made is written down first (share-intents.ts): if anything goes
+ * wrong between the add and the hand-over, every key of that random name is
+ * revoked by id and a warning stays until the owner clears it by hand.
  *
  * The key is handed to the owner's window once, to copy to the other device.
  * These calls are owner-only IPC and never a companion or relay route.
@@ -29,7 +36,10 @@ export const DAILY_USD_MAX = 1000
 const KEY_RE = /^sk-magpie-[A-Za-z0-9_-]{16,256}$/
 const ID_RE = /^[A-Za-z0-9]{8,64}$/
 const DEVICE_RE = /^[a-z0-9][a-z0-9-]{0,31}$/
-const DEVICE_NAME_RE = /^device-[a-z0-9][a-z0-9-]{0,31}$/
+/** Before recovery v1 a device key was named `device-<slug>`: still listed and revocable. */
+const LEGACY_NAME_RE = /^device-[a-z0-9][a-z0-9-]{0,31}$/
+/** Magpie's masked key column (0.1.3935): `sk-magpie-key-…5102ac`, the last characters of the key. */
+const MASK_TAIL_RE = /…([A-Za-z0-9_-]{4,})$/
 
 export interface MagpieAnswer {
   code: number
@@ -43,6 +53,8 @@ export interface KeyRow {
   id: string
   name: string
   limit: string | null
+  /** The key's last characters as Magpie shows them, or null when it shows none. */
+  tail: string | null
 }
 
 /** Magpie's `gateway-key list` table: columns are two or more spaces apart. */
@@ -57,10 +69,16 @@ export function parseKeyTable(text: string): KeyRow[] {
     const cells = line.trim().split(/\s{2,}/)
     // An unreadable row cannot safely be mistaken for an empty list during recovery.
     if (cells.length !== 8) throw new Error('Magpie returned an unreadable gateway key row.')
-    const [id, name, , , limit] = cells
+    const [id, name, , masked, limit] = cells
     if (!ID_RE.test(id)) throw new Error('Magpie returned an invalid gateway key ID.')
-    return { id, name, limit: limit && limit !== '-' ? limit : null }
+    return { id, name, limit: limit && limit !== '-' ? limit : null, tail: masked.match(MASK_TAIL_RE)?.[1] ?? null }
   })
+}
+
+/** The device a key was made for, from its name; null for a key this module did not make. */
+export function deviceOfName(name: string): string | null {
+  if (INTENT_NAME_RE.test(name)) return name.slice(DEVICE_PREFIX.length, name.lastIndexOf('--'))
+  return LEGACY_NAME_RE.test(name) ? name.slice(DEVICE_PREFIX.length) : null
 }
 
 export function deviceSlug(name: string): string {
@@ -74,8 +92,27 @@ export function deviceSlug(name: string): string {
 
 const refusal = (why: string): ShareIssueAnswer => ({ ok: false, why })
 
+export interface ShareKeysDeps {
+  run: MagpieRun
+  /** Where keys being made are written down first (share-intents.ts). */
+  intents: IntentStore
+  /** 128 random bits as 32 hex characters; injected for tests. */
+  nonce?: () => string
+  /** Every running process's command line, for the process check; injected for tests. */
+  processes?: () => Promise<string[]>
+  now?: () => Date
+}
+
 export class ShareKeys {
-  constructor(private readonly deps: { run: MagpieRun }) {}
+  /** The key last handed over, kept in memory only until the owner says Done, so a reloaded window still finds it. */
+  private handed: ShareHandover | null = null
+  private busy = 0
+
+  constructor(private readonly deps: ShareKeysDeps) {}
+
+  private now(): string {
+    return (this.deps.now ?? (() => new Date()))().toISOString()
+  }
 
   private async rows(): Promise<KeyRow[]> {
     const answer = await this.deps.run(['gateway-key', 'list'])
@@ -83,15 +120,35 @@ export class ShareKeys {
     return parseKeyTable(answer.stdout)
   }
 
-  async list(): Promise<SharedKey[]> {
-    return (await this.rows()).filter((row) => DEVICE_NAME_RE.test(row.name)).map((row) => ({ ...row, device: row.name.slice(DEVICE_PREFIX.length) }))
+  private async keys(): Promise<SharedKey[]> {
+    return (await this.rows()).flatMap((row) => {
+      const device = deviceOfName(row.name)
+      return device === null ? [] : [{ id: row.id, name: row.name, device, limit: row.limit }]
+    })
   }
 
-  /** One issue at a time: Magpie allows two keys of one name, so a race could hand out an uncapped key. */
+  private readIntents(): readonly ShareIntent[] {
+    try {
+      return this.deps.intents.read()
+    } catch {
+      throw new Error(INTENTS_UNREADABLE)
+    }
+  }
+
+  /** The device keys, every open intent with whether it may be cleared yet, and what is in flight. */
+  async list(): Promise<{ keys: SharedKey[]; pending: PendingKey[]; issuing: boolean; handover: ShareHandover | null }> {
+    const pending = this.readIntents().map((i) => ({ name: i.name, device: i.device, at: i.at, revoked: i.revoked ?? null, checked: i.checked ?? null, clearable: clearable(i) }))
+    return { keys: await this.keys(), pending, issuing: this.busy > 0, handover: this.handed }
+  }
+
+  /** One issue at a time: two adds racing could hand out a key nobody capped. */
   private queue: Promise<unknown> = Promise.resolve()
 
   issue(input: { device: unknown; dailyUsd: unknown }, permitted: () => boolean = () => true): Promise<ShareIssueAnswer> {
-    const next = this.queue.then(() => this.issueNow(input, permitted))
+    this.busy += 1
+    const next = this.queue.then(() => this.issueNow(input, permitted)).finally(() => {
+      this.busy -= 1
+    })
     this.queue = next.catch(() => undefined)
     return next
   }
@@ -101,50 +158,108 @@ export class ShareKeys {
     if (!DEVICE_RE.test(device)) return refusal('Name the device, such as “laptop”.')
     const daily = typeof input.dailyUsd === 'number' && Number.isFinite(input.dailyUsd) ? Math.round(input.dailyUsd * 100) / 100 : NaN
     if (!(daily >= DAILY_USD_MIN && daily <= DAILY_USD_MAX)) return refusal(`Set a daily cap between $${DAILY_USD_MIN} and $${DAILY_USD_MAX}.`)
-    const name = `${DEVICE_PREFIX}${device}`
-    const before = await this.rows()
-    if (before.some((row) => row.name === name)) return refusal(`“${device}” already has a key. Revoke it first to make a new one.`)
+    let intents: readonly ShareIntent[]
+    try {
+      intents = this.readIntents()
+    } catch (error) {
+      return refusal(errorText(error))
+    }
+    if (intents.some((i) => i.device === device)) return refusal(`A key for “${device}” may have been left behind. Resolve the warning first.`)
+    const before = await this.keys()
+    if (before.some((row) => row.device === device)) return refusal(`“${device}” already has a key. Revoke it first to make a new one.`)
     if (!permitted()) return refusal('Magpie sharing was switched off.')
-    // From here on, a key may exist even if the runner throws before returning.
-    let made: string | null = null
+    const name = `${DEVICE_PREFIX}${device}--${(this.deps.nonce ?? (() => randomBytes(16).toString('hex')))()}`
+    try {
+      // Written and synced before Magpie hears the name: from here on, a crash leaves a warning, never a lost key.
+      this.deps.intents.write([...intents, { name, device, at: this.now() }])
+    } catch {
+      return refusal('Cookrew could not write down the key it was about to make, so it made none.')
+    }
     try {
       const added = await this.deps.run(['gateway-key', 'add', name])
-      const fresh = await this.freshIds(name, before)
-      if (fresh.length > 1) return refusal(`Magpie lists multiple new keys named “${name}” (${fresh.join(', ')}); inspect and revoke them in Magpie.`)
       const key = added.stdout.trim()
-      if (added.code !== 0 || !KEY_RE.test(key)) {
-        const why = firstLine(added.stderr) ?? 'Magpie did not return a usable key.'
-        return refusal(`${why} Magpie may have made a key named “${name}”; check its Gateway keys. No unidentified key was removed.`)
-      }
-      made = fresh[0] ?? null
-      if (made === null) return refusal('Magpie made a key it does not list as new. Check Magpie’s Gateway keys and revoke it there.')
-      const capped = await this.capped(made, daily)
-      if (capped !== null) return await this.takeBack(made, capped)
-      if (!permitted()) return await this.takeBack(made, 'Magpie sharing was switched off.')
-      const shared = { id: made, name, device, limit: `$${daily} per day` }
-      made = null
+      const ours = (await this.rows()).filter((row) => row.name === name)
+      if (added.code !== 0 || !KEY_RE.test(key)) return await this.revokeAll(name, firstLine(added.stderr) ?? 'Magpie did not return a usable key.')
+      if (ours.length !== 1) return await this.revokeAll(name, `Magpie lists ${ours.length} keys named “${name}”.`)
+      const [row] = ours
+      // The key we hold must be the row we cap: Magpie shows its last characters.
+      if (row.tail === null || !key.endsWith(row.tail)) return await this.revokeAll(name, 'The key Magpie returned is not the one it lists.')
+      const capped = await this.capped(row.id, daily)
+      if (capped !== null) return await this.revokeAll(name, capped)
+      if (!permitted()) return await this.revokeAll(name, 'Magpie sharing was switched off.')
+      const shared: SharedKey = { id: row.id, name, device, limit: `$${daily} per day` }
+      this.settle(name)
+      this.handed = { id: row.id, device, key }
       return { ok: true, key, shared }
     } catch (error) {
-      // The id may never have been learned: one more look for it, so the key does not stay behind.
-      const why = error instanceof Error ? error.message : 'Magpie did not answer.'
-      if (made !== null) return await this.takeBack(made, why)
-      const late = await this.freshIds(name, before).catch(() => null)
-      if (late && late.length > 1) return refusal(`Magpie lists multiple new keys named “${name}” (${late.join(', ')}); inspect and revoke them in Magpie.`)
-      if (!late || late.length === 0) return refusal(`${why} Magpie may have made a key named “${name}”; check its Gateway keys.`)
-      return refusal(`${why} Magpie may have made a key named “${name}” (${late[0]}); check its Gateway keys. No unidentified key was removed.`)
+      return await this.revokeAll(name, errorText(error))
     }
   }
 
-  private async freshIds(name: string, before: readonly KeyRow[]): Promise<string[]> {
-    const known = new Set(before.map((row) => row.id))
-    return (await this.rows()).filter((row) => row.name === name && !known.has(row.id)).map((row) => row.id)
+  /** The key is capped and handed over: it is an ordinary device key now, listed under its own name. */
+  private settle(name: string): void {
+    try {
+      this.deps.intents.write(this.readIntents().filter((i) => i.name !== name))
+    } catch {
+      // The intent stays and warns: resolving it would revoke this key, which is the safe side.
+    }
   }
 
-  /** Take back a key that was made but not handed over, and say so if even that failed. */
-  private async takeBack(id: string | null, why: string): Promise<ShareIssueAnswer> {
-    if (id === null) return refusal(why)
-    const undone = await this.deps.run(['gateway-key', 'remove', id]).catch(() => null)
-    return undone?.code === 0 ? refusal(why) : refusal(`${why} The key it made could not be taken back: revoke “${id}” in Magpie.`)
+  /** Revoke every key Magpie lists under an intent's name, by id; the intent stays and records the pass. */
+  private async revokeAll(name: string, why: string): Promise<ShareIssueAnswer> {
+    const pass = await this.revokePass(name).catch(() => null)
+    const tail = pass === null ? ' Magpie could not be asked which keys carry its name; a warning stays until you check.' : pass.left > 0 ? ` ${pass.left} key(s) named “${name}” could not be revoked; a warning stays until you check.` : ' Every key it may have made was revoked; a warning stays until you check.'
+    return refusal(`${why}${tail}`)
+  }
+
+  private async revokePass(name: string): Promise<{ left: number }> {
+    for (const row of (await this.rows()).filter((r) => r.name === name)) {
+      await this.deps.run(['gateway-key', 'remove', row.id]).catch(() => null)
+    }
+    const left = (await this.rows()).filter((r) => r.name === name).length
+    this.record(name, { revoked: { at: this.now(), left } })
+    return { left }
+  }
+
+  private record(name: string, patch: Pick<ShareIntent, 'revoked'> | Pick<ShareIntent, 'checked'>): void {
+    this.deps.intents.write(this.readIntents().map((i) => (i.name === name ? { ...i, ...patch } : i)))
+  }
+
+  /** The owner's "Revoke and check": one revoke pass, then one process check, both recorded on the intent. */
+  async resolve(name: unknown): Promise<{ ok: true; left: number; live: number } | { ok: false; why: string }> {
+    if (typeof name !== 'string' || !this.readIntents().some((i) => i.name === name)) return { ok: false, why: 'No such key being made.' }
+    try {
+      const { left } = await this.revokePass(name)
+      const live = (await (this.deps.processes ?? runningCommands)()).filter((line) => addsName(line, name)).length
+      this.record(name, { checked: { at: this.now(), live } })
+      return { ok: true, left, live }
+    } catch (error) {
+      return { ok: false, why: errorText(error) }
+    }
+  }
+
+  /** Clear an intent by hand: only once a revoke pass left none of its keys and a process check found no add running. */
+  async clear(name: unknown): Promise<{ ok: true } | { ok: false; why: string }> {
+    let intents: readonly ShareIntent[]
+    try {
+      intents = this.readIntents()
+    } catch (error) {
+      return { ok: false, why: errorText(error) }
+    }
+    const intent = intents.find((i) => i.name === name)
+    if (!intent) return { ok: false, why: 'No such key being made.' }
+    if (!clearable(intent)) return { ok: false, why: 'Revoke and check first: a key of this name may still exist or still be in the making.' }
+    try {
+      this.deps.intents.write(intents.filter((i) => i.name !== name))
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, why: errorText(error) }
+    }
+  }
+
+  /** The owner copied the key: main forgets it. */
+  done(id: unknown): void {
+    if (this.handed?.id === id) this.handed = null
   }
 
   private async capped(id: string, daily: number): Promise<string | null> {
@@ -157,11 +272,42 @@ export class ShareKeys {
 
   async revoke(id: unknown): Promise<{ ok: true } | { ok: false; why: string }> {
     if (typeof id !== 'string' || !ID_RE.test(id)) return { ok: false, why: 'No such key.' }
-    const mine = (await this.list()).some((row) => row.id === id)
+    const mine = (await this.keys()).some((row) => row.id === id)
     if (!mine) return { ok: false, why: 'Only a key made here for a device can be revoked here.' }
     const removed = await this.deps.run(['gateway-key', 'remove', id])
-    return removed.code === 0 ? { ok: true } : { ok: false, why: firstLine(removed.stderr) ?? 'Magpie did not remove the key.' }
+    if (removed.code !== 0) return { ok: false, why: firstLine(removed.stderr) ?? 'Magpie did not remove the key.' }
+    if (this.handed?.id === id) this.handed = null
+    return { ok: true }
   }
+}
+
+export const INTENTS_UNREADABLE = 'Cookrew cannot read its record of keys being made (~/.cookrew/share-intents.json). No key is made until it can.'
+
+/** A revoke pass left no key of the name, and a process check after it found no add of the name running. */
+function clearable(i: ShareIntent): boolean {
+  return i.revoked !== undefined && i.revoked.left === 0 && i.checked !== undefined && i.checked.live === 0 && i.checked.at >= i.revoked.at
+}
+
+/** A `magpie gateway-key add <name>` command line: the name as its own word right after `add`. */
+function addsName(line: string, name: string): boolean {
+  const words = line.trim().split(/\s+/)
+  return words.some((word, at) => word === 'gateway-key' && words[at + 1] === 'add' && words[at + 2] === name)
+}
+
+const errorText = (error: unknown): string => (error instanceof Error ? error.message : 'Magpie did not answer.')
+
+/** Every process's command line (the process check). Throws when the list cannot be had: no list is no check. */
+export function runningCommands(): Promise<string[]> {
+  const [bin, args] =
+    process.platform === 'win32'
+      ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { $_.CommandLine }']]
+      : ['ps', ['-axww', '-o', 'command=']]
+  return new Promise((resolve, reject) => {
+    execFile(bin, args as string[], { timeout: 10_000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+      if (error) return reject(new Error('The process check could not list running programs.'))
+      resolve(String(stdout).split(/\r?\n/).filter((line) => line.trim() !== ''))
+    })
+  })
 }
 
 function firstLine(text: string): string | null {

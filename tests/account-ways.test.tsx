@@ -87,11 +87,11 @@ describe('AccountNudgeView', () => {
   })
 })
 
-describe('ShareDevicesView while issuance is paused', () => {
-  it('explains the pause and does not offer a form even when switches are enabled', () => {
+describe('ShareDevicesView with both switches on (key recovery v1 in place)', () => {
+  it('offers the form to make a key', () => {
     const html = renderToStaticMarkup(<ShareDevicesView keys={[]} where={null} problem={null} issued={null} busy={false} sharingEnabled onIssue={() => {}} onRevoke={() => {}} onCheck={() => {}} onDone={() => {}} />)
-    expect(html).toContain('Creating device keys is temporarily unavailable')
-    expect(html).not.toContain('name="device"')
+    expect(html).toContain('name="device"')
+    expect(html).not.toContain('temporarily unavailable')
   })
 })
 
