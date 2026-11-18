@@ -195,6 +195,8 @@ export interface CheckRtcBindInput {
   readonly machineId: string | null
 }
 
+/** Why every answer is refused on a page with no machine in scope (a machine's own page). */
+export const RTC_NO_MACHINE = 'no machine in scope'
 /** Why an answer from a Mac that sends no binding (one older than the binding, or the relay) is refused. */
 export const RTC_NO_BINDING = 'no binding'
 /** Why an answer is refused by a browser whose WebCrypto has no Ed25519 (Safari before 17, older Chrome). */
@@ -221,7 +223,7 @@ export const ed25519Available = async (): Promise<boolean> => {
 export const checkRtcBind = async (input: CheckRtcBindInput): Promise<RtcBindVerdict> => {
   const expected = input.machineId?.toLowerCase() ?? null
   // No machine in scope, no key to hold the Mac to: nothing here tells the Mac from the relay.
-  if (expected === null) return { ok: false, why: 'no machine in scope' }
+  if (expected === null) return { ok: false, why: RTC_NO_MACHINE }
   const bind = input.bind
   if (!isRecord(bind)) return { ok: false, why: RTC_NO_BINDING }
   // Said apart from a forgery: a browser that cannot check is not under attack, and the badge says which.

@@ -5,10 +5,8 @@ import { authHeaders, authStore } from '../auth-gate'
 import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
 import { currentBrowser } from '../browser-family'
 import { createPathReporter, postPathReport, reportedAttempts } from './report'
-import { adoptRtcLink, type RtcRow, type RtcUnbound } from './rtc-adopt'
-import { connectRtcLink, type RtcLink } from './rtc-link'
-import { heldFor, readRtcAnswer, trustRtcAnswer } from './rtc-trust'
-import { RTC_NO_ED25519, ed25519Available } from '../../../shared/rtc-bind'
+import { adoptRtcLink, type RtcRow } from './rtc-adopt'
+import { RTC_EVERY_MS, boundKnock, heldAfter, knockGapAfter, readRtcAnswer } from './rtc-trust'
 import { heldRtcLink, rtcLink, setRtcLink } from '../rtc-plane'
 import { isLanHostname, isTailnetHostname } from '../../../shared/path-badge'
 import { pageContext } from './page-context'
@@ -258,11 +256,14 @@ const pathReporter = (): ReturnType<typeof createPathReporter> =>
   })
 let tellTheDesktop = pathReporter()
 
-/** One WebRTC attempt per this long at most: each one opens a peer on the Mac. */
-const RTC_EVERY_MS = 2 * 60 * 1000
 /** After a link ends, the race that knocks it open again waits this long (the plane moves first). */
 const RACE_AFTER_END_MS = 300
 let lastRtcAt = 0
+/**
+ * One WebRTC attempt per this long at most: each one opens a peer on the Mac
+ * (RTC_EVERY_MS), and longer after a refused answer (path/rtc-trust.ts).
+ */
+let rtcGapMs = RTC_EVERY_MS
 /** How the last adopted link ended, carried by the next report and then dropped. */
 let lastEnd: RtcRow | null = null
 /** When an ended link let the next knock skip the gap, within HOLD_REPEAT_WINDOW_MS. */
@@ -276,6 +277,7 @@ registerScopeState('path switch memory', () => {
   lastDeviceId = null
   tellTheDesktop = pathReporter()
   lastRtcAt = 0
+  rtcGapMs = RTC_EVERY_MS
   lastEnd = null
   quickKnocks = []
 })
@@ -289,39 +291,24 @@ registerScopeState('path switch memory', () => {
 const rtcKnock = async (onEnd: () => void, live: () => boolean): Promise<RtcRow[]> => {
   if (typeof RTCPeerConnection !== 'function' || dataPlane().kind !== 'relay') return []
   const at = Date.now()
-  if (at - lastRtcAt < RTC_EVERY_MS) return []
+  if (at - lastRtcAt < rtcGapMs) return []
   lastRtcAt = at
   // THE ANSWER CROSSES THE RELAY: it is set only when the Mac's device
   // signature verifies over this page's offer (path/rtc-trust.ts), for the
   // machine in scope AS THIS KNOCK STARTS. One that does not is no link, and a row.
-  const trust = trustRtcAnswer({ machineId: machineScope().machineId })
-  // Why this knock's answer was refused, for the badge; null while none was.
-  let refused: string | null = null
-  const connect = async (): Promise<RtcLink | RtcUnbound | null> => {
-    // A page that could never check the answer sends no offer: its addresses stay off the relay.
-    if (!(await ed25519Available())) {
-      refused = RTC_NO_ED25519
-      return { unbound: RTC_NO_ED25519 }
+  const knock = boundKnock({
+    machineId: machineScope().machineId,
+    post: async (sdp) => {
+      const response = await planeFetch(apiPath('/api/rtc/offer'), {
+        method: 'POST',
+        headers: { ...authHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ sdp })
+      })
+      return response.ok ? readRtcAnswer(await response.json()) : null
     }
-    let unbound: string | null = null
-    const link = await connectRtcLink({
-      offer: async (sdp) => {
-        const response = await planeFetch(apiPath('/api/rtc/offer'), {
-          method: 'POST',
-          headers: { ...authHeaders(), 'content-type': 'application/json' },
-          body: JSON.stringify({ sdp })
-        })
-        if (!response.ok) return null
-        return readRtcAnswer(await response.json())
-      },
-      trust,
-      refused: (why) => void (unbound = why)
-    })
-    refused = unbound
-    return link ?? (unbound === null ? null : { unbound })
-  }
+  })
   const probe = await adoptRtcLink({
-    connect,
+    connect: knock.connect,
     live,
     current: heldRtcLink,
     plane: dataPlane,
@@ -346,12 +333,12 @@ const rtcKnock = async (onEnd: () => void, live: () => boolean): Promise<RtcRow[
     },
     classify: (address) => (isTailnetHostname(address) ? 'tailnet' : isLanHostname(address) ? 'lan' : 'other')
   }).catch(() => null)
-  // The badge's reason for the relay (path-link.ts): set by a refused answer, put down by a link,
-  // and left alone by a Mac that did not answer (that says nothing about proof). Only for the
-  // machine this knock was for.
-  if (probe !== null && live()) {
-    if (probe.outcome === 'answered') setDirectHeld(null)
-    if (probe.outcome === 'unbound' && refused !== null) setDirectHeld(heldFor(refused))
+  // Only for the machine this knock was for: the badge's reason for the relay
+  // (path-link.ts), and how long until the next knock.
+  if (live()) {
+    const held = heldAfter(knock.verdict())
+    if (held !== undefined) setDirectHeld(held)
+    rtcGapMs = knockGapAfter(knock.verdict())
   }
   return probe ? [probe] : []
 }

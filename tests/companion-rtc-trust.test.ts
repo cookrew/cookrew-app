@@ -105,7 +105,7 @@ class FakeChannel extends EventTarget {
 }
 
 /** The browser's RTCPeerConnection, stood in for: its offer carries OFFER, and any answer set opens the link. */
-const stubPeer = (): { readonly remote: () => readonly string[] } => {
+const stubPeer = (opens = true): { readonly remote: () => readonly string[] } => {
   const remote: string[] = []
   class FakePeer extends EventTarget {
     iceGatheringState = 'complete'
@@ -123,7 +123,7 @@ const stubPeer = (): { readonly remote: () => readonly string[] } => {
     async setLocalDescription(): Promise<void> {}
     async setRemoteDescription(description: { sdp: string }): Promise<void> {
       remote.push(description.sdp)
-      queueMicrotask(() => this.channels[0]?.open(MAC_ADDRESS))
+      if (opens) queueMicrotask(() => this.channels[0]?.open(MAC_ADDRESS))
     }
     close(): void {
       for (const channel of this.channels) channel.close()
@@ -205,15 +205,16 @@ describe('the trust the companion hands connectRtcLink', () => {
 })
 
 /** Start the real companion on machine A with the real connectRtcLink, against this relay. */
-const knockThrough = async (a: Machine, answer: (offerSdp: string) => Promise<Answer>) => {
+const knockThrough = async (a: Machine, answer: (offerSdp: string) => Promise<Answer>, options: { opens?: boolean; heldBefore?: 'old-mac' } = {}) => {
   const relay = stubConsole(answer)
   vi.resetModules()
-  const peer = stubPeer()
+  const peer = stubPeer(options.opens ?? true)
   await inConsole(a.deviceId)
   const companion = await import('../src/renderer/src/path/companion')
   const planes = await import('../src/renderer/src/data-plane')
   const links = await import('../src/renderer/src/rtc-plane')
   const badge = await import('../src/renderer/src/path-link')
+  if (options.heldBefore) badge.setDirectHeld(options.heldBefore)
   const stop = companion.startCompanionPathSwitch()
   return { relay, peer, plane: planes.dataPlane, link: links.rtcLink, held: () => badge.pathLinkState().held, stop }
 }
@@ -273,6 +274,17 @@ describe('a whole knock, over the real connectRtcLink', () => {
     expect(run.held()).toBe(why === 'no binding' ? 'old-mac' : 'unproved')
     run.stop()
   })
+
+  it('a verified answer whose link never opens puts down an earlier reason: the Mac has proved itself', async () => {
+    const a = machine()
+    const run = await knockThrough(a, async (offerSdp) => ({ sdp: ANSWER, bind: bound(a, offerSdp) }), { opens: false, heldBefore: 'old-mac' })
+    expect(run.held()).toBe('old-mac')
+    await vi.waitFor(() => expect(run.relay.reports().length).toBeGreaterThan(0), { timeout: 12_000 })
+    expect(run.peer.remote()).toEqual([ANSWER])
+    expect(run.plane()).toMatchObject({ kind: 'relay' })
+    expect(run.held()).toBeNull()
+    run.stop()
+  }, 15_000)
 
   it('a browser that cannot check Ed25519 sends no offer at all: the relay never sees its addresses', async () => {
     const a = machine()

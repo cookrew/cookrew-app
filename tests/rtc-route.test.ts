@@ -94,7 +94,8 @@ describe('the rtc row in a path report', () => {
   it('runs only on the relay, first in each race, and rides the race report', () => {
     const src = readFileSync('src/renderer/src/path/companion.ts', 'utf8')
     expect(src).toContain("dataPlane().kind !== 'relay'")
-    expect(src).toContain('const RTC_EVERY_MS = 2 * 60 * 1000')
+    // The gap between knocks is path/rtc-trust.ts's (2 minutes, longer after a refused answer).
+    expect(src).toContain('if (at - lastRtcAt < rtcGapMs) return []')
     // Before the names, unless the plane just failed or the phone is on a radio (no LAN in reach).
     expect(src).toContain('const knocked = health.held() || onCellular() ? [] : await rtcKnock(raceSoon, live)')
     expect(src).toContain('reportLinkRows(knocked)')
