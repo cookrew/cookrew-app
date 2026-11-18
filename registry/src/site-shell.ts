@@ -1,7 +1,7 @@
 import type { ServerResponse } from 'node:http'
 import { ASSET_VERSION } from './assets-bundle'
 import { BRAND_MARK_SVG } from './site-brand'
-import { GITHUB_REPO, SITE_ORIGIN } from './site-content'
+import { GITHUB_REPO, SITE_ORIGIN, listedFeatures } from './site-content'
 import { jsonLd } from './site-seo'
 import { webCopy } from './v3-copy'
 import { LEGAL_PUBLISHED } from './site-legal-entity'
@@ -325,7 +325,8 @@ function shell(options: ShellOptions, main: string): string {
 </div></header>
 ${main}
 <footer><div class="wrap">
-<nav class="row" aria-label="${tr('Site', '站点')}"><a href="${local('/#features')}">${tr('Features', '功能')}</a><a href="${local('/#start')}">${tr('Get started', '开始使用')}</a><a href="${local('/#download')}">${tr('Download', '下载')}</a><a href="${esc(staticSite.console)}/">${tr('Console', '控制台')}</a><a href="${esc(staticSite.auth)}/account">${tr('Account', '账号')}</a><a href="${GITHUB_REPO}">${tr('Source', '源码')}</a><a href="${GITHUB_REPO}/releases">${tr('Releases', '版本')}</a>${LEGAL_PUBLISHED ? `<a href="/privacy">${tr('Privacy', '隐私（英文）')}</a><a href="/terms">${tr('Terms', '条款（英文）')}</a>` : ''}</nav>
+<nav class="row" aria-label="${tr('Features', '功能')}">${listedFeatures().map((f) => `<a href="${local(`/features/${f.slug}`)}">${esc(f.title)}</a>`).join('')}</nav>
+<nav class="row" aria-label="${tr('Site', '站点')}" style="margin-top:8px"><a href="${local('/#flow')}">${tr('Features', '功能')}</a><a href="${local('/#start')}">${tr('Get started', '开始使用')}</a><a href="${local('/#download')}">${tr('Download', '下载')}</a><a href="${esc(staticSite.console)}/">${tr('Console', '控制台')}</a><a href="${esc(staticSite.auth)}/account">${tr('Account', '账号')}</a><a href="${GITHUB_REPO}">${tr('Source', '源码')}</a><a href="${GITHUB_REPO}/releases">${tr('Releases', '版本')}</a>${LEGAL_PUBLISHED ? `<a href="/privacy">${tr('Privacy', '隐私（英文）')}</a><a href="/terms">${tr('Terms', '条款（英文）')}</a>` : ''}</nav>
 <p class="meta" style="margin-top:12px">${tr(`Cookrew is open source under the MIT license. This site is static: no script runs on it and nothing here signs you in. Your machines are in the console; your account is at ${esc(new URL(staticSite.auth).host)}.`, `Cookrew 以 MIT 许可开源。本站是静态网站：不运行任何脚本，也不会让你登录。你的机器在控制台里；你的账号在 ${esc(new URL(staticSite.auth).host)}。`)}</p>
 </div></footer>
 </body></html>`
@@ -456,26 +457,7 @@ code,.mono{font-family:var(--font-mono);font-size:.88em}
 .note{background:var(--note-bg);border:1px solid var(--hair);box-shadow:var(--lift-sm);padding:12px 14px;font-size:14px;transform:rotate(-.6deg)}
 .grid{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
 .grid .card p{color:var(--muted);font-size:14.5px;margin:0}
-.pillar{padding:64px 0}
-.pillar h2{font-size:clamp(28px,3.4vw,42px);line-height:1.1;letter-spacing:-.01em;margin:0 0 12px;max-width:22ch}
-.pillar .lede{max-width:58ch;margin-bottom:28px}
-/* claims in two columns, the pictures the full width under them (12 columns; site-content.ts Pillar.media span) */
-.pillar-body{display:grid;gap:30px}
-.pillar-media{display:grid;gap:18px;grid-template-columns:repeat(12,minmax(0,1fr));align-items:start}
-.pillar-media>*{grid-column:1/-1}.pillar-media>.span-4{grid-column:span 4}.pillar-media>.span-6{grid-column:span 6}.pillar-media>.span-8{grid-column:span 8}
-ul.claims{list-style:none;margin:0;padding:0;border-top:1px solid var(--hair);display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:36px}
-.claim{display:grid;gap:7px;padding:16px 0;border-bottom:1px solid var(--line-soft)}
-.claim b{font:600 16.5px/1.3 var(--font-serif)}
-.claim p{margin:3px 0 0;color:var(--muted);font-size:14.5px;line-height:1.5}
-.route-diagram{margin:0;padding:16px;border:1px solid var(--hair);background:var(--cream-hi);display:grid;gap:12px}
-.route-diagram ol{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px;position:relative}
-.route-diagram ol>li{position:relative;display:grid;gap:2px;padding:9px 10px;border:1px solid var(--line);background:var(--cream)}
-.route-diagram ol>li+li::before{content:'→';position:absolute;left:-18px;top:50%;transform:translateY(-50%);color:var(--ink-soft);font:14px var(--font-mono)}
-.route-diagram b{font:600 13px/1.25 var(--font-serif)}.route-diagram span{font:10.5px/1.35 var(--font-mono);color:var(--muted)}
-.route-diagram figcaption{font-size:12.5px;color:var(--muted)}
 .hero-sub{font:500 clamp(17px,1.7vw,21px)/1.35 var(--font-serif);color:var(--amber-deep);margin:0 0 14px;max-width:34ch}
-@media (max-width:860px){ul.claims{grid-template-columns:minmax(0,1fr)}.pillar-media>[class*=span-]{grid-column:1/-1}}
-@media (max-width:520px){.route-diagram ol{grid-template-columns:1fr;gap:18px}.route-diagram ol>li+li::before{content:'↓';left:50%;top:-16px;transform:translateX(-50%)}}
 /* a frame as a card's face (the features index): a 16:10 window onto the
    top-left of the recording, never the image at its own pixel size — the
    only img rule above is scoped to figure.shot, and a 1400px frame dropped

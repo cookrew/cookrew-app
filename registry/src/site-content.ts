@@ -1,7 +1,8 @@
 import { LEGAL_PUBLISHED } from './site-legal-entity'
 import type { DemoKey } from './site-frames'
 import { currentLang } from './site-lang'
-import { ZH_COMPARE, ZH_DEFINITION, ZH_FAQ, ZH_FEATURES, ZH_HEADLINE, ZH_HEADLINE_SUB, ZH_PILLARS, ZH_START_FAQ, ZH_START_HOWTO } from './site-content-zh'
+import { FLOW_EN } from './site-flow'
+import { ZH_COMPARE, ZH_DEFINITION, ZH_FAQ, ZH_FEATURES, ZH_START_FAQ, ZH_START_HOWTO } from './site-content-zh'
 
 /**
  * THE WORDS — every sentence cookrew.dev says about itself, in one place.
@@ -24,12 +25,12 @@ export const GITHUB_REPO = 'https://github.com/cookrew/cookrew-app'
 
 /** The one-sentence entity definition. Meta description, JSON-LD, llms.txt, the hero. */
 export const DEFINITION =
-  'Cookrew is an open-source desktop workspace for AI coding agents on every machine you use. Claude Code, Codex, OpenCode and Pi work side by side on one canvas, every agent turn is a checkpoint, and one account lets you follow and answer your agents from the desktop or any browser.'
+  'Cookrew is an open-source desktop workspace. Put Claude Code, Codex, OpenCode and Pi on one canvas, run them on every machine you own, and follow and answer them from the desktop, any browser or your phone.'
 
-export const HEADLINE = 'Any device. Any harness. Any model.'
+export const HEADLINE = 'Let your tokens flow freely.'
 
-/** The line under the headline: what "any model" means today, so it does not read as a gateway we run. */
-export const HEADLINE_SUB = 'One account — and the models you bring: your subscriptions, API keys or local models.'
+/** The line under the headline (owner 2026-11-18: "One account", not "one sign-in"). */
+export const HEADLINE_SUB = 'One account. Across devices, across agents, across models.'
 
 export const MARKET_DEFINITION =
   'The Cookrew marketplace lists served teams: teams of AI agents that stay on their author’s machine. A caller signs in with a cookrew.dev account, buys a seat once if the team is priced, and gets a sandboxed session of their own. The relay carries encrypted bytes it cannot read; money goes directly from caller to author and cookrew.dev takes no cut.'
@@ -255,86 +256,6 @@ export function llmsText(): string {
   return llmsBody()
 }
 
-/**
- * WHERE A CLAIM STANDS, kept in this file only: the page prints no label
- * (owner 2026-11-18) and draws only the shipped claims, so nothing unbuilt
- * reads as available. "shipped" means in the released app.
- */
-export type ClaimStatus = 'shipped' | 'in-dev' | 'beta' | 'experiment' | 'planned'
-
-export interface Claim {
-  status: ClaimStatus
-  title: string
-  text: string
-}
-
-export interface Pillar {
-  /** The section's anchor on the home page. */
-  id: 'gateway' | 'everywhere' | 'workspace'
-  kicker: string
-  title: string
-  lede: string
-  claims: readonly Claim[]
-  /**
-   * Its pictures (site-frames.ts DEMO), each with a sentence of what it is not when the claims beside it say
-   * more than the picture shows. Every one is the current UI on demo data, labelled as an illustration.
-   */
-  /** span: of 12 columns on a desktop (default 12, the full width); every figure takes the full width on a phone. */
-  media: readonly { key: DemoKey; span?: 4 | 6 | 8 | 12 }[]
-}
-
-export const PILLARS: readonly Pillar[] = [
-  {
-    id: 'everywhere',
-    kicker: 'see and prompt everywhere',
-    title: 'Answer your agents from anywhere',
-    lede: 'You do not have to sit at the machine your agents run on. Every machine of your account is in the console, in any browser, with its workspaces, agents and transcripts — and a reply box.',
-    claims: [
-      { status: 'shipped', title: 'The console', text: 'console.cookrew.dev lists every machine of your account. Open one and its workspaces, agents and transcripts are there to read and answer.' },
-      { status: 'shipped', title: 'Your phone is the console', text: 'On a phone the same console opens in the browser. There is no app to install.' },
-      { status: 'shipped', title: 'A machine’s screen, when you allow it', text: 'With remote control turned on for a machine, your devices can take control of its screen card for 15 minutes at a time.' },
-      { status: 'shipped', title: 'One bar for what needs you', text: 'Agents waiting on you and new replies, gathered from every workspace of a machine into one bar.' },
-      { status: 'shipped', title: 'The bar on all your machines, an alert on your phone', text: 'The same bar also gathers what waits on you on the account’s other machines, and the console can alert your phone when an agent needs you.' },
-      { status: 'beta', title: 'Apple Watch', text: 'See who is waiting and reply from the wrist. Running on our own watches; not on the App Store or TestFlight.' },
-      { status: 'planned', title: 'One request, any device, every machine', text: 'A request that waits on you is answered once, from whichever device is at hand, across every machine of the account.' }
-    ],
-    media: [
-      { key: 'crewPhone', span: 4 },
-      { key: 'watch', span: 8 },
-      { key: 'ops' }
-    ]
-  },
-  {
-    id: 'gateway',
-    kicker: 'one route for every harness',
-    title: 'Every harness, the models you choose',
-    lede: 'Claude Code, Codex, OpenCode and Pi each expect a different model API. Cookrew can send all four through Magpie, yetone’s open-source model gateway (MIT, usemagpie.ai), installed separately on the same machine, so every agent uses the subscriptions, API keys or local models you set up there. Until you pick a default model in the Routing panel, a card runs its harness directly, on its own login.',
-    claims: [
-      { status: 'shipped', title: 'Four harnesses, one route', text: 'Claude Code, Codex, OpenCode and Pi can each be routed through the machine’s own Magpie. A plain shell is not routed.' },
-      { status: 'shipped', title: 'Provider keys stay in the gateway', text: 'Subscriptions and API keys are set up in Magpie. A routed agent is given the local gateway’s address, its gateway key and a tag naming its card — never a provider key.' },
-      { status: 'shipped', title: 'Usage per agent', text: 'Every request carries the card that made it, so the gateway counts usage agent by agent.' },
-      { status: 'experiment', title: 'Borrow another machine’s model', text: 'On 12 November 2026, Codex on one Mac ran its tools on that Mac while its model was answered by another machine’s Magpie, over an SSH tunnel set up by hand. One model, one run; no card is wired this way.' },
-      { status: 'planned', title: 'A gateway across your machines', text: 'Reach another machine’s gateway through your account, without a hand-made tunnel.' },
-      { status: 'planned', title: 'An official model gateway', text: 'Models offered through Cookrew itself. No provider agreement is in place.' }
-    ],
-    media: [{ key: 'routing' }]
-  },
-  {
-    id: 'workspace',
-    kicker: 'a room for the crew',
-    title: 'A workspace your crew shares',
-    lede: 'A workspace is one crew: agents on different harnesses, notes and browsers on one canvas, handing work to each other.',
-    claims: [
-      { status: 'shipped', title: 'Mixed harnesses, one crew', text: 'Claude Code, Codex, OpenCode and Pi agents in one workspace, wired by who can ask whom.' },
-      { status: 'shipped', title: 'Agents ask each other', text: 'Any agent can ask another and read its reply with the cookrew CLI. Notes and browser cards belong to the whole crew.' },
-      { status: 'shipped', title: 'Every turn is a checkpoint', text: 'Scrub back through a session and fork a new agent from any past turn; the original keeps running.' },
-      { status: 'planned', title: 'Cloud Workspace', text: 'Teammates, clients or family working with agents in one workspace, with roles, an isolated sandbox and an audit trail. Not available: it waits on security work that has to land first.' }
-    ],
-    media: [{ key: 'agents' }, { key: 'workspaces' }]
-  }
-]
-
-
 function llmsBody(): string {
   return [
     `# ${SITE_NAME}`,
@@ -350,10 +271,12 @@ function llmsBody(): string {
     '',
     `- Checkpoint: ${CHECKPOINT_DEFINITION}`,
     '',
-    // Only what is shipped: a label does not travel with a sentence lifted out of this file.
     '## What Cookrew does',
     '',
-    ...PILLARS.flatMap((p) => [`### ${p.title}`, '', ...p.claims.filter((c) => c.status === 'shipped').map((c) => `- ${c.title}: ${c.text}`), '']),
+    `${FLOW_EN.sub}`,
+    '',
+    ...FLOW_EN.chapters.flatMap((c) => [`### ${c.k.replace(/^\d+ · /, '')}: ${c.h2.join(' ')}`, '', c.lede, '', ...c.points.map(([b, t]) => `- ${b}: ${t}`), '']),
+    `Gateway: ${FLOW_EN.models.credit}. ${FLOW_EN.models.note}`,
     '',
     '## Facts',
     '',
@@ -370,12 +293,10 @@ function llmsBody(): string {
 /**
  * THE WORDS IN THE LANGUAGE BEING DRAWN (owner 2026-11-18: English and Chinese). The constants above are the English
  * text and stay as they are (llms.txt and the tests read them); the page builders ask these instead. Chinese text is
- * site-content-zh.ts, the same facts and the same status labels.
+ * site-content-zh.ts, the same facts.
  */
 const zh = (): boolean => currentLang() === 'zh'
 export const definition = (): string => (zh() ? ZH_DEFINITION : DEFINITION)
-export const headline = (): string => (zh() ? ZH_HEADLINE : HEADLINE)
-export const headlineSub = (): string => (zh() ? ZH_HEADLINE_SUB : HEADLINE_SUB)
 export const faq = (): readonly Faq[] => (zh() ? ZH_FAQ : FAQ)
 export const compare = (): readonly CompareRow[] => (zh() ? ZH_COMPARE : COMPARE)
 export const startHowto = (): readonly { name: string; text: string; detail: readonly string[] }[] => (zh() ? ZH_START_HOWTO : START_HOWTO)
@@ -383,12 +304,3 @@ export const startFaq = (): readonly Faq[] => (zh() ? ZH_START_FAQ : START_FAQ)
 const featureIn = (f: FeatureSpec): FeatureSpec => (zh() && ZH_FEATURES[f.slug] ? { ...f, ...ZH_FEATURES[f.slug] } : f)
 export const features = (): readonly FeatureSpec[] => FEATURES.map(featureIn)
 export const listedFeatures = (): readonly FeatureSpec[] => LISTED_FEATURES.map(featureIn)
-/** The pillars as drawn: only what the released app does (owner 2026-11-18: no status or progress on the page). */
-export const pillars = (): readonly Pillar[] =>
-  (zh()
-    ? PILLARS.map((p) => {
-        const w = ZH_PILLARS[p.id]
-        return { ...p, kicker: w.kicker, title: w.title, lede: w.lede, claims: p.claims.map((c, i) => ({ ...c, ...w.claims[i] })) }
-      })
-    : PILLARS
-  ).map((p) => ({ ...p, claims: p.claims.filter((c) => c.status === 'shipped') }))

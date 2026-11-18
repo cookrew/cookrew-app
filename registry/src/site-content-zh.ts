@@ -6,11 +6,7 @@ import { LEGAL_PUBLISHED } from './site-legal-entity'
  */
 
 export const ZH_DEFINITION =
-  'Cookrew 是一个开源的桌面工作空间，让 AI 编程 agent 在你用的每台机器上协作。Claude Code、Codex、OpenCode 和 Pi 在同一张画布上并肩工作，每个 agent 回合都是一个检查点；一个账号就能在桌面或任何浏览器里查看并回复你的 agent。'
-
-export const ZH_HEADLINE = '任何设备。任何 harness。任何模型。'
-
-export const ZH_HEADLINE_SUB = '一个账号，用你自己带来的模型：你的订阅、API key 或本地模型。'
+  'Cookrew 是一个开源的桌面工作空间。把 Claude Code、Codex、OpenCode 和 Pi 放进同一张画布，在你的每台机器上运行；在桌面、任何浏览器或手机上跟进它们、回复它们。'
 
 export const ZH_CHECKPOINT_DEFINITION =
   '在 Cookrew 里，每个 agent 回合都是一个检查点。你可以在会话里来回拖动，从任意一个过去的回合分叉出新的 agent。分叉或导出都从检查点复制，从不改动原会话。'
@@ -151,46 +147,4 @@ export const ZH_START_FAQ = [
   { q: '使用 Cookrew 需要账号吗？', a: '不需要。应用完全在你的机器上运行。只有想从控制台访问你的机器时，才需要一个 cookrew.dev 账号。' }
 ]
 
-
-/** The pillars by id; claims in the English order. */
-export const ZH_PILLARS: Readonly<Record<'gateway' | 'everywhere' | 'workspace', { kicker: string; title: string; lede: string; claims: readonly { title: string; text: string }[] }>> = {
-  everywhere: {
-    kicker: '随时随地查看与回复',
-    title: '在任何地方回复你的 agent',
-    lede: '你不必守在 agent 运行的那台机器前。你账号下的每台机器都在控制台里，任何浏览器都能打开，带着它的工作空间、agent、对话记录，以及一个回复框。',
-    claims: [
-      { title: '控制台', text: 'console.cookrew.dev 列出你账号下的每台机器。打开其中一台，它的工作空间、agent 和对话记录都在那里，可以阅读和回复。' },
-      { title: '手机就是控制台', text: '在手机上，同一个控制台在浏览器里打开。不需要安装应用。' },
-      { title: '在你允许时操作机器的屏幕', text: '为一台机器打开远程控制后，你的设备可以控制它的屏幕卡片，每次 15 分钟。' },
-      { title: '一个栏，汇总所有等你处理的事', text: '等你处理的 agent 和新回复，从一台机器的所有工作空间汇集到一个栏里。' },
-      { title: '跨机器的栏，手机上的提醒', text: '同一个栏也汇集账号下其他机器上等你处理的事；有 agent 需要你时，控制台可以提醒你的手机。' },
-      { title: 'Apple Watch', text: '在手腕上看到谁在等你并回复。在我们自己的手表上运行；尚未上架 App Store 或 TestFlight。' },
-      { title: '一个请求，任何设备，所有机器', text: '一个等你处理的请求只需回复一次，用手边的任何设备，覆盖账号下的所有机器。' }
-    ]
-  },
-  gateway: {
-    kicker: '所有 harness 走同一条路由',
-    title: '每个 harness，用你选的模型',
-    lede: 'Claude Code、Codex、OpenCode 和 Pi 各自需要不同的模型 API。Cookrew 可以把四者都经由 Magpie 发送——Magpie 是 yetone 的开源模型网关（MIT，usemagpie.ai），单独安装在同一台机器上——这样每个 agent 都使用你在那里配置的订阅、API key 或本地模型。在 Routing 面板里选定默认模型之前，卡片会直接用 harness 自己的登录运行。',
-    claims: [
-      { title: '四个 harness，一条路由', text: 'Claude Code、Codex、OpenCode 和 Pi 都可以经由本机的 Magpie 路由。普通 shell 不走路由。' },
-      { title: '服务商的 key 留在网关里', text: '订阅和 API key 在 Magpie 里配置。走路由的 agent 只拿到本地网关的地址、网关 key 和一个标明它是哪张卡片的标签——从不拿到服务商的 key。' },
-      { title: '按 agent 统计用量', text: '每个请求都带着发出它的卡片，所以网关能按 agent 统计用量。' },
-      { title: '借用另一台机器的模型', text: '2026 年 11 月 12 日，一台 Mac 上的 Codex 在这台 Mac 上运行工具，而它的模型由另一台机器的 Magpie 应答，经由手动建立的 SSH 隧道。仅一个模型、一次运行；没有任何卡片是这样连接的。' },
-      { title: '跨机器的网关', text: '通过你的账号连到另一台机器的网关，不用手动建隧道。' },
-      { title: '官方模型网关', text: '由 Cookrew 自己提供的模型。目前没有任何服务商协议。' }
-    ]
-  },
-  workspace: {
-    kicker: '团队共用的空间',
-    title: '团队共享的工作空间',
-    lede: '一个工作空间就是一支团队：不同 harness 上的 agent、便签和浏览器在同一张画布上，彼此交接工作。',
-    claims: [
-      { title: '混合 harness，一个团队', text: 'Claude Code、Codex、OpenCode 和 Pi 的 agent 在一个工作空间里，按谁能问谁连接起来。' },
-      { title: 'agent 之间互相提问', text: '任何 agent 都可以用 cookrew CLI 向另一个提问并读取回复。便签和浏览器卡片属于整个团队。' },
-      { title: '每个回合都是检查点', text: '在会话里来回拖动，从任意过去的回合分叉出新 agent；原会话继续运行。' },
-      { title: 'Cloud Workspace', text: '同事、客户或家人在一个工作空间里和 agent 一起工作，带角色、隔离沙箱和审计记录。尚不可用：需要先完成相关的安全工作。' }
-    ]
-  }
-}
 

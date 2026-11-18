@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { buildStaticSite } from '../registry/src/site-static'
 import { SITE_STYLE } from '../registry/src/site-shell'
-import { FEATURES, PILLARS, llmsText } from '../registry/src/site-content'
+import { FEATURES, llmsText } from '../registry/src/site-content'
+import { FLOW_EN, FLOW_ZH } from '../registry/src/site-flow'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { DEMO, PHONE_MEDIA } from '../registry/src/site-frames'
 import { CANVAS_CLIP } from '../registry/src/site-motion'
 
 /**
- * THE FRONT PAGE SAYS WHAT COOKREW DOES, AND NOTHING ELSE (owner 2026-11-18).
- * No status label, legend, roadmap or word of progress on any page: every
- * pillar claim keeps its status in site-content.ts, and only the shipped ones
- * are drawn, so a thing that is planned, tried once by hand, in beta or only
- * on the dev branch is never on the page at all.
+ * THE FRONT PAGE, "LET YOUR TOKENS FLOW" (owner 2026-11-18). It says what Cookrew does, with no status label, legend,
+ * roadmap or word of progress on any page (owner 475f4a16); its facts hold (agents and replies flow across devices,
+ * one account, Magpie is yetone's MIT project, no rotation of subscriptions); and every picture is the current UI on
+ * demo data, said once at the page's foot.
  */
 
 const site = (): ReadonlyMap<string, string | Uint8Array> =>
@@ -30,8 +30,6 @@ const home = (): string => {
   return body
 }
 
-const claims = PILLARS.flatMap((p) => p.claims)
-
 /** A baseline or progressive JPEG's width and height, from its SOF marker. */
 const jpegSize = (file: string): [number, number] => {
   const b = readFileSync(file)
@@ -44,16 +42,24 @@ const jpegSize = (file: string): [number, number] => {
   throw new Error(`no size in ${file}`)
 }
 
-describe('the pillars draw only what is shipped, with no word of progress', () => {
-  const shipped = claims.filter((c) => c.status === 'shipped')
+describe('the front page: three flows, no word of progress, the facts kept', () => {
   const words = (html: string): string => html.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/g, '').replace(/<[^>]+>/g, ' ')
 
-  it('draws every shipped claim, plain, and no other', () => {
-    const body = home()
-    expect([...body.matchAll(/<li class="claim">/g)]).toHaveLength(shipped.length)
-    for (const c of shipped) expect(body).toContain(`<b>${c.title.replace(/'/g, '&#39;')}</b>`)
-    for (const c of claims.filter((c) => c.status !== 'shipped')) expect(body, c.title).not.toContain(c.text)
-    expect(body).not.toMatch(/class="st |st-legend|id="roadmap"|id="status"|id="built"/)
+  it('runs hero, three flows, the three chapters, the field, start and the last call, in English and Chinese', () => {
+    const files = site()
+    for (const name of ['index.html', 'zh/index.html']) {
+      const body = files.get(name) as string
+      const order = ['class="tf-hero"', 'id="flow"', 'id="devices"', 'id="harness"', 'id="models"', 'id="field"', 'id="start"', 'class="tf-final"'].map((m) => body.indexOf(m))
+      for (const at of order) expect(at, name).toBeGreaterThan(0)
+      expect([...order].sort((x, y) => x - y)).toEqual(order)
+      expect(body, name).toContain('class="tf-dg tf-dg-wide"')
+      expect(body, name).toContain('class="tf-dg tf-dg-tall"')
+      // The old front page's grid, comparison, questions and roadmap are gone; their feature pages stay.
+      expect(body, name).not.toMatch(/id="(features|compare|faq|roadmap|status|built|everywhere|gateway|workspace)"/)
+    }
+    expect(home()).toContain('<h1>Let your tokens <em>flow freely</em>.</h1>')
+    expect((files.get('zh/index.html') as string)).toContain('<h1>让你的 token<br><em>自由流转</em>。</h1>')
+    for (const f of FEATURES.filter((f) => f.slug !== 'marketplace')) expect(files.has(`features/${f.slug}.html`), f.slug).toBe(true)
   })
 
   it('no page a reader is pointed at says shipped, in dev, beta, planned, roadmap or not yet, in English or Chinese', () => {
@@ -67,33 +73,38 @@ describe('the pillars draw only what is shipped, with no word of progress', () =
     expect(llmsText()).not.toMatch(en)
   })
 
-  it('what is not built is never shipped: Cloud Workspace, other people, the official or cross-machine gateway', () => {
-    const unbuilt = claims.filter((c) => /Cloud Workspace|teammates|clients|family|official|across your machines|every machine of the account/i.test(`${c.title} ${c.text}`))
-    expect(unbuilt.length).toBeGreaterThanOrEqual(4)
-    for (const c of unbuilt) expect(c.status, c.title).toBe('planned')
-  })
-
-  it('borrowing another machine’s model stays the manual experiment, so it is not drawn', () => {
-    const borrowed = claims.filter((c) => /another machine’s/i.test(c.title))
-    expect(borrowed).toHaveLength(1)
-    expect(borrowed[0].status).toBe('experiment')
-    expect(home()).not.toMatch(/ssh -L|SSH tunnel/)
-  })
-
-  it('the watch stays beta, so its claim is not drawn; both bars are shipped', () => {
-    for (const c of claims.filter((c) => /watch|wrist/i.test(`${c.title} ${c.text}`))) expect(c.status, c.title).toBe('beta')
-    for (const c of claims.filter((c) => /one bar|^The bar on all your machines/i.test(c.title))) expect(c.status, c.title).toBe('shipped')
-  })
-
-  it('llms.txt and the structured data carry only what is shipped: a label does not travel with a lifted sentence', () => {
-    const text = llmsText()
-    for (const c of claims) {
-      if (c.status === 'shipped') expect(text).toContain(`- ${c.title}: ${c.text}`)
-      else expect(text, c.title).not.toContain(c.text)
+  it('keeps the facts: one account, not one sign-in; agents and replies flow across devices; Magpie is yetone’s, MIT; no rotation', () => {
+    for (const f of [FLOW_EN, FLOW_ZH]) {
+      expect(f.models.credit).toMatch(/Magpie/)
+      expect(f.models.credit).toMatch(/yetone/)
+      expect(f.models.credit).toMatch(/MIT/)
     }
+    expect(FLOW_EN.sub).toMatch(/^One account\./)
+    expect(FLOW_ZH.sub).toMatch(/^一个账号/)
+    const all = [home(), site().get('zh/index.html') as string, llmsText()].map(words).join('\n')
+    expect(all).not.toMatch(/one sign-in|单点登录|一次登录/i)
+    expect(all).not.toMatch(/tokens? (flow|move|travel)s? (across|between) (devices|machines)|token\s*(在|跨)设备/i)
+    expect(all).not.toMatch(/rotat\w* (your |several |multiple )?(subscriptions|accounts)|轮换(订阅|账号)|多订阅轮/i)
+    // The chapter on devices is about agents and replies, the one on models about the gateway.
+    expect(FLOW_EN.chapters[0]!.lede).toMatch(/agent needs you/)
+    expect(FLOW_EN.models.note).toMatch(/installed separately/)
+  })
+
+  it('says once, at the foot, that the pictures are the current interface on demo data', () => {
+    expect(home()).toContain('<p class="tf-pictures">Pictures show Cookrew’s current interface with demo data.</p>')
+    expect(site().get('zh/index.html') as string).toContain('<p class="tf-pictures">图片为 Cookrew 当前界面，使用演示数据。</p>')
+    expect(home()).toContain('<p class="tf-cap">Controlling a computer’s or a phone’s screen needs the switch turned on at that machine, 15 minutes per grant.</p>')
+  })
+
+  it('llms.txt and the structured data carry the new lede and the chapters', () => {
+    const text = llmsText()
+    expect(text).toContain(`> ${FLOW_EN.lede}`)
+    for (const c of FLOW_EN.chapters) for (const [b, t] of c.points) expect(text).toContain(`- ${b}: ${t}`)
     const jsonLd = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(home())?.[1] ?? ''
-    expect(jsonLd.length).toBeGreaterThan(0)
-    for (const c of claims.filter((c) => c.status !== 'shipped')) expect(jsonLd, c.title).not.toContain(c.text)
+    expect(jsonLd).toContain(FLOW_EN.lede)
+    expect(jsonLd).toContain('"@type":"HowTo"')
+    expect(home()).toContain('<title>Cookrew — let your tokens flow</title>')
+    expect(site().get('zh/index.html') as string).toContain('<title>Cookrew · 让你的 token 自由流转</title>')
   })
 
   it('the front page does not point at serving or selling seats while sharing waits on security work', () => {
@@ -140,7 +151,7 @@ describe('the pictures say what they are (2026-11-17)', () => {
   })
 
   it('the hero is one question on three devices, a composite of renders on demo data, by day and by night', () => {
-    const hero = /<div class="hero">[\s\S]*?<\/figure>/.exec(home())?.[0] ?? ''
+    const hero = /<section class="tf-hero">[\s\S]*?<\/figure>/.exec(home())?.[0] ?? ''
     expect(hero).toContain(`/site/${DEMO.hero.file}"`)
     expect(hero).toContain(`/site/${DEMO.hero.night!.file}"`)
     expect(hero).toContain('data-source="composite"')
@@ -185,24 +196,22 @@ describe('the pictures say what they are (2026-11-17)', () => {
     expect(SITE_STYLE).toContain('figure.shot .v-night{display:none}')
   })
 
-  it('every picture is in one section of one page, never two (2026-11-17, second round)', () => {
-    const seenIn = new Map<string, string>()
-    // Within one language: the Chinese pages show the same pictures as their English twins.
+  it('every picture is shown once on a page (the front page and a feature page may share one)', () => {
     for (const [name, body] of [...pages()].filter(([n]) => !n.startsWith('zh/'))) {
+      const seen = new Set<string>()
       for (const fig of figures(body)) {
-        const files = new Set([...fig.matchAll(/\/site\/(demo-[a-z-]+?)(?:-\d+|-phone)?\.(?:jpg|mp4)/g)].map((m) => m[1]))
+        const files = new Set([...fig.matchAll(/\/site\/(demo-[a-z-]+?)(?:-\d+|-phone)?\.(?:jpg|mp4)/g)].map((m) => m[1]!))
         for (const file of files) {
-          expect(seenIn.get(file), `${file} on ${name} and ${seenIn.get(file)}`).toBeUndefined()
-          seenIn.set(file, name)
+          expect(seen.has(file), `${file} twice on ${name}`).toBe(false)
+          seen.add(file)
         }
       }
     }
-    expect(seenIn.size).toBeGreaterThan(12)
   })
 
   it('a figure whose desktop framing is too wide for a phone carries its own phone framing', () => {
     const body = home()
-    for (const key of ['hero', 'routing', 'watch', 'ops'] as const) {
+    for (const key of ['hero', 'routing', 'ops', 'devices'] as const) {
       expect(DEMO[key].phone, key).toBeDefined()
       expect(body).toContain(`<source media="${PHONE_MEDIA}" srcset="`)
       expect(body).toContain(DEMO[key].file.replace(/\.jpg$/, '-phone.jpg'))
@@ -214,16 +223,18 @@ describe('the pictures say what they are (2026-11-17)', () => {
     expect(SITE_STYLE).toMatch(/@media \(max-width:640px\)\{[^}]*\.feature-shots figure\.clip\{display:none\}/)
   })
 
-  it('the pillars run everywhere, then the gateway, then the workspace (owner 2026-11-18), each showing its pictures', () => {
-    expect(PILLARS.map((p) => p.id)).toEqual(['everywhere', 'gateway', 'workspace'])
+  it('the front page shows the draft’s ten pictures, each in its chapter, by day and by night', () => {
     const body = home()
-    expect(body.indexOf('id="everywhere"')).toBeLessThan(body.indexOf('id="gateway"'))
-    expect(body).toMatch(/<span class="no">01<\/span>see and prompt everywhere/)
-    for (const p of PILLARS) for (const m of p.media) {
-      expect(body).toContain(DEMO[m.key].file.replace(/\.jpg$/, '-800.jpg'))
-      expect(body).toContain(`/site/${DEMO[m.key].file} ${DEMO[m.key].width}w`)
+    const where: [string, keyof typeof DEMO][] = [
+      ['tf-hero', 'hero'], ['devices', 'devices'], ['devices', 'crewPhone'], ['devices', 'hitlPhone'], ['harness', 'agents'], ['harness', 'hitlDesk'],
+      ['models', 'routing'], ['field', 'ops'], ['field', 'browserCard'], ['field', 'workspaces']
+    ]
+    for (const [section, key] of where) {
+      const at = section === 'tf-hero' ? /<section class="tf-hero">[\s\S]*?<\/section>/.exec(body)?.[0] : new RegExp(`<section class="tf-ch" id="${section}">[\\s\\S]*?</section>`).exec(body)?.[0]
+      expect(at, `${section} ${key}`).toContain(`/site/${DEMO[key].file} ${DEMO[key].width}w`)
+      if (DEMO[key].night) expect(at, `${section} ${key} night`).toContain(DEMO[key].night!.file)
     }
-    expect(body).toContain('Diagram, not a screenshot.')
+    expect(body).not.toContain(DEMO.watch.file)
   })
 
   it('every picture the pages name is a file in the repository, at the size the pages say, with its twins', () => {
@@ -249,15 +260,15 @@ describe('the site in Chinese (owner 2026-11-18)', () => {
     return body
   }
 
-  it('draws the front page and every feature page again at /zh/, in Chinese, with the same claims and labels', () => {
+  it('draws the front page and every feature page again at /zh/, in Chinese, with the same chapters and pictures', () => {
     const zh = read('zh/index.html')
     expect(zh).toContain('<html lang="zh-CN">')
-    expect(zh).toContain('<h1><span class="hl">任何设备。</span> <span class="hl">任何 harness。</span> <span class="hl">任何模型。</span></h1>')
+    expect(zh).toContain('<h1>让你的 token<br><em>自由流转</em>。</h1>')
     expect(zh).toContain('<link rel="canonical" href="https://cookrew.dev/zh/">')
-    // As many claims as the English page.
-    const claimsIn = (html: string): number => [...html.matchAll(/<li class="claim">/g)].length
-    expect(claimsIn(zh)).toBe(claimsIn(read('index.html')))
-    expect(claimsIn(zh)).toBeGreaterThan(0)
+    // As many points and pictures as the English page.
+    const count = (html: string, re: RegExp): number => [...html.matchAll(re)].length
+    expect(count(zh, /<ul class="tf-points"><li>/g)).toBe(3)
+    expect(count(zh, /<figure class="shot/g)).toBe(count(read('index.html'), /<figure class="shot/g))
     for (const f of FEATURES) expect(read(`zh/features/${f.slug}.html`)).toContain('<html lang="zh-CN">')
   })
 
@@ -270,7 +281,7 @@ describe('the site in Chinese (owner 2026-11-18)', () => {
       expect(read(name)).toContain('<link rel="alternate" hreflang="zh-CN" href="https://cookrew.dev/zh/">')
     }
     // A Chinese page keeps its links in Chinese.
-    expect(read('zh/index.html')).toContain('href="/zh/features/canvas"')
+    expect(read('zh/index.html')).toContain('href="/zh/"')
     expect(read('zh/features/canvas.html')).toContain('href="/zh/#download"')
   })
 })

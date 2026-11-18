@@ -44,14 +44,14 @@ export function featurePage(slug: string): Page | null {
         webPage({ path, name: f.title, description: f.definition }),
         breadcrumbs([
           { name: 'Cookrew', path: local('/') },
-          { name: tr('Features', '功能'), path: local('/#features') },
+          { name: tr('Features', '功能'), path: local('/#flow') },
           { name: f.title, path }
         ]),
         faqPage(f.faq)
       ]
     },
     `<div class="wrap" style="padding-top:36px">
-<p class="meta"><a href="${local('/')}">Cookrew</a> / <a href="${local('/#features')}">${tr('Features', '功能')}</a> / ${esc(f.slug)}</p>
+<p class="meta"><a href="${local('/')}">Cookrew</a> / <a href="${local('/#flow')}">${tr('Features', '功能')}</a> / ${esc(f.slug)}</p>
 <h1>${esc(f.title)}</h1>
 <p class="lede">${esc(f.definition)}</p>
 <ul class="pts">${f.pts.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>

@@ -177,7 +177,7 @@ describe('what moved, and where an old link goes', () => {
   })
 
   it('the old section addresses still land on their sections, and /download on the build', () => {
-    expect(redirects).toContain('/features /#features 301')
+    expect(redirects).toContain('/features /#flow 301')
     expect(redirects).toContain('/start /#start 301')
     expect(redirects).toContain('/download /#download 302')
   })
