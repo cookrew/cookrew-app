@@ -101,6 +101,16 @@ describe('cookrew-seal/2 device mode, against node:crypto', () => {
     expect(hex(opened ?? new Uint8Array(0))).toBe(v.record.plain)
   })
 
+  it('the dialling desktop refuses an answer signed by any key but the one whose id it dialled', async () => {
+    const { newDevice } = await import('./support/seal2-accounts')
+    const started = await startDeviceHandshake({ self: initiator, to: v.to, verify: verifyDevice })
+    // Another key answers in the dialled id's name: a well-formed, correctly signed accept for the wrong key.
+    const impostor = newDevice()
+    const accepted = await acceptDeviceHandshake(started.hello, { self: { ...impostor.signer, deviceId: v.to }, verify: verifyDevice })
+    expect(accepted).not.toBeNull()
+    expect(await started.finish(accepted?.accept)).toBeNull()
+  })
+
   it('speaks the same words for the pair from either side', async () => {
     const words = fingerprintOfDigest(bytes(v.wordsDigest))
     expect(await pairWords(v.from, v.to)).toEqual(words)

@@ -1,6 +1,6 @@
 import type { SealRecord } from '../canvas-seal'
 import { createInbox, encodeRecord, type InboxAnswer } from '../canvas-seal-wire'
-import { decodeFrame2, encodeFrame2, STREAM_KIND, type Fields, type Frame2 } from './frames'
+import { decodeFrame2, encodeFrame2, isStreamKind, type Fields, type Frame2 } from './frames'
 import type { Seal2Session } from './records'
 import { ABORT, ACK_DELAY_MS, HARD_LIMIT, HIGH_WATER, MAX_STREAMS, PING_MS, SILENT_MS, STREAM_WINDOW } from './spec'
 import { createStream, Seal2StreamError, type Seal2Stream, type StreamControl } from './stream'
@@ -288,7 +288,7 @@ export function createSeal2Connection(options: Seal2ConnectionOptions): Seal2Con
     openStream(kind, fields = {}) {
       if (closed) throw new Error('The sealed session has ended')
       if (leaving || theyLeave) throw new Error('The sealed session is going away')
-      if (!STREAM_KIND.test(kind)) throw new Error(`Not a stream kind: ${kind}`)
+      if (!isStreamKind(kind)) throw new Error(`Not a stream kind: ${kind}`)
       const id = nextOwn
       nextOwn += 2
       const open: Frame2 = { kind: 'open', stream: id, type: kind, fields }

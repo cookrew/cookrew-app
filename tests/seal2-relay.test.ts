@@ -85,6 +85,8 @@ beforeAll(async () => {
     codeFor: (asked) => (asked === id ? code : null),
     dial: loopbackDialer(port),
     device: { self: () => mac.signer, verify: verifyDevice, trusted: async (deviceId) => deviceId === other.id },
+    // Only what this suite lets a desktop peer reach: a lane names its routes (owner: http off by default).
+    deviceHttp: (deviceId, _method, path) => deviceId === other.id && path.startsWith('/api/') && path !== '/api/refused-route',
     kinds: {
       echo: (stream, peer) => {
         stream.respond(200, { peer: peer.mode })
@@ -257,6 +259,13 @@ describe('device mode (desktop to desktop on one account) through the real relay
     const read = world.relayCouldRead(from, fromExchange)
     for (const canary of [MACHINE_KEY, 'canary-machine-key', REPLY, ROUTE, UPLOAD]) expect(read, canary).not.toContain(canary)
     expect(sealed.some((notice) => notice.peer.mode === 'device' && notice.peer.deviceId === world.otherDesktop.id)).toBe(true)
+  })
+
+  it('a route a desktop peer was not given is refused, and so is a kind named for what every object has', async () => {
+    const link = await otherDesktop()
+    await expect(sealedFetch(link.connection, { method: 'GET', path: '/api/refused-route', headers: { authorization: MACHINE_KEY } })).rejects.toMatchObject({ code: ABORT.refused })
+    expect(seen.some((request) => request.path === '/api/refused-route')).toBe(false)
+    expect(() => link.connection.openStream('constructor', {})).toThrow()
   })
 
   it('opens a stream of another kind (openStream), here an echo', async () => {

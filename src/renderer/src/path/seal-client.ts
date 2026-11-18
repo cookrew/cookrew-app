@@ -65,7 +65,9 @@ export class SealRefusedError extends Seal2RefusedError {
   constructor(
     override readonly why: SealRefusal,
     /** On 'replaced' from a v2 Mac: its proof naming the code that replaced this one (seal2/successor.ts). */
-    readonly successor?: string
+    readonly successor?: string,
+    /** The refused hello's own key: the successor proof answers that hello and no other. */
+    readonly helloE?: string
   ) {
     super(why, REFUSED[why])
   }
@@ -124,7 +126,7 @@ async function shakeHands(deps: SealClientDeps, fetchFn: typeof fetch) {
   const done = await shakeHandsOverHttp(http, started, async (said) => {
     const replaced = said !== null && (await checkReplaced(code, started.hello, said.replaced).catch(() => false))
     const successor = replaced && typeof said?.successor === 'string' ? said.successor : undefined
-    return new SealRefusedError(replaced ? 'replaced' : 'code', successor)
+    return new SealRefusedError(replaced ? 'replaced' : 'code', successor, started.hello.e)
   }).catch((error: unknown) => {
     throw error instanceof Seal2RefusedError && !(error instanceof SealRefusedError) ? new SealRefusedError('proof') : error
   })

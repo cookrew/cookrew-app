@@ -8,7 +8,7 @@ import { bodiless } from './http-compress'
 import { RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER } from './relay-device'
 import { DOOR_MARKER } from '../shared/remote-unlock'
 import { acceptCodeHandshake, acceptDeviceHandshake, offersSeal2, type AcceptedSeal2, type DeviceSigner, type DeviceVerifier } from '../shared/seal2/handshake'
-import { HTTP_KIND } from '../shared/seal2/http'
+import { HTTP_KIND, readRequest } from '../shared/seal2/http'
 import { ABORT } from '../shared/seal2/spec'
 import type { Seal2Stream } from '../shared/seal2/stream'
 import { openSeal2Live } from './seal2-live'
@@ -100,8 +100,14 @@ export interface SealTerminusDeps {
   currentCodeId?(): Promise<string>
   readonly dial: BridgeDialer
   readonly handshakesPerMinute?: number
-  /** Stream kinds besides "http". */
+  /** Stream kinds besides "http", each a lane's own (lane Magpie: "magpie"). */
   readonly kinds?: Readonly<Record<string, SealStreamHandler>>
+  /**
+   * Which of this Mac's routes a DEVICE-mode peer may reach as kind "http" (owner 2026-11-19: off by default).
+   * Absent, or false for a route: refused. A phone or the console on the connect code is not this: its
+   * "http" streams go to the companion as before, where the pairing token is what is asked for.
+   */
+  deviceHttp?(deviceId: string, method: string, path: string): boolean
   /** Absent: device hellos are refused. */
   readonly device?: SealDeviceDeps
   onSealed?(notice: SealedNotice): void
@@ -516,7 +522,7 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
       if (was === null) return reply(response, 403, { error: 'no such code' })
       const replaced = await proveReplaced(was, { id: body.id as string, e: body.e as string })
       const current = (await deps.currentCodeId?.().catch(() => null)) ?? null
-      const successor = current === null ? {} : { successor: await proveSuccessor(was, body.id as string, current) }
+      const successor = current === null ? {} : { successor: await proveSuccessor(was, body.id as string, current, body.e as string) }
       return reply(response, 403, { error: 'code replaced', replaced, ...successor })
     }
     const v2 = offersSeal2(body)
@@ -555,10 +561,17 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     // In device mode the handshake proved who dialled: that, not the relay's word, names the device inside.
     const outer: SealOuter = peer.mode === 'device' ? { ...said, device: peer.deviceId } : said
     if (stream.kind === HTTP_KIND) {
+      if (peer.mode === 'device') {
+        const asked = readRequest(stream.fields)
+        const allowed = asked !== null && deps.deviceHttp?.(peer.deviceId, asked.method, asked.path) === true
+        if (!allowed) return stream.abort(ABORT.refused, 'not a route for this device')
+      }
       return serveHttpStream(stream, { dial: deps.dial, headersFor: (asked) => innerHeaders(asked, outer), log })
     }
-    const handler = deps.kinds?.[stream.kind]
-    if (handler === undefined) return stream.abort(ABORT.unknownKind, 'no such kind')
+    // Own entries only: a kind named for something every object has ("constructor") is no handler.
+    const kinds = deps.kinds ?? {}
+    const handler = Object.prototype.hasOwnProperty.call(kinds, stream.kind) ? kinds[stream.kind] : undefined
+    if (typeof handler !== 'function') return stream.abort(ABORT.unknownKind, 'no such kind')
     handler(stream, peer, outer)
   }
 

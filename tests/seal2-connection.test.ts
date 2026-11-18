@@ -240,7 +240,7 @@ describe('what a carrier can do', () => {
     const { a, b, toA } = await pair({}, {
       onStream: (stream) => {
         stream.respond(200, {})
-        void stream.writable.getWriter().write(text('partial'))
+        void stream.writable.getWriter().write(text('partial')).catch(() => undefined)
       }
     })
     const stream = a.openStream('echo', {})
@@ -343,7 +343,8 @@ describe('the session', () => {
       {
         onStream: (stream) => {
           stream.respond(200, {})
-          void stream.writable.getWriter().write(new Uint8Array(STREAM_WINDOW + 10))
+          // Its write waits on credit that never comes: the abort (or the teardown) ends it, and that is expected.
+          void stream.writable.getWriter().write(new Uint8Array(STREAM_WINDOW + 10)).catch(() => undefined)
         }
       }
     )
@@ -373,4 +374,14 @@ describe('sealedFetch and a caller\'s abort', () => {
     late.abort()
     await expect(asked).rejects.toMatchObject({ name: 'AbortError' })
   })
+
+describe('stream kinds', () => {
+  it('a kind named for what every object answers to is no kind, either way on the wire', () => {
+    for (const kind of ['constructor', 'prototype', '__proto__', 'tostring']) {
+      expect(() => encodeFrame2({ kind: 'open', stream: 1, type: kind, fields: {} })).toThrow()
+    }
+    const raw = Uint8Array.of(1, 0, 0, 0, 1, 11, ...new TextEncoder().encode('constructor'), 0, 0)
+    expect(decodeFrame2(raw)).toBeNull()
+  })
 })
+

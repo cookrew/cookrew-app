@@ -28,7 +28,10 @@ export const STREAM_KIND = /^[a-z][a-z0-9-]{0,31}$/
 const FIELD_NAME = /^:?[!#$%&'*+.^_`|~0-9a-z-]+$/
 
 /** Callers name things by plain property: a field called "__proto__" is refused, not merged. */
-const RESERVED = new Set(['__proto__', 'constructor', 'prototype'])
+const RESERVED = new Set(['__proto__', 'constructor', 'prototype', 'hasownproperty', 'tostring', 'valueof'])
+
+/** A kind is a lane's name: never one every object already answers to. */
+export const isStreamKind = (kind: string): boolean => STREAM_KIND.test(kind) && !RESERVED.has(kind)
 
 export function encodeFields(fields: Fields): Bytes {
   const entries = Object.entries(fields)
@@ -79,7 +82,7 @@ const coded = (code: number, reason: string): Bytes => {
 function bodyOf(frame: Frame2): Uint8Array {
   switch (frame.kind) {
     case 'open': {
-      if (!STREAM_KIND.test(frame.type)) throw new Error(`Not a stream kind: ${frame.type}`)
+      if (!isStreamKind(frame.type)) throw new Error(`Not a stream kind: ${frame.type}`)
       return concat(u8(frame.type.length), utf8(frame.type), encodeFields(frame.fields))
     }
     case 'head':
@@ -120,7 +123,7 @@ function decodeStreamFrame(kind: (typeof TYPES)[number], stream: number, body: U
     case 'open': {
       const length = body[0] ?? 0
       const type = String.fromCharCode(...body.subarray(1, 1 + length))
-      if (body.length < 1 + length || !STREAM_KIND.test(type) || type.length !== length) return null
+      if (body.length < 1 + length || !isStreamKind(type) || type.length !== length) return null
       const fields = decodeFields(body.subarray(1 + length))
       return fields === null ? null : { kind, stream, type, fields }
     }

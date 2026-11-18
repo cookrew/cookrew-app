@@ -18,7 +18,7 @@ const CODE_SHAPE = /^[A-Za-z0-9_-]{43}$/
 const bytesOf = (encoded: string): Uint8Array => Uint8Array.from(atob(encoded.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0))
 
 export async function vouchedNextCode(storage: Pick<Storage, 'getItem' | 'removeItem'>, codeKey: string, held: string, failure: unknown): Promise<string | null> {
-  if (!(failure instanceof SealRefusedError) || failure.why !== 'replaced' || failure.successor === undefined) return null
+  if (!(failure instanceof SealRefusedError) || failure.why !== 'replaced' || failure.successor === undefined || failure.helloE === undefined) return null
   let waiting: string | null = null
   try {
     waiting = storage.getItem(nextCodeKey(codeKey))
@@ -26,7 +26,7 @@ export async function vouchedNextCode(storage: Pick<Storage, 'getItem' | 'remove
     return null
   }
   if (waiting === null || !CODE_SHAPE.test(waiting) || !CODE_SHAPE.test(held)) return null
-  if (!(await checkSuccessor(bytesOf(held), bytesOf(waiting), failure.successor).catch(() => false))) return null
+  if (!(await checkSuccessor(bytesOf(held), bytesOf(waiting), failure.successor, failure.helloE).catch(() => false))) return null
   try {
     storage.removeItem(nextCodeKey(codeKey))
   } catch {
