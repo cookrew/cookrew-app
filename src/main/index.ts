@@ -327,7 +327,10 @@ import { MagpieWeb, MAGPIE_WEB_FILE } from './route/magpie-web'
 import { openMagpieCardSession } from './magpie-card-open'
 import { plainRemoteProviders, remoteLoopbackPorts, remoteLoopbackProviders } from './route/remote-ports'
 import type { LiveValues } from '../shared/launch-settings'
-import { magpieBinary } from './route/share-keys'
+import { magpieBinary, magpieRunner, ShareKeys } from './route/share-keys'
+import { fileIntentStore, INTENT_FILE } from './route/share-intents'
+import { createMagpieRemote } from './magpie-remote/setup'
+import { MAGPIE_REMOTE_KIND } from '../shared/remote-magpie'
 import { AccessStore, probeEndpoint } from './agent-access'
 import { macKeychain } from './pane-keychain'
 import { createSetupLines, registerSetupLineIpc, shellHoldsTerminal } from './setup-line'
@@ -1883,6 +1886,41 @@ const sealPeers = createSealPeers({
 })
 // A blocked desktop is refused in the clear on the relay line too, whatever its marks (seal-blocked.ts).
 const sealMarks = blockedLanes.marks
+/**
+ * The owner's gateway keys for their devices (route/share-keys.ts): ONE instance, so the
+ * Routing panel's Make a key and another desktop's sealed ask share one queue. Made once
+ * Magpie is found; asked again while it is not.
+ */
+let shareKeysHeld: ShareKeys | null = null
+const shareKeysNow = (): ShareKeys | null => {
+  if (shareKeysHeld !== null) return shareKeysHeld
+  const bin = magpieBinary(defaultDiscoveryEnv())
+  if (bin !== null) shareKeysHeld = new ShareKeys({ run: magpieRunner(bin), intents: fileIntentStore(path.join(homedir(), '.cookrew', INTENT_FILE)) })
+  return shareKeysHeld
+}
+/**
+ * Magpie across the owner's computers (magpie-remote/setup.ts): this computer's Magpie
+ * served to the account's other desktops as the `magpie` stream kind, and theirs used
+ * here through a loopback forwarder onto openStream. Both switches are read on every
+ * stream and every request, at both ends.
+ */
+const magpieRemote = createMagpieRemote({
+  base: path.join(homedir(), '.cookrew'),
+  switches: () => launchLive?.() ?? null,
+  shareKeys: shareKeysNow,
+  gatewayPort: () => routeService.gatewayPort(),
+  openStream: (peer, kind, fields) => sealPeers.openStream(peer, kind, fields),
+  desktops: async () => {
+    const answer = await accounts.authed<unknown>('/v2/me/desktops')
+    if (!answer.ok) return null
+    return (parseAccountMachines(answer.value, accounts.account()?.deviceId ?? null) ?? []).map((m) => ({ id: m.id, name: m.name, online: m.online }))
+  },
+  selfId: () => accounts.account()?.deviceId ?? null,
+  sealer: electronSealer(safeStorage),
+  magpieBin: () => magpieBinary(defaultDiscoveryEnv()),
+  env: () => defaultDiscoveryEnv(),
+  log: (line) => console.error(`[cookrew] ${line}`)
+})
 const sealTerminus = createSealTerminus({
   codeFor: (id) => connectCodes.codeFor(id),
   replacedKeyFor: (id) => connectCodes.replacedKeyFor(id),
@@ -1901,6 +1939,7 @@ const sealTerminus = createSealTerminus({
   },
   // Owner ruling 2026-11-19: no route for a desktop peer by default. A confirmed watch reaches its own routes.
   deviceHttp: watchDeviceHttp(sealWatchKeys, watchSealedRouteAllowed),
+  kinds: { [MAGPIE_REMOTE_KIND]: magpieRemote.serve },
   dial: loopbackDialer(MOBILE_PORT, undefined, sealProofHeaders()),
   // What the paced uplink still holds counts too: since relay-uplink.ts, an
   // answer waits there rather than in Node's socket buffer.
@@ -7808,6 +7847,9 @@ app.whenReady().then(() => {
   // on Windows that proof is async (file-privacy.ts), and until it lands every
   // call is refused rather than any request waiting on it.
   callCredentials.prepare().catch((error: unknown) => console.error('[cookrew] call signing key not ready:', error))
+  // Hold the forwarder's port from the start (magpie-remote/forward.ts): while Cookrew runs,
+  // nothing else can take the address this computer's Magpie sends other computers' requests to.
+  void magpieRemote.start()
   // Dock icon must be set at runtime in dev; packaged builds also bundle
   // resources/icon.icns via the packager config when one is added.
   if (process.platform === 'darwin' && app.dock) {
@@ -8883,7 +8925,10 @@ app.on('window-all-closed', () => {
 let appShutdownStarted = false
 let appShutdownComplete = false
 
-app.on('will-quit', () => magpieWeb.stop())
+app.on('will-quit', () => {
+  magpieWeb.stop()
+  void magpieRemote.stop()
+})
 app.on('before-quit', (event) => {
   // The sizes panes last had, so their mirrors start at them next launch (pane-sizes.ts).
   paneSizes().flush()
@@ -9056,7 +9101,22 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   // Sharing this computer's Magpie with the owner's other devices (route/share-keys.ts):
   // a key is minted on the owner's gateway, so only the owner's top frame may ask.
-  registerShareIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), { enabled: () => launchLive?.() ?? null })
+  registerShareIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
+    enabled: () => launchLive?.() ?? null,
+    makeKeys: shareKeysNow,
+    // A key revoked here is forgotten by the sealed path too (magpie-remote/bound-keys.ts).
+    onRevoked: (id) => {
+      try {
+        magpieRemote.boundKeys.remove(id)
+      } catch {
+        // Unreadable list: the key is already refused there, since Magpie no longer lists it.
+      }
+    }
+  })
+  // Another computer's Magpie over the seal (magpie-remote/setup.ts): owner's window only.
+  ipcMain.handle('magpie-remote:list', ownerOnly(() => magpieRemote.list()))
+  ipcMain.handle('magpie-remote:connect', ownerOnly((peer: unknown, name: unknown) => magpieRemote.connect(peer, name)))
+  ipcMain.handle('magpie-remote:disconnect', ownerOnly((peer: unknown) => magpieRemote.disconnect(peer)))
 
   // ---- the owner's account (identity v2) ----
   //

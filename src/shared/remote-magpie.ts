@@ -42,3 +42,45 @@ export function tailnetHost(host: string): boolean {
   if (ip !== null) return ip[0] === 100 && ip[1] >= 64 && ip[1] <= 127
   return host.toLowerCase().endsWith('.ts.net')
 }
+
+/**
+ * MAGPIE OVER THE SEAL (lane Magpie). Another computer of the account uses this
+ * one's Magpie through a cookrew-seal/2 stream of this kind (main/magpie-remote/),
+ * never a tunnel onto loopback and never plain http across a LAN.
+ */
+export const MAGPIE_REMOTE_KIND = 'magpie'
+/** On a `magpie` stream: the asking computer wants a key of its own (POST, JSON `{ name }`). */
+export const MAGPIE_KEY_PATH = '/.cookrew/magpie-key'
+/** On a `magpie` stream: the asking computer gives its key back (POST). */
+export const MAGPIE_KEY_RETURN_PATH = '/.cookrew/magpie-key/return'
+/**
+ * What the asking computer's own Magpie is told its key is. Not a secret: the
+ * real key stays in Cookrew's main process, which puts it on each request it seals.
+ */
+export const SEALED_PLACEHOLDER_KEY = 'cookrew-sealed'
+/**
+ * The loopback port of the asking computer's forwarder (main/magpie-remote/forward.ts).
+ * One port, never a fallback: Magpie's providers name it, and moving would leave them
+ * pointing at whatever took the old one.
+ */
+export const MAGPIE_FORWARD_PORTS: readonly number[] = [3428]
+
+export interface MagpieKeyAnswerOk {
+  readonly ok: true
+  readonly key: string
+  readonly id: string
+}
+export type MagpieKeyAnswer = MagpieKeyAnswerOk | { readonly ok: false; readonly why: string }
+
+/** The Routing panel's "Your other computers" (owner-only IPC magpie-remote:list). */
+export interface MagpieRemoteList {
+  readonly signedIn: boolean
+  /** The forwarder's port, or null while it is not running. */
+  readonly forwarder: number | null
+  /** Keys from other computers are sealed with the keychain here. */
+  readonly sealed: boolean
+  readonly problem: string | null
+  /** False when the account's desktops could not be had: the list is empty for that reason. */
+  readonly desktopsKnown: boolean
+  readonly desktops: readonly { readonly id: string; readonly name: string; readonly online: boolean; readonly providerId: string | null }[]
+}

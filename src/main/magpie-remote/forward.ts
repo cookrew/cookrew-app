@@ -1,0 +1,197 @@
+import http from 'node:http'
+import type { LiveValues } from '../../shared/launch-settings'
+import { MAGPIE_REMOTE_KIND } from '../../shared/remote-magpie'
+import type { Fields } from '../../shared/seal2/frames'
+import { plainHeaders, requestFields } from '../../shared/seal2/http'
+import { ABORT } from '../../shared/seal2/spec'
+import type { Seal2Stream } from '../../shared/seal2/stream'
+
+/**
+ * THIS COMPUTER'S WAY TO ANOTHER ONE'S MAGPIE: A FORWARDER ONTO THE SEAL.
+ *
+ * Magpie's Remote magpie provider wants a URL. Here that URL is this forwarder,
+ * on loopback: `http://127.0.0.1:<port>/peer/<device id>` (and `/v1` under it).
+ * Each request this computer's Magpie sends there becomes one `magpie` stream of
+ * the cookrew-seal/2 session to that desktop (seal-peers.ts · openStream), so
+ * between the two computers there is only the relay's ciphertext: no tunnel onto
+ * the other computer's loopback, no plain http across a network.
+ *
+ * Checked on EVERY request, before any byte leaves: both switches on HERE
+ * (unreadable = off), the desktop is one this computer was connected to, and the
+ * request looks like this computer's Magpie (no browser Origin, our own Host, a
+ * model path). This is where a Magpie group or fallback that reaches the other
+ * computer is stopped at dispatch time too: whatever Magpie picks, its request
+ * comes through here.
+ *
+ * THE KEY. This computer's Magpie holds a placeholder (SEALED_PLACEHOLDER_KEY).
+ * The key the other computer gave this one is kept in main (remotes.ts) and put
+ * on each request here, in whichever credential header the request used. A
+ * program that took this port while Cookrew is not running would be handed the
+ * placeholder and the request, never the key (the residual: it does see the
+ * prompt). A served seat cannot take or reach the port (sandbox-deny.ts,
+ * route/service.ts · gatewayPorts).
+ */
+
+export interface ForwardDeps {
+  /** This computer's switches, read now; null = unreadable = off. */
+  switches(): LiveValues | null
+  /** The key the desktop gave this computer, or null when this computer is not connected to it. */
+  keyFor(peer: string): string | null
+  openStream(peer: string, kind: string, fields: Fields): Promise<Seal2Stream>
+  log(line: string): void
+}
+
+const PEER_PATH = /^\/peer\/([A-Za-z0-9_-]{8,128})(\/.*)$/
+const HOP = new Set(['host', 'connection', 'keep-alive', 'proxy-authorization', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'cookie', 'origin', 'referer', 'content-length', 'expect'])
+
+function refuse(response: http.ServerResponse, status: number, message: string): void {
+  if (response.headersSent) return void response.destroy()
+  const body = JSON.stringify({ error: { type: 'cookrew_sealed', message } })
+  response.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) })
+  response.end(body)
+}
+
+/** The request's headers for the far Magpie, with the real key in each credential header the request used. */
+export function sealedHeaders(raw: http.IncomingHttpHeaders, key: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [name, value] of Object.entries(raw)) {
+    if (value === undefined || HOP.has(name) || name.startsWith('x-cookrew-')) continue
+    out[name] = Array.isArray(value) ? value.join(', ') : value
+  }
+  const usedApiKey = out['x-api-key'] !== undefined
+  const usedAuth = out.authorization !== undefined
+  if (usedApiKey) out['x-api-key'] = key
+  if (usedAuth || !usedApiKey) out.authorization = `Bearer ${key}`
+  return out
+}
+
+function hostIsOurs(host: string | undefined, port: number): boolean {
+  return host === `127.0.0.1:${port}` || host === `localhost:${port}`
+}
+
+export function createMagpieForwarder(deps: ForwardDeps): {
+  handler: (request: http.IncomingMessage, response: http.ServerResponse) => void
+  listen(port: number): Promise<number>
+  close(): Promise<void>
+  port(): number | null
+} {
+  let server: http.Server | null = null
+  let bound: number | null = null
+
+  const switchedOn = (): boolean => {
+    try {
+      const s = deps.switches()
+      return s?.magpie === true && s.magpieRemote === true
+    } catch {
+      return false
+    }
+  }
+
+  const handle = async (request: http.IncomingMessage, response: http.ServerResponse): Promise<void> => {
+    const port = bound ?? request.socket.localPort ?? 0
+    // A browser page aimed at loopback (DNS rebinding, a malicious site) is not this computer's Magpie.
+    if (request.headers.origin !== undefined || !hostIsOurs(request.headers.host, port)) return refuse(response, 403, 'Not a request from this computer’s Magpie.')
+    const m = PEER_PATH.exec(request.url ?? '')
+    if (m === null) return refuse(response, 404, 'No such computer.')
+    const [, peer, path] = m
+    if (!path.split('?')[0].startsWith('/v1/') && path !== '/v1') return refuse(response, 404, 'Only model requests go to another computer.')
+    if (!switchedOn()) return refuse(response, 403, 'Magpie remote is switched off in Launch settings on this computer.')
+    let key: string | null
+    try {
+      key = deps.keyFor(peer)
+    } catch {
+      key = null
+    }
+    if (key === null) return refuse(response, 403, 'This computer is not connected to that one’s Magpie.')
+    let fields: Fields
+    try {
+      fields = requestFields(request.method ?? 'GET', path, sealedHeaders(request.headers, key))
+    } catch {
+      return refuse(response, 400, 'Not a request the seal carries.')
+    }
+    let stream: Seal2Stream
+    try {
+      stream = await deps.openStream(peer, MAGPIE_REMOTE_KIND, fields)
+    } catch (error) {
+      deps.log(`magpie remote: no sealed way to ${peer.slice(0, 8)}…: ${error instanceof Error ? error.message : 'unknown'}`)
+      return refuse(response, 502, 'The other computer could not be reached over the sealed relay.')
+    }
+    const stop = (): void => stream.abort(ABORT.cancel, 'the caller went away')
+    response.once('close', () => {
+      if (!response.writableFinished) stop()
+    })
+    void pumpBody(request, stream).catch(() => stream.abort(ABORT.cancel, 'the request body stopped'))
+    let head: Awaited<Seal2Stream['head']>
+    try {
+      head = await stream.head
+    } catch {
+      return refuse(response, 502, 'The other computer stopped answering.')
+    }
+    const headers = plainHeaders(head.fields, true)
+    if (headers === null) {
+      stream.abort(ABORT.protocol, 'unreadable answer')
+      return refuse(response, 502, 'The other computer answered with headers that cannot be read.')
+    }
+    const { 'content-length': _length, 'transfer-encoding': _te, connection: _c, ...kept } = headers
+    response.writeHead(head.status, kept)
+    await pumpAnswer(stream, response)
+  }
+
+  return {
+    handler: (request, response) => {
+      void handle(request, response).catch(() => refuse(response, 500, 'The forwarder failed.'))
+    },
+    listen: (port) =>
+      new Promise((resolve, reject) => {
+        const s = http.createServer((request, response) => void handle(request, response).catch(() => refuse(response, 500, 'The forwarder failed.')))
+        s.once('error', reject)
+        s.listen(port, '127.0.0.1', () => {
+          server = s
+          bound = (s.address() as { port: number }).port
+          resolve(bound)
+        })
+      }),
+    close: () =>
+      new Promise((resolve) => {
+        const s = server
+        server = null
+        bound = null
+        if (s === null) return resolve()
+        s.close(() => resolve())
+        s.closeAllConnections?.()
+      }),
+    port: () => bound
+  }
+}
+
+/** The request body into the stream, at the pace the stream's credit allows. */
+async function pumpBody(request: http.IncomingMessage, stream: Seal2Stream): Promise<void> {
+  const writer = stream.writable.getWriter()
+  for await (const chunk of request) {
+    await writer.ready
+    await writer.write(new Uint8Array(chunk as Buffer))
+  }
+  await writer.close()
+}
+
+/** The answer back to this computer's Magpie, holding the stream while the socket is behind. */
+async function pumpAnswer(stream: Seal2Stream, response: http.ServerResponse): Promise<void> {
+  const reader = stream.readable.getReader()
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!response.write(value)) {
+        await new Promise<void>((resolve) => {
+          response.once('drain', resolve)
+          response.once('close', resolve)
+        })
+      }
+      if (response.destroyed) throw new Error('the caller went away')
+    }
+    response.end()
+  } catch {
+    // The stream was cut: the answer is not complete, so it must not look complete.
+    response.destroy()
+  }
+}

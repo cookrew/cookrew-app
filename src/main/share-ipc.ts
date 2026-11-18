@@ -28,6 +28,8 @@ export interface ShareIpcDeps {
   interfaces?: () => ReturnType<typeof os.networkInterfaces>
   /** Read on each issue; unavailable or disabled must never mint a key. */
   enabled?: () => LiveValues | null
+  /** A key was revoked here (magpie-remote/bound-keys.ts forgets it). */
+  onRevoked?: (id: string) => void
 }
 
 const NO_MAGPIE = 'Magpie is not installed on this computer.'
@@ -81,7 +83,12 @@ export function shareHandlers(deps: ShareIpcDeps = {}): {
       const form = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
       return guarded((k) => k.issue({ device: form.device, dailyUsd: form.dailyUsd }, permitted))
     },
-    revoke: (id) => guarded((k) => k.revoke(id)),
+    revoke: (id) =>
+      guarded(async (k) => {
+        const answer = await k.revoke(id)
+        if (answer.ok && typeof id === 'string') deps.onRevoked?.(id)
+        return answer
+      }),
     resolve: (name) => guarded((k) => k.resolve(name)),
     clear: (name) => guarded((k) => k.clear(name)),
     done: (id) => {

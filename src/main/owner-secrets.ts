@@ -216,6 +216,13 @@ export function ownerSecretPaths(
     path.join(base, 'magpie.json'),
     // The key that signs in to Magpie's own settings page (route/magpie-web.ts).
     path.join(base, 'magpie-web.json'),
-    path.join(base, 'magpie-web.json.tmp')
+    path.join(base, 'magpie-web.json.tmp'),
+    // Lane Magpie: the names of keys being made (share-intents.ts); the hashes of
+    // keys given to the owner's other computers (magpie-remote/bound-keys.ts); and
+    // the keys other computers gave this one, sealed (magpie-remote/remotes.ts).
+    path.join(base, 'share-intents.json'),
+    path.join(base, 'magpie-bound-keys.json'),
+    path.join(base, 'magpie-remotes.json'),
+    path.join(base, 'magpie-remotes.json.tmp')
   ]
 }

@@ -317,7 +317,7 @@ describe('who may mint a key on the owner’s gateway', () => {
   const read = (file: string): string => readFileSync(path.join(__dirname, '../src', file), 'utf8')
 
   it('registers the share channels through ownerOnly and nowhere else', () => {
-    expect(read('main/index.ts')).toContain('registerShareIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), { enabled: () => launchLive?.() ?? null })')
+    expect(read('main/index.ts')).toContain('registerShareIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {\n    enabled: () => launchLive?.() ?? null,')
     expect(read('main/index.ts').match(/route:share-/g)).toBeNull()
   })
 

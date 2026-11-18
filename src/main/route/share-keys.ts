@@ -120,6 +120,11 @@ export class ShareKeys {
     return parseKeyTable(answer.stdout)
   }
 
+  /** Magpie's whole key list, read now (magpie-remote/serve.ts checks a bound key against it). */
+  listed(): Promise<KeyRow[]> {
+    return this.rows()
+  }
+
   private async keys(): Promise<SharedKey[]> {
     return (await this.rows()).flatMap((row) => {
       const device = deviceOfName(row.name)

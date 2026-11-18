@@ -1,4 +1,5 @@
 import { MAGPIE_WEB_PORTS } from './magpie-web'
+import { MAGPIE_FORWARD_PORTS } from '../../shared/remote-magpie'
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -273,13 +274,30 @@ export class RouteService extends EventEmitter {
     return { status: probe.status, source: probe.gateway?.source ?? null, providers: providersOf(this.models), live: this.decisions.following.length }
   }
 
+  /**
+   * The port of Magpie's gateway on THIS computer's loopback while it is online, else
+   * null: where a sealed request from another of the owner's computers is handed
+   * (magpie-remote/serve.ts). The monitor only ever accepts a loopback gateway.
+   */
+  gatewayPort(): number | null {
+    const probe = this.deps.monitor.probe
+    if (probe.status !== 'online' || !probe.gateway) return null
+    try {
+      const host = new URL(probe.gateway.url).hostname
+      return host === '127.0.0.1' || host === 'localhost' || host === '[::1]' ? probe.gateway.port : null
+    } catch {
+      return null
+    }
+  }
+
   /** The port(s) a served sandbox must not reach: the one found, and the default. */
   gatewayPorts(): number[] {
     const found = this.deps.monitor.probe.gateway?.port
     // Magpie's settings page too: its key could be read from a same-user environment, its port cannot be reached.
     // And every hand-made tunnel to another Magpie: it lands on that computer's loopback, past its key.
     const tunnels = this.deps.remotePorts?.() ?? []
-    return [...new Set([...(found ? [found, DEFAULT_PORT] : [DEFAULT_PORT]), ...MAGPIE_WEB_PORTS, ...tunnels])]
+    // And the forwarder onto the seal (magpie-remote/forward.ts): it puts the owner's key for another Magpie on every request.
+    return [...new Set([...(found ? [found, DEFAULT_PORT] : [DEFAULT_PORT]), ...MAGPIE_WEB_PORTS, ...MAGPIE_FORWARD_PORTS, ...tunnels])]
   }
 
   /** The plugin's pick wins; else the owner's own; else nothing. */
