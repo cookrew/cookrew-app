@@ -72,4 +72,31 @@ struct WatchSealTests {
     #expect(shelf.entry("k")?.seal == nil)
     #expect(shelf.entry("k")?.sealPinned == nil)
   }
+
+  @Test("a Mac the owner matched is pinned at once: a refusal of its relay road is a failure, never plain")
+  func matchedPins() {
+    let peer = SealPeer(deviceId: "mac", x: "k1", words: ["a", "b", "c", "d", "e", "f"])
+    let session = WatchSession(desktop: "Mac", bases: [], token: "t").matched(peer)
+    #expect(session.sealPinned)
+    #expect(!WatchSession(desktop: "Mac", bases: [], token: "t").matched(nil).sealPinned)
+    var shelf = SessionShelf()
+    let key = shelf.put(session)
+    #expect(shelf.entry(key)?.sealPinned == true)
+  }
+
+  @Test("a sealer that was closed opens nothing again: its store is gone")
+  func closedSealer() async {
+    struct Pass: RelayPass {
+      var host: String { "127.0.0.1" }
+      var port: Int? { 9 }
+      func token() async -> String { "s" }
+      func newer(than token: String) async -> String? { nil }
+    }
+    let peer = SealPeer(deviceId: "mac", x: "k1", words: [])
+    let sealer = WatchSealer(peer: peer, device: WatchDevice(), relay: Pass(), pinned: false)
+    await sealer.close()
+    await #expect(throws: WatchError.unreachable) {
+      _ = try await sealer.exchange(base: URL(string: "http://127.0.0.1:9/api/m/mac")!, method: "GET", path: "/api/x", headers: [:], body: nil)
+    }
+  }
 }

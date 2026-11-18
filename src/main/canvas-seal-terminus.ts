@@ -566,7 +566,9 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
       const toHere = body.to === self.deviceId
       // Only for an id that is not its key's own (a watch's): a desktop's malformed hello stays a malformed one.
       const watchLike = typeof body.from === 'string' && isDeviceKey(body.jwk) && (await deviceIdOf(body.jwk)) !== body.from.toLowerCase()
-      const unheld = toHere && watchLike && (await deps.device.keyOf?.(body.from as string).catch(() => null)) == null
+      const held = toHere && watchLike ? ((await deps.device.keyOf?.(body.from as string).catch(() => null)) ?? null) : null
+      // No key held for that id, or another one than this hello's (a watch paired again with a new key): not let in.
+      const unheld = toHere && watchLike && (held === null || held.x !== (body.jwk as DeviceKey).x)
       if (!toHere) return reply(response, 403, { error: 'not this machine' })
       return unheld ? reply(response, 403, { error: 'not let in' }) : reply(response, 400, { error: 'not a hello' })
     }

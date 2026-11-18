@@ -23,9 +23,13 @@ public struct WatchSession: Equatable, Sendable {
     self.offer = offer
   }
 
-  /** The same session, with the Mac the owner matched (nil: kept as it was). */
+  /**
+   * The same session, with the Mac the owner matched (nil: kept as it was). A matched Mac is pinned at once:
+   * its key was checked here by the owner's own eyes, so a refusal of its relay road ("not let in", which a
+   * relay can say as well as the Mac) is a failure from now on, never a reason to go plain.
+   */
   public func matched(_ peer: SealPeer?) -> WatchSession {
-    WatchSession(desktop: desktop, bases: bases, token: token, seal: peer, sealPinned: false, offer: nil)
+    WatchSession(desktop: desktop, bases: bases, token: token, seal: peer, sealPinned: peer != nil, offer: nil)
   }
 
   public var urls: [URL] { bases.compactMap { URL(string: $0.url) } }

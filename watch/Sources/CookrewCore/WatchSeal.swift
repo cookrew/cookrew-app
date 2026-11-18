@@ -60,6 +60,8 @@ public actor WatchSealer {
   private var opening: Task<Seal2Client?, Error>?
   /** Not let in yet: not asked again before this, so a watch waiting for the owner costs the Mac nothing. */
   private var refusedUntil = Date.distantPast
+  /** Closed for good: its store is gone, and nothing may open a session through it again. */
+  private var shut = false
   private var refusedFor: TimeInterval = 0
 
   public init(peer: SealPeer, device: WatchDevice, relay: RelayPass, pinned: Bool, http: URLSession = .shared, onPinned: @escaping @Sendable () -> Void = {}) {
@@ -75,6 +77,7 @@ public actor WatchSealer {
 
   /** The session, open or opened now; nil when the Mac has not let this watch in and it was never sealed. */
   private func session(base: URL) async throws -> Seal2Client? {
+    if shut { throw WatchError.unreachable }
     if let client, await client.isOpen() { return client }
     if let dead = client {
       client = nil
@@ -95,6 +98,11 @@ public actor WatchSealer {
     let shake = try Seal2.DeviceHandshake(deviceId: device.id, signing: try device.signingKey(), to: peer.deviceId, macX: peer.x)
     do {
       let opened = try await Seal2Client.open(route: route, device: shake, http: http)
+      // Closed while this was opening: the session goes with it, not into a store nobody uses.
+      if shut {
+        await opened.close()
+        throw WatchError.unreachable
+      }
       client = opened
       refusedFor = 0
       if !pinned {
@@ -136,6 +144,8 @@ public actor WatchSealer {
   }
 
   public func close() async {
+    shut = true
+    opening?.cancel()
     await client?.close()
     client = nil
   }

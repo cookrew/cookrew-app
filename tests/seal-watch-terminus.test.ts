@@ -16,14 +16,14 @@ afterEach(async () => {
   for (const server of servers.splice(0)) await new Promise((resolve) => server.close(resolve))
 })
 
-async function mac() {
+async function mac(held: (id: string) => Promise<ReturnType<typeof newDevice>['jwk'] | null> = async () => null) {
   const self = newDevice()
   const code = newConnectCode()
   const id = await connectCodeId(code)
   const terminus = createSealTerminus({
     codeFor: (asked) => (asked === id ? code : null),
     dial: () => ({ write: () => undefined, end: () => undefined, destroy: () => undefined }),
-    device: { self: () => self.signer, verify: verifyDevice, trusted: async () => false, keyOf: async () => null }
+    device: { self: () => self.signer, verify: verifyDevice, trusted: async () => false, keyOf: held }
   })
   terminuses.push(terminus)
   const server = createServer((request, response) => {
@@ -65,5 +65,13 @@ describe('a watch\'s device hello', () => {
     for (let n = 0; n < 150; n += 1) await hello(started.hello, watch.id)
     const phone = await startCodeHandshake(code, { allowV1: false })
     expect((await hello(phone.hello, randomUUID())).status).toBe(200)
+  })
+
+  it('a watch paired again with a new key, while the old one is let in, is "not let in" with the new one', async () => {
+    const old = newDevice().jwk
+    const { self, hello } = await mac(async () => old)
+    const watch = watchOf()
+    const started = await startDeviceHandshake({ self: watch.signer, to: self.id, verify: verifyDevice })
+    expect(await hello(started.hello, watch.id)).toEqual({ status: 403, said: { error: 'not let in' } })
   })
 })

@@ -260,13 +260,16 @@ final class WatchApp {
     stage = .paired(session.desktop)
     try? await Task.sleep(nanoseconds: UInt64(pairedSeconds * 1_000_000_000))
     guard let offer = session.offer else { return keep(session.matched(nil)) }
+    // Kept now, with no seal: a watch closed on the words screen still holds the token its claim was given.
+    vault.save(session.matched(nil))
     // The words are computed HERE, from this watch's own key and the key offered: words taken from the answer
     // would be whatever the carrier of the answer wanted. The owner compares them with the Mac's.
     awaitingWords = session
     stage = .words(session.desktop, offer.words(ownX: vault.device().publicX))
     try? await Task.sleep(nanoseconds: UInt64(wordsSeconds * 1_000_000_000))
-    // No answer: no seal. The watch keeps its old way (or the Mac it had already matched).
-    if case .words = stage { wordsAnswered(match: false) }
+    // No answer: no seal. The watch keeps its old way (or the Mac it had already matched). Only this pairing's
+    // words: a later pairing on screen now is not this timer's to answer.
+    if case .words = stage, awaitingWords == session { wordsAnswered(match: false) }
   }
 
   /** The owner's answer on the watch: Match keeps the Mac's key; anything else keeps none of it. */
@@ -675,7 +678,7 @@ private struct SealWordsView: View {
       VStack(alignment: .leading, spacing: 6) {
         Text("Same words on \(desktop)?").font(.headline)
         Text(words.joined(separator: " ")).font(.system(.title3, design: .rounded)).fixedSize(horizontal: false, vertical: true)
-        Text("Compare them with the computer's Apple Watch sheet, and confirm there too.").font(.footnote).foregroundStyle(.secondary)
+        Text("The computer's Apple Watch sheet must show these same six words. Tap Same words there too: until then this watch reaches it only at home.").font(.footnote).foregroundStyle(.secondary)
         Button("They match") { onAnswer(true) }
         Button("They don't", role: .destructive) { onAnswer(false) }
       }
