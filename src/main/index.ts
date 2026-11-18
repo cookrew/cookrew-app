@@ -1013,12 +1013,13 @@ const grants = serviceGrants(sessionsBase)
 // phone and every spawn read it. Its emitter fans out to the renderer and
 // the phone stream (routeBus) exactly like the dials' tuningBus.
 const routeBus = new EventEmitter()
-/** The owner's live Magpie switches (launch settings), set once the store exists; until then Magpie is on. */
+/** The owner's live Magpie switches (launch settings), set once the store exists; until then nothing routes. */
 let launchLive: (() => LiveValues) | null = null
 /** Magpie's own settings page, opened in a browser card (route/magpie-web.ts). */
 const magpieWeb = new MagpieWeb({ bin: () => magpieBinary(defaultDiscoveryEnv()), file: path.join(homedir(), '.cookrew', MAGPIE_WEB_FILE) })
 const routeService = new RouteService({
-  enabled: () => launchLive?.().magpie ?? true,
+  // Read on every route choice and dispatch; before the store exists, or if it throws, nothing routes (remote-gate.ts).
+  switches: () => launchLive?.() ?? null,
   remotePorts: () => remoteLoopbackPorts(defaultDiscoveryEnv()),
   remoteLoopback: () => remoteLoopbackProviders(defaultDiscoveryEnv()),
   plainRemotes: () => plainRemoteProviders(defaultDiscoveryEnv()),

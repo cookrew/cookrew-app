@@ -104,6 +104,7 @@ describe('2 · the notes on a card', () => {
     try {
       const nodes = new Map<string, TerminalNodeData>()
       const svc = new RouteService({
+        switches: () => ({ magpie: true, magpieRemote: false }),
         monitor: new GatewayMonitor({ discovery: { home, env: { MAGPIE_ADDR: `:${port}` } }, hasBinary: () => true, watchDir: null, helloTimeoutMs: 300, schedule: () => () => {} }),
         fetch: (i, init) => fetch(i, init),
         home,

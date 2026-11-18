@@ -58,6 +58,7 @@ describe('the spawn env per harness', () => {
       const nodes = new Map<string, TerminalNodeData>()
       const served = new Set(['s1'])
       const svc = new RouteService({
+        switches: () => ({ magpie: true, magpieRemote: false }),
         monitor: new GatewayMonitor({ discovery: { home, env: { MAGPIE_ADDR: `:${port}` } }, hasBinary: () => true, watchDir: null, helloTimeoutMs: 300, schedule: () => () => {} }),
         fetch: (i, init) => fetch(i, init),
         home,

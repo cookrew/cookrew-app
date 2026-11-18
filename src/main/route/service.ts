@@ -26,6 +26,8 @@ import { ADD_KEY_STEM, HarnessScan, groupLineFor, setupLines } from './setup'
 import { keyFor, readRouteKeys, type RouteKeys } from './route-keys'
 import { sharedMcpArgs } from './shared-mcp'
 import { readLibraryServers } from './library'
+import { GATE_UNREAD, gateRoute, readMagpieRouting, type GateAnswer, type MagpieRouting } from './remote-gate'
+import type { LiveValues } from '../../shared/launch-settings'
 
 /**
  * THE ROUTE SERVICE — one object main keeps, every route question answered
@@ -101,8 +103,13 @@ export interface RouteServiceDeps {
   /** The harness scan (installed, signed in, in dock), cached; injected for tests. */
   scan?: HarnessScan
   now?: () => number
-  /** The owner's Magpie switch (launch settings, live): off, every card is direct and no Magpie is shown. Absent = on. */
-  enabled?: () => boolean
+  /**
+   * The owner's two Magpie switches (launch settings, live), read on every route
+   * choice and dispatch. null = could not be read = everything off (remote-gate.ts).
+   */
+  switches: () => LiveValues | null
+  /** Magpie's provider list (ids, groups, fallbacks), read fresh; default reads the file. Injected for tests. */
+  routing?: () => MagpieRouting | null
   /** Loopback ports of Remote magpie tunnels made by hand (route/remote-ports.ts): denied to the sandbox too. */
   remotePorts?: () => number[]
   /** The same, by provider id, for the panel's warning. */
@@ -186,20 +193,43 @@ export class RouteService extends EventEmitter {
     return typeof key === 'string' && key.length > 0 ? key : null
   }
 
-  /** The owner's switch, read each time: a change applies to the next card and the next screen. */
+  /** The owner's switches, read each time: a change applies to the next card and the next screen. Unreadable = off. */
+  private switches(): LiveValues | null {
+    try {
+      return this.deps.switches()
+    } catch {
+      return null
+    }
+  }
+
+  /** Magpie is switched on, read just now. */
   enabled(): boolean {
-    return this.deps.enabled?.() ?? true
+    return this.switches()?.magpie === true
+  }
+
+  private routing(): MagpieRouting | null {
+    try {
+      return (this.deps.routing ?? (() => readMagpieRouting({ home: this.deps.home, env: process.env })))()
+    } catch {
+      return null
+    }
+  }
+
+  /** May this route be chosen or dispatched right now? Both switches and Magpie's list, read fresh. */
+  gate(route: CardRoute): GateAnswer {
+    return gateRoute(route, this.switches(), this.routing())
   }
 
   state(): RouteState {
     const probe = this.deps.monitor.probe
     const lines = setupLines(this.deps.pluginDir)
-    if (!this.enabled()) {
-      // Switched off by the owner: no gateway, nothing routed, the tools' own rows still shown.
+    const switches = this.switches()
+    if (switches?.magpie !== true) {
+      // Switched off by the owner (or unreadable): no gateway, nothing routed, the tools' own rows still shown.
       return {
         status: 'absent',
         gateway: null,
-        why: MAGPIE_SWITCHED_OFF,
+        why: switches === null ? GATE_UNREAD : MAGPIE_SWITCHED_OFF,
         switchedOff: true,
         defaultModel: null,
         providers: 0,
@@ -214,6 +244,9 @@ export class RouteService extends EventEmitter {
         setup: { ...lines, installAsksAdmin: process.platform === 'linux', addKeyLine: ADD_KEY_STEM, addGroupLine: null }
       }
     }
+    // Remote off: a model or group that can reach another computer's Magpie is not offered.
+    const routing = switches.magpieRemote === true ? null : this.routing()
+    const models = switches.magpieRemote === true ? this.models : this.models.filter((m) => gateRoute(m.id, switches, routing).ok)
     return {
       loopbackRemotes: this.deps.remoteLoopback?.() ?? [],
       plainRemotes: this.deps.plainRemotes?.() ?? [],
@@ -221,8 +254,8 @@ export class RouteService extends EventEmitter {
       gateway: probe.gateway,
       why: probe.why,
       defaultModel: this.defaultModel(),
-      providers: providersOf(this.models),
-      models: this.models,
+      providers: providersOf(models),
+      models,
       quotas: this.quotas,
       live: this.live,
       harnesses: this.scan.rows(),
@@ -319,7 +352,7 @@ export class RouteService extends EventEmitter {
       live: this.decisions.cardLive(terminalId),
       turn: this.decisions.cardTurn(terminalId),
       offline: this.offlineAtSpawn.has(terminalId),
-      note: this.noteFor(node, route),
+      note: this.noteFor(node, route) ?? this.refusedNote(node),
       gateway: this.deps.monitor.probe.status,
       routable: this.routableOf(node)
     }
@@ -364,6 +397,22 @@ export class RouteService extends EventEmitter {
     return null
   }
 
+  /** The card asked for a route the gate refuses right now: say why it runs direct. */
+  private refusedNote(node: TerminalNodeData | null): string | null {
+    if (node === null || this.isServedNode(node)) return null
+    const asked = this.askedRoute(node)
+    if (asked === DIRECT) return null
+    const answer = this.gate(asked)
+    return answer.ok ? null : answer.why
+  }
+
+  /** The route the card or the fleet default names, before the gate. */
+  private askedRoute(node: TerminalNodeData): CardRoute {
+    if (node.route) return node.route
+    const d = this.defaultModel()
+    return this.deps.monitor.probe.status === 'online' && d ? d : DIRECT
+  }
+
   /**
    * For Sous, minting a decision: the card's route and what its process got —
    * one node lookup, no probe, no respawn. Null for a card that is not there.
@@ -374,13 +423,15 @@ export class RouteService extends EventEmitter {
     return { route: this.routeOf(node), effective: node.routeEffective ?? null }
   }
 
-  /** The card's route as it stands: its own, else the fleet default, else direct. A served card is direct, always. */
+  /**
+   * The card's route as it stands: its own, else the fleet default, else direct.
+   * A served card is direct, always; so is any route the switches refuse now.
+   */
   routeOf(node: TerminalNodeData | null): CardRoute {
     if (node === null) return DIRECT
-    if (this.isServedNode(node) || !this.enabled()) return DIRECT
-    if (node.route) return node.route
-    const d = this.defaultModel()
-    return this.deps.monitor.probe.status === 'online' && d ? d : DIRECT
+    if (this.isServedNode(node)) return DIRECT
+    const asked = this.askedRoute(node)
+    return this.gate(asked).ok ? asked : DIRECT
   }
 
   async setCardRoute(terminalId: string, route: CardRoute): Promise<CardRouteState | { error: string }> {
@@ -389,6 +440,8 @@ export class RouteService extends EventEmitter {
     if (this.isServedNode(node)) return { error: 'a served session is never routed' }
     if (route !== DIRECT) {
       if (!ROUTE_ID_RE.test(route)) return { error: 'not a route id' }
+      const gate = this.gate(route)
+      if (!gate.ok) return { error: gate.why }
       if (this.models.length > 0 && !this.models.some((m) => m.id === route)) return { error: `not in the catalog: ${route}` }
     }
     // A routed claude card runs its route's model: a `--model` left on the
@@ -416,6 +469,8 @@ export class RouteService extends EventEmitter {
     if (this.isServedNode(node)) return direct(false)
     const route = this.routeOf(node)
     if (route === DIRECT) return direct(false)
+    // The dispatch itself asks again (routeOf did, but this is the line the env is written on).
+    if (!this.gate(route).ok) return direct(false)
     const probe = this.deps.monitor.probe
     if (probe.status !== 'online' || !probe.gateway) return direct(true)
     const harness = this.deps.harnessOf(node.command)

@@ -45,7 +45,7 @@ describe('the Magpie switch', () => {
         canRestoreExact: () => true,
         respawn: async () => true,
         dockCommands: () => [],
-        enabled: () => on,
+        switches: () => ({ magpie: on, magpieRemote: false }),
         remotePorts: () => [13425],
         scan: new HarnessScan({ home, pathEnv: '', dockCommands: () => [], harnessOfCommand: () => null, keychain: async () => false, installed: () => false }),
         schedule: (fn) => {
