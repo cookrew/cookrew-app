@@ -87,6 +87,23 @@ describe('AccountNudgeView', () => {
   })
 })
 
+describe('ShareDevicesView while issuance is paused', () => {
+  it('explains the pause and does not offer a form even when switches are enabled', () => {
+    const html = renderToStaticMarkup(<ShareDevicesView keys={[]} where={null} problem={null} issued={null} busy={false} sharingEnabled onIssue={() => {}} onRevoke={() => {}} onCheck={() => {}} onDone={() => {}} />)
+    expect(html).toContain('Creating device keys is temporarily unavailable')
+    expect(html).not.toContain('name="device"')
+  })
+})
+
+describe('ShareDevicesView while sharing is disabled', () => {
+  it('keeps revocation available and makes clear existing keys still work', () => {
+    const html = renderToStaticMarkup(<ShareDevicesView keys={[{ id: 'a'.repeat(24), name: 'device-solis', device: 'solis', limit: null }]} where={null} problem={null} issued={null} busy={false} sharingEnabled={false} onIssue={() => {}} onRevoke={() => {}} onCheck={() => {}} onDone={() => {}} />)
+    expect(html).toContain('Existing device keys still work')
+    expect(html).toMatch(/<button[^>]*>Revoke<\/button>/)
+    expect(html).not.toContain('name="device"')
+  })
+})
+
 describe('ShareDevicesView', () => {
   const base = { problem: null, issued: null, busy: false, onIssue: () => {}, onRevoke: () => {}, onCheck: () => {}, onDone: () => {} }
 
@@ -105,7 +122,7 @@ describe('ShareDevicesView', () => {
   })
 
   it('shows a new key once, with the way to copy it, and no form beside it', () => {
-    const html = renderToStaticMarkup(<ShareDevicesView {...base} keys={[]} where={null} issued={{ key: 'sk-magpie-abcdefabcdefabcdef', device: 'laptop' }} />)
+    const html = renderToStaticMarkup(<ShareDevicesView {...base} keys={[]} where={null} issued={{ id: 'a'.repeat(24), key: 'sk-magpie-abcdefabcdefabcdef', device: 'laptop' }} />)
     expect(html).toContain('sk-magpie-abcdefabcdefabcdef')
     expect(html).toContain('shown once')
     expect(html).not.toContain('name="device"')

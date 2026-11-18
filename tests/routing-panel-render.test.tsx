@@ -11,6 +11,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { RoutingEntry, RoutingPanel } from '../src/renderer/src/routing/RoutingPanel'
+import { AddMenu } from '../src/renderer/src/routing/RoutingSections'
 import { keyLineFor } from '../src/shared/route-lines'
 import { newestError } from '../src/renderer/src/routing/newest-error'
 import { WORKSPACE_CHANGED, workspaceKey } from '../src/renderer/src/routing/use-setup-terminal'
@@ -19,6 +20,13 @@ import { ROUTE_FIXTURE_NOW, cardRouteFixture, localTurnFixture, routeFixture } f
 import { decisionFacts, harnessTicks, maskAccount, quotaBar, routeChoices, routeDialAllowed, routeDialLines, statusLine, windowLabel } from '../src/shared/route-view'
 import type { RouteState } from '../src/shared/route'
 import type { WorkspaceState } from '../src/shared/model'
+
+describe('remote setting before its initial read', () => {
+  it('does not offer another computer’s Magpie until the switch has been read as enabled', () => {
+    const html = renderToStaticMarkup(<AddMenu setup={routeFixture('online').setup} onRun={() => {}} defaultOpen />)
+    expect(html).not.toContain('data-item="remote-magpie"')
+  })
+})
 
 const NAMES = new Map([
   ['forge', 'Forge'],

@@ -19,7 +19,13 @@ describe('parseKeyTable', () => {
   it('reads a dash as no limit, and an empty list as nothing', () => {
     expect(parseKeyTable('ID  NAME  STATE  GATEWAY KEY  LIMIT  MODELS  ACCOUNTS  ACCESS\n')).toEqual([])
     expect(parseKeyTable('ID  NAME  STATE  GATEWAY KEY  LIMIT  MODELS  ACCOUNTS  ACCESS\nabc12345abc12345abc12345  device-x  enabled  sk-…1  -  all  all  full\n')[0].limit).toBeNull()
-    expect(parseKeyTable('')).toEqual([])
+    expect(() => parseKeyTable('')).toThrow()
+    expect(() => parseKeyTable('unexpected format')).toThrow()
+    expect(() => parseKeyTable('ID  NAME  EXPIRES\n')).toThrow()
+    expect(() => parseKeyTable('ID  NAME  STATE  GATEWAY KEY  LIMIT  MODELS  ACCOUNTS\n')).toThrow()
+    expect(() => parseKeyTable('error: incomplete\nID  NAME  STATE  GATEWAY KEY  LIMIT  MODELS  ACCOUNTS  ACCESS\n')).toThrow()
+    expect(() => parseKeyTable('ID  NAME  STATE  GATEWAY KEY  LIMIT  MODELS  ACCOUNTS  ACCESS')).toThrow()
+    expect(() => parseKeyTable('ID  NAME  STATE  GATEWAY KEY  LIMIT  MODELS  ACCOUNTS  ACCESS\nbroken row\n')).toThrow()
   })
 })
 
@@ -54,6 +60,73 @@ function fakeMagpie(opts: { failLimit?: boolean; key?: string; failListAt?: numb
   }
   return { run, calls, rows }
 }
+
+describe('share issuance containment', () => {
+  it('does not invoke Magpie while crash-safe ownership recovery is unavailable', async () => {
+    const magpie = fakeMagpie()
+    const handlers = shareHandlers({ keys: new ShareKeys({ run: magpie.run }), enabled: () => ({ magpie: true, magpieRemote: true }) })
+    const answer = await handlers.issue({ device: 'laptop', dailyUsd: 5 })
+    expect(answer).toMatchObject({ ok: false })
+    expect(magpie.calls).toEqual([])
+  })
+})
+
+describe('share IPC switches', () => {
+  it('takes back a key when remote is switched off during issuance', async () => {
+    const magpie = fakeMagpie()
+    let enabled = true
+    const run: MagpieRun = async (args) => {
+      const result = await magpie.run(args)
+      if (args[1] === 'add') enabled = false
+      return result
+    }
+    const handlers = shareHandlers({ keys: new ShareKeys({ run }), enabled: () => ({ magpie: true, magpieRemote: enabled }) })
+    const answer = await handlers.issue({ device: 'laptop', dailyUsd: 5 })
+    expect(answer.ok).toBe(false)
+    expect(magpie.rows.some((row) => row.name === 'device-laptop')).toBe(false)
+  })
+
+  it('does not start a queued issue after remote is switched off', async () => {
+    const magpie = fakeMagpie({ slow: true })
+    let enabled = true
+    const handlers = shareHandlers({ keys: new ShareKeys({ run: magpie.run }), enabled: () => ({ magpie: true, magpieRemote: enabled }) })
+    const first = handlers.issue({ device: 'laptop', dailyUsd: 5 })
+    const second = handlers.issue({ device: 'phone', dailyUsd: 5 })
+    enabled = false
+    expect((await first).ok).toBe(false)
+    expect((await second).ok).toBe(false)
+    expect(magpie.calls.filter((args) => args[1] === 'add')).toEqual([])
+  })
+  it('serializes overlapping issues through the same production-style key manager', async () => {
+    const magpie = fakeMagpie({ slow: true })
+    let made = 0
+    const handlers = shareHandlers({
+      makeKeys: () => { made += 1; return new ShareKeys({ run: magpie.run }) },
+      enabled: () => ({ magpie: true, magpieRemote: true })
+    })
+    const [first, second] = await Promise.all([
+      handlers.issue({ device: 'laptop', dailyUsd: 5 }),
+      handlers.issue({ device: 'laptop', dailyUsd: 5 })
+    ])
+    expect(made).toBe(1)
+    expect([first.ok, second.ok].sort()).toEqual([false, true])
+    expect(magpie.rows.filter((row) => row.name === 'device-laptop')).toHaveLength(1)
+  })
+  it('checks both switches at every issue and permits revocation while disabled', async () => {
+    const magpie = fakeMagpie()
+    magpie.rows.push({ id: 'a'.repeat(24), name: 'device-solis' })
+    let switches = { magpie: true, magpieRemote: false }
+    const handlers = shareHandlers({ keys: new ShareKeys({ run: magpie.run }), enabled: () => switches })
+    expect((await handlers.issue({ device: 'laptop', dailyUsd: 5 })).ok).toBe(false)
+    expect(magpie.calls).toEqual([])
+    switches = { magpie: false, magpieRemote: true }
+    expect((await handlers.issue({ device: 'laptop', dailyUsd: 5 })).ok).toBe(false)
+    switches = { magpie: true, magpieRemote: true }
+    expect((await handlers.issue({ device: 'laptop', dailyUsd: 5 })).ok).toBe(true)
+    switches = { magpie: false, magpieRemote: false }
+    expect(await handlers.revoke('a'.repeat(24))).toEqual({ ok: true })
+  })
+})
 
 describe('ShareKeys', () => {
   it('lists only the keys it made for devices', async () => {
@@ -98,20 +171,106 @@ describe('ShareKeys', () => {
     expect(await new ShareKeys({ run: fakeMagpie({ key: 'Usage: …' }).run }).issue({ device: 'laptop', dailyUsd: 20 })).toMatchObject({ ok: false })
   })
 
-  it('takes the key back when Magpie answers with something that is not a key', async () => {
+  it('warns and retains an unidentified row when Magpie does not return a key', async () => {
     const magpie = fakeMagpie({ key: 'sk-magpie-abcdefabcdefabcdefabcdef\nA newer magpie is out' })
     const answer = await new ShareKeys({ run: magpie.run }).issue({ device: 'laptop', dailyUsd: 20 })
     expect(answer.ok).toBe(false)
-    expect(magpie.rows.map((r) => r.name)).toEqual(['solis-compare'])
+    expect(magpie.rows.map((r) => r.name)).toEqual(['solis-compare', 'device-laptop'])
   })
 
-  it('takes the key back when the list after it fails', async () => {
+  it.each([0, 1])('reports all ambiguous new IDs after add exits %i without removing either', async (code) => {
+    const magpie = fakeMagpie()
+    const run: MagpieRun = async (args) => {
+      const answer = await magpie.run(args)
+      if (args[1] !== 'add') return answer
+      magpie.rows.push({ id: 'b'.repeat(24), name: 'device-laptop' })
+      return { ...answer, code }
+    }
+    const answer = await new ShareKeys({ run }).issue({ device: 'laptop', dailyUsd: 20 })
+    expect(answer).toMatchObject({ ok: false, why: expect.stringContaining('multiple new keys') })
+    if (!answer.ok) {
+      expect(answer.why).toContain('f'.repeat(24))
+      expect(answer.why).toContain('b'.repeat(24))
+    }
+    expect(magpie.calls.filter((args) => args[1] === 'remove')).toEqual([])
+  })
+
+  it('warns if add fails and a subsequent list cannot identify a potentially late key', async () => {
+    const magpie = fakeMagpie()
+    const run: MagpieRun = async (args) => {
+      if (args[1] === 'add') return { code: 1, stdout: '', stderr: 'timed out' }
+      return magpie.run(args)
+    }
+    const answer = await new ShareKeys({ run }).issue({ device: 'laptop', dailyUsd: 20 })
+    expect(answer).toMatchObject({ ok: false, why: expect.stringContaining('may have made a key') })
+  })
+
+  it('never caps or delivers a different newly listed key when our returned key does not match', async () => {
+    const magpie = fakeMagpie()
+    const run: MagpieRun = async (args) => {
+      const answer = await magpie.run(args)
+      if (args[1] === 'add') return { ...answer, stdout: `sk-magpie-${'q'.repeat(52)}\n` }
+      return answer
+    }
+    const answer = await new ShareKeys({ run }).issue({ device: 'laptop', dailyUsd: 20 })
+    expect(answer.ok).toBe(false)
+    expect(magpie.calls.filter((args) => ['limit', 'concurrency', 'remove'].includes(args[1]))).toEqual([])
+  })
+
+  it('never deletes an unidentified concurrent key when add fails', async () => {
+    const magpie = fakeMagpie()
+    const run: MagpieRun = async (args) => {
+      if (args[1] === 'add') {
+        magpie.rows.push({ id: 'b'.repeat(24), name: 'device-laptop' })
+        return { code: 1, stdout: '', stderr: 'timed out' }
+      }
+      return magpie.run(args)
+    }
+    const answer = await new ShareKeys({ run }).issue({ device: 'laptop', dailyUsd: 20 })
+    expect(answer).toMatchObject({ ok: false, why: expect.stringContaining('may have made') })
+    expect(magpie.rows.some((row) => row.id === 'b'.repeat(24))).toBe(true)
+    expect(magpie.calls.filter((args) => args[1] === 'remove')).toEqual([])
+  })
+
+  it('warns without removing an unidentified row if add throws', async () => {
+    const magpie = fakeMagpie()
+    const run: MagpieRun = async (args) => {
+      const answer = await magpie.run(args)
+      if (args[1] === 'add') throw new Error('runner failed after add')
+      return answer
+    }
+    const answer = await new ShareKeys({ run }).issue({ device: 'laptop', dailyUsd: 20 })
+    expect(answer.ok).toBe(false)
+    expect(magpie.rows.some((row) => row.name === 'device-laptop')).toBe(true)
+  })
+
+  it('warns when both attempts to identify a possibly created key fail', async () => {
+    const magpie = fakeMagpie()
+    let lists = 0
+    const run: MagpieRun = async (args) => {
+      if (args[1] === 'list' && ++lists > 1) throw new Error('list unavailable')
+      return magpie.run(args)
+    }
+    const answer = await new ShareKeys({ run }).issue({ device: 'laptop', dailyUsd: 20 })
+    expect(answer).toMatchObject({ ok: false, why: expect.stringContaining('may have made a key named “device-laptop”') })
+  })
+
+  it('warns if rollback cannot remove the newly created key', async () => {
+    const magpie = fakeMagpie({ failLimit: true })
+    const run: MagpieRun = async (args) => args[1] === 'remove'
+      ? { code: 1, stdout: '', stderr: 'remove failed' }
+      : magpie.run(args)
+    const answer = await new ShareKeys({ run }).issue({ device: 'laptop', dailyUsd: 20 })
+    expect(answer).toMatchObject({ ok: false, why: expect.stringContaining('could not be taken back') })
+  })
+
+  it('warns without removing an unidentified row when the first list fails', async () => {
     const magpie = fakeMagpie({ failListAt: 2 })
     const answer = await new ShareKeys({ run: magpie.run }).issue({ device: 'laptop', dailyUsd: 20 })
     expect(answer).toMatchObject({ ok: false, why: expect.stringContaining('timed out') })
-    // The list failed before the id was learned: one more look finds it, and it is taken back.
+    // A retry finds a row but cannot prove ownership without the returned key.
     expect(magpie.calls.some((c) => c[1] === 'limit')).toBe(false)
-    expect(magpie.rows.map((r) => r.name)).toEqual(['solis-compare'])
+    expect(magpie.rows.map((r) => r.name)).toEqual(['solis-compare', 'device-laptop'])
   })
 
   it('issues one key per device even when two presses race', async () => {
@@ -124,7 +283,7 @@ describe('ShareKeys', () => {
 
   it('does not read a hand-made key with spaces in its name as a device key', () => {
     const table = 'ID  NAME  STATE  GATEWAY KEY  LIMIT  MODELS  ACCOUNTS  ACCESS\nabc12345abc12345abc12345  device-a  b  enabled  sk-…1  -  all  all  full\n'
-    expect(parseKeyTable(table)).toEqual([])
+    expect(() => parseKeyTable(table)).toThrow('unreadable gateway key row')
   })
 
   it('revokes only a key it made', async () => {
@@ -162,7 +321,7 @@ describe('who may mint a key on the owner’s gateway', () => {
   const read = (file: string): string => readFileSync(path.join(__dirname, '../src', file), 'utf8')
 
   it('registers the share channels through ownerOnly and nowhere else', () => {
-    expect(read('main/index.ts')).toContain('registerShareIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)))')
+    expect(read('main/index.ts')).toContain('registerShareIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), { enabled: () => launchLive?.() ?? null })')
     expect(read('main/index.ts').match(/route:share-/g)).toBeNull()
   })
 

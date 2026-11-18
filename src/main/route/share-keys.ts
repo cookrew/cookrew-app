@@ -48,15 +48,18 @@ export interface KeyRow {
 /** Magpie's `gateway-key list` table: columns are two or more spaces apart. */
 export function parseKeyTable(text: string): KeyRow[] {
   const lines = text.split('\n').filter((line) => line.trim() !== '')
-  const head = lines.findIndex((line) => /^ID\s+NAME\s+/.test(line))
-  if (head < 0) return []
-  return lines.slice(head + 1).flatMap((line) => {
+  const columns = ['ID', 'NAME', 'STATE', 'GATEWAY KEY', 'LIMIT', 'MODELS', 'ACCOUNTS', 'ACCESS']
+  if (!text.endsWith('\n') || lines.length === 0 || lines[0].trim().split(/\s{2,}/).join('|') !== columns.join('|')) {
+    throw new Error('Magpie returned an unrecognized gateway key list.')
+  }
+  // A complete-looking text table is not proof that output was not truncated at a row boundary.
+  return lines.slice(1).map((line) => {
     const cells = line.trim().split(/\s{2,}/)
-    // Eight columns or it is not a row we can read: a name with two spaces in it shifts every cell.
-    if (cells.length !== 8) return []
+    // An unreadable row cannot safely be mistaken for an empty list during recovery.
+    if (cells.length !== 8) throw new Error('Magpie returned an unreadable gateway key row.')
     const [id, name, , , limit] = cells
-    if (!ID_RE.test(id)) return []
-    return [{ id, name, limit: limit && limit !== '-' ? limit : null }]
+    if (!ID_RE.test(id)) throw new Error('Magpie returned an invalid gateway key ID.')
+    return { id, name, limit: limit && limit !== '-' ? limit : null }
   })
 }
 
@@ -87,13 +90,13 @@ export class ShareKeys {
   /** One issue at a time: Magpie allows two keys of one name, so a race could hand out an uncapped key. */
   private queue: Promise<unknown> = Promise.resolve()
 
-  issue(input: { device: unknown; dailyUsd: unknown }): Promise<ShareIssueAnswer> {
-    const next = this.queue.then(() => this.issueNow(input))
+  issue(input: { device: unknown; dailyUsd: unknown }, permitted: () => boolean = () => true): Promise<ShareIssueAnswer> {
+    const next = this.queue.then(() => this.issueNow(input, permitted))
     this.queue = next.catch(() => undefined)
     return next
   }
 
-  private async issueNow(input: { device: unknown; dailyUsd: unknown }): Promise<ShareIssueAnswer> {
+  private async issueNow(input: { device: unknown; dailyUsd: unknown }, permitted: () => boolean): Promise<ShareIssueAnswer> {
     const device = deviceSlug(typeof input.device === 'string' ? input.device : '')
     if (!DEVICE_RE.test(device)) return refusal('Name the device, such as “laptop”.')
     const daily = typeof input.dailyUsd === 'number' && Number.isFinite(input.dailyUsd) ? Math.round(input.dailyUsd * 100) / 100 : NaN
@@ -101,30 +104,40 @@ export class ShareKeys {
     const name = `${DEVICE_PREFIX}${device}`
     const before = await this.rows()
     if (before.some((row) => row.name === name)) return refusal(`“${device}” already has a key. Revoke it first to make a new one.`)
-    const added = await this.deps.run(['gateway-key', 'add', name])
-    // From here on, a key may exist: every way out that does not hand it over takes it back.
+    if (!permitted()) return refusal('Magpie sharing was switched off.')
+    // From here on, a key may exist even if the runner throws before returning.
     let made: string | null = null
     try {
-      made = await this.freshId(name, before)
+      const added = await this.deps.run(['gateway-key', 'add', name])
+      const fresh = await this.freshIds(name, before)
+      if (fresh.length > 1) return refusal(`Magpie lists multiple new keys named “${name}” (${fresh.join(', ')}); inspect and revoke them in Magpie.`)
       const key = added.stdout.trim()
-      if (added.code !== 0 || !KEY_RE.test(key)) return await this.takeBack(made, firstLine(added.stderr) ?? 'Magpie did not make a key.')
+      if (added.code !== 0 || !KEY_RE.test(key)) {
+        const why = firstLine(added.stderr) ?? 'Magpie did not return a usable key.'
+        return refusal(`${why} Magpie may have made a key named “${name}”; check its Gateway keys. No unidentified key was removed.`)
+      }
+      made = fresh[0] ?? null
       if (made === null) return refusal('Magpie made a key it does not list as new. Check Magpie’s Gateway keys and revoke it there.')
       const capped = await this.capped(made, daily)
       if (capped !== null) return await this.takeBack(made, capped)
+      if (!permitted()) return await this.takeBack(made, 'Magpie sharing was switched off.')
       const shared = { id: made, name, device, limit: `$${daily} per day` }
       made = null
       return { ok: true, key, shared }
     } catch (error) {
       // The id may never have been learned: one more look for it, so the key does not stay behind.
-      const late = made ?? (await this.freshId(name, before).catch(() => null))
-      return await this.takeBack(late, error instanceof Error ? error.message : 'Magpie did not answer.')
+      const why = error instanceof Error ? error.message : 'Magpie did not answer.'
+      if (made !== null) return await this.takeBack(made, why)
+      const late = await this.freshIds(name, before).catch(() => null)
+      if (late && late.length > 1) return refusal(`Magpie lists multiple new keys named “${name}” (${late.join(', ')}); inspect and revoke them in Magpie.`)
+      if (!late || late.length === 0) return refusal(`${why} Magpie may have made a key named “${name}”; check its Gateway keys.`)
+      return refusal(`${why} Magpie may have made a key named “${name}” (${late[0]}); check its Gateway keys. No unidentified key was removed.`)
     }
   }
 
-  private async freshId(name: string, before: readonly KeyRow[]): Promise<string | null> {
+  private async freshIds(name: string, before: readonly KeyRow[]): Promise<string[]> {
     const known = new Set(before.map((row) => row.id))
-    const fresh = (await this.rows()).filter((row) => row.name === name && !known.has(row.id))
-    return fresh.length === 1 ? fresh[0].id : null
+    return (await this.rows()).filter((row) => row.name === name && !known.has(row.id)).map((row) => row.id)
   }
 
   /** Take back a key that was made but not handed over, and say so if even that failed. */

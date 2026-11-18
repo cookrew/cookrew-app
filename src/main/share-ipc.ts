@@ -15,7 +15,11 @@ export const SHARE_CHANNELS = ['route:share-list', 'route:share-issue', 'route:s
 export interface ShareIpcDeps {
   env?: DiscoveryEnv
   keys?: ShareKeys | null
+  /** Optional factory for testing the production lazy initialization. */
+  makeKeys?: () => ShareKeys | null
   interfaces?: () => ReturnType<typeof os.networkInterfaces>
+  /** Read on each issue; unavailable or disabled must never mint a key. */
+  enabled?: () => { magpie: boolean; magpieRemote: boolean } | null
 }
 
 const NO_MAGPIE = 'Magpie is not installed on this computer.'
@@ -28,10 +32,17 @@ export function shareHandlers(deps: ShareIpcDeps = {}): {
 } {
   const env = deps.env ?? defaultDiscoveryEnv()
   const interfaces = deps.interfaces ?? (() => os.networkInterfaces())
+  let held: ShareKeys | null = deps.keys ?? null
   const keys = (): ShareKeys | null => {
     if (deps.keys !== undefined) return deps.keys
+    if (held !== null) return held
+    if (deps.makeKeys) {
+      held = deps.makeKeys()
+      return held
+    }
     const bin = magpieBinary(env)
-    return bin === null ? null : new ShareKeys({ run: magpieRunner(bin) })
+    held = bin === null ? null : new ShareKeys({ run: magpieRunner(bin) })
+    return held
   }
   return {
     list: async () => {
@@ -43,15 +54,9 @@ export function shareHandlers(deps: ShareIpcDeps = {}): {
         return { ok: false, why: why(error) }
       }
     },
-    issue: async (input) => {
-      const k = keys()
-      if (k === null) return { ok: false, why: NO_MAGPIE }
-      const form = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
-      try {
-        return await k.issue({ device: form.device, dailyUsd: form.dailyUsd })
-      } catch (error) {
-        return { ok: false, why: why(error) }
-      }
+    issue: async (_input) => {
+      // Fail closed until crash-safe ownership and pending-key recovery are implemented.
+      return { ok: false, why: 'Creating device keys is temporarily unavailable; manage existing keys in Magpie.' }
     },
     revoke: async (id) => {
       const k = keys()

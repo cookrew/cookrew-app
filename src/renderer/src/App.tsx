@@ -1704,7 +1704,7 @@ function Canvas(): React.JSX.Element {
               />
             ) : null
           }
-          share={routeState.state !== null && routeState.state.status !== 'absent' && magpieSwitches.values?.magpieRemote === true ? <ShareDevices /> : null}
+          share={typeof cookrew().routeShareList === 'function' ? <ShareDevices sharingEnabled={magpieSwitches.values?.magpie === true && magpieSwitches.values.magpieRemote === true} /> : null}
           open={routingOpen}
           onClose={() => setRoutingOpen(false)}
           state={routeState.state}

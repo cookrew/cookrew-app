@@ -9054,7 +9054,7 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   // Sharing this computer's Magpie with the owner's other devices (route/share-keys.ts):
   // a key is minted on the owner's gateway, so only the owner's top frame may ask.
-  registerShareIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)))
+  registerShareIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), { enabled: () => launchLive?.() ?? null })
 
   // ---- the owner's account (identity v2) ----
   //

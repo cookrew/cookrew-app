@@ -149,8 +149,9 @@ export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: {
   const [open, setOpen] = useState(defaultOpen)
   // Keys are typed into Magpie's own page, never a terminal (routing/magpie-card.ts): what went wrong opening it.
   const [settingsProblem, setSettingsProblem] = useState<string | null>(null)
-  // Another computer's Magpie is offered only with its switch on (a bridge without switches offers it).
-  const remoteOn = useMagpieSwitches().values?.magpieRemote ?? true
+  // Unknown or unavailable is not consent: offer remote only after both switches are read as on.
+  const switches = useMagpieSwitches().values
+  const remoteOn = switches?.magpie === true && switches.magpieRemote === true
   const [unexpected, setUnexpected] = useState(false)
   const toggle = (): void => {
     setOpen((o) => !o)

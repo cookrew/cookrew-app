@@ -26,4 +26,6 @@ export interface ShareWhere {
 
 export type ShareListAnswer = { readonly ok: true; readonly keys: readonly SharedKey[]; readonly where: ShareWhere } | { readonly ok: false; readonly why: string }
 
+/** Issuance stays unavailable until crash-safe key ownership and recovery are implemented. */
+export const SHARE_ISSUANCE_AVAILABLE = false
 export const DEFAULT_DAILY_USD = 20
