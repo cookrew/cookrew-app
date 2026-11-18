@@ -7,6 +7,7 @@ import type { ShareKeys } from '../route/share-keys'
 import type { SecretSealer } from '../secrets-store'
 import { DEFAULT_DAILY_USD } from '../../shared/share-devices'
 import type { LiveValues } from '../../shared/launch-settings'
+import type { GuideOs } from '../../shared/devices-guide'
 import { MAGPIE_FORWARD_PORTS, type MagpieRemoteList } from '../../shared/remote-magpie'
 import type { Fields } from '../../shared/seal2/frames'
 import type { Seal2Stream } from '../../shared/seal2/stream'
@@ -32,7 +33,7 @@ export interface MagpieRemoteDeps {
   gatewayPort(): number | null
   openStream(peer: string, kind: string, fields: Fields): Promise<Seal2Stream>
   /** The account's desktops (registry), or null when they cannot be had. */
-  desktops(): Promise<{ id: string; name: string; online: boolean }[] | null>
+  desktops(): Promise<{ id: string; name: string; online: boolean; os: GuideOs | null; arch: string | null }[] | null>
   /** This desktop's account device id, or null when signed out. */
   selfId(): string | null
   readonly sealer: SecretSealer | null
@@ -125,7 +126,7 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
           .filter((d) => d.id !== self)
           .map((d) => {
             const c = connected.find((r) => r.peer === d.id)
-            return { id: d.id, name: d.name, online: d.online, providerId: c?.providerId ?? null }
+            return { id: d.id, name: d.name, online: d.online, providerId: c?.providerId ?? null, os: d.os, arch: d.arch }
           }),
         desktopsKnown: desktops !== null
       }

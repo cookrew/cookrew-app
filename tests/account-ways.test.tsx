@@ -130,10 +130,11 @@ describe('ShareDevicesView', () => {
 })
 
 describe('another computer’s Magpie', () => {
-  it('opens Magpie’s own settings instead of typing a key line into a terminal', () => {
+  it('points at Your computers, the sealed way, with no key typed anywhere', () => {
     const html = renderToStaticMarkup(<AccountWays route={routeFixture('online', { defaultModel: null, harnesses: [] })} endpointActive={false} onRun={() => {}} running={null} switches={{ magpie: true, magpieRemote: true }} showSwitches={false} />)
-    expect(html).toMatch(/data-way="remote-magpie"[^>]*>Open Magpie settings/)
-    expect(html).toContain('Providers › Add › Remote magpie')
+    expect(html).toContain('data-way="remote-magpie"')
+    expect(html).toContain('Your computers')
+    expect(html).not.toContain('Providers › Add › Remote magpie')
     expect(html).not.toContain('remote-magpie url=')
   })
 })

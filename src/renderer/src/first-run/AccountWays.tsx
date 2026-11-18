@@ -91,14 +91,9 @@ export function AccountWays({ route, endpointActive, endpoint, onRun, running, o
       </Way>
       )}
       {on.magpie && on.magpieRemote && (
+      // Sealed, no key typed anywhere: the press is in Your computers (routing/DevicesGuide.tsx).
       <Way title={ACCOUNT_COPY.REMOTE} does={ACCOUNT_COPY.REMOTE_DOES}>
-        {magpie === 'absent' || !route ? (
-          needsMagpie()
-        ) : (
-          <button type="button" className="fr-fix" data-way="remote-magpie" onClick={() => void openMagpieSettings().then(setRemoteProblem)}>
-            {ACCOUNT_COPY.REMOTE_OPEN}
-          </button>
-        )}
+        {magpie === 'absent' || !route ? needsMagpie() : <span data-way="remote-magpie" />}
       </Way>
       )}
       {on.magpie && remoteProblem && (

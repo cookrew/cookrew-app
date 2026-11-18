@@ -2,6 +2,8 @@
 // as the app starts and belong to this machine, so where the bridge has no such
 // call (the phone, a served page) the row is simply not there.
 import { MagpieSwitches } from './routing/MagpieSwitches'
+import { DevicesGuide } from './routing/DevicesGuide'
+import { DEVICES_COPY } from '../../shared/devices-guide'
 import { MAGPIE_SWITCH_COPY } from '../../shared/account-guide-copy'
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -142,6 +144,7 @@ export function LaunchSettingsView({ draft, status, saved, error, busy, onDraft,
         {/* Live: saved and applied the moment they change, apart from the Save below. */}
         <h3 className="mg-head">{MAGPIE_SWITCH_COPY.HEAD}</h3>
         <MagpieSwitches installed variant="sheet" />
+        <DevicesGuide modelHere={false} model={<small>{DEVICES_COPY.MODEL_ROUTING}</small>} />
         {error !== null && (
           <p className="gs-paste-error" role="alert">
             {error}

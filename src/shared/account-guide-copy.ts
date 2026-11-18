@@ -18,7 +18,7 @@ export const ACCOUNT_COPY = {
   API_KEY_DOES: 'In Magpie’s settings choose Providers › Add, pick the vendor and paste its key there. Magpie keeps it; it never passes through a terminal or Cookrew.',
   ENDPOINT: 'Your own endpoint',
   REMOTE: 'Another computer’s Magpie',
-  REMOTE_DOES: 'Use the accounts, quota and routing groups of a Magpie on another computer you own. In Magpie’s settings choose Providers › Add › Remote magpie and type its address and key there: the key never passes through a terminal.',
+  REMOTE_DOES: 'Use the accounts, quota and routing groups of a Magpie on another of your computers, over an encrypted link: see Your computers. Nobody copies or types a key.',
   REMOTE_OPEN: 'Open Magpie settings',
   NEEDS_MAGPIE: 'Needs Magpie on this computer.',
   INSTALL_MAGPIE: 'Install Magpie',

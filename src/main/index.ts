@@ -1913,7 +1913,7 @@ const magpieRemote = createMagpieRemote({
   desktops: async () => {
     const answer = await accounts.authed<unknown>('/v2/me/desktops')
     if (!answer.ok) return null
-    return (parseAccountMachines(answer.value, accounts.account()?.deviceId ?? null) ?? []).map((m) => ({ id: m.id, name: m.name, online: m.online }))
+    return (parseAccountMachines(answer.value, accounts.account()?.deviceId ?? null) ?? []).map((m) => ({ id: m.id, name: m.name, online: m.online, os: m.profile?.os ?? null, arch: m.profile?.arch ?? null }))
   },
   selfId: () => accounts.account()?.deviceId ?? null,
   sealer: electronSealer(safeStorage),

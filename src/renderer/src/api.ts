@@ -17,6 +17,7 @@ import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
 import type { CardRoute, CardRouteState, RouteState } from '../../shared/route';
 import type { ShareIssueAnswer, ShareListAnswer, ShareResolveAnswer, ShareRevokeAnswer } from '../../shared/share-devices';
+import type { MagpieRemoteList } from '../../shared/remote-magpie';
 import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
 import type { LaunchOffer, LaunchTune } from '../../shared/launch-tune'
 import type { TranslateResult } from '../../shared/translate'
@@ -581,6 +582,11 @@ export interface CookrewApi {
   routeShareClear?: (name: string) => Promise<ShareRevokeAnswer | { ok: false; reason: string }>;
   /** The owner copied the key: main forgets its copy. */
   routeShareDone?: (id: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** The account's other desktops and which of their Magpies this computer uses (main/magpie-remote/setup.ts). */
+  magpieRemoteList?: () => Promise<MagpieRemoteList | { ok: false; reason: string }>;
+  /** Ask that desktop for a key over the seal and add its Magpie here. */
+  magpieRemoteConnect?: (peer: string, name: string) => Promise<{ ok: true; providerId: string } | { ok: false; why: string } | { ok: false; reason: string }>;
+  magpieRemoteDisconnect?: (peer: string) => Promise<{ ok: true } | { ok: false; why: string } | { ok: false; reason: string }>;
   terminalRoute?: (terminalId: string) => Promise<CardRouteState>;
   terminalRouteSet?: (terminalId: string, route: CardRoute) => Promise<CardRouteState | { error: string }>;
   onRoute?: (cb: (state: RouteState) => void) => () => void;

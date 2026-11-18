@@ -591,6 +591,9 @@ const api = {
   routeShareResolve: (name: string) => ipcRenderer.invoke('route:share-resolve', name),
   routeShareClear: (name: string) => ipcRenderer.invoke('route:share-clear', name),
   routeShareDone: (id: string) => ipcRenderer.invoke('route:share-done', id),
+  magpieRemoteList: () => ipcRenderer.invoke('magpie-remote:list'),
+  magpieRemoteConnect: (peer: string, name: string) => ipcRenderer.invoke('magpie-remote:connect', peer, name),
+  magpieRemoteDisconnect: (peer: string) => ipcRenderer.invoke('magpie-remote:disconnect', peer),
   terminalRoute: (terminalId: string) => ipcRenderer.invoke('terminal:route', terminalId),
   terminalRouteSet: (terminalId: string, route: string) => ipcRenderer.invoke('terminal:route-set', terminalId, route),
   onRoute: (cb: (state: unknown) => void) => {

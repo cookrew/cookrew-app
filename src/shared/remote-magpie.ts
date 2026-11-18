@@ -1,3 +1,4 @@
+import type { GuideDesktop } from './devices-guide'
 /**
  * ANOTHER COMPUTER'S MAGPIE, WHAT COOKREW STILL SAYS ABOUT IT.
  *
@@ -82,5 +83,5 @@ export interface MagpieRemoteList {
   readonly problem: string | null
   /** False when the account's desktops could not be had: the list is empty for that reason. */
   readonly desktopsKnown: boolean
-  readonly desktops: readonly { readonly id: string; readonly name: string; readonly online: boolean; readonly providerId: string | null }[]
+  readonly desktops: readonly GuideDesktop[]
 }
