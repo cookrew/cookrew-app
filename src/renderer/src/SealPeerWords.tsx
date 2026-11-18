@@ -51,7 +51,9 @@ export function SealPeerWordsView({ peer, busy, onAnswer }: { peer: WaitingPeer;
           Press SAME WORDS only if the other screen shows this sheet too, with these words swapped: its "This computer" is the "The other computer" here. Not the same: that computer is refused, whatever your account says.
         </p>
         <div className="gs-sheet-foot">
-          <button type="button" className="gs-ghost" onClick={() => onAnswer('later')} disabled={busy}>
+          {/* Focus starts here, so Escape (Later) works at once and Enter never presses SAME by accident. */}
+          {/* eslint-disable-next-line jsx-a11y/no-autofocus */}
+          <button type="button" className="gs-ghost" onClick={() => onAnswer('later')} disabled={busy} autoFocus>
             LATER
           </button>
           <button type="button" className="gs-ghost" onClick={() => onAnswer('not-same')} disabled={busy}>
