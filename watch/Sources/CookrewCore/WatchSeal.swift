@@ -117,11 +117,16 @@ public actor WatchSealer {
         onPinned()
       }
       return opened
-    } catch {
+    } catch Seal2ClientError.refused {
       // Not let in yet (the words not confirmed on the Mac), or a carrier saying so: not asked again for a while,
       // longer each time. Pinned, the road stays shut meanwhile; not pinned, the old way, as before.
       refusedFor = min(max(refusedFor * 2, 30), 600)
       refusedUntil = Date().addingTimeInterval(refusedFor)
+      if pinned { throw SealRoadClosed() }
+      return nil
+    } catch {
+      // The line, not the Mac: a short wait, not a growing one, so a blip away from home costs seconds.
+      refusedUntil = Date().addingTimeInterval(5)
       if pinned { throw SealRoadClosed() }
       return nil
     }
