@@ -99,6 +99,9 @@ describe('the rtc row in a path report', () => {
     // First in each race, unless the plane just failed or the phone is on a radio (no LAN in reach).
     expect(src).toContain('const knocked = health.held() || onCellular() ? [] : await rtcKnock(raceSoon, live)')
     expect(src).toContain('reportLinkRows(knocked)')
+    // The offer goes out one way only: path/rtc-offer.ts, sealed whenever the page has a session (step 2).
+    expect(src).toContain('post: (sdp) => postRtcOffer(sdp)')
+    expect(src).not.toContain("'/api/rtc/offer'")
     // A link that ended, however, is knocked again at once, not after the gap.
     expect(src).toMatch(/ended: \(row\) => \{[\s\S]{0,400}lastRtcAt = 0[\s\S]{0,40}onEnd\(\)/)
     // The knocks and the navigation home are gone with the offer that drove them.

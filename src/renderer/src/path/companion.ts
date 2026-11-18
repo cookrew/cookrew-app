@@ -6,7 +6,8 @@ import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
 import { currentBrowser } from '../browser-family'
 import { createPathReporter, postPathReport } from './report'
 import { adoptRtcLink, type RtcRow } from './rtc-adopt'
-import { RTC_EVERY_MS, boundKnock, heldAfter, knockGapAfter, readRtcAnswer } from './rtc-trust'
+import { RTC_EVERY_MS, boundKnock, heldAfter, knockGapAfter } from './rtc-trust'
+import { postRtcOffer } from './rtc-offer'
 import { heldRtcLink, rtcLink, setRtcLink } from '../rtc-plane'
 import { isLanHostname, isTailnetHostname } from '../../../shared/path-badge'
 import { pageContext } from './page-context'
@@ -126,17 +127,9 @@ const rtcKnock = async (onEnd: () => void, live: () => boolean): Promise<RtcRow[
   // THE ANSWER CROSSES THE RELAY: it is set only when the Mac's device
   // signature verifies over this page's offer (path/rtc-trust.ts), for the
   // machine in scope AS THIS KNOCK STARTS. One that does not is no link, and a row.
-  const knock = boundKnock({
-    machineId: machineScope().machineId,
-    post: async (sdp) => {
-      const response = await planeFetch(apiPath('/api/rtc/offer'), {
-        method: 'POST',
-        headers: { ...authHeaders(), 'content-type': 'application/json' },
-        body: JSON.stringify({ sdp })
-      })
-      return response.ok ? readRtcAnswer(await response.json()) : null
-    }
-  })
+  // The offer and answer carry both sides' addresses: inside the sealed
+  // session whenever this page has one (path/rtc-offer.ts, lane LAN step 2).
+  const knock = boundKnock({ machineId: machineScope().machineId, post: (sdp) => postRtcOffer(sdp) })
   const probe = await adoptRtcLink({
     connect: knock.connect,
     live,
