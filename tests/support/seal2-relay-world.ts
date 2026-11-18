@@ -21,8 +21,16 @@ import { relayLineHeaders } from '../../src/main/seal-proof'
 import { createSealTerminus, isSealPath, routeSeal, type SealTerminus, type SealTerminusDeps } from '../../src/main/canvas-seal-terminus'
 import { RELAY_SESSION_HEADER } from '../../src/shared/machine-relay'
 import { newDevice, signUp, type Device } from './seal2-accounts'
-import { until } from './seal-phone'
 
+
+/** Waits for a condition, with no test runner in it: scripts load this module too. */
+export const until = async (what: () => boolean, why: string, ms = 3000): Promise<void> => {
+  const deadline = Date.now() + ms
+  while (!what()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${why}`)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
 
 export interface Up {
   readonly origin: string
@@ -167,5 +175,5 @@ export async function startRelayWorld(companion: (terminus: () => SealTerminus |
   }
 }
 
-export { isSealPath, routeSeal, loopbackDialer, until }
+export { isSealPath, routeSeal, loopbackDialer }
 export { newDevice, signUp, verifyDevice, type Device } from './seal2-accounts'
