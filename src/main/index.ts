@@ -3811,10 +3811,13 @@ function spawnTracked(t: {
   // finds the transcript (2026-11-04: eight GOAT Team cards, every --no-wait
   // ask to them interrupted at 60 s). Once moved, the file is found at the
   // cwd and this never fires again.
-  // A served card is never moved: its sandbox is its boundary.
+  // A served card is never moved: its sandbox is its boundary. Its folder says
+  // so too, for a workspace served before the mark existed: judged here, on the
+  // folder it STARTED in, so a move cannot carry it out of the refusal below.
   const home = store.ownerOf(t.id)
+  const servedPlace = inSessionsRoot(t.cwd, sessionsRootOf(sessionsBase)) || inSessionsRoot(t.cwd, resolvedOr(sessionsRootOf(sessionsBase)))
   const repairedCwd =
-    isClaudeCommand(t.command) && t.claudeSessionId && !(home !== undefined && isServedWorkspace(home))
+    isClaudeCommand(t.command) && t.claudeSessionId && !servedPlace && !(home !== undefined && isServedWorkspace(home))
       ? claudeCwdRepair({ cwd: t.cwd, sessionId: t.claudeSessionId })
       : null
   if (repairedCwd !== null) {
@@ -3838,8 +3841,7 @@ function spawnTracked(t: {
   // A served workspace keeps its mark across a restart; its context does not.
   // Without the context this would be the OWNER's spawn: unconfined, the owner's
   // env, a stranger's conversation. Refused instead (session-spawn.ts spawnMode).
-  // The folder counts too: a workspace served before the mark existed has none.
-  const servedPlace = inSessionsRoot(t.cwd, sessionsRootOf(sessionsBase)) || inSessionsRoot(t.cwd, resolvedOr(sessionsRootOf(sessionsBase)))
+  // The folder counts too (servedPlace, above): a workspace served before the mark existed has none.
   if (!ptys.get(t.id) && spawnMode(isServedWorkspace(owner) || servedPlace, servedCtx !== undefined) === 'refuse') {
     noteLaunchFailure(t.id, {
       kind: 'served-context-lost',
