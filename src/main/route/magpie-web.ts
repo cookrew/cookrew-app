@@ -24,11 +24,11 @@ import { writeFileAtomic } from '../atomic-file'
  * THE PAGE MUST BE OURS. The link carries the key, so before it is handed over the
  * process listening on the port is checked to be the one this module started
  * (lsof; magpie web listens in the process it was started as, 0.1.3935). Another
- * program answering there, a squatter, gets nothing. Where the listener cannot be
- * read (no lsof) the check is skipped, and a same-user program that takes the port
- * in the moment between the check and the card's first load is not ruled out: the
- * window is made short, not closed. A served seat cannot take these ports at all
- * (sandbox-deny.ts · network-bind).
+ * program answering there, a squatter, gets nothing. FAIL CLOSED: where the listener
+ * cannot be read (no lsof) or more than one process listens, nothing is opened. A
+ * same-user program that takes the port in the moment between the check and the
+ * card's first load is not ruled out: the window is made short, not closed. A served
+ * seat cannot take these ports at all (sandbox-deny.ts · network-bind).
  */
 
 export const MAGPIE_WEB_PORTS: readonly number[] = [3431, 3432, 3433, 3434, 3435, 3436, 3437, 3438, 3439, 3440]
@@ -164,16 +164,16 @@ export class MagpieWeb {
     return { ok: false, why: 'Magpie’s page did not answer in time.' }
   }
 
-  /** Is the process listening on the port the one we started? Unknowable counts as yes (see the header). */
+  /** Is the ONLY process listening on the port the one we started? Unknowable or shared counts as no. */
   private async ours(child: ChildProcess, port: number): Promise<boolean> {
-    const pids = await (this.deps.listeners ?? loopbackListeners)(port)
-    if (pids === null) return true
-    return child.pid !== undefined && pids.includes(child.pid)
+    const pids = await (this.deps.listeners ?? loopbackListeners)(port).catch(() => null)
+    if (pids === null || child.pid === undefined) return false
+    return pids.length === 1 && pids[0] === child.pid
   }
 
   private squatted(port: number): MagpieWebOpen {
     this.stop()
-    return { ok: false, why: `Another program is answering on port ${port}, so Magpie’s settings were not opened. Quit it and try again.` }
+    return { ok: false, why: `Could not confirm that Magpie’s own page is the one answering on port ${port}, so its settings were not opened.` }
   }
 
   private async firstFree(free: (port: number) => Promise<boolean>): Promise<number | null> {

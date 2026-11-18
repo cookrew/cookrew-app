@@ -10,6 +10,8 @@ import { MagpieWeb, MAGPIE_WEB_PORTS, linkOf, readHeld } from '../src/main/route
 function fakeChild(): ChildProcess & { killed: boolean } {
   const child = new EventEmitter() as unknown as ChildProcess & { killed: boolean; exitCode: number | null }
   child.exitCode = null
+  // The listener the fake page reports is this child (MagpieWeb fails closed on anything else).
+  ;(child as unknown as { pid: number }).pid = 4242
   child.killed = false
   child.kill = (() => {
     child.killed = true
@@ -48,7 +50,7 @@ describe('MagpieWeb', () => {
       },
       wait: async () => undefined,
       // A fake child listens nowhere: who listens cannot be read here.
-      listeners: async () => null
+      listeners: async () => [4242]
     })
     const opened = await web.open()
     expect(opened).toMatchObject({ ok: true, port: MAGPIE_WEB_PORTS[1] })
@@ -75,7 +77,7 @@ describe('MagpieWeb', () => {
       },
       wait: async () => undefined,
       // A fake child listens nowhere: who listens cannot be read here.
-      listeners: async () => null
+      listeners: async () => [4242]
     })
     const first = await web.open()
     const second = await web.open()
@@ -96,17 +98,28 @@ describe('MagpieWeb', () => {
     ;(child as unknown as { pid: number }).pid = 4242
     const web = new MagpieWeb({ bin: () => '/bin/magpie', file, portFree: async () => true, answers: async () => true, start: () => child, wait: async () => undefined, listeners: async () => [9999] })
     const opened = await web.open()
-    expect(opened).toMatchObject({ ok: false, why: expect.stringContaining('Another program is answering') })
+    expect(opened).toMatchObject({ ok: false, why: expect.stringContaining('Could not confirm') })
     expect(JSON.stringify(opened)).not.toContain('?k=')
     expect(child.killed).toBe(true)
   })
 
-  it('opens when the listener is the page it started, and when the listener cannot be read', async () => {
-    for (const listeners of [async () => [4242, 7], async () => null]) {
+  it('opens only when listener identity is known and uniquely matches the child', async () => {
+    for (const listeners of [async () => [4242]]) {
       const child = fakeChild()
       ;(child as unknown as { pid: number }).pid = 4242
       const web = new MagpieWeb({ bin: () => '/bin/magpie', file, portFree: async () => true, answers: async () => true, start: () => child, wait: async () => undefined, listeners })
       expect(await web.open()).toMatchObject({ ok: true })
+    }
+  })
+
+  it('fails closed if listener identity is unavailable or ambiguous', async () => {
+    for (const listeners of [async () => null, async () => [4242, 7]]) {
+      const child = fakeChild()
+      ;(child as unknown as { pid: number }).pid = 4242
+      const web = new MagpieWeb({ bin: () => '/bin/magpie', file, portFree: async () => true, answers: async () => true, start: () => child, wait: async () => undefined, listeners })
+      const answer = await web.open()
+      expect(answer.ok).toBe(false)
+      expect(JSON.stringify(answer)).not.toContain('?k=')
     }
   })
 
