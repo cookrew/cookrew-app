@@ -181,6 +181,9 @@ import { createCanvasRelay } from './canvas-relay'
 import { loopbackDialer } from './canvas-bridge'
 import { createSealTerminus } from './canvas-seal-terminus'
 import { sealProofHeaders } from './seal-proof'
+import { createSealDevice } from './seal-device'
+import { createSealPeers } from './seal-peers'
+import { createSealPinStore } from './seal-pins'
 import { sealedSwitchMemory } from './remote-switch-memory'
 import { singleConfirm } from './remote-switch-confirm'
 import { createConnectCodes } from './connect-code'
@@ -1799,9 +1802,37 @@ const canvasLink = canvasRelay.link
 // unconfirmed bytes, what the paced uplink still holds, and (once the bridge has
 // paused this stream) the loopback response's own buffer.
 const connectCodes = createConnectCodes(path.join(homedir(), '.cookrew', 'connect-code'))
+// cookrew-seal/2 device mode: this desktop and the account's others (seal-device.ts, seal-pins.ts).
+const sealPins = createSealPinStore(path.join(homedir(), '.cookrew', 'seal-pins.json'))
+const sealDevice = createSealDevice({
+  account: () => accounts.account(),
+  desktops: async () => {
+    const answer = await accounts.authed<unknown>('/v2/me/desktops')
+    if (!answer.ok) return null
+    return (parseAccountMachines(answer.value, null) ?? []).map((machine) => machine.id)
+  },
+  pins: sealPins
+})
+/**
+ * openStream(peer, kind) and fetch(peer, request): sealed streams to another desktop of
+ * this account (seal-peers.ts). The interface cross-device work and lane Magpie build on:
+ * hand `sealPeers` to whatever needs another machine, here at the composition root.
+ */
+const sealPeers = createSealPeers({
+  self: () => sealDevice.self(),
+  verify: sealDevice.device.verify,
+  relayed: async (deviceId, route, init) => {
+    const sent = await accounts.relayed(deviceId, route, init)
+    if (!sent.ok) throw new Error(`No way to that machine: ${sent.reason}`)
+    return sent.response
+  },
+  pins: sealPins,
+  log: (line) => console.error(`[cookrew] ${line}`)
+})
 const sealTerminus = createSealTerminus({
   codeFor: (id) => connectCodes.codeFor(id),
   replacedKeyFor: (id) => connectCodes.replacedKeyFor(id),
+  device: sealDevice.device,
   dial: loopbackDialer(MOBILE_PORT, undefined, sealProofHeaders()),
   // What the paced uplink still holds counts too: since relay-uplink.ts, an
   // answer waits there rather than in Node's socket buffer.
@@ -8809,6 +8840,7 @@ app.on('before-quit', (event) => {
   // silently is a relay that claims this desktop for as long as it takes the
   // pulse to notice.
   sealTerminus.close()
+  sealPeers.close()
   canvasLink.stop()
   store.flush()
   events.flush()
