@@ -7,7 +7,7 @@ import type { ViewportMetrics } from '../shared/cast-viewport'
 import type { BrowserTab } from '../shared/model'
 import type { BrowserViewportState } from './browser-viewport'
 import type { ArrivingDownload } from './browser-downloads'
-import type { FrameMeta, HeadlessPageState, HeadlessStopResult } from './headless-chrome'
+import type { FrameMeta, HeadlessCookie, HeadlessPageState, HeadlessStopResult } from './headless-chrome'
 
 /**
  * WHAT A BROWSER CARD'S BACKING INSTANCE HAS TO BE.
@@ -29,6 +29,8 @@ export interface BrowserInstance {
   onTabClosed: (tabId: string) => void
 
   start(): Promise<void>
+  /** Set cookies in the running browser. Absent where there is no web page to sign in (a phone). */
+  setCookies?(cookies: readonly HeadlessCookie[]): Promise<void>
   stop(gracefulTimeoutMs?: number): Promise<HeadlessStopResult>
   syncTabs(tabs: BrowserTab[], activeTabId: string): Promise<void>
   resize(width: number, height: number): Promise<void>

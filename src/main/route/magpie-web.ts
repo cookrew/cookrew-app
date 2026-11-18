@@ -13,22 +13,25 @@ import { writeFileAtomic } from '../atomic-file'
  * opens it in a browser card, so a person configures Magpie without leaving Cookrew
  * and on a box with no desktop (Linux over SSH) too.
  *
- * THE KEY. Magpie asks for `?k=<key>` once, answers 303 to `/` and sets an
- * HttpOnly cookie named after the PORT, good for 400 days. So the key and the port
- * are kept together (0600, in the served sandbox's deny list) and reused: a new
- * port would be a new cookie and a new sign-in. The key reaches Magpie in its
- * environment, never on a command line. A seat that could read that environment
- * still cannot use it: every port in MAGPIE_WEB_PORTS is denied to the sandbox
- * (route/service.ts · gatewayPorts).
+ * THE KEY. Magpie signs a browser in with an HttpOnly cookie named after the PORT
+ * whose value is the key (`magpie_web_<port>=<key>`; `?k=<key>` is how a person's
+ * browser gets it). So the key and the port are kept together (0600, in the served
+ * sandbox's deny list) and reused. The key reaches Magpie in its environment, never
+ * on a command line, and it never becomes a link: open() answers with the bare
+ * address and the cookie, and the cookie stays in main, which sets it into the
+ * card's own browser session (main/magpie-card-open.ts). A seat that could read the
+ * environment still cannot use it: every port in MAGPIE_WEB_PORTS is denied to the
+ * sandbox (route/service.ts · gatewayPorts).
  *
- * THE PAGE MUST BE OURS. The link carries the key, so before it is handed over the
+ * THE PAGE MUST BE OURS. The cookie is the key, so before it is handed over the
  * process listening on the port is checked to be the one this module started
- * (lsof; magpie web listens in the process it was started as, 0.1.3935). Another
- * program answering there, a squatter, gets nothing. FAIL CLOSED: where the listener
- * cannot be read (no lsof) or more than one process listens, nothing is opened. A
- * same-user program that takes the port in the moment between the check and the
- * card's first load is not ruled out: the window is made short, not closed. A served
- * seat cannot take these ports at all (sandbox-deny.ts · network-bind).
+ * (lsof, or ss on Linux; magpie web listens in the process it was started as,
+ * 0.1.3935). Another program answering there, a squatter, gets nothing. FAIL
+ * CLOSED: where the listener cannot be read or more than one process listens,
+ * nothing is opened. A same-user program that takes the port in the moment between
+ * the check and the card's first request is not ruled out (the TOCTOU): the window
+ * is made short, not closed. A served seat cannot take these ports at all
+ * (sandbox-deny.ts · network-bind).
  */
 
 export const MAGPIE_WEB_PORTS: readonly number[] = [3431, 3432, 3433, 3434, 3435, 3436, 3437, 3438, 3439, 3440]
@@ -37,7 +40,10 @@ const KEY_RE = /^[A-Za-z0-9._~-]{16,128}$/
 const READY_MS = 15_000
 const STEP_MS = 250
 
-export type MagpieWebOpen = { readonly ok: true; readonly url: string; readonly port: number } | { readonly ok: false; readonly why: string }
+/** MAIN ONLY: `cookie.value` is the page's key. Never hand this to a renderer (magpie-card-open.ts strips it). */
+export type MagpieWebOpen =
+  | { readonly ok: true; readonly url: string; readonly port: number; readonly cookie: { readonly name: string; readonly value: string } }
+  | { readonly ok: false; readonly why: string }
 
 interface Held {
   readonly key: string
@@ -70,7 +76,12 @@ export function readHeld(file: string, read: (f: string) => string = (f) => read
 
 export const newKey = (): string => `cookrew-${randomBytes(24).toString('hex')}`
 
-export const linkOf = (port: number, key: string): string => `http://127.0.0.1:${port}/?k=${key}`
+export const bareUrlOf = (port: number): string => `http://127.0.0.1:${port}/`
+
+/** Magpie's sign-in cookie for the page on this port. */
+export const cookieOf = (port: number, key: string): { name: string; value: string } => ({ name: `magpie_web_${port}`, value: key })
+
+const opened = (held: Held): MagpieWebOpen => ({ ok: true, url: bareUrlOf(held.port), port: held.port, cookie: cookieOf(held.port, held.key) })
 
 function portFreeOnLoopback(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -90,7 +101,7 @@ async function answersOnLoopback(port: number): Promise<boolean> {
   }
 }
 
-function loopbackListeners(port: number): Promise<number[] | null> {
+function lsofListeners(port: number): Promise<number[] | null> {
   return new Promise((resolve) => {
     execFile('lsof', ['-nP', `-iTCP@127.0.0.1:${port}`, '-sTCP:LISTEN', '-t'], { timeout: 3_000 }, (error, stdout) => {
       const pids = String(stdout).split('\n').map((line) => Number(line.trim())).filter((pid) => Number.isInteger(pid) && pid > 0)
@@ -99,6 +110,38 @@ function loopbackListeners(port: number): Promise<number[] | null> {
       resolve(error && (error as { code?: unknown }).code === 1 ? [] : null)
     })
   })
+}
+
+const REACHES_LOOPBACK = new Set(['127.0.0.1', '0.0.0.0', '*', '[::]', '[::ffff:127.0.0.1]', '[::ffff:0.0.0.0]'])
+
+/** `ss -Hltnp` lines: `LISTEN 0 4096 127.0.0.1:3431 0.0.0.0:* users:(("magpie",pid=123,fd=7))`. */
+export function parseSsListeners(text: string, port: number): number[] | null {
+  const pids: number[] = []
+  for (const line of text.split('\n')) {
+    const cells = line.trim().split(/\s+/)
+    // Any listener that loopback connections to the port can reach: 127.0.0.1 and every wildcard.
+    if (cells.length < 5 || !REACHES_LOOPBACK.has(cells[3].slice(0, cells[3].lastIndexOf(':'))) || cells[3].slice(cells[3].lastIndexOf(':') + 1) !== String(port)) continue
+    const found = [...line.matchAll(/pid=(\d+)/g)].map((m) => Number(m[1]))
+    // A listener ss could not name the owner of (another user's): cannot tell.
+    if (found.length === 0) return null
+    pids.push(...found)
+  }
+  return [...new Set(pids)]
+}
+
+function ssListeners(port: number): Promise<number[] | null> {
+  return new Promise((resolve) => {
+    execFile('ss', ['-Hltnp', `sport = :${port}`], { timeout: 3_000 }, (error, stdout) => {
+      resolve(error ? null : parseSsListeners(String(stdout), port))
+    })
+  })
+}
+
+/** The PIDs listening on 127.0.0.1:<port>: lsof, else ss on Linux; null when neither can tell. */
+async function loopbackListeners(port: number): Promise<number[] | null> {
+  const viaLsof = await lsofListeners(port)
+  if (viaLsof !== null || process.platform !== 'linux') return viaLsof
+  return ssListeners(port)
 }
 
 function startMagpieWeb(bin: string, port: number, key: string): ChildProcess {
@@ -131,7 +174,7 @@ export class MagpieWeb {
     const answers = this.deps.answers ?? answersOnLoopback
     if (this.child !== null && this.child.exitCode === null && this.held !== null && (await answers(this.held.port))) {
       if (!(await this.ours(this.child, this.held.port))) return this.squatted(this.held.port)
-      return { ok: true, url: linkOf(this.held.port, this.held.key), port: this.held.port }
+      return opened(this.held)
     }
     const saved = readHeld(this.deps.file)
     const free = this.deps.portFree ?? portFreeOnLoopback
@@ -156,7 +199,7 @@ export class MagpieWeb {
       if (child.exitCode !== null) return { ok: false, why: 'Magpie’s page stopped as it started. Run `magpie web` in a terminal to see why.' }
       if (await answers(port)) {
         if (!(await this.ours(child, port))) return this.squatted(port)
-        return { ok: true, url: linkOf(port, held.key), port }
+        return opened(held)
       }
       await wait(STEP_MS)
     }

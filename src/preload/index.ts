@@ -660,7 +660,7 @@ const api = {
     ipcRenderer.on('launch-live', listener)
     return () => ipcRenderer.removeListener('launch-live', listener)
   },
-  magpieWebOpen: () => ipcRenderer.invoke('magpie-web:open'),
+  magpieWebOpen: (browserId: string) => ipcRenderer.invoke('magpie-web:open', browserId),
   updateStatus: () => ipcRenderer.invoke('update:status'),
   setUpdateCheck: (on: boolean) => ipcRenderer.invoke('update:set', on),
   restartToUpdate: () => ipcRenderer.invoke('update:restart'),

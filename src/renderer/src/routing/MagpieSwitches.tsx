@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { cookrew } from '../api'
 import { MAGPIE_SWITCH_COPY } from '../../../shared/account-guide-copy'
 import { LAUNCH_ENV, type LiveValues } from '../../../shared/launch-settings'
-import { openMagpieCard } from './magpie-card'
+import { openMagpieSettings } from './magpie-card'
 import '../first-run/first-run.css'
 
 /**
@@ -139,13 +139,11 @@ export function MagpieSwitches({ installed, variant = 'guide' }: { installed: bo
       onConfigure={() => {
         setBusy(true)
         setProblem(null)
-        void cookrew()
-          .magpieWebOpen?.()
-          .then(async (answer) => {
-            if (!answer.ok) return setProblem(answer.why)
-            await openMagpieCard(answer.url)
+        // One way in: main signs the card in, the card holds the bare address (magpie-card.ts).
+        void openMagpieSettings()
+          .then((why) => {
+            if (why !== null) setProblem(why)
           })
-          .catch(() => setProblem('Could not open Magpie’s settings.'))
           .finally(() => setBusy(false))
       }}
     />

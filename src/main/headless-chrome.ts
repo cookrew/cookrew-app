@@ -189,6 +189,19 @@ export interface HeadlessOptions {
   quality?: number
   /** Integration-test hook: hold startup after spawn so cancellation is deterministic. */
   startupDelayMs?: number
+  /** Set before the first page loads (CDP Storage.setCookies): a card signed in to a page main opened for it (magpie-card-open.ts). */
+  cookies?: readonly HeadlessCookie[]
+}
+
+/** A cookie as CDP's Storage.setCookies takes it. */
+export interface HeadlessCookie {
+  readonly name: string
+  readonly value: string
+  readonly url: string
+  readonly domain: string
+  readonly path: string
+  readonly httpOnly: boolean
+  readonly sameSite: 'Lax' | 'Strict' | 'None'
 }
 
 export interface FrameMeta {
@@ -357,6 +370,8 @@ export class HeadlessInstance {
     }
     this.browserCdp = browserCdp
     await this.downloads?.attach(browserCdp)
+    // Before any page loads: the first request already carries them.
+    if (this.opts.cookies && this.opts.cookies.length > 0) await browserCdp.send('Storage.setCookies', { cookies: this.opts.cookies })
 
     // In this order: /json still lists a closing probe page for a moment, and
     // firstPageTarget must not pick it.
@@ -931,6 +946,12 @@ export class HeadlessInstance {
   }
 
   /** Update the node-card fallback without clobbering a viewer-owned viewport. */
+  /** Set cookies in this card's browser now (a running instance); rejects when the browser is not attached. */
+  async setCookies(cookies: readonly HeadlessCookie[]): Promise<void> {
+    if (this.browserCdp === null) throw new Error('The browser is not running.')
+    await this.browserCdp.send('Storage.setCookies', { cookies })
+  }
+
   async resize(width: number, height: number): Promise<void> {
     this.viewportCoordinator.setDefault({ width, height, mobile: false })
   }

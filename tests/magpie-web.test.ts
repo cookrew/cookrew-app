@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ChildProcess } from 'node:child_process'
-import { MagpieWeb, MAGPIE_WEB_PORTS, linkOf, readHeld } from '../src/main/route/magpie-web'
+import { MagpieWeb, MAGPIE_WEB_PORTS, bareUrlOf, parseSsListeners, readHeld } from '../src/main/route/magpie-web'
 
 /** A stand-in child: exitCode stays null until killed. */
 function fakeChild(): ChildProcess & { killed: boolean } {
@@ -56,7 +56,12 @@ describe('MagpieWeb', () => {
     expect(opened).toMatchObject({ ok: true, port: MAGPIE_WEB_PORTS[1] })
     const held = readHeld(file)
     expect(held).toEqual({ key: starts[0].key, port: MAGPIE_WEB_PORTS[1] })
-    if (opened.ok) expect(opened.url).toBe(linkOf(MAGPIE_WEB_PORTS[1], starts[0].key))
+    if (opened.ok) {
+      // The address is bare: the key travels only as the cookie, which main keeps.
+      expect(opened.url).toBe(bareUrlOf(MAGPIE_WEB_PORTS[1]))
+      expect(opened.url).not.toContain(starts[0].key)
+      expect(opened.cookie).toEqual({ name: `magpie_web_${MAGPIE_WEB_PORTS[1]}`, value: starts[0].key })
+    }
     expect(statSync(file).mode & 0o777).toBe(0o600)
     expect(starts[0].key).toMatch(/^[A-Za-z0-9._~-]{16,128}$/)
   })
@@ -83,7 +88,7 @@ describe('MagpieWeb', () => {
     const second = await web.open()
     expect(starts).toBe(1)
     expect(first).toEqual(second)
-    expect(first).toMatchObject({ ok: true, port: MAGPIE_WEB_PORTS[2], url: linkOf(MAGPIE_WEB_PORTS[2], 'cookrew-kept-key-1234567890') })
+    expect(first).toMatchObject({ ok: true, port: MAGPIE_WEB_PORTS[2], url: bareUrlOf(MAGPIE_WEB_PORTS[2]), cookie: { value: 'cookrew-kept-key-1234567890' } })
   })
 
   it('reports a page that never answers, and stops it', async () => {
@@ -137,5 +142,20 @@ describe('who may reach Magpie’s page', () => {
   it('keeps its key out of the served sandbox and its ports closed to it', () => {
     expect(read('main/owner-secrets.ts')).toContain("path.join(base, 'magpie-web.json')")
     expect(read('main/route/service.ts')).toMatch(/MAGPIE_WEB_PORTS/)
+  })
+})
+
+describe('who listens, on Linux (ss)', () => {
+  it('reads the owner pid of a loopback listener, and cannot tell for one ss cannot name', () => {
+    const line = 'LISTEN 0      4096       127.0.0.1:3431      0.0.0.0:*    users:(("magpie",pid=4242,fd=7))'
+    expect(parseSsListeners(line, 3431)).toEqual([4242])
+    expect(parseSsListeners('', 3431)).toEqual([])
+    expect(parseSsListeners('LISTEN 0      4096       127.0.0.1:3431      0.0.0.0:*', 3431)).toBeNull()
+    expect(parseSsListeners(`${line}\nLISTEN 0 4096 127.0.0.1:3431 0.0.0.0:* users:(("nc",pid=99,fd=3))`, 3431)).toEqual([4242, 99])
+    // A wildcard listener on the port also hears loopback: it counts.
+    expect(parseSsListeners('LISTEN 0 4096 0.0.0.0:3431 0.0.0.0:* users:(("x",pid=1,fd=3))', 3431)).toEqual([1])
+    expect(parseSsListeners('LISTEN 0 4096 [::]:3431 [::]:* users:(("x",pid=2,fd=3))', 3431)).toEqual([2])
+    expect(parseSsListeners('LISTEN 0 4096 192.168.1.5:3431 0.0.0.0:* users:(("x",pid=3,fd=3))', 3431)).toEqual([])
+    expect(parseSsListeners('LISTEN 0 4096 127.0.0.1:34310 0.0.0.0:* users:(("x",pid=4,fd=3))', 3431)).toEqual([])
   })
 })

@@ -1,5 +1,5 @@
 import { launchBoot } from './launch-settings-boot'
-import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, net, Notification, powerMonitor, powerSaveBlocker, safeStorage, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, net, Notification, powerMonitor, powerSaveBlocker, safeStorage, session, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -324,6 +324,7 @@ import { bootStep, paintFailure } from './boot-failure'
 import { registerAccessIpc } from './access-ipc'
 import { registerShareIpc } from './share-ipc'
 import { MagpieWeb, MAGPIE_WEB_FILE } from './route/magpie-web'
+import { openMagpieCardSession } from './magpie-card-open'
 import { plainRemoteProviders, remoteLoopbackPorts, remoteLoopbackProviders } from './route/remote-ports'
 import type { LiveValues } from '../shared/launch-settings'
 import { magpieBinary } from './route/share-keys'
@@ -9779,11 +9780,18 @@ function registerIpc(handlers: RestoreHandlers): void {
   })
   ipcMain.handle('launch-settings:live', (event) => (ownerFrame(event) ? launchSettings.live() : null))
   ipcMain.handle('launch-settings:set-live', (event, input: unknown) => (ownerFrame(event) ? launchSettings.setLive(input) : { ok: false, reason: 'not-owner' }))
-  // Magpie's settings page: the link carries its key, so only the owner's window may ask for it.
-  ipcMain.handle('magpie-web:open', (event) => {
+  // Magpie's settings page in a card: main signs that card's own browser session in, and the
+  // renderer gets the bare address only (magpie-card-open.ts). Only the owner's window may ask.
+  ipcMain.handle('magpie-web:open', (event, browserId: unknown) => {
     if (!ownerFrame(event)) return { ok: false, why: 'not_owner' }
-    if (!launchSettings.live().magpie) return { ok: false, why: 'Magpie is switched off in Launch settings.' }
-    return magpieWeb.open()
+    return openMagpieCardSession(browserId, {
+      switchedOn: () => launchSettings.live().magpie,
+      open: () => magpieWeb.open(),
+      setPartitionCookie: async (partition, cookie) => {
+        await session.fromPartition(partition).cookies.set(cookie)
+      },
+      primeHeadless: (id, cookies) => browserManager.primeCookies(id, cookies)
+    })
   })
   ipcMain.handle('launch-settings:status', (event) => (ownerFrame(event) ? launchSettings.status() : null))
   ipcMain.handle('launch-settings:save', (event, input: unknown) => (ownerFrame(event) ? launchSettings.save(input) : { ok: false, reason: 'not-owner' }))
