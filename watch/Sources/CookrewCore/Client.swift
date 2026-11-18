@@ -141,6 +141,8 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   private let onToken: (@Sendable (String) -> Void)?
   /** What the vault holds now: another instance (the background refresh) may have traded the token since. */
   private let latest: (@Sendable () -> (token: String, rekeyed: Bool)?)?
+  /** The vault's token as this instance last read it: only a change since then is taken up, never a step back. */
+  private var lastVaultToken: String?
   private let session: URLSession
   private let relay: RelayPass?
   /** A watch that roams: its plain roads may be anyone's, so they prove themselves first. */
@@ -163,6 +165,8 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
     latest: (@Sendable () -> (token: String, rekeyed: Bool)?)? = nil
   ) {
     self.latest = latest
+    // What this instance was made with is what the vault held then: a vault that moves after is taken up.
+    self.lastVaultToken = token
     self.sealer = sealer
     self.rekeyed = rekeyed
     self.onToken = onToken
@@ -305,10 +309,13 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
     // One token for the whole watch: a newer one in the vault (traded by another instance) is taken up first.
     if let kept = latest?() {
       lock.lock()
-      if kept.token != heldToken {
+      // Only a vault that moved since this instance last looked, and never during this instance's own trade:
+      // its new token reaches the vault a moment after it is held here, and reading in between would step back.
+      if rekeying == nil, let seen = lastVaultToken, kept.token != seen, kept.token != heldToken {
         heldToken = kept.token
         rekeyed = kept.rekeyed
       }
+      lastVaultToken = kept.token
       lock.unlock()
     }
     guard let sealer, await sealer.isPinned else { return }
@@ -336,11 +343,13 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
       let said = try? JSONSerialization.jsonObject(with: answer.0) as? [String: Any],
       let fresh = said["token"] as? String, fresh.count >= 16
     else { return }
+    // Into the vault first, then held here: another instance that reads the vault never sees it behind this one.
+    onToken?(fresh)
     lock.lock()
     heldToken = fresh
+    lastVaultToken = fresh
     rekeyed = true
     lock.unlock()
-    onToken?(fresh)
   }
 
   private func call(_ method: String, _ path: String, query: [URLQueryItem] = [], body: [String: Any]? = nil, tag: String? = nil) async throws -> (Data, HTTPURLResponse) {

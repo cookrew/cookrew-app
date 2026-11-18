@@ -1,5 +1,5 @@
 import { relayLineHeaders, sealProofHeaders } from '../src/main/seal-proof'
-import { SEALED_MARKER } from '../src/shared/remote-unlock'
+import { DOOR_MARKER, SEALED_MARKER } from '../src/shared/remote-unlock'
 import { readFileSync, writeFileSync, existsSync, mkdtempSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -395,9 +395,8 @@ describe('through the real gate', () => {
     const again = (await (await call('/api/watch/rekey', old, { method: 'POST', body: '{}', headers: sealed })).json()) as { token: string }
     expect(again.token).toBe(token)
     expect((await call('/api/watch/cards', token)).status).toBe(200)
-    // The new token was presented: the old one is done.
-    expect((await call('/api/watch/cards', old)).status).toBe(401)
-    expect((await call('/api/watch/rekey', old, { method: 'POST', body: '{}', headers: sealed })).status).toBe(404)
+    // The new token was presented: the old one still serves calls already on their way, for a minute.
+    expect((await call('/api/watch/cards', old)).status).toBe(200)
   })
 
   it('once a watch key is confirmed, the watch token is refused in the clear on the relay line, whatever device the relay names', async () => {
@@ -407,7 +406,12 @@ describe('through the real gate', () => {
     const line = relayLineHeaders()
     expect((await call('/api/watch/cards', token, { headers: line })).status).toBe(200)
     confirmed = true
-    expect((await call('/api/watch/cards', token, { headers: line })).status).toBe(401)
+    // 403 sealed-only, never 401: a watch takes a 401 for being forgotten and would let go of its pairing.
+    const refused = await call('/api/watch/cards', token, { headers: line })
+    expect(refused.status).toBe(403)
+    expect(await refused.json()).toEqual({ error: 'sealed-only' })
+    // Through a served door, a watch token is never taken at all.
+    expect((await call('/api/watch/cards', token, { headers: { [DOOR_MARKER]: '1' } })).status).toBe(403)
     // Not the relay line (home, or out of the sealed session): taken as before.
     expect((await call('/api/watch/cards', token)).status).toBe(200)
   })

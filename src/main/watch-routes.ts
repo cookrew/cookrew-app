@@ -203,8 +203,9 @@ export const watchTokenAccepted = (candidate: string | null): boolean => host?.p
  * its token is refused in the clear on the relay line whatever device the relay names: the relay saw
  * the claim's token, and a mark by device name is one a lying relay steps round (security review 2026-11-19).
  */
-export const watchTokenAcceptedOn = (candidate: string | null, overRelayLine: boolean): boolean =>
-  !(overRelayLine && (host?.seal?.sealedOnRelay() ?? false)) && watchTokenAccepted(candidate)
+export const watchTokenAcceptedOn = (candidate: string | null, overRelayLine: boolean, throughDoor = false): boolean =>
+  // A watch never comes through a served door: a watch token there is somebody else's use of it.
+  !throughDoor && !(overRelayLine && (host?.seal?.sealedOnRelay() ?? false)) && watchTokenAccepted(candidate)
 
 const TERMINAL_WRITE = /^\/api\/terminal\/([^/]+)\/(input|menu)$|^\/api\/watch\/card\/([^/]+)\/stop$/
 

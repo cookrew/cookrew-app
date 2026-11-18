@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { expectMode } from './support/file-mode'
 import { createHmac } from 'node:crypto'
 import {
+  WATCH_PREVIOUS_GRACE_MS,
   WATCH_CODE_GUESSES,
   WATCH_CODE_TTL_MS,
   WATCH_FAILS_BEFORE_PAUSE,
@@ -197,3 +198,26 @@ describe('a watch that claimed its first machine down the relay', () => {
     expect(pairing.accepts(claim.token)).toBe(false)
   })
 })
+
+describe('trading the watch token', () => {
+  it('the old token serves until the new is used and a minute after; a trade asked again gives the same new token', () => {
+    const { pairing, clock } = fresh()
+    const { code } = pairing.mintCode()
+    const claim = pairing.claim(code)
+    if (!claim.ok) throw new Error('no claim')
+    const old = claim.token
+    expect(pairing.rekey('not-it')).toBeNull()
+    const next = pairing.rekey(old)
+    expect(next).not.toBeNull()
+    expect(pairing.rekey(old)).toBe(next)
+    expect(pairing.accepts(old)).toBe(true)
+    expect(pairing.accepts(next)).toBe(true)
+    clock.now += WATCH_PREVIOUS_GRACE_MS - 1
+    expect(pairing.accepts(old)).toBe(true)
+    clock.now += 2
+    expect(pairing.accepts(old)).toBe(false)
+    expect(pairing.rekey(old)).toBeNull()
+    expect(pairing.accepts(next)).toBe(true)
+  })
+})
+

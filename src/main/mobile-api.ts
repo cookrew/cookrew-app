@@ -70,6 +70,7 @@ import { fromTheMacsOwnPage, handleUseSourceRoutes, isUseSourceRoute } from "./u
 import { handleUnlockGrantRoutes, isUnlockGrantRoute } from "./unlock-grant-routes";
 import type { UnlockGrantDoor } from "./unlock-grant";
 import { cameOverRelayLine, carriesSealProof } from "./seal-proof";
+import { DOOR_MARKER } from "../shared/remote-unlock";
 import { UNLOCK_GRANT_EVENT } from "../shared/unlock-grant";
 import type { ViewerWho } from "../shared/remote-access";
 import type { SkinStore } from "./skin-store";
@@ -742,7 +743,13 @@ export async function handleMobileApi(
   // A watch's token clears this gate for its own short list of routes and no
   // other (watch-routes.ts): past here it is what a pairing is for those routes.
   const watchCleared =
-    !ownerPairing && watchRouteAllowed(method, p) && watchTokenAcceptedOn(presentedToken(request, url), cameOverRelayLine(request));
+    !ownerPairing && watchRouteAllowed(method, p) && watchTokenAcceptedOn(presentedToken(request, url), cameOverRelayLine(request), request.headers[DOOR_MARKER] !== undefined);
+  // The watch's own token, refused for the road it came on: said as "sealed only" (403), never as an unknown
+  // token (401), which a watch takes for being forgotten and lets go of its pairing.
+  if (!ownerPairing && !watchCleared && watchRouteAllowed(method, p) && watchTokenAccepted(presentedToken(request, url))) {
+    respondJson(response, 403, { error: "sealed-only" });
+    return true;
+  }
   const hasPairing = ownerPairing || watchCleared;
   const hasReadOnly =
     !!deps.wallToken && pairingAuthorized(request, url, deps.wallToken);
