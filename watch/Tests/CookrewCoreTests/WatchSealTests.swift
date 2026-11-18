@@ -95,8 +95,26 @@ struct WatchSealTests {
     let peer = SealPeer(deviceId: "mac", x: "k1", words: [])
     let sealer = WatchSealer(peer: peer, device: WatchDevice(), relay: Pass(), pinned: false)
     await sealer.close()
-    await #expect(throws: WatchError.unreachable) {
+    await #expect(throws: SealRoadClosed()) {
       _ = try await sealer.exchange(base: URL(string: "http://127.0.0.1:9/api/m/mac")!, method: "GET", path: "/api/x", headers: [:], body: nil)
     }
+  }
+
+  @Test("a pinned watch the Mac refused is not asked again at once: the road stays shut, with no handshake per call")
+  func pinnedBackoff() async {
+    struct Pass: RelayPass {
+      var host: String { "127.0.0.1" }
+      var port: Int? { 9 }
+      func token() async -> String { "s" }
+      func newer(than token: String) async -> String? { nil }
+    }
+    let peer = SealPeer(deviceId: Seal2.deviceId(x: base64urlEncoded(Data(repeating: 1, count: 32))), x: base64urlEncoded(Data(repeating: 1, count: 32)), words: [])
+    let sealer = WatchSealer(peer: peer, device: WatchDevice(), relay: Pass(), pinned: true)
+    let base = URL(string: "http://127.0.0.1:9/api/m/mac")!
+    // Nothing listens on port 9: the first try fails at the handshake; the next is refused from memory, at once.
+    await #expect(throws: SealRoadClosed()) { _ = try await sealer.exchange(base: base, method: "GET", path: "/a", headers: [:], body: nil) }
+    let started = Date()
+    await #expect(throws: SealRoadClosed()) { _ = try await sealer.exchange(base: base, method: "POST", path: "/b", headers: [:], body: nil) }
+    #expect(Date().timeIntervalSince(started) < 0.5)
   }
 }

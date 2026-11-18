@@ -13,6 +13,9 @@ import Foundation
 //
 // The direct roads (the Mac's own address at home) are not this file's.
 
+/** The sealed road would not open, so nothing of this call reached the Mac: any road may be tried next, a write's too. */
+public struct SealRoadClosed: Error, Equatable {}
+
 /** What a claim answer offers: not yet believed (ClaimReply · sealOffer). */
 public struct SealOffer: Equatable, Sendable {
   public let deviceId: String
@@ -77,13 +80,17 @@ public actor WatchSealer {
 
   /** The session, open or opened now; nil when the Mac has not let this watch in and it was never sealed. */
   private func session(base: URL) async throws -> Seal2Client? {
-    if shut { throw WatchError.unreachable }
+    if shut { throw SealRoadClosed() }
     if let client, await client.isOpen() { return client }
     if let dead = client {
       client = nil
       await dead.close()
     }
-    if !pinned, Date() < refusedUntil { return nil }
+    // Refused a moment ago: not asked again yet. Pinned, that is the road shut; not pinned, the old way.
+    if Date() < refusedUntil {
+      if pinned { throw SealRoadClosed() }
+      return nil
+    }
     if let opening { return try await opening.value }
     let task = Task { try await self.open(base: base) }
     opening = task
@@ -101,7 +108,7 @@ public actor WatchSealer {
       // Closed while this was opening: the session goes with it, not into a store nobody uses.
       if shut {
         await opened.close()
-        throw WatchError.unreachable
+        throw SealRoadClosed()
       }
       client = opened
       refusedFor = 0
@@ -111,11 +118,11 @@ public actor WatchSealer {
       }
       return opened
     } catch {
-      if pinned { throw WatchError.unreachable }
-      // Not let in yet (the words not confirmed on the Mac), or a carrier saying so: the old way, as before,
-      // and not asked again for a while, longer each time.
+      // Not let in yet (the words not confirmed on the Mac), or a carrier saying so: not asked again for a while,
+      // longer each time. Pinned, the road stays shut meanwhile; not pinned, the old way, as before.
       refusedFor = min(max(refusedFor * 2, 30), 600)
       refusedUntil = Date().addingTimeInterval(refusedFor)
+      if pinned { throw SealRoadClosed() }
       return nil
     }
   }

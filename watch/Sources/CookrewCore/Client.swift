@@ -292,9 +292,12 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
           let answer: (Data, HTTPURLResponse)?
           do {
             answer = try await sealer.exchange(base: bases[index], method: method, path: inner, headers: headers, body: payload, timeout: read ? 10 : 30)
+          } catch is SealRoadClosed {
+            // The session never opened, so nothing reached the Mac: the next road (home), a write's too.
+            continue
           } catch {
-            // The sealed relay road failed: a read tries the next road (home, if there is one); a write may
-            // have reached the Mac and stops. Never the plain relay on this same road.
+            // The sealed relay road failed mid-call: a read tries the next road; a write may have reached the
+            // Mac and stops. Never the plain relay on this same road.
             if read { continue }
             throw WatchError.unreachable
           }
