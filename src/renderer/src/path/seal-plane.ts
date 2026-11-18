@@ -215,6 +215,8 @@ function probe(base: string, code: string): void {
   const held = probes.get(key)
   if (held?.running || (held !== undefined && timing.now() < held.at)) return
   const gen = generation
+  // A new try asks again: until it answers, an old "no v2" is no answer (the Mac may have been updated).
+  oldMacs.delete(key)
   const after = (delay: number, wait: number): void => {
     if (gen === generation) probes.set(key, { at: timing.now() + wait, delay, running: null })
   }

@@ -154,6 +154,20 @@ describe('a try that fails is not an answer', () => {
     expect(offers).toEqual([{ plain: true, sdp: OFFER }])
   })
 
+  it('a Mac once found old and since updated is asked again: while that try fails, nothing goes plain', async () => {
+    carrier = 'strip'
+    oldMac = true
+    const page = await consolePage(true)
+    expect((await page.postRtcOffer(OFFER, { decideMs: 3_000 }))?.sdp).toBe(ANSWER)
+    expect(offers).toEqual([{ plain: true, sdp: OFFER }])
+    // Updated; the relay now fails every handshake. Past oldMacMs (2 s here) the old answer is no answer.
+    oldMac = false
+    carrier = 'fail'
+    await new Promise((resolve) => setTimeout(resolve, 2_100))
+    expect(await page.postRtcOffer(OFFER, { decideMs: 500 })).toBeNull()
+    expect(offers).toHaveLength(1)
+  }, 10_000)
+
   it('a Mac whose v2 offer the relay takes off the hello is still found to speak sealed: the offer never goes plain', async () => {
     carrier = 'strip'
     const page = await consolePage(true)
