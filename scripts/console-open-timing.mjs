@@ -9,8 +9,8 @@
  *   paint      navigation start -> the machine's level drawn (`--ready` selector)
  *   requests   every request the page made, by origin, with the preflights
  *              counted on their own and the distinct relay URLs
- *   probe      when the page asked for a direct path (rtc offer, hellos, the
- *              registry's verify) and when it stopped asking
+ *   probe      when the page asked for a direct path (the rtc offer) and
+ *              reported how it went
  *   steady     what one quiet minute inside the machine costs, in requests and
  *              preflights
  *
@@ -125,7 +125,6 @@ const classify = (row) => {
   if (relayPrefix(row.url)) return 'relay'
   if (u.hostname.startsWith('api.')) return 'registry'
   if (u.origin === consoleOrigin) return 'console'
-  if (u.hostname.endsWith('.d.cookrew.dev')) return 'direct'
   return 'other'
 }
 const summarise = (rows, from) => {
@@ -181,7 +180,7 @@ for (const width of widths) {
     const badge = await cdp.send('Runtime.evaluate', { expression: `(document.querySelector('[data-path], .cr-path-badge, .path-badge') || {}).innerText || ''`, returnByValue: true }).catch(() => null)
     const boot = [...seen.values()]
     const bootSummary = summarise(boot, navAt)
-    const probeRows = bootSummary.timeline.filter((row) => /rtc\/offer|\/api\/reach|\/api\/hello|verify-hello|path-report|path\/report/.test(row.what))
+    const probeRows = bootSummary.timeline.filter((row) => /rtc\/offer|path-report|path\/report/.test(row.what))
     // A quiet minute inside the machine.
     const steadyFrom = boot.length
     const steadyStart = Date.now()

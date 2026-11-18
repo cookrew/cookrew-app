@@ -21,41 +21,22 @@
 // suppress the report that mattered.
 
 import { describe, expect, it } from 'vitest'
-import {
-  PATH_REPORT_MIN_GAP_MS,
-  createPathReporter,
-  reportedAttempts
-} from '../src/renderer/src/path/report'
-import {
-  switchPlaneIfBetter,
-  type PlaneAttempt,
-  type PlaneSwitchDeps
-} from '../src/renderer/src/path/plane-switch'
-import type { LocalNetworkState } from '../src/renderer/src/local-network'
-import type { PathAttempt } from '../src/renderer/src/path-attempts'
-import type { DataPlane } from '../src/renderer/src/data-plane'
-import type { PathReport } from '../src/shared/path-report'
-import type { ReachCardLite } from '../src/renderer/src/path/switch'
+import { PATH_REPORT_MIN_GAP_MS, createPathReporter } from '../src/renderer/src/path/report'
+import type { PathReport, PathReportAttempt, PathReportProbe } from '../src/shared/path-report'
 
-const DEVICE = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
-const LAN = `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`
-const RELAY: DataPlane = { origin: '', kind: 'relay' }
-
-const report = (attempts: readonly PathAttempt[], over: Partial<PathReport> = {}): PathReport => ({
+const report = (attempts: readonly PathReportAttempt[], over: Partial<PathReport> = {}): PathReport => ({
   at: 1_800_000_000_000,
   plane: 'RELAY',
   permission: 'prompt',
   browser: 'Chrome 152',
-  attempts: reportedAttempts(attempts),
+  attempts,
   ...over
 })
 
-const blockedRow: PathAttempt = {
+const blockedRow: PathReportAttempt = {
   name: '192.168.2.40:8643',
   outcome: 'blocked',
   ms: 32,
-  plane: 'LAN',
-  chosen: false,
   hint: 'none'
 }
 
@@ -103,81 +84,16 @@ describe('a report with nothing in it', () => {
   })
 })
 
-describe('the two races the owner actually ran, wired as the companion wires them', () => {
-  /** The switcher and the reporter, joined by `note` exactly as companion.ts does. */
-  const companion = (): {
-    readonly race: (pressed: boolean) => Promise<void>
-    readonly sent: readonly PathReport[]
-    readonly panel: () => readonly PlaneAttempt[]
-  } => {
+describe('a race whose only row is the WebRTC link', () => {
+  it('is a fact, and is sent: since the names went (2026-11-16) a race has no other rows', async () => {
     const sent: PathReport[] = []
-    const clock = { ms: 0 }
-    let panel: readonly PlaneAttempt[] = []
     const tell = createPathReporter({
       post: async (one) => void sent.push(one),
-      now: () => clock.ms
+      now: () => 0
     })
-    const permission = async (): Promise<LocalNetworkState> => 'prompt'
-    const race = async (pressed: boolean): Promise<void> => {
-      clock.ms += 1_000
-      let pending: Promise<boolean> = Promise.resolve(false)
-      const deps: PlaneSwitchDeps = {
-        plane: () => RELAY,
-        card: async (): Promise<ReachCardLite> => ({
-          deviceId: DEVICE,
-          lan: [],
-          tailnet: null,
-          trusted: [LAN]
-        }),
-        // The measured fact: refused in 32 ms with the hint and again without.
-        hello: async () => ({
-          ok: false,
-          kind: 'blocked',
-          ms: 32,
-          attempts: [
-            { hint: 'local', kind: 'blocked', ms: 32 },
-            { hint: 'none', kind: 'blocked', ms: 30 }
-          ]
-        }),
-        verify: async () => false,
-        adopt: () => undefined,
-        nonce: () => 'a-nonce',
-        permission,
-        mayPrompt: () => pressed,
-        note: (rows) => {
-          panel = rows
-          pending = tell(report(rows as readonly PathAttempt[]))
-        }
-      }
-      await switchPlaneIfBetter(deps)
-      await pending
-    }
-    return { race, sent, panel: () => panel }
-  }
-
-  it('sends exactly one report, and it is the race the panel is showing', async () => {
-    const phone = companion()
-    // The timer's race, which is not allowed to raise a dialog and so tries
-    // nothing at all. It used to post an empty report and swallow the floor.
-    await phone.race(false)
-    expect(phone.panel()).toEqual([])
-    expect(phone.sent).toEqual([])
-
-    // The reader presses ALLOW. One candidate, refused both ways.
-    await phone.race(true)
-    expect(phone.panel()).toHaveLength(1)
-    expect(phone.sent).toHaveLength(1)
-    expect(phone.sent[0].attempts).toEqual([
-      { name: '192.168.2.40:8643', outcome: 'blocked', ms: 32, hint: 'none' }
-    ])
-  })
-
-  it('does not send the timer races that follow it either', async () => {
-    const phone = companion()
-    await phone.race(false)
-    await phone.race(true)
-    await phone.race(false)
-    await phone.race(false)
-    expect(phone.sent).toHaveLength(1)
+    const probe: PathReportProbe = { kind: 'rtc', name: '192.168.2.40', outcome: 'answered', ms: 420 }
+    expect(await tell(report([], { probes: [probe] }))).toBe(true)
+    expect(sent).toHaveLength(1)
+    expect(sent[0].attempts).toEqual([])
   })
 })

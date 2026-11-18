@@ -7,19 +7,18 @@
 // our trusted names is. Without the annotation the whole of Reach v2.1's fast
 // path dies silently on the phone in most people's pocket.
 //
-// So three things are pinned here: the annotation is on the module that speaks
-// for a direct request; the permission is read deliberately and degrades to
-// 'unsupported' on every browser that has never heard of it; and asking is ONE
-// probe, never a loop — a permission prompt raised twice is a permission
-// prompt dismissed twice.
+// So two things are pinned here: the annotation is on the module that speaks
+// for a direct request, and the permission is read deliberately and degrades
+// to 'unsupported' on every browser that has never heard of it. Nothing asks
+// for it any more: the ask was a request to one of the Mac's names under
+// d.cookrew.dev, and those names are gone (2026-11-16).
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   DIRECT_ADDRESS_SPACE,
   LOCAL_NETWORK_PERMISSION,
   directAddressSpaceInit,
-  localNetworkState,
-  requestLocalNetwork
+  localNetworkState
 } from '../src/renderer/src/local-network'
 
 afterEach(() => {
@@ -81,45 +80,8 @@ describe('reading the permission', () => {
 })
 
 describe('asking for it', () => {
-  it('makes exactly ONE annotated request and never loops', async () => {
-    const inits: RequestInit[] = []
-    const fetched: string[] = []
-    const state = await requestLocalNetwork({
-      url: 'https://192-168-1-24.aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.d.cookrew.dev:8643',
-      fetch: (async (url: string, init: RequestInit) => {
-        fetched.push(url)
-        inits.push(init)
-        return new Response('{}', { status: 200 })
-      }) as unknown as typeof fetch,
-      permissions: permissions(async () => ({ state: 'granted' }))
-    })
-    expect(fetched).toHaveLength(1)
-    expect((inits[0] as { targetAddressSpace?: string }).targetAddressSpace).toBe('local')
-    // No cookies to an address that has not yet proved it is the Mac.
-    expect(inits[0].credentials).toBe('omit')
-    expect(state).toBe('granted')
-  })
-
-  it('still answers, and still asks only once, when the probe is refused', async () => {
-    let calls = 0
-    const state = await requestLocalNetwork({
-      url: 'https://192-168-1-24.aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.d.cookrew.dev:8643',
-      fetch: (async () => {
-        calls += 1
-        throw new TypeError('Failed to fetch')
-      }) as unknown as typeof fetch,
-      permissions: permissions(async () => ({ state: 'denied' }))
-    })
-    expect(calls).toBe(1)
-    expect(state).toBe('denied')
-  })
-
-  it('answers unsupported when there is nothing to ask and nothing to ask with', async () => {
-    const state = await requestLocalNetwork({
-      url: 'https://192-168-1-24.aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.d.cookrew.dev:8643',
-      fetch: (async () => new Response('{}')) as unknown as typeof fetch,
-      permissions: null
-    })
-    expect(state).toBe('unsupported')
+  it('is no longer possible: the module offers no probe that could raise the prompt', async () => {
+    const module = await import('../src/renderer/src/local-network')
+    expect(module).not.toHaveProperty('requestLocalNetwork')
   })
 })

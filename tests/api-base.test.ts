@@ -265,9 +265,6 @@ describe('the streams are covered too', () => {
     // Each one same-origin, or a simple request with no credential header, which nothing preflights.
     const allowed = new Map([
       ['account-pair-client.ts', "the same-origin branch of httpAt: a machine's own page"],
-      ['path/ask-hello.ts', 'a simple GET with no header: never preflighted'],
-      ['path/name-oracle.ts', 'a simple GET with no header: never preflighted'],
-      ['local-network.ts', 'the local-network permission probe: no credential'],
       ['console/console-version.ts', 'the console’s own origin']
     ])
     const found: string[] = []

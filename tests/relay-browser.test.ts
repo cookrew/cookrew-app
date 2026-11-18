@@ -6,8 +6,6 @@ import { describe, expect, it } from 'vitest'
 import { bridgeablePath, createSocketBridge } from '../src/main/socket-bridge'
 import type { LoopbackSocket, LoopbackSocketDeps } from '../src/main/ws-client'
 import { BridgeWebSocket, type BridgeStream } from '../src/renderer/src/path/bridge-socket'
-import { tailnetWorthIt, TAILNET_WARM_MAX_MS, warmRoundTrip } from '../src/renderer/src/path/plane-quality'
-import { switchPlaneIfBetter, type PlaneSwitchDeps } from '../src/renderer/src/path/plane-switch'
 
 describe('the credential a bridged socket dials with', () => {
   const dialled = (path: string, credential: string | null): string => {
@@ -147,47 +145,6 @@ describe('the phone end of the bridge', () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(seen).toEqual(['error', 'close'])
     expect(stream.closed).toBe(true)
-  })
-})
-
-describe('a tailnet worth moving onto', () => {
-  it('beats the relay on a warm connection, under a ceiling', () => {
-    expect(tailnetWorthIt(150, 900)).toBe(true)
-    expect(tailnetWorthIt(150, 100)).toBe(true) // plainly fast
-    expect(tailnetWorthIt(400, 500)).toBe(true)
-    expect(tailnetWorthIt(600, 300)).toBe(false) // slower than the relay
-    expect(tailnetWorthIt(TAILNET_WARM_MAX_MS + 1, 5000)).toBe(false)
-    expect(tailnetWorthIt(null, 300)).toBe(false) // the warm hellos did not come back
-    expect(tailnetWorthIt(500, null)).toBe(true) // nothing to compare against yet
-  })
-
-  it('times the faster of two answered round trips', async () => {
-    let t = 0
-    const times = [300, 120]
-    const ms = await warmRoundTrip(async () => {
-      t += times.shift() ?? 0
-      return true
-    }, 2, () => t)
-    expect(ms).toBe(120)
-    expect(await warmRoundTrip(async () => false)).toBeNull()
-  })
-
-  it('keeps the phone where it is when the winner is slower — outcome "slower", nothing adopted', async () => {
-    const DEVICE = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
-    const TAIL = `https://100-68-81-64.${DEVICE}.d.cookrew.dev:8643`
-    let adopted = 0
-    const deps: PlaneSwitchDeps = {
-      plane: () => ({ origin: '', kind: 'relay' }),
-      card: async () => ({ deviceId: DEVICE, lan: [], tailnet: null, trusted: [TAIL] }),
-      hello: async (origin, nonce) => ({ ok: true, reply: { v: 2, deviceId: DEVICE, origin, issuedAtMs: 1, nonce, sig: 's' } }),
-      verify: async () => true,
-      adopt: () => void (adopted += 1),
-      nonce: () => 'n',
-      worthIt: async () => false
-    }
-    expect(await switchPlaneIfBetter(deps)).toBe('slower')
-    expect(adopted).toBe(0)
-    expect(await switchPlaneIfBetter({ ...deps, worthIt: async () => true })).toBe('switched')
   })
 })
 

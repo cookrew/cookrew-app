@@ -8,10 +8,11 @@
 // hand it what they read.
 //
 // THE POLICY. Only this origin's own scripts run, nothing inline. The page
-// talks to itself (its worker's install, its version file), to the API host it
-// was built for, and to a machine's own name on the machine's port: the direct
-// path, by https and by WebSocket. It cannot be framed, rebased or made to post
-// a form.
+// talks to itself (its worker's install, its version file) and to the API host
+// it was built for, which carries the relay. The direct path to a machine is the
+// WebRTC link, which connect-src does not govern; the per-machine names under
+// d.cookrew.dev are gone (2026-11-16). It cannot be framed, rebased or made to
+// post a form.
 //
 // STYLES MAY BE WRITTEN IN PLACE ('unsafe-inline'), because the terminal does:
 // a page in a browser gets xterm's DOM renderer, which adds <style> elements
@@ -32,7 +33,6 @@
 // nothing here stops that. Chunks loaded later are not pinned yet.
 import { createHash } from 'node:crypto'
 
-const MACHINE_NAMES = ['https://*.d.cookrew.dev:8643', 'wss://*.d.cookrew.dev:8643']
 export const CONSOLE_HOST_MARK = '# console.cookrew.dev, built by scripts/console-host-files.mjs.'
 
 /** A bare https origin, spelled out; a loopback http one only when a local build asks. Goes into a header: nothing else may. */
@@ -55,7 +55,7 @@ export function consolePolicy({ api, local = false }) {
     "default-src 'none'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    `connect-src 'self' ${apiOrigin(api, local)} ${MACHINE_NAMES.join(' ')}`,
+    `connect-src 'self' ${apiOrigin(api, local)}`,
     "img-src 'self' data: blob:",
     "media-src 'self' blob: data:",
     "font-src 'self'",

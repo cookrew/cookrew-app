@@ -27,9 +27,7 @@ const REGISTERED: Record<string, readonly string[]> = {
   'cable-signal.ts': ['cable signals'],
   'data-plane.ts': ['data plane'],
   'device-seat.ts': ['device seat'],
-  'local-network-gate.ts': ['local network ask'],
   'machine-session.ts': ['machine session'],
-  'path-attempts.ts': ['path attempts'],
   'path-link.ts': ['path link'],
   'path/companion.ts': ['path switch memory'],
   'pictures/use-picture.ts': ['pictures'],
@@ -141,12 +139,10 @@ describe('the list of what belongs to a machine', () => {
 })
 
 describe('entering another machine lets go of', () => {
-  it('the direct plane, its health and what the last race tried', async () => {
+  it('the direct plane and its health', async () => {
     const plane = await import('../src/renderer/src/data-plane')
     const health = await import('../src/renderer/src/plane-health')
-    const attempts = await import('../src/renderer/src/path-attempts')
-    plane.setDataPlane({ origin: `https://192-168-2-40.${A}.d.cookrew.dev:8643`, kind: 'lan' })
-    attempts.recordAttempts([], 'LAN')
+    plane.setDataPlane({ origin: '', kind: 'lan', transport: 'rtc' })
     // Given up on, with a hold: what the last machine's link earned.
     health.planeHealth().suspect('a stream went silent')
     await vi.waitFor(() => expect(health.planeHealth().held()).toBe(true))
@@ -156,25 +152,20 @@ describe('entering another machine lets go of', () => {
     expect(plane.dataPlane()).toEqual({ origin: '', kind: 'relay' })
     expect(health.planeHealth().held()).toBe(false)
     expect(health.planeHealth().lastReason()).toBeNull()
-    expect(attempts.pathAttempts()).toEqual({ attempts: [], settled: 'RELAY' })
   })
 
-  it('the badge’s facts and the ALLOW row’s aim, and tells whoever draws them', async () => {
+  it('the badge’s facts, and tells whoever draws them', async () => {
     const link = await import('../src/renderer/src/path-link')
-    const gate = await import('../src/renderer/src/local-network-gate')
     const heard: (string | null)[] = []
     link.subscribePathLink((next) => heard.push(next.desktopName))
     link.setDesktopName('Studio Mac')
     link.recordLatency(42)
     link.setPathLink('failed')
     link.setDirectHeld('unproved')
-    gate.offerLocalNetwork(async () => undefined)
-    expect(gate.localNetworkOffered()).toBe(true)
 
     scope.enterMachine(B)
     expect(link.pathLinkState()).toEqual({ link: 'live', latencyMs: null, desktopName: null, probing: false, held: null })
     expect(heard.at(-1)).toBeNull()
-    expect(gate.localNetworkOffered()).toBe(false)
     // Still listening, for the next machine's name.
     link.setDesktopName('Solis')
     expect(heard.at(-1)).toBe('Solis')

@@ -15,8 +15,6 @@
  * PROBING no matter which host is in the address bar.
  */
 
-import { addressFromTrustedName } from './reach-names'
-
 /**
  * A browser permission, in the four states local-network.ts reads.
  *
@@ -40,7 +38,7 @@ export type PathBadgeInput = {
   readonly desktopName?: string
   readonly latencyMs?: number | null
   /**
-   * The companion is racing a better path right now (path/switch.ts).
+   * The companion is racing a better path right now.
    *
    * Separate from `link`, because the two are different facts: `reconnecting`
    * means the channel this page is using is down, and probing means it is up
@@ -53,10 +51,9 @@ export type PathBadgeInput = {
    * THIS PAGE WAS SERVED UNDER A RELAY PREFIX, so the relay is what is
    * carrying the data plane — whatever host the address bar shows.
    *
-   * The origin alone cannot answer this. Reach v2.1 gives every Mac real
-   * certificates for names like `192-168-2-40.<id>.d.cookrew.dev`, and a relay
-   * can be fronted by any host at all; classifying by hostname would then read
-   * LAN off a page whose every request is going through cookrew.dev.
+   * The origin alone cannot answer this: a relay can be fronted by any host
+   * at all, and classifying by hostname would then read LAN off a page whose
+   * every request is going through cookrew.dev.
    *
    * It says only "do not read the address bar"; WHICH path is carrying the
    * data plane is `plane`, below.
@@ -67,8 +64,8 @@ export type PathBadgeInput = {
    *
    * Only meaningful under a prefix, and it is the whole of the promise the
    * address bar can no longer keep: the page stays at cookrew.dev for the life
-   * of the session while the requests underneath move to the Mac's own trusted
-   * name and back. The badge is then the only thing on screen telling the
+   * of the session while the requests underneath move onto the WebRTC link to
+   * the Mac and back. The badge is then the only thing on screen telling the
    * truth about the transport, which is why it is a supplied FACT — read off
    * the store that composes the request URLs — and never re-derived here.
    *
@@ -195,17 +192,8 @@ export const classifyOrigin = (
 ): PathState => {
   const host = hostOf(origin)
   if (!host) return 'OFFLINE'
-  /**
-   * A REACH v2.1 NAME IS THE ADDRESS IT SPELLS, NOT THE ZONE IT SITS IN.
-   *
-   * `192-168-2-40.<id>.d.cookrew.dev` is the Wi-Fi, and it fell through every
-   * test below to the closing "a public name we cannot name" — so the badge
-   * said RELAY over a page whose bytes never left the house. That is the one
-   * reading the badge exists to prevent, and it is what a phone gets from
-   * every trusted URL `cookrew mobile` prints.
-   */
-  const spelled = addressFromTrustedName(host)
-  if (spelled !== null) return isTailnetHostname(spelled) ? 'TAILNET' : isLanHostname(spelled) ? 'LAN' : 'RELAY'
+  // A name is never read for the address it might spell: the per-machine names
+  // under d.cookrew.dev are gone (2026-11-16), and a public name is judged as one.
   const registryHost = hostOf(registryOrigin)
   if (registryHost && bareHost(host) === bareHost(registryHost)) return 'RELAY'
   if (isTailnetHostname(host)) return 'TAILNET'

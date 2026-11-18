@@ -1,234 +1,45 @@
 import { heldScope, machineScope, registerScopeState } from '../machine-scope'
 import { apiPath, clientBase } from '../api-base'
 import { cookrew, isRemoteMode } from '../api'
-import { authHeaders, authStore } from '../auth-gate'
+import { authHeaders } from '../auth-gate'
 import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
 import { currentBrowser } from '../browser-family'
-import { createPathReporter, postPathReport, reportedAttempts } from './report'
+import { createPathReporter, postPathReport } from './report'
 import { adoptRtcLink, type RtcRow } from './rtc-adopt'
 import { RTC_EVERY_MS, boundKnock, heldAfter, knockGapAfter, readRtcAnswer } from './rtc-trust'
 import { heldRtcLink, rtcLink, setRtcLink } from '../rtc-plane'
 import { isLanHostname, isTailnetHostname } from '../../../shared/path-badge'
 import { pageContext } from './page-context'
 import type { PathReport } from '../../../shared/path-report'
-import { dataPlane, fallBackToRelay, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
-import type { LocalNetworkState } from '../local-network'
-import { isLocalOrigin, localNetworkState, requestLocalNetwork } from '../local-network'
-import { localNetworkGate, offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
-import { recordAttempts, type PathAttempt } from '../path-attempts'
-import { nameLive } from './name-oracle'
-import { createPathMemory, watchNetwork, type PathMemory, type PathMemoryDeps } from '../path-memory'
+import { dataPlane, fallBackToRelay, setDataPlane, subscribeDataPlane } from '../data-plane'
+import { localNetworkState } from '../local-network'
+import { localNetworkGate, setLocalNetwork } from '../local-network-gate'
 import { planeFetch } from '../plane-fetch'
 import { HOLD_REPEAT_WINDOW_MS, KEEPS_PER_WINDOW, planeHealth, setPlaneLiveProbe, type LinkHealth } from '../plane-health'
 import { followDataPlane } from '../plane-streams'
 import { onStreamDeath } from '../stream-watch'
-import { tailnetWorthIt, warmRoundTrip } from './plane-quality'
-import { currentOriginState, forgetLatency, pathLinkState, setDirectHeld, setProbing, subscribePathLink } from '../path-link'
-import {
-  PLANE_PROBE_EVERY_MS,
-  planeCandidates,
-  switchPlaneIfBetter
-} from './plane-switch'
-import { startPlaneRecheck } from './plane-recheck'
+import { forgetLatency, setDirectHeld, subscribePathLink } from '../path-link'
+import { startRaceLoop } from './race-loop'
 import { browserConnection, leaveDirectPlane, onCellular, watchNetworkMoves } from './radio'
-// The registry call it makes lives beside its own deadline (verify-hello.ts)
-// and is re-exported here, where every caller has always imported it from.
-export { VERIFY_TIMEOUT_MS, verifyHello } from './verify-hello'
-import { verifyHello } from './verify-hello'
-import {
-  PATH_MEMORY_PREFIX,
-  askHello,
-  pathRank,
-  randomNonce,
-  startPathSwitching,
-  startRaceLoop,
-  type ReachCardLite
-} from './switch'
 
 /**
- * THE SWITCHERS, PLUGGED INTO A REAL PHONE.
+ * THE NEARER PATH, PLUGGED INTO A REAL PHONE.
  *
- * switch.ts and plane-switch.ts are the decisions and hold no browser in them;
- * this is the handful of things those decisions need from an actual companion
- * — its plane, the desktop's card, a nonce, the credential, localStorage and
- * either `location.replace` or the data-plane store. Kept apart so the rules
- * ("only better, and only after the Mac proves it is the Mac") are testable
- * without a DOM, which is where a rule can actually be got wrong.
+ * A companion under the relay base (the console, and the phone page, which is
+ * the same bundle) reaches its Mac two ways and no others: over the relay,
+ * which is how the page arrived, and over the WebRTC link it knocks open by
+ * itself (path/rtc-adopt.ts). The page never leaves cookrew.dev; the DATA
+ * PLANE moves onto the link and back, and the badge is the only thing that
+ * changes on screen.
  *
- * WHICH SWITCHER RUNS IS DECIDED BY THE PREFIX, and it is the whole shape of
- * Reach v2.1 in one branch:
+ * NO NAMES (2026-11-16). The Mac's per-machine names under d.cookrew.dev, the
+ * race that probed them, the registry's zone and verify routes that vouched
+ * for them, and the navigating switch a root-served page ran onto a bare LAN
+ * address are all gone. A page a Mac serves itself is already on the Mac and
+ * stays where it is.
  *
- *   AT THE ROOT the page origin IS the transport, so moving to a nearer path
- *   means loading the app at that address. Unchanged, down to the URL it
- *   navigates to — a phone that scanned the Mac's printed LAN link is not
- *   affected by any of this.
- *
- *   UNDER THE RELAY BASE the page never leaves cookrew.dev. The data plane
- *   moves instead, and the badge is the only thing that changes on screen.
- *
- * IT DOES NOTHING ON THE DESKTOP, and nothing on a companion already on the
- * LAN. There is no faster path than the one it is on, and a probe that ran
- * anyway would be pointless requests off a device on battery.
+ * IT DOES NOTHING ON THE DESKTOP, and nothing on a page the Mac serves itself.
  */
-
-/**
- * WHICH DESKTOP THE PLANE WAS ADOPTED FOR.
- *
- * The re-check has to compare a hello against a device id, and it must not
- * spend a request on `/api/reach` to learn one it already knew. The card is
- * fetched by the switcher on every race up to the moment it switches — after
- * that the switcher is `skipped` and fetches nothing — so the last id seen is
- * exactly the id that was proved. It is only ever overwritten by a fresher
- * card, never by a failed fetch.
- */
-let lastDeviceId: string | null = null
-
-/** The desktop this companion is talking to, as far as the card ever said. */
-export const cardDeviceId = (): string | null => lastDeviceId
-
-/** The desktop's own reach card, over whatever plane is already working. */
-const fetchCard = async (): Promise<ReachCardLite | null> => {
-  const sameMachine = heldScope()
-  try {
-    const response = await planeFetch(apiPath('/api/reach'), {
-      // No `cache: 'no-store'`: on the relay it would cost a preflight each time (data-plane.ts · CROSS_ORIGIN_NO_COOKIE).
-      headers: authHeaders()
-    })
-    if (!response.ok) return null
-    const body = (await response.json()) as Partial<ReachCardLite>
-    // A card read to its end after its machine was left is not this machine's card.
-    if (!sameMachine()) return null
-    if (typeof body.deviceId !== 'string' || !Array.isArray(body.lan)) return null
-    // ON THE CONSOLE THE MACHINE IS KNOWN BEFORE IT SPEAKS: the one in scope, by the registry's id.
-    // A card naming another machine (one of the account's would verify) is not this machine's
-    // card, and nothing it lists is knocked on.
-    const expected = machineScope().machineId
-    if (expected !== null && body.deviceId.toLowerCase() !== expected) return null
-    // `trusted` is Reach v2.1's addition and an OLDER MAC WILL NOT HAVE IT.
-    // Absent reads as empty, which reads as "no live switch today" — the
-    // relay keeps working and nothing announces a downgrade that is really
-    // just a desktop that has not been updated yet.
-    const trusted = Array.isArray(body.trusted)
-      ? body.trusted.filter((origin): origin is string => typeof origin === 'string')
-      : []
-    lastDeviceId = body.deviceId
-    const card: ReachCardLite = {
-      deviceId: body.deviceId,
-      lan: body.lan,
-      tailnet: body.tailnet ?? null,
-      trusted
-    }
-    return card
-  } catch {
-    return null
-  }
-}
-
-/**
- * WHAT THIS PHONE CAN CHEAPLY SAY ABOUT ITS OWN CONNECTION.
- *
- * `navigator.connection` is the Network Information API — Chrome and the
- * Android web view have it, Safari does not — and `type`/`effectiveType` are
- * the two members that change when a phone moves from Wi-Fi to a radio. Null
- * where there is nothing to read, which is a DIFFERENT answer from "unknown
- * network" and is why path-memory.ts keeps two lifetimes rather than one.
- */
-const connectionHint = (): string | null => {
-  try {
-    const link = (window as unknown as {
-      navigator?: { connection?: { type?: string; effectiveType?: string } }
-    }).navigator?.connection
-    if (!link) return null
-    const described = [link.type, link.effectiveType].filter(Boolean).join('/')
-    return described.length > 0 ? described : null
-  } catch {
-    return null
-  }
-}
-
-/**
- * The path memory over this phone's real storage.
- *
- * Private-mode Safari THROWS on storage access rather than returning null, so
- * the whole surface is probed once here and every method inside path-memory.ts
- * is guarded again — a hint is worth one saved probe and is never worth an
- * exception on a boot path.
- */
-const memory = (): PathMemory => {
-  const dead: PathMemoryDeps = {
-    read: () => null,
-    write: () => undefined,
-    remove: () => undefined,
-    now: () => Date.now(),
-    network: connectionHint,
-    keys: () => []
-  }
-  try {
-    const storage = window.localStorage
-    storage.getItem(PATH_MEMORY_PREFIX)
-    return createPathMemory({
-      ...dead,
-      read: (key) => storage.getItem(key),
-      write: (key, value) => storage.setItem(key, value),
-      remove: (key) => storage.removeItem(key),
-      keys: () => Object.keys(storage)
-    })
-  } catch {
-    return createPathMemory(dead)
-  }
-}
-
-/** window, as the two watchers here need it. */
-const listen = (event: string, listener: () => void): (() => void) => {
-  window.addEventListener(event, listener)
-  return () => window.removeEventListener(event, listener)
-}
-
-/**
- * THE LIVE DATA-PLANE SWITCH, for a companion served under the relay base.
- *
- * Everything it does happens below the address bar: it races the Mac's trusted
- * names, has the registry prove one of them, and then points the store that
- * composes every request URL at it. The streams follow (plane-streams.ts), the
- * badge follows (path-link.ts), the token stays where it is, and the page is
- * not reloaded — which is the entire difference between this and the switch
- * that put a phone on a certificate warning.
- */
-/**
- * READ THE LOCAL-NETWORK PERMISSION, AND TELL THE REST OF THE APP.
- *
- * One read per race, and the store it updates is what the badge's sentence and
- * the explainer row both hang off — so there is exactly one moment in the
- * companion where this fact is established and everything else follows it.
- */
-const readLocalNetwork = async (): Promise<LocalNetworkState> => {
-  const state = await localNetworkState()
-  setLocalNetwork(state)
-  return state
-}
-
-/**
- * THE ONE ASK, aimed at the best trusted name the desktop currently publishes.
- *
- * A permission prompt has to be raised by a real request, and a request to
- * nowhere would spend the single ask a reader will ever grant. So the card is
- * fetched first and the ask is simply not offered when the Mac has no trusted
- * name — which is the honest state on a desktop with no certificate yet.
- */
-const askForLocalNetwork = async (): Promise<void> => {
-  const card = await fetchCard()
-  // The first LOCAL candidate, not simply the first: a prompt is only raised
-  // by a request the permission covers, and probing a CGNAT tailnet address
-  // would spend the press without ever showing a dialog.
-  const best = card
-    ? planeCandidates(card, dataPlane().kind).find((candidate) => isLocalOrigin(candidate.origin))
-    : undefined
-  if (!best) {
-    await readLocalNetwork()
-    return
-  }
-  setLocalNetwork(await requestLocalNetwork({ url: best.origin }))
-}
 
 /** The word the badge, the store and the report all use for where this ended up. */
 const settledPlane = (): 'LAN' | 'TAILNET' | 'RELAY' => {
@@ -237,12 +48,22 @@ const settledPlane = (): 'LAN' | 'TAILNET' | 'RELAY' => {
 }
 
 /**
+ * READ THE LOCAL-NETWORK PERMISSION, AND TELL THE REST OF THE APP.
+ *
+ * One local read per race, no request: the report carries it to the Mac, and
+ * the row under the badge says so when the browser refused it.
+ */
+const readLocalNetwork = async (): Promise<void> => {
+  setLocalNetwork(await localNetworkState().catch(() => 'unsupported' as const))
+}
+
+/**
  * ONE REPORT PER RACE, TO THE MAC, OVER WHATEVER PLANE IS WORKING.
  *
  * Built once at start rather than per race, because the one-at-a-time guards
  * live inside it (path/report.ts) and a reporter rebuilt every minute would
  * have nothing to remember. `apiPath` scopes it to this workspace session and
- * points it at the current plane — relay or direct — like every other request
+ * points it at the current plane — relay or link — like every other request
  * the companion makes; there is no second transport for diagnostics.
  */
 const pathReporter = (): ReturnType<typeof createPathReporter> =>
@@ -269,12 +90,11 @@ let lastEnd: RtcRow | null = null
 /** When an ended link let the next knock skip the gap, within HOLD_REPEAT_WINDOW_MS. */
 let quickKnocks: readonly number[] = []
 
-// All of the above is ONE machine's: the id its card proved, the last report
-// sent to it (and so what the next one may leave out), and when it was last
-// knocked on. Kept across a change of machine, the last knock would hold the
-// next machine's direct link back for two minutes it never earned.
+// All of the above is ONE machine's: the last report sent to it (and so what
+// the next one may leave out), and when it was last knocked on. Kept across a
+// change of machine, the last knock would hold the next machine's direct link
+// back for two minutes it never earned.
 registerScopeState('path switch memory', () => {
-  lastDeviceId = null
   tellTheDesktop = pathReporter()
   lastRtcAt = 0
   rtcGapMs = RTC_EVERY_MS
@@ -353,7 +173,7 @@ const reportRace = async (report: PathReport, rtc: readonly RtcRow[]): Promise<v
   await tellTheDesktop(probes.length > 0 ? { ...report, plane: settledPlane(), probes } : report)
 }
 
-/** What a race reports when the switcher had no rows to note: the WebRTC rows alone. */
+/** What a race reports: the WebRTC rows, and nothing when there are none. */
 const reportLinkRows = (rtc: readonly RtcRow[]): void => {
   if (rtc.length === 0 && !lastEnd) return
   void reportRace(
@@ -369,10 +189,16 @@ const reportLinkRows = (rtc: readonly RtcRow[]): void => {
   )
 }
 
+/** window, as the watchers here need it. */
+const listen = (event: string, listener: () => void): (() => void) => {
+  window.addEventListener(event, listener)
+  return () => window.removeEventListener(event, listener)
+}
+
 const startPlaneSwitch = (): (() => void) => {
   const health = planeHealth()
   // Set by the loop at start; the ONE-AT-A-TIME guard stays the loop's, so a
-  // press cannot start a second race beside the timer's.
+  // push from the Mac cannot start a second race beside the timer's.
   let raceNow: () => void = () => undefined
   // A link that ended while the page is in front is knocked open again within
   // a second, not at the next minute's race.
@@ -389,9 +215,6 @@ const startPlaneSwitch = (): (() => void) => {
   // nothing and remembers nothing.
   const sameMachine = heldScope()
   const live = (): boolean => !stopped && sameMachine()
-  // Counts the phone's moves between networks (path/radio.ts). A race that
-  // began before a move proved its path on the network the phone just left.
-  let moves = 0
   const raceSoon = (): void => {
     if (stopped || document.visibilityState !== 'visible' || soon !== null) return
     soon = setTimeout(() => {
@@ -402,133 +225,33 @@ const startPlaneSwitch = (): (() => void) => {
   }
   // The watchdog asks the link before it gives up the plane (plane-health.ts).
   setPlaneLiveProbe((reason) => (dataPlane().transport === 'rtc' ? (rtcLink()?.probe(reason) ?? null) : null))
-  // True for exactly one race: the one a person asked for by pressing ALLOW.
-  // Every other race — the timer, `online`, a tab coming back — must never
-  // raise a dialog at a phone nobody is looking at.
-  let pressed = false
-  // The link store announces on EVERY change it holds — latency, probing, the
+  // The link store announces on EVERY change it holds — latency, the
   // desktop's name — and only the transport's own state is evidence about the
   // plane. Without this the latency recorded by each successful request would
   // read as "the channel is live" and quietly disarm the watchdog that is
   // waiting to see whether a dropped stream comes back.
   let lastLink: LinkHealth | null = null
-  /**
-   * THE RE-CHECK, on the plane the companion is actually using. One line of
-   * wiring; the rule is in path/plane-recheck.ts. It runs on its own five
-   * minute clock and on `online`, and is poked below whenever the push stream
-   * comes back — a stream that reconnected made a new connection, which is the
-   * moment a name could have started answering as somebody else.
-   */
-  const recheck = startPlaneRecheck({
-    deps: {
-      plane: dataPlane,
-      deviceId: cardDeviceId,
-      hello: (origin, nonce) => askHello(origin, nonce, { origin }),
-      verify: verifyHello,
-      nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
-      // A re-check still out when the machine was left says nothing of the next one's plane.
-      health: {
-        note: (ok) => {
-          if (live()) health.note(ok)
-        },
-        condemn: () => {
-          if (live()) health.condemn()
-        }
-      }
-    }
-  })
-  /** One race: the link, then the names (plane-switch.ts). */
+  /** One race: the link, and a report of how it went. */
   const racePlane = async (): Promise<void> => {
-    // Asked for by something that outlived the switcher (a permission prompt
-    // answered late): there is no race to run, and none to charge the next
-    // machine's two-minute knock for.
+    // Asked for by something that outlived the switcher: there is no race to
+    // run, and none to charge the next machine's two-minute knock for.
     if (!live()) return
-    // This race is for the network the phone is on as it starts: after a move
-    // it adopts nothing, and the race the move asked for runs instead.
-    const onNetwork = moves
-    const raceLive = (): boolean => live() && moves === onNetwork
-    // THE LINK FIRST. It opens in about a second where it opens at all,
-    // and on the owner's phone the names never answer (each race spent
-    // 2.5-6 s timing them out before the link was even tried). A hold
-    // means the plane just failed; the race after the hold knocks.
+    // THE LINK FIRST: it opens in about a second where it opens at all.
+    // A hold means the plane just failed; the race after the hold knocks.
     // ON A RADIO THERE IS NO LAN TO KNOCK ON (path/radio.ts): the Mac's
     // candidates are its LAN addresses, and a knock from 5G spent ~10 s of
     // gathering and waiting to learn it. WebRTC over the tailnet never opened
-    // from a phone (cookrew-webrtc-lan); the name race still carries it.
-    // A link that opens is working on whatever network the phone is on now, so
-    // the knock is not gated on the move: only the name race, which proves a
-    // path before it adopts it, is.
+    // from a phone (cookrew-webrtc-lan).
     const knocked = health.held() || onCellular() ? [] : await rtcKnock(raceSoon, live)
     if (!live()) return
-    let noted = false
-    await switchPlaneIfBetter({
-      live: raceLive,
-      plane: dataPlane,
-      card: fetchCard,
-      // The origin is sent so the Mac answers version 2 — a proof bound
-      // to the endpoint, which is the only kind this switcher accepts.
-      hello: (origin, nonce) => askHello(origin, nonce, { origin }),
-      verify: verifyHello,
-      // The zone's word on a name whose probe died without a cause, so
-      // the rows say "not published" where that is the fact and never
-      // "refused by the browser" where it is not (path/name-oracle.ts).
-      named: (origin) => nameLive(origin),
-      adopt: (plane: DataPlane) => {
-        if (raceLive()) setDataPlane(plane)
-      },
-      // A tailnet must beat the relay on a warm connection, not just
-      // answer once (path/plane-quality.ts). The LAN is the same Wi-Fi.
-      worthIt: async (origin, kind) => {
-        if (kind === 'lan') return true
-        const warm = await warmRoundTrip(async () => {
-          const result = await askHello(origin, randomNonce((bytes) => window.crypto.getRandomValues(bytes)), { origin })
-          return result.ok
-        })
-        return tailnetWorthIt(warm, pathLinkState().latencyMs)
-      },
-      nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
-      held: () => health.held(),
-      cellular: () => onCellular(),
-      probing: (on) => {
-        if (live()) setProbing(on)
-      },
-      note: (rows) => {
-        noted = true
-        if (!live()) return
-        const settled = settledPlane()
-        // The two shapes are the same fact and are kept apart on purpose:
-        // plane-switch.ts must not import a renderer store, or the rule
-        // stops being testable without one.
-        const attempts = rows as readonly PathAttempt[]
-        recordAttempts(attempts, settled)
-        // AND TELL THE MAC, with the WebRTC attempt beside the rows, so
-        // the owner at the desk reads which way got through.
-        void reportRace(
-          {
-            at: Date.now(),
-            plane: settled,
-            permission: localNetworkGate(),
-            browser: currentBrowser(),
-            attempts: reportedAttempts(attempts),
-            context: pageContext()
-          },
-          knocked
-        )
-      },
-      permission: readLocalNetwork,
-      mayPrompt: () => {
-        const may = pressed
-        pressed = false
-        return may
-      }
-    })
-    // Skipped (the link already made this LAN), held, or no trusted
-    // names: the link's own rows still reach the Mac.
-    if (!noted && live()) reportLinkRows(knocked)
+    // A local read and no request; the report below carries it to the Mac.
+    await readLocalNetwork()
+    if (!live()) return
+    // The link's rows reach the Mac; a race that tried nothing reports nothing.
+    reportLinkRows(knocked)
   }
 
   const offs: (() => void)[] = [
-    recheck.stop,
     () => setPlaneLiveProbe(null),
     () => {
       stopped = true
@@ -551,7 +274,7 @@ const startPlaneSwitch = (): (() => void) => {
       else if (why === 'never-opened') health.note(false)
     }),
     // AND RACE AGAIN THE MOMENT A HOLD ENDS. The loop ticks once a minute, so
-    // a tailnet that came back waited up to a minute past its hold.
+    // a link that came back waited up to a minute past its hold.
     (() => {
       let timer: ReturnType<typeof setTimeout> | null = null
       const off = subscribeDataPlane((next) => {
@@ -568,8 +291,8 @@ const startPlaneSwitch = (): (() => void) => {
         if (timer !== null) clearTimeout(timer)
       }
     })(),
-    // A plane that is no longer the link (the health watchdog fell back, a
-    // name answered) lets the link go, so the Mac's peer is freed.
+    // A plane that is no longer the link (the health watchdog fell back) lets
+    // the link go, so the Mac's peer is freed.
     // Its end row says why: the watchdog's reason when it gave the plane up.
     subscribeDataPlane((next) => {
       if (next.transport !== 'rtc') rtcLink()?.close((health.held() ? health.lastReason() : null) ?? 'the plane moved')
@@ -584,12 +307,8 @@ const startPlaneSwitch = (): (() => void) => {
     // its state is fed to the health watchdog rather than only to the badge.
     subscribePathLink((state) => {
       if (state.link === lastLink) return
-      const reconnected = state.link === 'live' && lastLink !== null
       lastLink = state.link
       health.link(state.link)
-      // A stream that dropped and came back opened a new connection. Prove the
-      // far end is still the Mac before the session keeps using it.
-      if (reconnected) recheck.now()
     }),
     // THE PHONE MOVED NETWORKS (Wi-Fi to 5G fires no `online`): a direct
     // plane proved on the last network is let go now, not when the heartbeat
@@ -599,7 +318,6 @@ const startPlaneSwitch = (): (() => void) => {
     watchNetworkMoves(
       () => {
         if (!live()) return
-        moves += 1
         // A new network is owed a knock now, not two minutes after the last one.
         lastRtcAt = 0
         leaveDirectPlane({ plane: dataPlane, link: heldRtcLink, fallBack: fallBackToRelay }, 'the network changed')
@@ -607,20 +325,14 @@ const startPlaneSwitch = (): (() => void) => {
       },
       { connection: browserConnection(), on: listen }
     ),
-    // THE MAC SAID ITS ADDRESSES MOVED — and said it only once the registry
-    // took the new card, so the names resolve. No `pressed`, so a phone
-    // nobody is holding is never shown the one permission prompt it gets.
-    cookrew().onReachChanged?.(() => raceNow()) ?? ((): void => undefined),
-    offerLocalNetwork(async () => {
-      await askForLocalNetwork()
-      // Whatever the browser decided, look again immediately — a grant that
-      // waited up to a minute for the next tick would read as a button that
-      // did nothing.
-      pressed = true
+    // THE MAC SAID ITS ADDRESSES MOVED (it woke on another Wi-Fi). Its link
+    // candidates are new, so the knock is owed now rather than after the gap.
+    cookrew().onReachChanged?.(() => {
+      if (!live()) return
+      lastRtcAt = 0
       raceNow()
-    }),
+    }) ?? ((): void => undefined),
     startRaceLoop({
-      everyMs: PLANE_PROBE_EVERY_MS,
       ready: (run) => void (raceNow = run),
       race: async () => {
         racing = true
@@ -640,38 +352,14 @@ const startPlaneSwitch = (): (() => void) => {
 }
 
 /**
- * Start switching, or answer with a no-op teardown.
+ * Start looking for a nearer path, or answer with a no-op teardown.
  *
  * Called once at boot. The guards are here rather than at the call site so
- * main.tsx does not have to know what a path is.
+ * main.tsx does not have to know what a path is. Only a page under the relay
+ * base looks: a page the Mac serves itself is already talking to the Mac, and
+ * it stays where it is — nothing here ever navigates.
  */
 export const startCompanionPathSwitch = (): (() => void) => {
-  const noop = (): void => undefined
-  if (!isRemoteMode()) return noop
-  if (clientBase() !== '') return startPlaneSwitch()
-  // Already as close as it gets. Nothing on the card can beat this origin.
-  if (pathRank(currentOriginState()) >= pathRank('LAN')) return noop
-  const store = memory()
-  // The hint is flushed by the same two events that start a race, and it is
-  // flushed FIRST: a race that read a stale hint would put an address from the
-  // last network at the front of the queue on this one.
-  const unwatch = watchNetwork(store, listen)
-
-  const stop = startPathSwitching({
-    deps: {
-      current: currentOriginState,
-      card: fetchCard,
-      hello: (url, nonce) => askHello(url, nonce),
-      credential: () => authStore().token(),
-      go: (url) => window.location.replace(url),
-      nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
-      remembered: (deviceId) => store.remembered(deviceId),
-      remember: (deviceId, url) => store.remember(deviceId, url),
-      probing: setProbing
-    }
-  })
-  return () => {
-    unwatch()
-    stop()
-  }
+  if (!isRemoteMode() || clientBase() === '') return (): void => undefined
+  return startPlaneSwitch()
 }

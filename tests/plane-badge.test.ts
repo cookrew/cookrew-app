@@ -6,10 +6,13 @@
 // feature, and it costs the reader the one signal they used to have.
 //
 // So under a relay prefix the badge is fed from the DATA PLANE and not from
-// the origin. Reading the hostname there would be wrong twice over — every
-// trusted name the Mac holds ends in cookrew.dev, and a relay may be fronted
-// by any host at all — and it would be wrong in the direction that matters:
-// it would say LAN over a page whose every request goes through the relay.
+// the origin. Reading the hostname there would be wrong — a relay may be
+// fronted by any host at all — and wrong in the direction that matters: it
+// would say LAN over a page whose every request goes through the relay.
+//
+// The plane moves onto the WebRTC link (path/rtc-adopt.ts), LAN or TAILNET by
+// the Mac's word; the per-machine names under d.cookrew.dev are gone
+// (2026-11-16), and a page at one is not read for the address it spells.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { inConsole, relayBaseFor } from './support/console-scope'
@@ -17,8 +20,12 @@ import { inConsole, relayBaseFor } from './support/console-scope'
 const DEVICE = '11111111-2222-3333-4444-555555555555'
 /** The machine's address on the relay, as the console reaches it. */
 const RELAY_BASE = relayBaseFor(DEVICE)
-const LAN = `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`
-const TAILNET = `https://100-68-81-64.${DEVICE}.d.cookrew.dev:8643`
+/** A name of the kind the Mac used to hold, for the tests that a name is never read. */
+const NAME = `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`
+const TAILNET_NAME = `https://100-68-81-64.${DEVICE}.d.cookrew.dev:8643`
+/** The two direct planes there are: the link, on the LAN or the tailnet. */
+const LAN = { origin: '', kind: 'lan', transport: 'rtc' } as const
+const TAILNET = { origin: '', kind: 'tailnet', transport: 'rtc' } as const
 
 /** A phone as the renderer detects one; the origin never changes in any test. */
 const stubPhone = (origin: string): void => {
@@ -62,7 +69,7 @@ describe('the badge under a relay prefix', () => {
   it('flips to LAN with the address bar unchanged, which is the whole feature', async () => {
     stubPhone('https://cookrew.dev')
     const { link, plane } = await servedAt(RELAY_BASE)
-    plane.setDataPlane({ origin: LAN, kind: 'lan' })
+    plane.setDataPlane(LAN)
     expect(link.currentPathBadge().word).toBe('LAN')
     expect(link.currentPathBadge().sentence).toContain('Wi-Fi')
     // Nothing about the page moved. That is the point.
@@ -74,26 +81,26 @@ describe('the badge under a relay prefix', () => {
     // hop painted green would tell a reader their Mac is on this Wi-Fi.
     stubPhone('https://cookrew.dev')
     const { link, plane } = await servedAt(RELAY_BASE)
-    plane.setDataPlane({ origin: TAILNET, kind: 'tailnet' })
+    plane.setDataPlane(TAILNET)
     expect(link.currentPathBadge().word).toBe('TAILNET')
   })
 
   it('says RELAY again the moment it falls back', async () => {
     stubPhone('https://cookrew.dev')
     const { link, plane } = await servedAt(RELAY_BASE)
-    plane.setDataPlane({ origin: LAN, kind: 'lan' })
+    plane.setDataPlane(LAN)
     plane.fallBackToRelay()
     expect(link.currentPathBadge().word).toBe('RELAY')
   })
 
-  it('never reads the hostname — a trusted LAN name still ends in cookrew.dev', async () => {
+  it('never reads the hostname under a prefix, whatever host fronts the page', async () => {
     // Classifying by origin would call this page's transport the relay while
     // the plane was on the Wi-Fi, and the LAN while it was on the relay. The
     // origin is simply not the answer under a prefix.
-    stubPhone(LAN)
+    stubPhone('https://192.168.2.40:8643')
     const { link, plane } = await servedAt(RELAY_BASE)
     expect(link.currentPathBadge().word).toBe('RELAY')
-    plane.setDataPlane({ origin: LAN, kind: 'lan' })
+    plane.setDataPlane(LAN)
     expect(link.currentPathBadge().word).toBe('LAN')
   })
 
@@ -102,7 +109,7 @@ describe('the badge under a relay prefix', () => {
     // path. A page whose channel is down must not read as a working LAN.
     stubPhone('https://cookrew.dev')
     const { link, plane } = await servedAt(RELAY_BASE)
-    plane.setDataPlane({ origin: LAN, kind: 'lan' })
+    plane.setDataPlane(LAN)
     link.setPathLink('failed')
     expect(link.currentPathBadge().word).toBe('OFFLINE')
     link.resetPathLink()
@@ -112,7 +119,7 @@ describe('the badge under a relay prefix', () => {
     stubPhone('https://cookrew.dev')
     const { link, plane } = await servedAt(RELAY_BASE)
     expect(link.currentOriginState()).toBe('RELAY')
-    plane.setDataPlane({ origin: TAILNET, kind: 'tailnet' })
+    plane.setDataPlane(TAILNET)
     expect(link.currentOriginState()).toBe('TAILNET')
   })
 })
@@ -143,21 +150,21 @@ describe('at the root origin nothing changes', () => {
   })
 })
 
-describe('at the root origin nothing changes — including a trusted name', () => {
-  // A phone that opened a URL `cookrew mobile` printed is at the ROOT of a
-  // name under d.cookrew.dev, with no relay prefix and nothing to read but
-  // the hostname. Classifying that by suffix called the Wi-Fi the relay.
-  it('reads a trusted LAN name as the address it spells', async () => {
-    stubPhone(LAN)
+describe('at the root origin, a name is a name', () => {
+  // The per-machine names under d.cookrew.dev are gone (2026-11-16). A page at
+  // the root of one is a public name like any other: its first label is never
+  // read back into an address.
+  it('does not read a LAN address out of a name', async () => {
+    stubPhone(NAME)
     const { link } = await servedAt('')
-    expect(link.currentOriginState()).toBe('LAN')
-    expect(link.currentPathBadge().word).toBe('LAN')
+    expect(link.currentOriginState()).toBe('RELAY')
+    expect(link.currentPathBadge().word).toBe('RELAY')
   })
 
-  it('reads a trusted tailnet name as TAILNET, not as the LAN', async () => {
-    stubPhone(TAILNET)
+  it('does not read a tailnet address out of a name either', async () => {
+    stubPhone(TAILNET_NAME)
     const { link } = await servedAt('')
-    expect(link.currentPathBadge().word).toBe('TAILNET')
+    expect(link.currentPathBadge().word).toBe('RELAY')
   })
 
   it('still calls the registry itself the relay', async () => {
@@ -178,17 +185,17 @@ describe('the streams follow the plane', () => {
     const off = streams.followDataPlane()
     streams.registerPlaneStream({ restart: () => void (restarts += 1) })
 
-    plane.setDataPlane({ origin: LAN, kind: 'lan' })
+    plane.setDataPlane(LAN)
     expect(restarts).toBe(1)
     // Setting the same plane again is not a move, and a reconnect for it would
     // cost a full state re-send for nothing.
-    plane.setDataPlane({ origin: LAN, kind: 'lan' })
+    plane.setDataPlane(LAN)
     expect(restarts).toBe(1)
     plane.fallBackToRelay()
     expect(restarts).toBe(2)
 
     off()
-    plane.setDataPlane({ origin: TAILNET, kind: 'tailnet' })
+    plane.setDataPlane(TAILNET)
     expect(restarts).toBe(2)
   })
 
@@ -203,7 +210,7 @@ describe('the streams follow the plane', () => {
       }
     })
     streams.registerPlaneStream({ restart: () => void (restarted = true) })
-    plane.setDataPlane({ origin: LAN, kind: 'lan' })
+    plane.setDataPlane(LAN)
     expect(restarted).toBe(true)
   })
 })

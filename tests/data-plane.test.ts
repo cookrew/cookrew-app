@@ -7,7 +7,7 @@
 //
 //   relay   https://api.cookrew.dev/api/m/<id>/api/state   (the console)
 //           /playground/api/state                           (a machine's own page)
-//   direct  https://192-168-2-40.<id>.d.cookrew.dev:8643/playground/api/state
+//   direct  https://192.168.2.40:8643/playground/api/state
 //
 // The difference that matters is the BASE, and it is the one a reader would
 // get wrong: the relay prefix belongs to cookrew.dev, and carrying it onto the
@@ -29,7 +29,7 @@ import { inConsole, relayBaseFor } from './support/console-scope'
 const DEVICE = '11111111-2222-3333-4444-555555555555'
 /** The machine's address on the relay, as the console reaches it: another origin. */
 const BASE = relayBaseFor(DEVICE)
-const LAN = `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`
+const LAN = 'https://192.168.2.40:8643'
 const LAN_PLANE: DataPlane = { origin: LAN, kind: 'lan' }
 
 describe('the composition rule, on its own', () => {
@@ -207,7 +207,7 @@ describe('the browser socket follows the plane too', () => {
   it('upgrades a direct origin rather than borrowing the page origin', () => {
     const scoped = `${LAN}${streamPath(ID, 800, 1400)}`
     expect(socketUrl('https://cookrew.dev', scoped)).toBe(
-      `wss://192-168-2-40.${DEVICE}.d.cookrew.dev:8643/api/browser/${ID}/stream?w=800&h=1400`
+      `wss://192.168.2.40:8643/api/browser/${ID}/stream?w=800&h=1400`
     )
     // The socket must go to the Mac, not to whatever served the page.
     expect(socketUrl('https://cookrew.dev', scoped)).not.toContain('cookrew.dev/api')

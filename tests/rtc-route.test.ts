@@ -96,7 +96,7 @@ describe('the rtc row in a path report', () => {
     expect(src).toContain("dataPlane().kind !== 'relay'")
     // The gap between knocks is path/rtc-trust.ts's (2 minutes, longer after a refused answer).
     expect(src).toContain('if (at - lastRtcAt < rtcGapMs) return []')
-    // Before the names, unless the plane just failed or the phone is on a radio (no LAN in reach).
+    // First in each race, unless the plane just failed or the phone is on a radio (no LAN in reach).
     expect(src).toContain('const knocked = health.held() || onCellular() ? [] : await rtcKnock(raceSoon, live)')
     expect(src).toContain('reportLinkRows(knocked)')
     // A link that ended, however, is knocked again at once, not after the gap.

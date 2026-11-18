@@ -32,7 +32,7 @@ export type PathLinkState = {
   readonly link: PathLink
   readonly latencyMs: number | null
   readonly desktopName: string | null
-  /** A better path is being raced right now. See path/switch.ts. */
+  /** A better path is being raced right now. */
   readonly probing: boolean
   /** A direct link answered and was refused, and why (path/companion.ts). Null when none was. */
   readonly held: DirectHeld | null
@@ -170,9 +170,9 @@ const registryOf = (): string | undefined => {
  *
  * `clientBase()` is non-empty only on the console with a machine in scope,
  * where it is that machine's relay address: exactly the case where every
- * request this client makes goes through the registry. Reading it off the origin would
- * be wrong twice over in Reach v2.1: a Mac's own certificates now carry names
- * under `d.cookrew.dev`, and a relay may be fronted by any host at all.
+ * request this client makes goes through the registry (or the WebRTC link the
+ * plane says it moved onto). Reading it off the origin would be wrong: a relay
+ * may be fronted by any host at all.
  */
 const relayed = (): boolean => clientBase() !== ''
 

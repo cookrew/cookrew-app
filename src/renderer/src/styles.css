@@ -5967,12 +5967,12 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   .cr-path-probing .cr-path-dot { animation: none; }
 }
 
-/* ---- the local-network ask ----
-   One line hanging under the header, anchored to the badge's own edge. It is
-   OUT OF FLOW on purpose: the header is a single 24 px row on a phone and a
-   second line inside it would push the canvas down every time a browser
-   decided to ask about the local network. Cream, hard-edged and 2 px lined,
-   like every other thing on this bar that wants an answer. */
+/* ---- the local-network row ----
+   One line hanging under the header, anchored to the badge's own edge, said
+   only after the browser refused the local network. It is OUT OF FLOW on
+   purpose: the header is a single 24 px row on a phone and a second line
+   inside it would push the canvas down. Cream, hard-edged and 2 px lined,
+   like everything else on this bar. */
 
 .cr-path-ask {
   position: absolute;
@@ -5993,16 +5993,7 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   color: var(--ink);
 }
 
-.cr-path-ask-text {
-  flex: 1 1 auto;
-}
-
-.cr-path-ask-allow {
-  flex: 0 0 auto;
-}
-
-/* The refusal is a statement, not a control: no button, muted, and it stays
-   until the phone finds a network where the question is asked again. */
+/* The refusal is a statement, not a control: no button, muted. */
 .cr-path-ask-denied {
   color: var(--muted);
 }
