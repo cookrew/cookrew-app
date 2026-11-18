@@ -30,6 +30,8 @@ export interface Seal2Limits {
   readonly pingMs: number
   readonly silentMs: number
   readonly ackDelayMs: number
+  /** A stream whose reader took nothing for this long while the far end waited on credit is aborted. */
+  readonly stallMs: number
 }
 
 const DEFAULT_LIMITS: Seal2Limits = {
@@ -39,7 +41,8 @@ const DEFAULT_LIMITS: Seal2Limits = {
   hardLimit: HARD_LIMIT,
   pingMs: PING_MS,
   silentMs: SILENT_MS,
-  ackDelayMs: ACK_DELAY_MS
+  ackDelayMs: ACK_DELAY_MS,
+  stallMs: 120_000
 }
 
 export interface Seal2ConnectionOptions {
@@ -91,7 +94,7 @@ export function createSeal2Connection(options: Seal2ConnectionOptions): Seal2Con
   const backlog = options.backlog ?? ((): number => 0)
   const streams = new Map<number, StreamControl>()
   /** Streams of ours past the far end's limit, waiting their turn, with what they said meanwhile. */
-  const waitingOpens: Array<{ readonly id: number; readonly open: Frame2; readonly held: Frame2[] }> = []
+  const waitingOpens: Array<{ readonly id: number; readonly open: Frame2; readonly held: Frame2[]; readonly let: () => void; readonly sent: Promise<void> }> = []
   const mine = role === 'initiator' ? 1 : 0
   let nextOwn = role === 'initiator' ? 1 : 2
   let highestTheirs = 0
@@ -124,7 +127,7 @@ export function createSeal2Connection(options: Seal2ConnectionOptions): Seal2Con
     if (closed) return
     closed = true
     if (ackTimer !== null) clearTimeout(ackTimer)
-    waitingOpens.length = 0
+    for (const waiting of waitingOpens.splice(0)) waiting.let()
     for (const control of [...streams.values()]) control.fail(new Seal2StreamError(ABORT.ended, `the session ended: ${why}`, false))
     streams.clear()
     kept = []
@@ -168,6 +171,7 @@ export function createSeal2Connection(options: Seal2ConnectionOptions): Seal2Con
       if (next === undefined) return
       send(next.open)
       for (const frame of next.held) send(frame)
+      next.let()
     }
   }
 
@@ -177,16 +181,20 @@ export function createSeal2Connection(options: Seal2ConnectionOptions): Seal2Con
     streams.delete(id)
     const waiting = waitingOpens.findIndex((entry) => entry.id === id)
     // Ended before its turn came: the far end never hears of it.
-    if (waiting >= 0) waitingOpens.splice(waiting, 1)
+    if (waiting >= 0) waitingOpens.splice(waiting, 1)[0].let()
     letWaitingIn()
     maybeLeave()
   }
 
-  const host = { send, window: limits.streamWindow, room, retire }
+  const host = { send, window: limits.streamWindow, room, retire, now }
 
-  /** A stream of ours speaks only once its OPEN has gone. */
+  /** A stream of ours speaks only once its OPEN has gone: its body waits for that, outside any count. */
   const hostFor = (id: number) => ({
     ...host,
+    room: async (): Promise<void> => {
+      await waitingOpens.find((entry) => entry.id === id)?.sent
+      return room()
+    },
     send: (frame: Frame2): void => {
       const waiting = waitingOpens.find((entry) => entry.id === id)
       if (waiting === undefined) return send(frame)
@@ -225,7 +233,9 @@ export function createSeal2Connection(options: Seal2ConnectionOptions): Seal2Con
     if (id % 2 === mine || id <= highestTheirs) return close('protocol: a stream id out of turn')
     highestTheirs = id
     if (leaving) return send({ kind: 'abort', stream: id, code: ABORT.refused, reason: 'going away' })
-    if (streams.size >= limits.maxStreams) return send({ kind: 'abort', stream: id, code: ABORT.busy, reason: 'too many streams' })
+    // The far end's own open streams count against it, never this end's.
+    const theirs = [...streams.keys()].filter((open) => open % 2 !== mine).length
+    if (theirs >= limits.maxStreams) return send({ kind: 'abort', stream: id, code: ABORT.busy, reason: 'too many streams' })
     if (options.onStream === undefined) return send({ kind: 'abort', stream: id, code: ABORT.unknownKind, reason: 'no streams here' })
     const control = createStream(host, id, frame.type, frame.fields, 'there')
     streams.set(id, control)
@@ -238,6 +248,8 @@ export function createSeal2Connection(options: Seal2ConnectionOptions): Seal2Con
   }
 
   const heard = (frame: Frame2): void => {
+    // A frame in the same batch as the fault that ended the session is not acted on.
+    if (closed) return
     if (frame.kind === 'open') return opened(frame)
     if (frame.kind === 'ack') return acknowledged(frame.next)
     if (frame.kind === 'ping') return
@@ -283,7 +295,11 @@ export function createSeal2Connection(options: Seal2ConnectionOptions): Seal2Con
       const full = waitingOpens.length > 0 || ownOpen() >= limits.maxStreams
       // Encoded now, so a field that cannot be sent fails here and not later.
       encodeFrame2(open)
-      if (full) waitingOpens.push({ id, open, held: [] })
+      if (full) {
+        let lets = (): void => undefined
+        const sent = new Promise<void>((resolve) => (lets = resolve))
+        waitingOpens.push({ id, open, held: [], let: () => lets(), sent })
+      }
       const control = createStream(hostFor(id), id, kind, fields, 'here')
       streams.set(id, control)
       if (!full) send(open)
@@ -317,6 +333,7 @@ export function createSeal2Connection(options: Seal2ConnectionOptions): Seal2Con
     tick(at = now()) {
       if (closed) return
       if (at - lastHeard > limits.silentMs) return close('the far end went silent')
+      for (const control of [...streams.values()]) if (control.stalled(at, limits.stallMs)) control.stream.abort(ABORT.timeout, 'nobody read the answer')
       releaseRoom()
       if (at - lastPing < limits.pingMs) return
       lastPing = at

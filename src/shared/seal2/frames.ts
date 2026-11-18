@@ -85,7 +85,7 @@ function bodyOf(frame: Frame2): Uint8Array {
     case 'head':
       return concat(u16(frame.status), encodeFields(frame.fields))
     case 'data':
-      if (frame.data.length > DATA_MAX) throw new Error('This data frame is too large')
+      if (frame.data.length === 0 || frame.data.length > DATA_MAX) throw new Error('A data frame carries 1 to DATA_MAX bytes')
       return frame.data
     case 'abort':
     case 'goaway':
@@ -130,8 +130,9 @@ function decodeStreamFrame(kind: (typeof TYPES)[number], stream: number, body: U
       const fields = decodeFields(body.subarray(2))
       return fields === null || !isStatus(status) ? null : { kind, stream, status, fields }
     }
+    // Never empty: an empty one would cost no credit, so a peer could queue them without end.
     case 'data':
-      return body.length > DATA_MAX ? null : { kind, stream, data: body.slice() }
+      return body.length === 0 || body.length > DATA_MAX ? null : { kind, stream, data: body.slice() }
     case 'end':
       return body.length === 0 ? { kind, stream } : null
     case 'abort': {

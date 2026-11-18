@@ -13,6 +13,7 @@ import { ABORT } from '../shared/seal2/spec'
 import type { Seal2Stream } from '../shared/seal2/stream'
 import { openSeal2Live } from './seal2-live'
 import { RELAY_LINE_MARKER } from './seal-proof'
+import { RELAY_SESSION_HEADER } from '../shared/machine-relay'
 import { serveHttpStream } from './seal2-serve-http'
 
 /**
@@ -142,7 +143,9 @@ export async function routeSeal(request: http.IncomingMessage, response: http.Se
 /** Hop by hop, and everything only the bridge may say. The dialer writes host and the marker itself. */
 const NOT_FROM_INSIDE = new Set([
   'host', 'connection', 'keep-alive', 'proxy-connection', 'proxy-authorization', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'content-length', 'expect',
-  'x-real-ip', RELAY_MARKER, RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER, DOOR_MARKER, RELAY_LINE_MARKER
+  'x-real-ip', RELAY_MARKER, RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER, DOOR_MARKER, RELAY_LINE_MARKER,
+  // The account's session is the relay's: a machine never holds it.
+  RELAY_SESSION_HEADER
 ])
 
 export function innerHeaders(asked: Readonly<Record<string, string>>, outer: SealOuter): Record<string, string> {
@@ -542,7 +545,9 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     reply(response, 200, { session: accepted.session.id, accept: accepted.accept })
   }
 
-  const streamHandler = (peer: SealPeer, outer: SealOuter) => (stream: Seal2Stream): void => {
+  const streamHandler = (peer: SealPeer, said: SealOuter) => (stream: Seal2Stream): void => {
+    // In device mode the handshake proved who dialled: that, not the relay's word, names the device inside.
+    const outer: SealOuter = peer.mode === 'device' ? { ...said, device: peer.deviceId } : said
     if (stream.kind === HTTP_KIND) {
       return serveHttpStream(stream, { dial: deps.dial, headersFor: (asked) => innerHeaders(asked, outer), log })
     }
@@ -602,8 +607,11 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     const url = new URL(request.url ?? '/', 'http://seal')
     const verb = url.pathname.slice(SEAL_PREFIX.length)
     const method = request.method ?? 'GET'
-    if (!['hello', 'finish', 'up', 'down'].includes(verb)) return reply(response, 404, { error: 'not found' })
-    if (method !== (verb === 'down' ? 'GET' : 'POST')) return reply(response, 405, { error: 'wrong method' })
+    if (!['hello', 'finish', 'up', 'down', 'version'].includes(verb)) return reply(response, 404, { error: 'not found' })
+    if (method !== (verb === 'down' || verb === 'version' ? 'GET' : 'POST')) return reply(response, 405, { error: 'wrong method' })
+    // What this Mac speaks. Believed only when asked inside a sealed session (seal-client.ts · openSealSession):
+    // there a carrier that took v2's offer off the hello cannot also hide that this Mac has it.
+    if (verb === 'version') return reply(response, 200, { versions: [2, 1] })
     if (verb === 'hello') return hello(request, response, outer)
     if (verb === 'finish') return finish(request, response)
     const live = sessions.get(url.searchParams.get('s') ?? '')

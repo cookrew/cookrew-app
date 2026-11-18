@@ -2,7 +2,7 @@ import { checkReplaced, concat, type SealRecord, type SealSession } from '../../
 import { createInbox, createRecordReader, decodeFrame, encodeFrame, encodeRecord, type Inbox, type SealFrame } from '../../../shared/canvas-seal-wire'
 import { startCodeHandshake } from '../../../shared/seal2/handshake'
 import { readBody, sealedFetch } from '../../../shared/seal2/http'
-import { runSeal2Link, Seal2RefusedError, shakeHandsOverHttp } from '../../../shared/seal2/http-link'
+import { runSeal2Link, Seal2RefusedError, shakeHandsOverHttp, type Seal2Link } from '../../../shared/seal2/http-link'
 import type { Seal2Session } from '../../../shared/seal2/records'
 
 /**
@@ -36,7 +36,24 @@ export type SealRefusal = 'code' | 'replaced' | 'proof'
 export interface SealVersionPin {
   v2(): boolean
   sawV2(): void
+  /** The Mac proved it replaced this code: the pin goes with it. */
+  forget(): void
 }
+
+/**
+ * The Mac answered v1, and then said inside that sealed session that it speaks v2:
+ * the offer was taken off the hello on its way. The pin is set now, so the next
+ * try refuses v1; nothing went in the clear.
+ */
+export class SealDowngradedError extends Error {
+  constructor() {
+    super('The sealed session was downgraded on its way to the Mac. Try again.')
+  }
+}
+
+/** Where a v2 Mac answers, inside a session: an old Mac has no such route and says 404. */
+export const SEAL_VERSION_PATH = '/~seal/version'
+const VERSION_ASK_MS = 15_000
 
 const REFUSED: Record<SealRefusal, string> = {
   code: 'This Mac no longer knows that connect code.',
@@ -113,8 +130,7 @@ async function shakeHands(deps: SealClientDeps, fetchFn: typeof fetch) {
 }
 
 /** The same client, on a v2 session: each request one stream. */
-function seal2Client(deps: SealClientDeps, fetchFn: typeof fetch, session: Seal2Session): SealClient {
-  const link = runSeal2Link({ url: deps.url, fetchFn, retryMs: deps.retryMs, upMs: deps.upMs }, session)
+function seal2Client(deps: SealClientDeps, link: Seal2Link): SealClient {
   return {
     async request(input) {
       if (link.connection.closed) throw new Error('The sealed session has ended.')
@@ -133,11 +149,47 @@ function seal2Client(deps: SealClientDeps, fetchFn: typeof fetch, session: Seal2
   }
 }
 
-export async function openSeal(deps: SealClientDeps): Promise<SealClient> {
+export type OpenedSeal =
+  | { readonly version: 2; readonly link: Seal2Link }
+  /** `mac`: what the Mac itself said inside this session about v2. 'unknown' when its answer did not come. */
+  | { readonly version: 1; readonly client: SealClient; readonly mac: 'no-v2' | 'unknown' }
+
+/** Asked inside a sealed v1 session, so only the Mac can answer: a carrier can drop it, not forge it. */
+async function macSpeaksV2(client: SealClient): Promise<'yes' | 'no' | 'unknown'> {
+  try {
+    const answer = await Promise.race([
+      client.request({ method: 'GET', path: SEAL_VERSION_PATH, headers: {} }),
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('no answer')), VERSION_ASK_MS))
+    ])
+    if (answer.status === 404) return 'no'
+    const said = JSON.parse(new TextDecoder().decode(answer.body)) as { versions?: unknown }
+    return Array.isArray(said.versions) && said.versions.includes(2) ? 'yes' : 'no'
+  } catch {
+    return 'unknown'
+  }
+}
+
+/**
+ * The session on this code: v2, or v1 with a Mac that said, sealed, that it has no
+ * v2. A v1 answer from a Mac that does speak v2 is a downgrade: pinned, refused.
+ */
+export async function openSealSession(deps: SealClientDeps): Promise<OpenedSeal> {
   const fetchFn = deps.fetchFn ?? ((input, init) => fetch(input, init))
   const done = await shakeHands(deps, fetchFn)
-  if (done.version === 2) return seal2Client(deps, fetchFn, done.session as Seal2Session)
-  return seal1Client(deps, fetchFn, done.session)
+  if (done.version === 2) return { version: 2, link: runSeal2Link({ url: deps.url, fetchFn, retryMs: deps.retryMs, upMs: deps.upMs }, done.session as Seal2Session) }
+  const client = seal1Client(deps, fetchFn, done.session)
+  const said = await macSpeaksV2(client)
+  if (said === 'yes') {
+    deps.pin?.sawV2()
+    client.close()
+    throw new SealDowngradedError()
+  }
+  return { version: 1, client, mac: said === 'no' ? 'no-v2' : 'unknown' }
+}
+
+export async function openSeal(deps: SealClientDeps): Promise<SealClient> {
+  const opened = await openSealSession(deps)
+  return opened.version === 2 ? seal2Client(deps, opened.link) : opened.client
 }
 
 /** A Mac from before v2: canvas-seal.ts records, JSON frames, one session-wide window. */

@@ -49,6 +49,7 @@ export interface StreamHost {
   room(): Promise<void>
   retire(id: number): void
   readonly window: number
+  now(): number
 }
 
 /** The session's handle on a stream: frames in, and the end of the session. */
@@ -60,6 +61,8 @@ export interface StreamControl {
   onCredit(bytes: number): void
   onAbort(code: number, reason: string): void
   fail(error: Seal2StreamError): void
+  /** True when the far end waits on credit nobody here is reading to give: a body that was dropped. */
+  stalled(at: number, ms: number): boolean
 }
 
 interface Waiter {
@@ -83,6 +86,7 @@ export function createStream(host: StreamHost, id: number, kind: string, fields:
   let failure: Seal2StreamError | null = null
   let waiters: Waiter[] = []
   let readController: ReadableStreamDefaultController<Uint8Array> | null = null
+  let lastTaken = host.now()
   let writeController: WritableStreamDefaultController | null = null
 
   let headDone!: { resolve(head: StreamHead): void; reject(error: Error): void }
@@ -142,6 +146,7 @@ export function createStream(host: StreamHost, id: number, kind: string, fields:
         if (failure !== null) return
         const chunk = queue.shift()
         if (chunk !== undefined) {
+          lastTaken = host.now()
           controller.enqueue(chunk)
           consumed(chunk.length)
           return
@@ -234,6 +239,7 @@ export function createStream(host: StreamHost, id: number, kind: string, fields:
     onAbort(code, reason) {
       fail(new Seal2StreamError(code, reason, true))
     },
-    fail
+    fail,
+    stalled: (at, ms) => failure === null && !remoteEnded && receiveAllowance <= 0 && queue.length > 0 && at - lastTaken > ms
   }
 }

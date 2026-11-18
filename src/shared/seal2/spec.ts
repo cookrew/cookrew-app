@@ -86,7 +86,7 @@
  *   u8 type | u32 stream | body
  *   1 OPEN    u8 n | kind[n] (ascii [a-z][a-z0-9-]*) | fields
  *   2 HEAD    u16 status | fields
- *   3 DATA    bytes, at most DATA_MAX
+ *   3 DATA    bytes, 1 to DATA_MAX (an empty one is not a frame)
  *   4 END     (empty) the sender's direction of the stream is finished
  *   5 ABORT   u16 code | utf8 reason: the whole stream is over, both ways
  *   6 ACK     stream 0, u64 next: every record below `next` arrived

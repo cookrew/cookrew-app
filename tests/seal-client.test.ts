@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { BridgeDialer } from '../src/main/canvas-bridge'
 import { createSealTerminus, type SealTerminus, type SealTerminusDeps } from '../src/main/canvas-seal-terminus'
-import { openSeal, SealRefusedError, type SealClient } from '../src/renderer/src/path/seal-client'
+import { openSeal, SEAL_VERSION_PATH, SealDowngradedError, SealRefusedError, type SealClient } from '../src/renderer/src/path/seal-client'
 import { connectCodeId, newConnectCode, proveReplaced, replacedKeyOf, startHandshake } from '../src/shared/canvas-seal'
 
 const encoded = (code: Uint8Array): string => Buffer.from(code).toString('base64url')
@@ -246,7 +246,7 @@ describe('openSeal across versions', () => {
 
   const pinned = (start: boolean) => {
     let v2 = start
-    return { v2: () => v2, sawV2: () => void (v2 = true), held: () => v2 }
+    return { v2: () => v2, sawV2: () => void (v2 = true), forget: () => void (v2 = false), held: () => v2 }
   }
 
   it('speaks v2 to a Mac that does, and remembers it', async () => {
@@ -277,5 +277,35 @@ describe('openSeal across versions', () => {
     }
     await expect(openSeal({ url, code: encoded(code), retryMs: 5, fetchFn: counting, pin: pinned(true) })).rejects.toMatchObject({ why: 'proof' })
     expect(asked).toBe(0)
+  })
+
+  it('a carrier that takes the offer off a v2 Mac\'s hello is caught inside the sealed v1 session: pinned, refused, nothing sent', async () => {
+    // A Mac whose companion answers its own seal routes, as the real one does (mobile-server.ts · routeSeal).
+    const versioned: BridgeDialer = (input, onResponse) => {
+      if (input.path !== SEAL_VERSION_PATH) return echo(input, onResponse, () => undefined)
+      return {
+        write: () => undefined,
+        end: () =>
+          onResponse({
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            onData: (listener) => listener(Buffer.from(JSON.stringify({ versions: [2, 1] }))),
+            onEnd: (listener) => setImmediate(listener),
+            pause: () => undefined,
+            resume: () => undefined
+          }),
+        destroy: () => undefined
+      }
+    }
+    const { url, code } = await bed({ dial: versioned })
+    const pin = pinned(false)
+    await expect(openSeal({ url, code: encoded(code), retryMs: 5, fetchFn: asOldMac, pin })).rejects.toBeInstanceOf(SealDowngradedError)
+    expect(pin.held()).toBe(true)
+  })
+
+  it('the terminus says what it speaks at the version route', async () => {
+    const { url } = await bed()
+    const answer = await fetch(url(SEAL_VERSION_PATH))
+    expect(await answer.json()).toEqual({ versions: [2, 1] })
   })
 })

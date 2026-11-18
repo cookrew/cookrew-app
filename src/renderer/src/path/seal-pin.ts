@@ -13,7 +13,7 @@ import type { SealVersionPin } from './seal-client'
 const TAG = 12
 const pinKey = (codeKey: string): string => `${codeKey}:seal2`
 
-export function sealPinFor(codeKey: string, code: string, storage: Pick<Storage, 'getItem' | 'setItem'> = window.localStorage): SealVersionPin {
+export function sealPinFor(codeKey: string, code: string, storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> = window.localStorage): SealVersionPin {
   const tag = code.slice(0, TAG)
   return {
     v2: () => {
@@ -28,6 +28,13 @@ export function sealPinFor(codeKey: string, code: string, storage: Pick<Storage,
         storage.setItem(pinKey(codeKey), tag)
       } catch {
         // Storage refused (private mode, quota): the pin is a hardening, the session still opened sealed.
+      }
+    },
+    forget: () => {
+      try {
+        if (storage.getItem(pinKey(codeKey)) === tag) storage.removeItem(pinKey(codeKey))
+      } catch {
+        // Nothing held, nothing to forget.
       }
     }
   }

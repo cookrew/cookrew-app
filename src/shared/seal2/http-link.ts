@@ -108,10 +108,15 @@ export function runSeal2Link(deps: HttpLinkDeps, session: Seal2Session, options:
     },
     backlog: () => outgoingBytes,
     onClose: (why, clean) => {
-      end()
+      // What was already sealed (a GOAWAY, a last ACK) gets its moment to leave before the line is let go.
+      void drainedOrLate().then(end)
       options.onClose?.(why, clean)
     }
   })
+  const drainedOrLate = async (): Promise<void> => {
+    const deadline = Date.now() + retryMs
+    while ((outgoing.length > 0 || posting) && Date.now() < deadline) await sleep(20)
+  }
   const at = (path: string): string => deps.url(`${path}${path.includes('?') ? '&' : '?'}s=${encodeURIComponent(connection.id)}`)
 
   /** The status, or 0 for no answer at all. */

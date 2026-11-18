@@ -86,7 +86,11 @@ export async function sealedFetch(connection: Seal2Connection, request: SealedRe
   request.signal?.addEventListener('abort', stop, { once: true })
   void stream.closed.finally(() => request.signal?.removeEventListener('abort', stop)).catch(() => undefined)
   void sendBody(stream, request.body).catch(() => stream.abort(1, 'the request body failed'))
-  const head = await stream.head
+  // A caller's abort reads as one, the way fetch says it, with the caller's own reason.
+  const head = await stream.head.catch((error: unknown) => {
+    if (request.signal?.aborted) throw request.signal.reason ?? new DOMException('The request was aborted', 'AbortError')
+    throw error
+  })
   const headers = plainHeaders(head.fields, true)
   if (headers === null) {
     stream.abort(8, 'an answer with unreadable headers')

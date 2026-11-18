@@ -14,6 +14,7 @@ public enum Seal2 {
   public static let version: UInt8 = 2
   public static let epochRecords: UInt64 = 1 << 16
   public static let seqLimit: UInt64 = 1 << 48
+  static let maxEpochsAhead: UInt64 = 4
   static let v1IdLabel = "cookrew-canvas-seal/1 id"
 
   // MARK: bytes
@@ -173,7 +174,9 @@ public enum Seal2 {
     public func open(seq: UInt64, box: Data) -> Data? {
       guard seq < Seal2.seqLimit, box.count >= 16 else { return nil }
       let epoch = seq / Seal2.epochRecords
-      guard epoch >= openFloor else { return nil }
+      // A number far ahead would cost a long key walk before it failed: a receiver's window spans
+      // at most two epochs past what it has forgotten, so anything further is not opened at all.
+      guard epoch >= openFloor, epoch - openFloor <= Seal2.maxEpochsAhead else { return nil }
       let (key, iv) = Seal2.epochKey(Seal2.epochSecret(openSecret, epoch: epoch - openFloor))
       let opens: Direction = sends == .toResponder ? .toInitiator : .toResponder
       guard let nonce = try? AES.GCM.Nonce(data: Seal2.nonce(iv: iv, seq: seq)),
@@ -284,7 +287,7 @@ public enum Seal2 {
       guard body.count >= 2, let f = readFields(Data(body.dropFirst(2))) else { return nil }
       let status = UInt16(readUInt(body, at: 0, width: 2))
       return (100 ... 599).contains(status) ? .head(stream: stream, status: status, fields: f) : nil
-    case 3: return .data(stream: stream, bytes: body)
+    case 3: return body.isEmpty || body.count > 256 * 1024 - 5 ? nil : .data(stream: stream, bytes: body)
     case 4: return body.isEmpty ? .end(stream: stream) : nil
     case 5:
       guard body.count >= 2, let reason = String(data: body.dropFirst(2), encoding: .utf8) else { return nil }

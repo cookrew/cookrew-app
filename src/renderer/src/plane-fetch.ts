@@ -4,7 +4,7 @@ import { planeHealth } from './plane-health'
 import { linkBody, linkHeaders, linkPath, viaLink } from './rtc-plane'
 import { reviveStreams } from './plane-streams'
 import { heldScope, machineLeft, relayHeadersForUrl, relayRequestFor } from './machine-scope'
-import { refusedInTheClear, sealedFetchFor } from './path/seal-plane'
+import { probeSettled, refusedInTheClear, sealedFetchFor } from './path/seal-plane'
 
 /**
  * ONE FETCH, ON WHICHEVER PLANE IS CARRYING THE SESSION.
@@ -128,6 +128,8 @@ async function fetchRelayed(url: string, init: RequestInit): Promise<Response> {
   const sent = toRelay(url, init.headers)
   const response = await fetch(sent.url, { ...init, ...apiRequestInit(), ...(sent.headers ? { headers: sent.headers } : {}) })
   if (!(await refusedInTheClear(response))) return response
+  // The Mac learned this device speaks sealed before this page did: the try under way is about to say so.
+  await probeSettled(url)
   return sealedFetchFor(url, init) ?? response
 }
 

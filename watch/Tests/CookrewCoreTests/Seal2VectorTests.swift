@@ -142,4 +142,19 @@ struct Seal2VectorTests {
     #expect(initiatorKey.isValidSignature(base64urlDecoded(finish["sig"]!), for: signed("initiator")))
     #expect(!initiatorKey.isValidSignature(base64urlDecoded(finish["sig"]!), for: signed("responder")))
   }
+
+  @Test("a number far past the window is not opened, and costs no long key walk")
+  func farAhead() throws {
+    let v = try Vectors.load().code
+    let mac = Seal2.Session(id: v["sessionId"] as! String, send: hex(v["secretToInitiator"] as! String), open: hex(v["secretToResponder"] as! String), sends: .toInitiator)
+    let started = Date()
+    #expect(mac.open(seq: (1 << 48) - 1, box: Data(repeating: 0, count: 32)) == nil)
+    #expect(mac.open(seq: 5 * Seal2.epochRecords, box: Data(repeating: 0, count: 32)) == nil)
+    #expect(Date().timeIntervalSince(started) < 1)
+  }
+
+  @Test("an empty DATA frame is not a frame")
+  func emptyData() {
+    #expect(Seal2.decode(Data([3, 0, 0, 0, 1])) == nil)
+  }
 }

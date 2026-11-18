@@ -6,7 +6,8 @@ import { createRecordReader, encodeRecord } from '../src/shared/canvas-seal-wire
 import type { SealRecord } from '../src/shared/canvas-seal'
 import { acceptCodeHandshake, startCodeHandshake } from '../src/shared/seal2/handshake'
 import { createSeal2Connection, Seal2StreamError, type Seal2Connection, type Seal2ConnectionOptions, type Seal2Stream } from '../src/shared/seal2/connection'
-import { encodeFrame2, type Frame2 } from '../src/shared/seal2/frames'
+import { decodeFrame2, encodeFrame2, type Frame2 } from '../src/shared/seal2/frames'
+import { sealedFetch } from '../src/shared/seal2/http'
 import type { Seal2Session } from '../src/shared/seal2/records'
 import { ABORT, STREAM_WINDOW } from '../src/shared/seal2/spec'
 
@@ -324,5 +325,52 @@ describe('the session', () => {
     await readAll(stream.readable)
     const wire = Buffer.concat(toB.sent.map((record) => encodeRecord(record)))
     for (const canary of ['unlock', 'canary-token', 'canary-body', 'authorization', 'echo']) expect(wire.includes(Buffer.from(canary))).toBe(false)
+  })
+
+  it('the far end\'s open streams are what its limit counts, not this end\'s own', async () => {
+    const { a, b } = await pair({ onStream: (stream) => stream.respond(200, {}), limits: { maxStreams: 2 } }, { onStream: (stream) => stream.respond(200, {}), limits: { maxStreams: 2 } })
+    const mine = [a.openStream('x', {}), a.openStream('x', {})]
+    await Promise.all(mine.map((stream) => stream.head))
+    // b's own two opens are not refused because a already holds two of a's own on the same session.
+    const theirs = [b.openStream('x', {}), b.openStream('x', {})]
+    await expect(Promise.all(theirs.map((stream) => stream.head))).resolves.toHaveLength(2)
+  })
+
+  it('an answer nobody reads, past its window, is aborted once its reader has been quiet too long', async () => {
+    let now = 1_000
+    const { a } = await pair(
+      { now: () => now, limits: { stallMs: 50_000 } },
+      {
+        onStream: (stream) => {
+          stream.respond(200, {})
+          void stream.writable.getWriter().write(new Uint8Array(STREAM_WINDOW + 10))
+        }
+      }
+    )
+    const stream = a.openStream('x', {})
+    await stream.head
+    await vi.waitFor(() => expect(a.stats().streams).toBe(1))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    now += 60_000
+    a.tick(now)
+    await expect(stream.closed).rejects.toMatchObject({ code: ABORT.timeout })
+  })
+
+  it('an empty DATA frame is not a frame: it would cost no credit', () => {
+    expect(() => encodeFrame2({ kind: 'data', stream: 1, data: new Uint8Array(0) })).toThrow()
+    expect(decodeFrame2(Uint8Array.of(3, 0, 0, 0, 1))).toBeNull()
+  })
+})
+
+describe('sealedFetch and a caller\'s abort', () => {
+  it('rejects the way fetch does, with the caller\'s own reason', async () => {
+    const { a } = await pair({}, { onStream: () => undefined })
+    const stop = new AbortController()
+    stop.abort(new DOMException('gave up', 'TimeoutError'))
+    await expect(sealedFetch(a, { method: 'GET', path: '/x', signal: stop.signal })).rejects.toMatchObject({ name: 'TimeoutError' })
+    const late = new AbortController()
+    const asked = sealedFetch(a, { method: 'GET', path: '/y', signal: late.signal })
+    late.abort()
+    await expect(asked).rejects.toMatchObject({ name: 'AbortError' })
   })
 })

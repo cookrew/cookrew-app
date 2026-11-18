@@ -163,7 +163,8 @@ describe('code mode (phone and console) through the real relay', () => {
     const reader = answer.body.getReader()
     let got = ''
     const next = async (): Promise<void> => {
-      const { value } = await reader.read()
+      const { done, value } = await reader.read()
+      if (done) throw new Error('the stream ended before the event')
       got += text(value ?? new Uint8Array())
     }
     await next()
@@ -210,7 +211,11 @@ describe('code mode (phone and console) through the real relay', () => {
     await new Promise((resolve) => setTimeout(resolve, 20))
     events?.('data: while-away\n\n')
     let got = ''
-    while (!got.includes('while-away')) got += text((await reader.read()).value ?? new Uint8Array())
+    while (!got.includes('while-away')) {
+      const { done, value } = await reader.read()
+      if (done) throw new Error('the stream ended before the event')
+      got += text(value ?? new Uint8Array())
+    }
     answer.stream.abort(ABORT.cancel, 'done')
   })
 
