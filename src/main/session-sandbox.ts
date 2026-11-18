@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, realpathSync, utimesSync } from 'node:fs'
 import path from 'node:path'
 import { gatewayDenyClauses } from './route/sandbox-deny'
+import { seatMachDenies } from './seat-mach-denies'
 
 /**
  * THE SANDBOX — cwd is not a jail, so this is the jail (SEC-S, slice 1).
@@ -280,16 +281,6 @@ export function seatbeltProfile(input: ProfileInput): string {
     ...input.secretPaths.map(
       (secret) => `(deny file-read* (subpath ${quote(secret)}) (literal ${quote(secret)}))`
     ),
-    // The CLI socket. `(allow network*)` above covers unix-domain connects, so
-    // without this a served agent that learned the path could speak to the
-    // app's command socket — which takes orders with no credential and accepts
-    // `--as <any agent>`. Denying the connect closes that from the other side.
-    ...(input.controlSocketPath
-      ? [
-          `(deny network-outbound (literal ${quote(input.controlSocketPath)}))`,
-          `(deny file-read* file-write* (literal ${quote(input.controlSocketPath)}))`
-        ]
-      : []),
     // THE OWNER'S SCREEN. A served pane is a child of the app, so macOS may count
     // what it runs as the app: once the owner grants Screen Recording these would
     // read the screen, and osascript could drive it, past every gate in main.
@@ -306,6 +297,12 @@ export function seatbeltProfile(input: ProfileInput): string {
     '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd"))',
     '(deny mach-lookup (global-name "com.apple.lsd.mapdb"))',
     '(deny mach-lookup (global-name "com.apple.lsd.modifydb"))',
+    // NO ONE ACTS FOR THE SEAT. A service that fetches for its client does it from
+    // its own unconfined process, past every network deny below: nsurlsessiond
+    // (background URLSession) reached a denied loopback port and returned the reply
+    // until these lines, and WebKit's networking process did the same on a looser
+    // base. The pasteboard is the owner's data. See seat-mach-denies.ts.
+    ...seatMachDenies(),
     // The owner's gateway (route program): any port it listens on, any host.
     ...gatewayDenyClauses(input.gatewayPorts ?? []),
     // NO LOOPBACK BY DEFAULT (owner ruling 2026-11-17). A seat's profile is fixed
@@ -319,7 +316,35 @@ export function seatbeltProfile(input: ProfileInput): string {
     // and every other loopback port stayed shut. So the gateway goes first, and a
     // guarded port is never lent at all (loopbackAllowClauses filters it): the
     // loopback deny is what keeps it shut, whatever order Seatbelt reads.
-    '(deny network-outbound (remote ip "localhost:*"))',
+    // IPv4-mapped IPv6 can reach IPv4 loopback while bypassing `ip localhost`.
+    // Until a narrower rule is proven, deny all outbound IPv6; IPv6-only vendors
+    // are unavailable to served seats. Explicitly use ip4 for IPv4 rules.
+    // Unix socket connects are network operations, not covered by file-read denies.
+    // A served process may connect only to sockets inside its own sandbox.
+    '(deny network-outbound (subpath "/"))',
+    `(allow network-outbound (subpath ${sandbox}))`,
+    // macOS name resolution requires this exact system service socket. No other
+    // socket under /var/run is granted; test DNS and a neighbouring socket.
+    '(allow network-outbound (literal "/private/var/run/mDNSResponder"))',
+    // The CLI socket, which takes orders with no credential and accepts `--as
+    // <any agent>`. The Unix deny above already covers it; these lines are its own
+    // lock, after every Unix allow so no allow can reopen it. EVERY SPELLING: the
+    // path comes from os.tmpdir() as /var/folders/..., Seatbelt matches the
+    // resolved /private/var/... form, and a literal in the /var form alone never
+    // fired (measured: OPEN by either spelling; tests/served-control-socket.test.ts).
+    ...(input.controlSocketPath
+      ? pathSpellings(input.controlSocketPath).flatMap((form) => [
+          `(deny network-outbound (literal ${quote(form)}))`,
+          `(deny file-read* file-write* (literal ${quote(form)}))`
+        ])
+      : []),
+    // Do not let a served process impersonate a present or future local service
+    // by taking its IP port. This also prevents it hosting an IP dev server.
+    '(deny network-bind (local ip "*:*"))',
+    // listen() without an explicit bind can otherwise acquire an ephemeral IP port.
+    '(deny network-inbound (local tcp "*:*"))',
+    '(deny network-outbound (remote ip4 "localhost:*"))',
+    '(deny network-outbound (remote ip6 "*:*"))',
     ...loopbackAllowClauses(input.loopbackAllow ?? [], input.gatewayPorts ?? []),
     // TRAVERSAL. Found by running it: denying the service root outright made a
     // session unable to reach its OWN sandbox — `cd` into it failed with "Not a
@@ -340,7 +365,39 @@ export function loopbackAllowClauses(ports: readonly number[], guarded: readonly
   return [...new Set(ports)]
     .filter((p) => Number.isInteger(p) && p > 0 && p < 65536 && !never.has(p))
     .sort((a, b) => a - b)
-    .map((port) => `(allow network-outbound (remote ip "localhost:${port}"))`)
+    .map((port) => `(allow network-outbound (remote ip4 "localhost:${port}"))`)
+}
+
+/** macOS firmlinked roots: Seatbelt sees `/var/x` as `/private/var/x`. */
+const FIRMLINKED_ROOTS = ['/var', '/tmp', '/etc'] as const
+
+/** The resolved directory, or null when it does not exist (yet). */
+function realDir(dir: string): string | null {
+  try {
+    return realpathSync(dir)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Every spelling of a path a Seatbelt literal must name to match it.
+ *
+ * Seatbelt compares against the resolved path, so a literal in an unresolved
+ * spelling is silently void. The given form is kept (harmless, and what a
+ * reader greps for), the firmlink twin is added both ways, and so is what the
+ * parent directory resolves to when it exists (a symlinked runtime dir).
+ */
+export function pathSpellings(raw: string, resolveDir: (dir: string) => string | null = realDir): string[] {
+  const forms = [raw]
+  for (const root of FIRMLINKED_ROOTS) {
+    if (raw === root || raw.startsWith(`${root}/`)) forms.push(`/private${raw}`)
+    if (raw === `/private${root}` || raw.startsWith(`/private${root}/`)) forms.push(raw.slice('/private'.length))
+  }
+  // POSIX on purpose: a Seatbelt path is a macOS path wherever this runs.
+  const resolved = resolveDir(path.posix.dirname(raw))
+  if (resolved) forms.push(path.posix.join(resolved, path.posix.basename(raw)))
+  return [...new Set(forms)]
 }
 
 /** Seatbelt string literals — a quote in a path would end the s-expression. */

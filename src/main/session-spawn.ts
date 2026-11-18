@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto'
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { confinedSpawn, seatbeltProfile, serviceRoot } from './session-sandbox'
+import { confinedSpawn, safeSegment, seatbeltProfile, serviceRoot, sessionSegment } from './session-sandbox'
 import { grantable, sessionEnv } from './session-env'
 import { ownerSecretPaths, sessionsRootOf } from './owner-secrets'
 
@@ -23,8 +24,8 @@ import { ownerSecretPaths, sessionsRootOf } from './owner-secrets'
  *
  * PURE BUT FOR ONE WRITE. Everything here is a value except writing the profile
  * file, which `sandbox-exec -f` reads. That write is injected so the transform
- * is tested without disk, and it lands INSIDE the sandbox so END removes it with
- * everything else.
+ * is tested without disk. It lands OUTSIDE the sandbox (seatProfilePath), where
+ * the seat cannot swap it before the next spawn reads it.
  *
  * THE INTEGRATION MUST MERGE, NOT REPLACE — AND IN THE RIGHT DIRECTION. The
  * returned `env` is an allowlist, so it omits the pane's own infrastructure
@@ -73,6 +74,59 @@ export interface ServedConfinement {
   env: Record<string, string>
   /** The written Seatbelt profile the spawn should be wrapped under. */
   profilePath: string
+  /** What the profile said, hashed: a seat keeps this profile until it is respawned (seat-ledger.ts). */
+  profileDigest: string
+}
+
+/** Where a session's profile is written: `<base>/seat-profiles/<service>/<session>.sb`, never in a sandbox. */
+export function seatProfilePath(ctx: Pick<ServedSpawnContext, 'base' | 'serviceId' | 'sessionId'>): string {
+  return path.join(ctx.base, 'seat-profiles', safeSegment(ctx.serviceId), `${sessionSegment(ctx.serviceId, ctx.sessionId)}.sb`)
+}
+
+/** A short, stable hash of a profile's text. */
+export function profileDigest(profile: string): string {
+  return createHash('sha256').update(profile).digest('hex').slice(0, 16)
+}
+
+/**
+ * How a terminal spawns, decided BEFORE anything runs. A served workspace whose
+ * context is gone (a restart empties the in-memory map; the workspace keeps its
+ * served mark on disk) must not fall through to the owner's unconfined spawn:
+ * that would run a stranger's conversation as the owner. It is refused.
+ */
+export function spawnMode(servedWorkspace: boolean, hasContext: boolean): 'owner' | 'confined' | 'refuse' {
+  if (hasContext) return 'confined'
+  return servedWorkspace ? 'refuse' : 'owner'
+}
+
+/**
+ * Is this folder inside the sessions root? A served workspace forked before
+ * its served mark was written to disk (the mark arrived 2026-11-16) has no
+ * mark to keep across a restart, but its terminals still live in a sandbox
+ * under `<base>/sessions`. The folder says so when the mark cannot: such a
+ * terminal is refused, never spawned as the owner. POSIX on purpose: these are
+ * macOS paths wherever the check runs.
+ */
+export function inSessionsRoot(cwd: string, sessionsRoot: string): boolean {
+  const at = path.posix.normalize(cwd)
+  const root = path.posix.normalize(sessionsRoot).replace(/\/+$/, '')
+  return at === root || at.startsWith(`${root}/`)
+}
+
+/** The profile a served spawn runs under, as text: pure, so a gate can ask what it would be now. */
+export function servedProfile(ctx: ServedSpawnContext): string {
+  return seatbeltProfile({
+    sandbox: ctx.sandbox,
+    siblingRoot: serviceRoot(ctx.base, ctx.serviceId),
+    sessionsRoot: sessionsRootOf(ctx.base),
+    // What the owner did NOT lend, made unreachable. Without this the grant in
+    // service-grants.ts is a formality — the agent could read the originals.
+    secretPaths: ownerSecretPaths(ctx.base),
+    // The owner's canvas control plane, denied from the other side of the env.
+    ...(ctx.controlSocketPath ? { controlSocketPath: ctx.controlSocketPath } : {}),
+    ...(ctx.gatewayPorts ? { gatewayPorts: ctx.gatewayPorts } : {}),
+    ...(ctx.loopbackPorts ? { loopbackAllow: ctx.loopbackPorts } : {})
+  })
 }
 
 /** Writes the profile `sandbox-exec -f` will read. Injected for testability. */
@@ -109,26 +163,16 @@ export function servedConfinement(
   ctx: ServedSpawnContext,
   writeProfile: ProfileWriter = defaultWriter
 ): ServedConfinement {
-  const siblingRoot = serviceRoot(ctx.base, ctx.serviceId)
-  const profile = seatbeltProfile({
-    sandbox: ctx.sandbox,
-    siblingRoot,
-    sessionsRoot: sessionsRootOf(ctx.base),
-    // What the owner did NOT lend, made unreachable. Without this the grant in
-    // service-grants.ts is a formality — the agent could read the originals.
-    secretPaths: ownerSecretPaths(ctx.base),
-    // The owner's canvas control plane, denied from the other side of the env.
-    ...(ctx.controlSocketPath ? { controlSocketPath: ctx.controlSocketPath } : {}),
-    ...(ctx.gatewayPorts ? { gatewayPorts: ctx.gatewayPorts } : {}),
-    ...(ctx.loopbackPorts ? { loopbackAllow: ctx.loopbackPorts } : {})
-  })
-  // Inside the sandbox (so END's cleanup removes it); the per-session SANDBOX
-  // dir is what keeps two sessions' profiles apart, not this constant filename.
-  // REWRITTEN EVERY SPAWN, and that is load-bearing: the confined agent can
-  // write inside its own sandbox, so it can overwrite this file — harmless while
-  // running (sandbox-exec reads it once at exec) but it means any resume MUST
-  // re-derive the profile through here, never trust an existing session.sb.
-  const profilePath = path.join(ctx.sandbox, '.cookrew', 'session.sb')
+  const profile = servedProfile(ctx)
+  // OUTSIDE THE SANDBOX, in a directory only the app writes. sandbox-exec reads
+  // the profile by path a few milliseconds after this write, and a live seat
+  // process can write anywhere in its own sandbox: with the file in there it
+  // renamed its own `(allow default)` into place in that gap, and the respawn
+  // ran unconfined (security review 2026-11-18, 19 of 20;
+  // tests/served-profile-swap.test.ts). Here the seat can neither write nor
+  // rename. One file per session (sessionSegment, the rule every session path
+  // uses), REWRITTEN EVERY SPAWN: a resume re-derives it, never trusts it.
+  const profilePath = seatProfilePath(ctx)
   writeProfile(profilePath, profile)
 
   // Filter the granted names through `grantable` HERE, not only upstream: the
@@ -147,7 +191,7 @@ export function servedConfinement(
   // skips its interactive first-run theme/analytics wizard. The directory is
   // inside HOME and is also where explicit provider-file grants land.
   env.PI_CODING_AGENT_DIR = path.join(ctx.sandbox, '.pi', 'agent')
-  return { env, profilePath }
+  return { env, profilePath, profileDigest: profileDigest(profile) }
 }
 
 export function servedSpawn(

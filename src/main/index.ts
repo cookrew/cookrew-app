@@ -385,7 +385,9 @@ import { openWorkspace, workspaceCheck } from './workspace-door'
 import { seedConductor } from './seed-conductor'
 import { inspectForks, planWorkspaceRemove, removeFork, type ForkScope } from './workspace-fork-check'
 import type { WorkspaceRemovePlan } from '../shared/workspace-door'
-import { servedConfinement } from './session-spawn'
+import { inSessionsRoot, profileDigest, servedConfinement, servedProfile, spawnMode, type ServedSpawnContext } from './session-spawn'
+import { SeatLedger, lsofCwds, seatGate, type SeatGate } from './seat-ledger'
+import { sessionsRootOf } from './owner-secrets'
 import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
 import { ACCOUNT_SUB_PREFIX, ServedCallers } from './served-callers'
 import { serviceGrants } from './service-grants-store'
@@ -899,6 +901,68 @@ const servedSpawnContexts = new Map<
   string,
   { serviceId: string; sessionId: string; sandbox: string }
 >()
+
+/** Every live seat and the profile it started under (seat-ledger.ts). */
+const seatLedger = new SeatLedger()
+
+/**
+ * What a served terminal's confinement is built from, read NOW. The spawn and
+ * the seat gate both use this, so "what would a spawn write now" is the spawn's
+ * own answer and never a second spelling of it.
+ */
+function servedSpawnContextFor(servedCtx: { serviceId: string; sessionId: string; sandbox: string }): ServedSpawnContext {
+  return {
+    base: sessionsBase,
+    serviceId: servedCtx.serviceId,
+    sessionId: servedCtx.sessionId,
+    sandbox: servedCtx.sandbox,
+    // The owner's own environment PLUS whatever this service was lent by
+    // name; `sessionEnv` still allowlists on top, so a value here reaches
+    // nothing that grantedKeys does not name.
+    ownerEnv: grants.ownerEnvFor(servedCtx.serviceId),
+    grantedKeys: grants.envKeysFor(servedCtx.serviceId),
+    // The canvas control plane is the owner's alone: pty.ts withholds the
+    // env keys that name this socket, and the profile denies the connect.
+    controlSocketPath: ptys.socketPath,
+    // The owner's gateway is denied to a seat outright (sandbox-deny.ts).
+    gatewayPorts: routeService.gatewayPorts(),
+    // Every other loopback port is denied to a seat; only what this service was lent passes.
+    loopbackPorts: grants.loopbackPortsFor(servedCtx.serviceId)
+  }
+}
+
+/** The resolved path, or the path as given when it does not exist yet. */
+function resolvedOr(dir: string): string {
+  try {
+    return realpathSync(dir)
+  } catch {
+    return dir
+  }
+}
+
+/**
+ * ASK BEFORE OPENING ANYTHING NEW ON THIS MACHINE (a remote provider, a tunnel):
+ * closed while a live seat runs an older profile or a served session left a
+ * process behind (seat-ledger.ts). Only seats whose pane still exists count.
+ * NOT YET ASKED by anything but the boot check: origin/dev has no tunnel or
+ * remote provider to gate. The Magpie lane's opener must await this and refuse
+ * when it is closed; until then a lent port taken back reaches a running seat
+ * only when it is respawned.
+ */
+function servedSeatGate(): Promise<SeatGate> {
+  const seats = seatLedger.list().filter((seat) => ptys.get(seat.terminalId) !== undefined)
+  return seatGate({
+    seats,
+    currentDigest: (seat) => {
+      const ctx = [...servedSpawnContexts.values()].find((c) => c.sandbox === seat.sandbox)
+      return ctx ? profileDigest(servedProfile(servedSpawnContextFor(ctx))) : null
+    },
+    // Resolved: lsof reports resolved working directories, so a symlinked
+    // ~/.cookrew would otherwise hide every leftover.
+    sessionsRoot: resolvedOr(sessionsRootOf(sessionsBase)),
+    listCwds: lsofCwds
+  })
+}
 
 /**
  * IS THIS A CUSTOMER'S WORKSPACE: its served context, or the mark it keeps on
@@ -3771,6 +3835,23 @@ function spawnTracked(t: {
   }
   const owner = store.ownerOf(t.id) ?? store.focusedId
   const servedCtx = servedSpawnContexts.get(owner)
+  // A served workspace keeps its mark across a restart; its context does not.
+  // Without the context this would be the OWNER's spawn: unconfined, the owner's
+  // env, a stranger's conversation. Refused instead (session-spawn.ts spawnMode).
+  // The folder counts too: a workspace served before the mark existed has none.
+  const servedPlace = inSessionsRoot(t.cwd, sessionsRootOf(sessionsBase)) || inSessionsRoot(t.cwd, resolvedOr(sessionsRootOf(sessionsBase)))
+  if (!ptys.get(t.id) && spawnMode(isServedWorkspace(owner) || servedPlace, servedCtx !== undefined) === 'refuse') {
+    noteLaunchFailure(t.id, {
+      kind: 'served-context-lost',
+      why: "This served session's sandbox was lost when Cookrew restarted, so it will not start outside it.",
+      fix: 'End this served session; a new caller gets a fresh seat.',
+      blocked: true,
+      exitCode: null,
+      lastLines: [],
+      at: Date.now()
+    }, true)
+    return false
+  }
   const upgraded = LEGACY_COMMANDS[t.command.trim()]
   const command = upgraded ?? t.command
   if (upgraded) store.updateNodeUnsafe(t.id, { command })
@@ -3895,26 +3976,7 @@ function spawnTracked(t: {
   // workspace; focus is only the fallback for a terminal no canvas claims yet.
   // A served session's terminal spawns confined and scrubbed; the owner's own
   // spawns exactly as before (servedCtx is undefined).
-  const served = servedCtx
-    ? servedConfinement({
-        base: sessionsBase,
-        serviceId: servedCtx.serviceId,
-        sessionId: servedCtx.sessionId,
-        sandbox: servedCtx.sandbox,
-        // The owner's own environment PLUS whatever this service was lent by
-        // name; `sessionEnv` still allowlists on top, so a value here reaches
-        // nothing that grantedKeys does not name.
-        ownerEnv: grants.ownerEnvFor(servedCtx.serviceId),
-        grantedKeys: grants.envKeysFor(servedCtx.serviceId),
-        // The canvas control plane is the owner's alone: pty.ts withholds the
-        // env keys that name this socket, and the profile denies the connect.
-        controlSocketPath: ptys.socketPath,
-        // The owner's gateway is denied to a seat outright (sandbox-deny.ts).
-        gatewayPorts: routeService.gatewayPorts(),
-        // Every other loopback port is denied to a seat; only what this service was lent passes.
-        loopbackPorts: grants.loopbackPortsFor(servedCtx.serviceId)
-      })
-    : undefined
+  const served = servedCtx ? servedConfinement(servedSpawnContextFor(servedCtx)) : undefined
   // The card's route, as env and args the harness is spawned with. Decided
   // here, at the spawn, so what the process got is what the node records as
   // `routeEffective`; a served session gets none (the service refuses it).
@@ -3973,6 +4035,14 @@ function spawnTracked(t: {
   // actually open — spawnTracked is called repeatedly for a REUSED session
   // (workspace switches), and an unconditional listener would pile up on it.
   if (timingBoot) session.once('exit', () => boots.cancel(sessionNameFor(t.id)))
+  // A seat keeps the profile it started under until it is respawned: recorded
+  // so the seat gate can tell when that is no longer what a spawn would write.
+  if (served && servedCtx && fresh && !session.reattached) {
+    const seat = { terminalId: t.id, serviceId: servedCtx.serviceId, sandbox: servedCtx.sandbox, digest: served.profileDigest }
+    seatLedger.record(seat)
+    // This record only: a respawn's new seat is recorded before the old exit fires.
+    session.once('exit', () => seatLedger.forget(t.id, seat))
+  }
   turns.track(session, command.trim().length > 0)
   recordSpawn(t.id, session)
   // Codex rollout bind (trace-sourced-context-final): the rollout file
@@ -7600,6 +7670,17 @@ if (selfHosted) {
 let cliSocket: SocketServerHandle | null = null
 
 app.whenReady().then(() => {
+  // A served session's detached process outlives the app under the sandbox it
+  // started with, older builds' included (seat-ledger.ts). Said at boot, where
+  // the owner's log can show it. Whatever later opens something new on this
+  // machine must ask the same gate (servedSeatGate).
+  if (process.platform === 'darwin') {
+    void servedSeatGate()
+      .then((gate) => {
+        if (!gate.open) console.error(`[cookrew] served seats: ${gate.why}`)
+      })
+      .catch((error: unknown) => console.error('[cookrew] served seat check failed', error))
+  }
   // Before anything reads a secret: a value still in the clear goes under the key.
   try {
     const moved = secrets.migrate()

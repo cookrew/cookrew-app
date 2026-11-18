@@ -202,6 +202,7 @@ export function ServedTeamCard({
         )}
 
         <p className="gs-foot-note">{MKT_SERVE['mkt.serve.safety']}</p>
+        <p className="gs-foot-note">{MKT_SERVE['mkt.serve.seat-limits']}</p>
 
         <footer className="gs-sheet-foot">
           <button
