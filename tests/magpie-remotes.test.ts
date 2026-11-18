@@ -187,7 +187,7 @@ describe('the served-seat gate (lane Seatbelt)', () => {
 })
 
 describe('the forwarder waits on the served-seat gate', () => {
-  it('stays shut when the gate fails, and opens when it passes', async () => {
+  it('holds its port, refuses every request while the gate is shut, and serves once it passes', async () => {
     const { createMagpieRemote } = await import('../src/main/magpie-remote/setup')
     const asked: boolean[] = []
     const make = (answer: boolean) =>
@@ -210,10 +210,17 @@ describe('the forwarder waits on the served-seat gate', () => {
         callerIsMagpie: async () => true,
         forwardPort: 0
       })
+    // The port is held whatever the gate says; a shut gate refuses every request instead (forward.ts open()).
     const shut = make(false)
     await shut.start()
-    expect(shut.port()).toBeNull()
-    expect(asked).toEqual([false])
+    try {
+      expect(shut.port()).not.toBeNull()
+      const r = await fetch(`http://127.0.0.1:${shut.port()}/peer/deviceB0000000000000000000000002/v1/models`, { headers: { host: `127.0.0.1:${shut.port()}` } })
+      expect(r.status).toBe(403)
+      expect(asked).toEqual([false])
+    } finally {
+      await shut.stop()
+    }
     const open = make(true)
     await open.start()
     try {

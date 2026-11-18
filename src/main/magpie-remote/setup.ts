@@ -118,14 +118,13 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
     log: (line) => deps.log(line)
   })
   const forwardPort = deps.forwardPort ?? MAGPIE_FORWARD_PORTS[0]
-  /** Open the forwarder if it is not, once the gate passes. True when it runs. */
+  /**
+   * Hold the forwarder's port, whatever the gate says: an unheld port could be taken by whatever
+   * Magpie's providers would then send prompts to. While the gate is shut every request is refused
+   * (open() above), so holding the port lets nothing through.
+   */
   const ensureForwarder = async (): Promise<boolean> => {
     if (forwarder.port() !== null) return true
-    // A served seat on an old profile could dial or take the port: it stays shut until the gate passes.
-    if (!(await deps.seatGate().catch(() => false))) {
-      deps.log('magpie remote: the forwarder stays shut: a served session runs under an older sandbox')
-      return false
-    }
     try {
       await forwarder.listen(forwardPort)
       return true

@@ -165,6 +165,7 @@ export async function connectRemote(peer: unknown, peerName: unknown, deps: Conn
   if (typeof peer !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(peer) || typeof peerName !== 'string' || peerName.trim() === '') return { ok: false, why: 'Not one of your computers.' }
   if (!remoteSwitchedOn(() => deps.switches())) return { ok: false, why: 'Turn on Magpie and Magpie remote in Launch settings first.' }
   if (!(await deps.seatGate().catch(() => false))) {
+    // Connecting also asks: a provider is never pointed at the forwarder while the gate is shut.
     return { ok: false, why: 'A served session still runs under an older sandbox. Restart it, then connect again.' }
   }
   const port = deps.forwarderPort()

@@ -9862,7 +9862,7 @@ function registerIpc(handlers: RestoreHandlers): void {
           const headers = { ...details.requestHeaders }
           for (const name of Object.keys(headers)) {
             const site = Object.entries(details.requestHeaders).find(([n]) => n.toLowerCase() === 'sec-fetch-site')?.[1]
-            if (name.toLowerCase() !== 'cookie' || cookieAllowedFor(details.url, port, site, details.resourceType === 'mainFrame')) continue
+            if (name.toLowerCase() !== 'cookie' || cookieAllowedFor(details.url, port, site, details.resourceType === 'mainFrame' && details.method === 'GET')) continue
             const kept = stripMagpieCookies(headers[name])
             if (kept === '') delete headers[name]
             else headers[name] = kept

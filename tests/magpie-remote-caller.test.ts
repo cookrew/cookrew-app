@@ -1,7 +1,7 @@
 // WHO MAY USE THE FORWARDER (magpie-remote/caller.ts): the pid at the client end of a
 // loopback connection, read from lsof or ss, and nothing when that cannot be read.
 import { describe, expect, it } from 'vitest'
-import { callerIsMagpie, parseLsofPids, parseSsPids } from '../src/main/magpie-remote/caller'
+import { callerIsMagpie, parseLsofExe, parseLsofPids, parseSsPids } from '../src/main/magpie-remote/caller'
 
 describe('caller pids', () => {
   it('reads lsof -Fp output', () => {
@@ -19,5 +19,13 @@ describe('caller pids', () => {
   it('refuses when there is no magpie to compare with', async () => {
     expect(await callerIsMagpie(1, null)).toBe(false)
     expect(await callerIsMagpie(1, '/no/such/magpie')).toBe(false)
+  })
+})
+
+describe('the executable, as the kernel has it (never argv[0])', () => {
+  it('reads the first text mapping of lsof -d txt -Fn', () => {
+    expect(parseLsofExe('p53736\nftxt\nn/Applications/magpie.app/Contents/MacOS/magpie\nftxt\nn/usr/lib/dyld\n')).toBe('/Applications/magpie.app/Contents/MacOS/magpie')
+    expect(parseLsofExe('p1\n')).toBeNull()
+    expect(parseLsofExe('p1\nftxt\nnrelative\n')).toBeNull()
   })
 })

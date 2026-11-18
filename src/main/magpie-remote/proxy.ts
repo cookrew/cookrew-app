@@ -14,6 +14,9 @@ import type { Seal2Stream } from '../../shared/seal2/stream'
  * Magpie dialled, with the body in hand.
  */
 
+/** What a chunk is charged at the least: its object and buffer cost about this much on their own. */
+const CHUNK_FLOOR = 1024
+
 export type WholeBody = { readonly ok: true; readonly parts: readonly Uint8Array[]; readonly size: number } | { readonly ok: false; readonly code: number; readonly reason: string }
 
 /** Bytes held in main for bodies being read: shared by every computer, so none can fill main's memory. */
@@ -64,8 +67,10 @@ async function readInto(stream: Seal2Stream, max: number, ms: number, budget: Bo
       if (next.done) break
       size += next.value.length
       if (size > max) return { ok: false, code: ABORT.tooLarge, reason: 'body-too-large' }
-      if (!budget.take(next.value.length)) return { ok: false, code: ABORT.busy, reason: 'too-much-in-flight' }
-      took(next.value.length)
+      // A chunk costs what it holds in memory, not only its bytes: tiny chunks must not get around the budget.
+      const cost = Math.max(next.value.length, CHUNK_FLOOR)
+      if (!budget.take(cost)) return { ok: false, code: ABORT.busy, reason: 'too-much-in-flight' }
+      took(cost)
       parts.push(next.value)
     }
     return { ok: true, parts, size }
