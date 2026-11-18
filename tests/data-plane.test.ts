@@ -228,10 +228,10 @@ describe('who may move the plane (security review of the names removal, 2026-11-
   // code itself goes with the desktop's names (lane LAN step D).
   it('is the link adoption and the fallback, and nothing else in the app', async () => {
     const { readdirSync, readFileSync, statSync } = await import('node:fs')
-    const { join } = await import('node:path')
+    // Spelled with '/' on every system (Windows reads it too), so the list compares the same everywhere.
     const files = (dir: string): string[] =>
       readdirSync(dir).flatMap((name) => {
-        const at = join(dir, name)
+        const at = `${dir}/${name}`
         return statSync(at).isDirectory() ? files(at) : /\.tsx?$/.test(name) ? [at] : []
       })
     const callers = files('src')
