@@ -15,6 +15,8 @@
  * PROBING no matter which host is in the address bar.
  */
 
+import { addressFromTrustedName } from './reach-names'
+
 /**
  * A browser permission, in the four states local-network.ts reads.
  *
@@ -192,8 +194,17 @@ export const classifyOrigin = (
 ): PathState => {
   const host = hostOf(origin)
   if (!host) return 'OFFLINE'
-  // A name is never read for the address it might spell: the per-machine names
-  // under d.cookrew.dev are gone (2026-11-16), and a public name is judged as one.
+  /**
+   * A MAC'S OWN NAME IS THE ADDRESS IT SPELLS, NOT THE ZONE IT SITS IN.
+   *
+   * The console never reaches a Mac by name (2026-11-16), but until the
+   * desktop stops handing its names out (lane LAN step D) a phone can still
+   * load the page a Mac serves itself at `192-168-2-40.<id>.d.cookrew.dev`,
+   * and every byte of that page stays on the Wi-Fi. Calling it RELAY is the
+   * one reading the badge exists to prevent. Goes with the names.
+   */
+  const spelled = addressFromTrustedName(host)
+  if (spelled !== null) return isTailnetHostname(spelled) ? 'TAILNET' : isLanHostname(spelled) ? 'LAN' : 'RELAY'
   const registryHost = hostOf(registryOrigin)
   if (registryHost && bareHost(host) === bareHost(registryHost)) return 'RELAY'
   if (isTailnetHostname(host)) return 'TAILNET'

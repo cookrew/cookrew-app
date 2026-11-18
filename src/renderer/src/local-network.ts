@@ -13,8 +13,7 @@
  *   know, so Safari, Firefox and older Chrome are unaffected.
  *
  *   THE PERMISSION, read and never asked for: the companion reports it to the
- *   Mac with each race, and the row under the badge says so after a refusal
- *   (LocalNetworkRow.tsx).
+ *   Mac with each race. Nothing draws it (the WebRTC link does not need it).
  */
 
 /** The address space a direct plane lives in, in the spec's own vocabulary. */

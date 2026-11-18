@@ -3,8 +3,9 @@ import type { LocalNetworkState } from './local-network'
 /**
  * THE ONE PLACE THAT KNOWS WHAT THE BROWSER SAYS ABOUT THE LOCAL NETWORK.
  *
- * The companion reads the permission once per race (path/companion.ts) and the
- * row under the badge says so when it was refused (LocalNetworkRow.tsx). Same
+ * The companion reads the permission once per race (path/companion.ts) and
+ * reports it to the Mac with the path report; nothing on screen draws it since
+ * the names went (2026-11-19: the WebRTC link does not ask for it). Same
  * shape as path-link.ts — a value, a set of listeners, and a subscribe — and
  * for the same reason: the thing that feeds it is not React.
  *

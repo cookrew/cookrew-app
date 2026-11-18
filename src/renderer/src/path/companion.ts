@@ -85,6 +85,16 @@ let lastRtcAt = 0
  * (RTC_EVERY_MS), and longer after a refused answer (path/rtc-trust.ts).
  */
 let rtcGapMs = RTC_EVERY_MS
+
+/**
+ * A reason to knock now rather than after the gap (the network moved, the Mac
+ * said its addresses did), unless the last answer was refused: the reach push
+ * rides the relay, which could send one whenever it liked and so cut the wait
+ * after a refusal short. A change of machine resets both (below).
+ */
+const owedAKnock = (): void => {
+  if (rtcGapMs === RTC_EVERY_MS) lastRtcAt = 0
+}
 /** How the last adopted link ended, carried by the next report and then dropped. */
 let lastEnd: RtcRow | null = null
 /** When an ended link let the next knock skip the gap, within HOLD_REPEAT_WINDOW_MS. */
@@ -319,7 +329,7 @@ const startPlaneSwitch = (): (() => void) => {
       () => {
         if (!live()) return
         // A new network is owed a knock now, not two minutes after the last one.
-        lastRtcAt = 0
+        owedAKnock()
         leaveDirectPlane({ plane: dataPlane, link: heldRtcLink, fallBack: fallBackToRelay }, 'the network changed')
         raceSoon()
       },
@@ -329,7 +339,7 @@ const startPlaneSwitch = (): (() => void) => {
     // candidates are new, so the knock is owed now rather than after the gap.
     cookrew().onReachChanged?.(() => {
       if (!live()) return
-      lastRtcAt = 0
+      owedAKnock()
       raceNow()
     }) ?? ((): void => undefined),
     startRaceLoop({

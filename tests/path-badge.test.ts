@@ -45,8 +45,9 @@ describe('path badge host classes', () => {
     expect(classifyOrigin('https://100.75.1.2:8643')).toBe('TAILNET')
     expect(classifyOrigin('https://cookrew.dev')).toBe('RELAY')
     expect(classifyOrigin('https://cookrew.dev/m/abc')).toBe('RELAY')
-    // A name is never read for the address it spells: the per-machine names are gone (2026-11-16).
-    expect(classifyOrigin('https://192-168-1-24.11111111-2222-3333-4444-555555555555.d.cookrew.dev:8643')).toBe('RELAY')
+    // A Mac's own name is the address it spells, until the desktop stops handing names out (step D).
+    expect(classifyOrigin('https://192-168-1-24.11111111-2222-3333-4444-555555555555.d.cookrew.dev:8643')).toBe('LAN')
+    expect(classifyOrigin('https://100-75-1-2.11111111-2222-3333-4444-555555555555.d.cookrew.dev:8643')).toBe('TAILNET')
   })
 
   it('honours a registry origin given for a local registry', () => {

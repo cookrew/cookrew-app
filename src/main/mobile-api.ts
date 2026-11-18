@@ -410,8 +410,9 @@ export interface MobileApiDeps {
   /**
    * 'changed' once the registry has taken a reach card that differs from the
    * last one it took (reach.ts · onChanged). The stream relays it as `reach`
-   * so a phone on the relay plane races the Mac's new names at once instead
-   * of on its own minute clock.
+   * so a phone on the relay plane knocks the WebRTC link open at once (this
+   * Mac's link candidates moved) instead of after its knock gap; an older
+   * console races the Mac's new names on it.
    */
   reachBus?: EventEmitter;
   /** Recover an inactive teammate as it was (agent-recover feature). */

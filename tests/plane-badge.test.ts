@@ -150,21 +150,22 @@ describe('at the root origin nothing changes', () => {
   })
 })
 
-describe('at the root origin, a name is a name', () => {
-  // The per-machine names under d.cookrew.dev are gone (2026-11-16). A page at
-  // the root of one is a public name like any other: its first label is never
-  // read back into an address.
-  it('does not read a LAN address out of a name', async () => {
+describe('at the root origin, a Mac\'s own name is the address it spells', () => {
+  // The CONSOLE never reads a name (2026-11-16). But until the desktop stops
+  // handing its names out (lane LAN step D), a phone can still load the page a
+  // Mac serves itself at one, and every byte of that page stays on the Wi-Fi:
+  // calling it RELAY would be the one lie the badge exists to prevent.
+  it('reads a LAN address out of a Mac\'s own name', async () => {
     stubPhone(NAME)
     const { link } = await servedAt('')
-    expect(link.currentOriginState()).toBe('RELAY')
-    expect(link.currentPathBadge().word).toBe('RELAY')
+    expect(link.currentOriginState()).toBe('LAN')
+    expect(link.currentPathBadge().word).toBe('LAN')
   })
 
-  it('does not read a tailnet address out of a name either', async () => {
+  it('reads a tailnet address out of one too', async () => {
     stubPhone(TAILNET_NAME)
     const { link } = await servedAt('')
-    expect(link.currentPathBadge().word).toBe('RELAY')
+    expect(link.currentPathBadge().word).toBe('TAILNET')
   })
 
   it('still calls the registry itself the relay', async () => {

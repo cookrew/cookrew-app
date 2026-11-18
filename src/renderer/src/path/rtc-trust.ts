@@ -77,16 +77,19 @@ export interface BoundKnock {
  * ONE KNOCK, HELD TO ONE MACHINE: connectRtcLink with the check for the
  * machine given here, and a record of what that check decided — a verified
  * answer whose link then never opens still proved the Mac. A page that could
- * never check the answer posts no offer at all.
+ * never check the answer (no machine in scope, no Ed25519) posts no offer.
  */
 export const boundKnock = (deps: BoundKnockDeps): BoundKnock => {
   const trust = trustRtcAnswer({ machineId: deps.machineId })
   let decided: KnockVerdict = UNDECIDED
+  /** Refused before anything is posted: the relay then never sees this page's offer. */
+  const refuseUnasked = (why: string): RtcUnbound => {
+    decided = { verified: false, refused: why }
+    return { unbound: why }
+  }
   const connect = async (): Promise<RtcLink | RtcUnbound | null> => {
-    if (!(await ed25519Available())) {
-      decided = { verified: false, refused: RTC_NO_ED25519 }
-      return { unbound: RTC_NO_ED25519 }
-    }
+    if (deps.machineId === null) return refuseUnasked(RTC_NO_MACHINE)
+    if (!(await ed25519Available())) return refuseUnasked(RTC_NO_ED25519)
     const link = await connectRtcLink({
       ...deps.link,
       offer: deps.post,

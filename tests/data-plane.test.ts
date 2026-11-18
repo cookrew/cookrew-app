@@ -219,3 +219,30 @@ describe('the browser socket follows the plane too', () => {
     )
   })
 })
+
+describe('who may move the plane (security review of the names removal, 2026-11-19)', () => {
+  // With the names gone, nothing proves an origin any more: a plane with one
+  // would send the pairing token to wherever it points (planeRequestInit). So
+  // the only moves left are the WebRTC link the Mac's device key bound
+  // (rtc-adopt.ts, origin '') and the way back to the relay. The origin-plane
+  // code itself goes with the desktop's names (lane LAN step D).
+  it('is the link adoption and the fallback, and nothing else in the app', async () => {
+    const { readdirSync, readFileSync, statSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const files = (dir: string): string[] =>
+      readdirSync(dir).flatMap((name) => {
+        const at = join(dir, name)
+        return statSync(at).isDirectory() ? files(at) : /\.tsx?$/.test(name) ? [at] : []
+      })
+    const callers = files('src')
+      .filter((file) => !file.endsWith('data-plane.ts'))
+      .filter((file) => /\bsetDataPlane\b/.test(readFileSync(file, 'utf8')))
+      .sort()
+    expect(callers).toEqual(['src/renderer/src/path/companion.ts', 'src/renderer/src/plane-health.ts'])
+    // companion.ts hands it to the link adoption only; plane-health.ts sets the relay only.
+    expect(readFileSync('src/renderer/src/path/companion.ts', 'utf8').match(/\bsetDataPlane\b/g)).toHaveLength(2)
+    expect(readFileSync('src/renderer/src/path/companion.ts', 'utf8')).toContain('adopt: setDataPlane,')
+    expect(readFileSync('src/renderer/src/plane-health.ts', 'utf8')).toContain('setDataPlane(RELAY_PLANE)')
+    expect(readFileSync('src/renderer/src/path/rtc-adopt.ts', 'utf8')).toContain("deps.adopt({ origin: '', kind: network, transport: 'rtc' })")
+  })
+})

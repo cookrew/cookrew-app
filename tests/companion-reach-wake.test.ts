@@ -78,12 +78,14 @@ const stubPhone = () => {
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
 /** Every knock the companion makes, counted where the link would be dialled. */
-const countKnocks = (): { readonly knocks: () => number } => {
+const countKnocks = (refusal: string | null = null): { readonly knocks: () => number } => {
   let knocks = 0
   vi.doMock('../src/renderer/src/path/rtc-link', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../src/renderer/src/path/rtc-link')>()),
-    connectRtcLink: async () => {
+    // With a refusal, the Mac answered and its answer did not prove it (rtc-trust.ts · boundKnock).
+    connectRtcLink: async (deps: { refused?: (why: string) => void }) => {
       knocks += 1
+      if (refusal !== null) deps.refused?.(refusal)
       return null
     }
   }))
@@ -124,5 +126,44 @@ describe('a reach push from the Mac', () => {
     await settle()
     await settle()
     expect(knocks()).toBe(2)
+  })
+})
+
+describe('after a refused answer', () => {
+  const OTHER = '66666666-7777-8888-9999-000000000000'
+
+  it('a reach push does not cut the ten-minute wait short: the relay can send one whenever it likes', async () => {
+    const phone = stubPhone()
+    vi.resetModules()
+    const { knocks } = countKnocks('no binding')
+    await inConsole(DEVICE)
+    const companion = await import('../src/renderer/src/path/companion')
+    const stop = companion.startCompanionPathSwitch()
+    await vi.waitFor(() => expect(phone.listening()).toBe(true))
+    await vi.waitFor(() => expect(phone.asked().some((url) => url.includes('/api/path/report'))).toBe(true))
+    expect(knocks()).toBe(1)
+
+    phone.push('reach', { at: 1 })
+    await settle()
+    await settle()
+    expect(knocks()).toBe(1)
+    stop()
+  })
+
+  it('entering another machine owes that machine a knock at once', async () => {
+    const phone = stubPhone()
+    vi.resetModules()
+    const { knocks } = countKnocks('no binding')
+    const scope = await inConsole(DEVICE)
+    const companion = await import('../src/renderer/src/path/companion')
+    const stopA = companion.startCompanionPathSwitch()
+    await vi.waitFor(() => expect(phone.asked().some((url) => url.includes('/api/path/report'))).toBe(true))
+    expect(knocks()).toBe(1)
+    stopA()
+
+    scope.enterMachine(OTHER)
+    const stopB = companion.startCompanionPathSwitch()
+    await vi.waitFor(() => expect(knocks()).toBe(2))
+    stopB()
   })
 })

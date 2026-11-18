@@ -138,6 +138,13 @@ describe('boundKnock: one knock held to one machine, and what its check decided'
     expect(knock.verdict()).toEqual({ verified: false, refused: null })
   })
 
+  it('a page with no machine in scope posts no offer: no key could prove an answer', async () => {
+    const { knock, posted } = knockWith(() => ({ sdp: ANSWER }), null)
+    expect(await knock.connect()).toEqual({ unbound: RTC_NO_MACHINE })
+    expect(posted).toEqual([])
+    expect(knock.verdict()).toEqual({ verified: false, refused: RTC_NO_MACHINE })
+  })
+
   it('a browser that cannot check Ed25519 posts no offer', async () => {
     const a = machine()
     const real = crypto.subtle.importKey.bind(crypto.subtle) as (...args: unknown[]) => Promise<CryptoKey>

@@ -5967,37 +5967,6 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   .cr-path-probing .cr-path-dot { animation: none; }
 }
 
-/* ---- the local-network row ----
-   One line hanging under the header, anchored to the badge's own edge, said
-   only after the browser refused the local network. It is OUT OF FLOW on
-   purpose: the header is a single 24 px row on a phone and a second line
-   inside it would push the canvas down. Cream, hard-edged and 2 px lined,
-   like everything else on this bar. */
-
-.cr-path-ask {
-  position: absolute;
-  top: 100%;
-  left: 8px;
-  right: 8px;
-  z-index: 60;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  padding: 7px 9px;
-  background: var(--cream-hi);
-  border: 2px solid var(--line);
-  box-shadow: 2px 2px 0 var(--line);
-  font-size: 12px;
-  line-height: 1.35;
-  color: var(--ink);
-}
-
-/* The refusal is a statement, not a control: no button, muted. */
-.cr-path-ask-denied {
-  color: var(--muted);
-}
-
 .cr-path-latency {
   margin: 0 0 12px;
   font-family: var(--font-pixel);

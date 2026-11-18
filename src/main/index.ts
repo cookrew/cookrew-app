@@ -654,7 +654,8 @@ const tuningBus = new EventEmitter()
  * 'changed' when the registry has taken a reach card that differs from the
  * last one it took: this Mac's addresses moved and the zone answers the new
  * names. Phone streams relay it as `reach` (mobile-api) and the renderer gets
- * `reach:changed`; both mean "race the Mac's names now, not in a minute".
+ * `reach:changed`; both mean "try the direct path now, not after the gap" (a
+ * WebRTC knock on a current console, a name race on an older one).
  */
 const reachBus = new EventEmitter()
 /**
@@ -8702,9 +8703,11 @@ app.whenReady().then(() => {
     trusted: () => trustedOrigins(),
     register: (workspaces, reach, trusted) =>
       accounts.registerDesktop(workspaces, reach, trusted),
-    // ONLY ONCE THE ZONE ANSWERS. A phone told before the registry took the
-    // card would resolve the new name to NXDOMAIN and cache that answer for
-    // minutes (path/name-oracle.ts, 2026-10-04); told after, it finds a Mac.
+    // ONLY ONCE THE ZONE ANSWERS, for an older console that still races names:
+    // told before the registry took the card it would resolve the new name to
+    // NXDOMAIN and cache that answer for minutes (2026-10-04). A current
+    // console only knocks the WebRTC link on it. When the names go (lane LAN
+    // step D) this push must come from the address change itself.
     onChanged: () => {
       reachBus.emit('changed')
       if (mainWindow && !mainWindow.webContents.isDestroyed()) {
