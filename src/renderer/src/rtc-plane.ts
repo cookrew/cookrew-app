@@ -33,7 +33,9 @@ export const setRtcLink = (link: RtcLink | null): void => {
 // would carry the next machine's requests to the last one.
 // A link offered before the machine's session was sealed had its offer cross the relay in
 // the clear: once the machine is pinned, it goes, and the next one is made fresh.
-onSealPinned(() => {
+onSealPinned((base) => {
+  // The link is to the machine in view; another machine going sealed is not its business.
+  if (base !== clientBase()) return
   const link = current
   current = null
   link?.close('the machine went sealed')

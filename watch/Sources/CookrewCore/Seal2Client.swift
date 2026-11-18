@@ -17,6 +17,9 @@ public enum Seal2ClientError: Error, Equatable {
   case ended(String)
   case aborted(UInt16, String)
   case badAnswer
+  /** The request cannot be sent as asked: a header name that is not one, or too large to seal. */
+  case badRequest
+  case timedOut
 }
 
 public struct Seal2Answer: Sendable {
@@ -50,8 +53,18 @@ public actor Seal2Client {
   private var ackDue = false
   private var listener: Task<Void, Never>?
   private var pinger: Task<Void, Never>?
+  private var lastHeard = Date()
+  private var openStreams = 0
+  private var turnWaiters: [CheckedContinuation<Void, Never>] = []
+  private var closing = false
   private static let window: UInt64 = 1024
   private static let creditStep = 64 * 1024
+  /** As the Mac ends a session that only reads: a Mac this quiet is gone. */
+  private static let silentSeconds: TimeInterval = 90
+  private static let requestSeconds: Double = 60
+  private static let maxStreams = 64
+  private static let recordMax = 8 + 256 * 1024 + 16
+  private static let fieldName = try! NSRegularExpression(pattern: "^:?[!#$%&'*+.^_`|~0-9a-z-]+$")
 
   private struct Pending {
     var status: Int?
@@ -107,22 +120,54 @@ public actor Seal2Client {
     pinger = Task {
       while !Task.isCancelled {
         try? await Task.sleep(for: .seconds(20))
-        await self.send(.ping)
+        await self.beat()
       }
     }
   }
 
-  /** One HTTP exchange, sealed. The answer comes whole. */
+  private func beat() {
+    if Date().timeIntervalSince(lastHeard) > Self.silentSeconds { return finish("the Mac went silent") }
+    _ = send(.ping)
+  }
+
+  /** One HTTP exchange, sealed. The answer comes whole, or an error within a minute. */
   public func request(method: String, path: String, headers: [String: String] = [:], body: Data? = nil) async throws -> Seal2Answer {
+    if let ended { throw Seal2ClientError.ended(ended) }
+    let fields = headers.reduce(into: [":method": method, ":path": path]) { $0[$1.key.lowercased()] = $1.value }
+    // Checked here, where the caller hears it: a name the Mac cannot read would end the whole session.
+    let valid = fields.keys.allSatisfy { Self.fieldName.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }
+    guard valid, path.hasPrefix("/"), !path.hasPrefix("//") else { throw Seal2ClientError.badRequest }
+    // Past the Mac's limit of open streams, a request waits its turn rather than being refused.
+    while openStreams >= Self.maxStreams, ended == nil { await withCheckedContinuation { turnWaiters.append($0) } }
     if let ended { throw Seal2ClientError.ended(ended) }
     let stream = nextStream
     nextStream += 2
-    let fields = headers.reduce(into: [":method": method, ":path": path]) { $0[$1.key.lowercased()] = $1.value }
+    let open = Seal2.encode(.open(stream: stream, kind: "http", fields: fields), fieldOrder: [":method", ":path"])
+    guard open.count <= 256 * 1024, let sealed = try? session.seal(open) else { throw Seal2ClientError.badRequest }
+    openStreams += 1
+    let deadline = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(Self.requestSeconds))
+      await self?.expire(stream)
+    }
+    defer { deadline.cancel() }
     return try await withCheckedThrowingContinuation { done in
       waiting[stream] = Pending(unsent: body ?? Data(), ending: true, done: done)
-      send(.open(stream: stream, kind: "http", fields: fields), order: [":method", ":path"])
+      enqueue(Seal2.wire(seq: sealed.seq, box: sealed.box))
       pump(stream)
     }
+  }
+
+  /** A request that ran out of time: the Mac is told, the caller hears it. */
+  private func expire(_ stream: UInt32) {
+    guard let pending = waiting.removeValue(forKey: stream) else { return }
+    _ = send(.abort(stream: stream, code: 5, reason: "the watch stopped waiting"))
+    released()
+    pending.done.resume(throwing: Seal2ClientError.timedOut)
+  }
+
+  private func released() {
+    openStreams = max(0, openStreams - 1)
+    if !turnWaiters.isEmpty { turnWaiters.removeFirst().resume() }
   }
 
   /** As much of the body as the stream's credit allows, then its END once all is gone. */
@@ -141,9 +186,12 @@ public actor Seal2Client {
     waiting[stream] = pending
   }
 
-  public func close() {
-    guard ended == nil else { return }
-    send(.goaway(code: 0, reason: "closing"))
+  /** Says goodbye, and lets the goodbye leave before the line is let go. */
+  public func close() async {
+    guard ended == nil, !closing else { return }
+    closing = true
+    _ = send(.goaway(code: 0, reason: "closing"))
+    for _ in 0 ..< 50 where !outgoing.isEmpty || posting { try? await Task.sleep(for: .milliseconds(20)) }
     finish("closed here")
   }
 
@@ -154,13 +202,26 @@ public actor Seal2Client {
     pinger?.cancel()
     for (_, pending) in waiting { pending.done.resume(throwing: Seal2ClientError.ended(why)) }
     waiting = [:]
+    for waiter in turnWaiters { waiter.resume() }
+    turnWaiters = []
   }
 
   // MARK: up
 
-  private func send(_ frame: Seal2.Frame, order: [String] = []) {
-    guard ended == nil, let sealed = try? session.seal(Seal2.encode(frame, fieldOrder: order)) else { return }
-    outgoing.append(Seal2.wire(seq: sealed.seq, box: sealed.box))
+  /** False when the frame could not be sealed: the session is past its records, and ends. */
+  @discardableResult
+  private func send(_ frame: Seal2.Frame, order: [String] = []) -> Bool {
+    guard ended == nil else { return false }
+    guard let sealed = try? session.seal(Seal2.encode(frame, fieldOrder: order)) else {
+      finish("the session could not seal any more")
+      return false
+    }
+    enqueue(Seal2.wire(seq: sealed.seq, box: sealed.box))
+    return true
+  }
+
+  private func enqueue(_ wire: Data) {
+    outgoing.append(wire)
     if !posting { Task { await self.flush() } }
   }
 
@@ -218,6 +279,11 @@ public actor Seal2Client {
         // Records are read as they complete: a length prefix says when.
         if chunk.count >= 4 {
           let length = Int(Seal2.readUInt(chunk, at: 0, width: 4))
+          // A length no record has is refused at once, before anything is held for it.
+          guard length >= 24, length <= Self.recordMax else {
+            finish("the line sent something that is not a record")
+            return true
+          }
           if chunk.count < 4 + length { continue }
         } else { continue }
         buffer.append(chunk)
@@ -250,6 +316,7 @@ public actor Seal2Client {
     }
     guard seq < expected + Self.window else { return true }
     guard let plain = session.open(seq: seq, box: box) else { return false }
+    lastHeard = Date()
     held[seq] = plain
     while let ready = held.removeValue(forKey: expected) {
       expected += 1
@@ -277,10 +344,13 @@ public actor Seal2Client {
       waiting[stream] = pending
     case let .end(stream):
       guard let pending = waiting.removeValue(forKey: stream) else { return }
+      released()
       guard let status = pending.status else { return pending.done.resume(throwing: Seal2ClientError.badAnswer) }
       pending.done.resume(returning: Seal2Answer(status: status, headers: pending.headers, body: pending.body))
     case let .abort(stream, code, reason):
-      waiting.removeValue(forKey: stream)?.done.resume(throwing: Seal2ClientError.aborted(code, reason))
+      guard let pending = waiting.removeValue(forKey: stream) else { return }
+      released()
+      pending.done.resume(throwing: Seal2ClientError.aborted(code, reason))
     case .goaway:
       break
     case .open(let stream, _, _):

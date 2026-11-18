@@ -1,10 +1,12 @@
 import { MACHINE_RELAY_PREFIX, RELAY_SESSION_HEADER } from '../../../shared/machine-relay'
 import { sealedFetch } from '../../../shared/seal2/http'
 import type { Seal2Link } from '../../../shared/seal2/http-link'
-import { machineBaseOf, machineScope, registerScopeState, setSealedRoute } from '../machine-scope'
-import { codeKeyForBase, takeNextCode } from '../pairing-scope'
+import { machineBaseOf, machineScope, registerScopeState, scopeBase, setSealedRoute } from '../machine-scope'
+import { codeKeyForBase } from '../pairing-scope'
 import { sealFetchFor } from '../use/seal-fetch'
+import { authStore } from '../auth-gate'
 import { openSealSession, SealDowngradedError, SealRefusedError, type OpenedSeal } from './seal-client'
+import { vouchedNextCode } from './seal-next-code'
 import { sealPinFor } from './seal-pin'
 
 /**
@@ -20,9 +22,10 @@ import { sealPinFor } from './seal-pin'
  *
  * WHAT A CARRIER CANNOT DO. Take v2's offer off the hello: the Mac answers v1,
  * and asked inside that sealed v1 session it says it speaks v2, so the page pins
- * it (seal-client.ts · openSealSession). Say "no such code": that refusal is not
- * the Mac's proof, so the pin stays and the page shows re-pair; only a code the
- * Mac PROVED it replaced lets go of the pin. What a carrier can still do is refuse
+ * it (seal-client.ts · openSealSession). The pin is per machine, and nothing here
+ * lets go of it. Say "no such code": that is not the Mac's proof, so the page shows
+ * re-pair and takes no other code; only a code the Mac named as the successor of
+ * the one held is taken (seal-next-code.ts). What a carrier can still do is refuse
  * every handshake of a page that was never pinned: that page then keeps the old
  * plain way, as every page did before v2, until a try gets through.
  *
@@ -124,7 +127,7 @@ const pinned = (base: string): void => {
 }
 
 const sessionFor = (base: string, code: string): Promise<OpenedSeal> =>
-  openSealSession({ url: (path) => `${base}${path}`, code, fetchFn: sealFetchFor(base), pin: sealPinFor(codeKeyForBase(base), code) })
+  openSealSession({ url: (path) => `${base}${path}`, code, fetchFn: sealFetchFor(base), pin: sealPinFor(codeKeyForBase(base)) })
 
 /** Keeps a link for a machine; the one it replaces is let go, never left polling. */
 const keep = (base: string, entry: Held): void => {
@@ -140,14 +143,16 @@ const refusedAnswer = (): Response =>
     headers: { 'content-type': 'application/json' }
   })
 
-const remember = (base: string, answer: () => Response | Error, ms: number): void => {
-  failures.set(base, { until: timing.now() + ms, answer })
+/** Per machine and code: a code scanned a moment later is not answered with the last one's failure. */
+const failureKey = (base: string, code: string): string => `${base}\n${code}`
+const remember = (base: string, code: string, answer: () => Response | Error, ms: number): void => {
+  failures.set(failureKey(base, code), { until: timing.now() + ms, answer })
 }
 
 /**
- * The machine's session on a pinned code. A refusal the Mac proved (a replaced code)
- * lets go of the pin and tries a code that waited beside it; any other refusal is the
- * re-pair screen, and nothing is ever sent in the clear for it.
+ * The machine's session on a pinned machine. A code the Mac proved replaced is
+ * followed only to the code it vouched for (seal-next-code.ts); any other refusal
+ * is the re-pair screen. Nothing is ever sent in the clear for either.
  */
 async function openPinned(base: string, code: string): Promise<Seal2Link> {
   const gen = generation
@@ -167,20 +172,19 @@ async function openPinned(base: string, code: string): Promise<Seal2Link> {
     if (!(error instanceof SealRefusedError) || (error.why !== 'code' && error.why !== 'replaced')) throw error
     const store = storage()
     const codeKey = codeKeyForBase(base)
-    if (error.why === 'replaced') sealPinFor(codeKey, code).forget()
-    const waited = store === null ? null : takeNextCode(store, codeKey)
-    if (store !== null && waited !== null && CODE_SHAPE.test(waited)) {
-      store.setItem(codeKey, waited)
-      throw new RetryWithCode(waited)
-    }
-    throw new CodeRefused()
+    const vouched = store === null ? null : await vouchedNextCode(store, codeKey, code, error)
+    if (vouched === null || gen !== generation) throw new CodeRefused()
+    // The machine in view keeps its code in the gate's memory as well: both learn it.
+    if (base === scopeBase()) authStore().saveConnectCode(vouched)
+    else store?.setItem(codeKey, vouched)
+    throw new RetryWithCode(vouched)
   }
 }
 
 class CodeRefused extends Error {}
 class RetryWithCode extends Error {
   constructor(readonly code: string) {
-    super('a waiting code is tried')
+    super('a vouched code is tried')
   }
 }
 
@@ -274,28 +278,21 @@ async function linkOrAnswer(base: string, code: string, call: SealedCall): Promi
   try {
     return await linkFor(base, code)
   } catch (error) {
-    if (error instanceof RetryWithCode) {
-      // The code that waited is new to this page: the try at it decides how this request goes.
-      const retry = (): Promise<Response> | null =>
-        sealedFetchFor(`${base}${call.path}`, { method: call.method, headers: call.headers, body: (call.body ?? null) as BodyInit | null, ...(call.signal ? { signal: call.signal } : {}) })
-      const first = retry()
-      if (first !== null) return first
-      await probeSettled(`${base}${call.path}`)
-      return (await retry()) ?? refusedAnswer()
-    }
+    // The machine stays pinned: the vouched code is asked on v2 like the last.
+    if (error instanceof RetryWithCode) return sendSealed(base, error.code, call, false)
     if (error instanceof CodeRefused) {
-      remember(base, refusedAnswer, timing.refusedMs)
+      remember(base, code, refusedAnswer, timing.refusedMs)
       return refusedAnswer()
     }
     const failed = error instanceof Error ? error : new Error(String(error))
-    remember(base, () => failed, timing.retryMs)
+    remember(base, code, () => failed, timing.retryMs)
     throw failed
   }
 }
 
 /** On a session that ended under it, a READ is asked once more on a fresh one; a write may have been carried out, so it is not. */
 async function sendSealed(base: string, code: string, call: SealedCall, again: boolean): Promise<Response> {
-  const known = failures.get(base)
+  const known = failures.get(failureKey(base, code))
   if (known !== undefined && timing.now() < known.until) {
     const answer = known.answer()
     if (answer instanceof Error) throw answer
@@ -303,7 +300,7 @@ async function sendSealed(base: string, code: string, call: SealedCall, again: b
   }
   const link = await linkOrAnswer(base, code, call)
   if (link instanceof Response) return link
-  failures.delete(base)
+  failures.delete(failureKey(base, code))
   try {
     const answer = await sealedFetch(link.connection, call)
     return toResponse(answer.status, answer.headers, answer.body)
@@ -322,7 +319,7 @@ export function viaSeal(url: string): SealRoute | null {
   const codeKey = codeKeyForBase(base)
   const code = store.getItem(codeKey)
   if (code === null || !CODE_SHAPE.test(code)) return null
-  if (!sealPinFor(codeKey, code, store).v2()) {
+  if (!sealPinFor(codeKey, store).v2()) {
     probe(base, code)
     return null
   }
@@ -344,8 +341,9 @@ export async function sealableBody(method: string, init: RequestInit): Promise<{
   asked.headers.forEach((value, name) => void (headers[name.toLowerCase()] = value))
   // The relay's session is the relay's: the machine never gets it, sealed or not.
   delete headers[RELAY_SESSION_HEADER]
-  // A Request drops this header; the machine compresses when asked, and decoded() undoes it.
-  if (typeof DecompressionStream !== 'undefined') headers['accept-encoding'] = 'gzip'
+  // A Request drops this header; the machine compresses when asked, and decoded() undoes it. Not for
+  // HEAD: no body comes, and a gzip decoder fails on none.
+  if (typeof DecompressionStream !== 'undefined' && method !== 'HEAD') headers['accept-encoding'] = 'gzip'
   const bytes = asked.body === null ? null : new Uint8Array(await asked.arrayBuffer())
   return { body: bytes, headers }
 }

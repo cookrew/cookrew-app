@@ -36,8 +36,6 @@ export type SealRefusal = 'code' | 'replaced' | 'proof'
 export interface SealVersionPin {
   v2(): boolean
   sawV2(): void
-  /** The Mac proved it replaced this code: the pin goes with it. */
-  forget(): void
 }
 
 /**
@@ -53,7 +51,7 @@ export class SealDowngradedError extends Error {
 
 /** Where a v2 Mac answers, inside a session: an old Mac has no such route and says 404. */
 export const SEAL_VERSION_PATH = '/~seal/version'
-const VERSION_ASK_MS = 15_000
+const VERSION_ASK_MS = 5_000
 
 const REFUSED: Record<SealRefusal, string> = {
   code: 'This Mac no longer knows that connect code.',
@@ -64,7 +62,11 @@ const REFUSED: Record<SealRefusal, string> = {
 
 /** The code is wrong, old or replaced, or the far end could not prove it. Nothing was sent. */
 export class SealRefusedError extends Seal2RefusedError {
-  constructor(override readonly why: SealRefusal) {
+  constructor(
+    override readonly why: SealRefusal,
+    /** On 'replaced' from a v2 Mac: its proof naming the code that replaced this one (seal2/successor.ts). */
+    readonly successor?: string
+  ) {
     super(why, REFUSED[why])
   }
 }
@@ -121,7 +123,8 @@ async function shakeHands(deps: SealClientDeps, fetchFn: typeof fetch) {
   const http = { url: deps.url, fetchFn, retryMs: deps.retryMs, upMs: deps.upMs }
   const done = await shakeHandsOverHttp(http, started, async (said) => {
     const replaced = said !== null && (await checkReplaced(code, started.hello, said.replaced).catch(() => false))
-    return new SealRefusedError(replaced ? 'replaced' : 'code')
+    const successor = replaced && typeof said?.successor === 'string' ? said.successor : undefined
+    return new SealRefusedError(replaced ? 'replaced' : 'code', successor)
   }).catch((error: unknown) => {
     throw error instanceof Seal2RefusedError && !(error instanceof SealRefusedError) ? new SealRefusedError('proof') : error
   })

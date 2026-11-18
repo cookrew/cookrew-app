@@ -1,40 +1,31 @@
 import type { SealVersionPin } from './seal-client'
 
 /**
- * "THIS CODE'S MAC SPEAKS cookrew-seal/2", remembered per machine and per code.
+ * "THIS MACHINE SPEAKS cookrew-seal/2", remembered per machine.
  *
- * Once a Mac answered v2 on a code, a v1 answer on that same code can only mean a
- * carrier stripped the offer, so it is refused (path/seal-client.ts). The pin is
- * tied to the code itself: a new code (scanned, or the Mac's replacement) starts
- * unpinned, so a Mac that was put back to an older version is reached again by
- * scanning its code once.
+ * Once a machine answered v2, a v1 answer from it can only mean a carrier took the
+ * offer off the hello, so it is refused (path/seal-client.ts), whatever code is held
+ * for it: a new code (a rotation, a scan) does not reopen the plain way. Nothing in
+ * this page ever unpins a machine. Going back to a Mac from before v2 means going
+ * back to a console from before v2 as well, which never reads this.
  */
 
-const TAG = 12
 const pinKey = (codeKey: string): string => `${codeKey}:seal2`
 
-export function sealPinFor(codeKey: string, code: string, storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> = window.localStorage): SealVersionPin {
-  const tag = code.slice(0, TAG)
+export function sealPinFor(codeKey: string, storage: Pick<Storage, 'getItem' | 'setItem'> = window.localStorage): SealVersionPin {
   return {
     v2: () => {
       try {
-        return storage.getItem(pinKey(codeKey)) === tag
+        return storage.getItem(pinKey(codeKey)) !== null
       } catch {
         return false
       }
     },
     sawV2: () => {
       try {
-        storage.setItem(pinKey(codeKey), tag)
+        storage.setItem(pinKey(codeKey), '2')
       } catch {
         // Storage refused (private mode, quota): the pin is a hardening, the session still opened sealed.
-      }
-    },
-    forget: () => {
-      try {
-        if (storage.getItem(pinKey(codeKey)) === tag) storage.removeItem(pinKey(codeKey))
-      } catch {
-        // Nothing held, nothing to forget.
       }
     }
   }

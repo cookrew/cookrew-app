@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { loopbackDialer } from '../src/main/canvas-bridge'
-import { createSealMarks } from '../src/main/seal-marks'
+import { createSealMarks, MARK_MS } from '../src/main/seal-marks'
 import { cameOverRelayLine, RELAY_LINE_MARKER, relayLineHeaders } from '../src/main/seal-proof'
 
 const dirs: string[] = []
@@ -60,6 +60,19 @@ describe('seal marks', () => {
     marks.mark('../../etc/passwd')
     expect(marks.marked()).toEqual([])
     expect(existsSync(file)).toBe(false)
+  })
+
+  it('a mark lapses a month after the device\'s last v2 session, and each session renews it', () => {
+    let at = 1_000
+    const marks = createSealMarks(fileIn(), () => at)
+    marks.mark(PHONE)
+    at += MARK_MS - 1
+    expect(marks.refuses(PHONE)).toBe(true)
+    marks.mark(PHONE)
+    at += 2
+    expect(marks.refuses(PHONE)).toBe(true)
+    at += MARK_MS
+    expect(marks.refuses(PHONE)).toBe(false)
   })
 })
 

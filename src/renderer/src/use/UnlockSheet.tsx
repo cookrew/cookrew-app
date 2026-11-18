@@ -14,6 +14,7 @@ import { authHeaders, authStore, connectCodeFromInput } from '../auth-gate'
 import { seated } from '../device-seat'
 import { openSeal, SealRefusedError, type SealClient } from '../path/seal-client'
 import { sealPinFor } from '../path/seal-pin'
+import { vouchedNextCode } from '../path/seal-next-code'
 import { closeUnlockSheet, subscribeUnlockSheet, unlockSheetOpen } from './unlock-sheet-store'
 import { openUnlockGrantSheet } from './unlock-grant-store'
 import { prepareUnlock, runUnlock, type UnlockFlowDeps } from './unlock-flow'
@@ -176,15 +177,20 @@ function useUnlockWay(attempt: number): Way {
     // or a slug. Read once: the session is with the machine it was opened to,
     // and stays there if another is entered before the sheet is gone.
     const base = clientBase()
-    openSeal({ url: (path) => `${base}${path}`, code, fetchFn: sealFetchFor(base), pin: sealPinFor(codeKeyForBase(base), code) })
+    openSeal({ url: (path) => `${base}${path}`, code, fetchFn: sealFetchFor(base), pin: sealPinFor(codeKeyForBase(base)) })
       .then((opened) => {
         client = opened
         if (!alive) return opened.close()
         setWay({ kind: 'ready', deps: flowFor(sealedUnlockApi(opened, authHeaders, seated)) })
       })
-      .catch((failure: unknown) => {
+      .catch(async (failure: unknown) => {
         if (!alive) return
-        const next = afterRefusal(failure, () => takeNextCode(window.localStorage, codeKeyForBase(base)))
+        // A machine on v2 names the code that replaced the held one; only that one is taken (seal-next-code.ts).
+        // A machine never seen on v2 keeps the old rule: the waiting code is tried once.
+        const codeKey = codeKeyForBase(base)
+        const vouched = sealPinFor(codeKey).v2() ? await vouchedNextCode(window.localStorage, codeKey, code, failure) : null
+        if (!alive) return
+        const next = afterRefusal(failure, () => (sealPinFor(codeKey).v2() ? vouched : takeNextCode(window.localStorage, codeKey)))
         if (next.kind !== 'try') return setWay(next)
         authStore().saveConnectCode(next.code)
         setRetry((n) => n + 1)

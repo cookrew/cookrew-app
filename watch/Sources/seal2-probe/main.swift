@@ -23,10 +23,18 @@ do {
   results["picture"] = big.body.count
   results["pictureIntact"] = big.body.enumerated().allSatisfy { $0.element == UInt8($0.offset % 251) }
   let many = try await withThrowingTaskGroup(of: Int.self) { group in
-    for n in 0 ..< 40 { group.addTask { try await client.request(method: "GET", path: "/api/n/\(n)").status } }
+    for n in 0 ..< 90 { group.addTask { try await client.request(method: "GET", path: "/api/n/\(n)").status } }
     return try await group.reduce(0) { $0 + ($1 == 200 ? 1 : 0) }
   }
   results["many"] = many
+  // A header name the Mac could not read is refused here, and the session lives on.
+  do {
+    _ = try await client.request(method: "GET", path: "/api/x", headers: ["bad name": "v"])
+    results["badHeader"] = "sent"
+  } catch Seal2ClientError.badRequest {
+    results["badHeader"] = "refused"
+  }
+  results["afterBad"] = try await client.request(method: "GET", path: "/api/after").status
   await client.close()
   results["ok"] = true
 } catch {

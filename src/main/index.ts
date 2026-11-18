@@ -1835,6 +1835,7 @@ const sealMarks = createSealMarks(path.join(homedir(), '.cookrew', 'seal-marks.j
 const sealTerminus = createSealTerminus({
   codeFor: (id) => connectCodes.codeFor(id),
   replacedKeyFor: (id) => connectCodes.replacedKeyFor(id),
+  currentCodeId: async () => connectCodes.currentId(),
   device: sealDevice.device,
   // A phone or console on v2 sends everything sealed from now on; its plain requests on the relay line are refused.
   // Desktops are not marked: their own machine calls still go in the clear until they move onto sealPeers.

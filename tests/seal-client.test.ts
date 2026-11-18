@@ -246,7 +246,7 @@ describe('openSeal across versions', () => {
 
   const pinned = (start: boolean) => {
     let v2 = start
-    return { v2: () => v2, sawV2: () => void (v2 = true), forget: () => void (v2 = false), held: () => v2 }
+    return { v2: () => v2, sawV2: () => void (v2 = true), held: () => v2 }
   }
 
   it('speaks v2 to a Mac that does, and remembers it', async () => {

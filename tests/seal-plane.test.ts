@@ -23,19 +23,21 @@ const BEARER = 'Bearer canary-pairing-token-5e11'
 const marksDir = mkdtempSync(path.join(tmpdir(), 'seal-plane-'))
 const marks = createSealMarks(path.join(marksDir, 'marks.json'))
 let events: ((chunk: string) => void) | null = null
-const seen: Array<{ path?: string; auth?: string; session?: string }> = []
+const seen: Array<{ path?: string; auth?: string; session?: string; plain: boolean }> = []
 
 const companion = (terminus: () => SealTerminus | undefined): Server =>
   createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://mac')
     if (isSealPath(url.pathname)) return void routeSeal(request, response, terminus())
     const device = takeRelayDevice(request)
-    if (cameOverRelayLine(request) && marks.refuses(device?.deviceId ?? null)) {
+    // Only a plain request down the relay line carries the line's proof; a sealed one comes from the terminus.
+    const plain = cameOverRelayLine(request)
+    if (plain && marks.refuses(device?.deviceId ?? null)) {
       response.writeHead(403, { 'content-type': 'application/json' })
       response.end(JSON.stringify({ error: SEALED_ONLY_ERROR }))
       return
     }
-    seen.push({ path: url.pathname, auth: request.headers.authorization, session: request.headers[RELAY_SESSION_HEADER] as string | undefined })
+    seen.push({ path: url.pathname, auth: request.headers.authorization, session: request.headers[RELAY_SESSION_HEADER] as string | undefined, plain })
     const gzip = String(request.headers['accept-encoding'] ?? '').includes('gzip')
     if (url.pathname === '/api/events' || url.pathname === '/api/gz-events') {
       const zipped = url.pathname === '/api/gz-events' && gzip
@@ -66,7 +68,7 @@ let current = { code: newConnectCode(), id: '' }
 const replaced = new Map<string, Uint8Array>()
 let world: RelayWorld
 /** What the carrier does to a handshake: pass it, take v2's offer off it, or refuse it. */
-let carrier: 'pass' | 'strip' | 'refuse' = 'pass'
+let carrier: 'pass' | 'strip' | 'refuse' | 'forge-code' = 'pass'
 let hellos = 0
 const realFetch = globalThis.fetch
 
@@ -77,6 +79,7 @@ beforeAll(async () => {
   world = await startRelayWorld(companion, (port) => ({
     codeFor: (asked) => (asked === current.id ? current.code : null),
     replacedKeyFor: (asked) => replaced.get(asked) ?? null,
+    currentCodeId: async () => current.id,
     dial: loopbackDialer(port),
     onSealed: ({ peer, outer }) => {
       if (peer.mode === 'code' && outer.device !== undefined) marks.mark(outer.device)
@@ -86,6 +89,8 @@ beforeAll(async () => {
     if (routeOf(input, init).endsWith('~seal/hello')) {
       hellos += 1
       if (carrier === 'refuse') return Promise.resolve(new Response('{}', { status: 502 }))
+      // The Mac's bare refusal, which carries no proof and so is anyone's to forge.
+      if (carrier === 'forge-code') return Promise.resolve(new Response(JSON.stringify({ error: 'no such code' }), { status: 403 }))
       if (carrier === 'strip' && typeof init?.body === 'string') {
         const { vs: _offer, ...v1 } = JSON.parse(init.body) as Record<string, unknown>
         return realFetch(input, { ...init, body: JSON.stringify(v1) })
@@ -145,7 +150,7 @@ describe('the console and a machine on v2', () => {
     await until(page.pinned, 'the pin', 4000)
     const answer = await page.get('/api/after-pin', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"a":1}' })
     expect(await answer.json()).toEqual({ path: '/api/after-pin' })
-    expect(seen.at(-1)).toEqual({ path: '/api/after-pin', auth: BEARER, session: undefined })
+    expect(seen.at(-1)).toEqual({ path: '/api/after-pin', auth: BEARER, session: undefined, plain: false })
   })
 
   it('carries the relay event stream sealed, as it happens', async () => {
@@ -230,32 +235,66 @@ describe('a pinned page when the Mac changes its code', () => {
     return next
   }
 
-  it('shows re-pair (a 401), lets go of the pin the Mac proved replaced, and does not shake hands per request', async () => {
+  const pinnedPage = async () => {
     const page = await consolePage()
     await page.get('/api/warm')
     await until(page.pinned, 'the pin', 4000)
+    return page
+  }
+
+  it('shows re-pair (a 401), stays pinned, and does not shake hands per request', async () => {
+    const page = await pinnedPage()
     await rotate()
     const before = hellos
+    const since = seen.length
     const first = await page.get('/api/after-rotation')
     expect(first.status).toBe(401)
     expect(await first.json()).toMatchObject({ error: expect.stringContaining('Scan its code again') })
-    // The Mac proved the code replaced, so the pin went with it: the page is back on the old way, where a rotation
-    // also rotated the pairing token and the Mac's own check answers 401 (this companion checks no token).
-    expect(page.pinned()).toBe(false)
-    for (let n = 0; n < 5; n += 1) await page.get(`/api/after-rotation-${n}`)
-    // One handshake for the refusal and at most one try on the dead code: not one per request.
-    expect(hellos - before).toBeLessThanOrEqual(2)
+    for (let n = 0; n < 5; n += 1) expect((await page.get(`/api/after-rotation-${n}`)).status).toBe(401)
+    expect(hellos - before).toBe(1)
+    // Pinned per machine: nothing went in the clear, before or after.
+    expect(page.pinned()).toBe(true)
+    expect(seen.slice(since).some((request) => request.plain)).toBe(false)
   })
 
-  it('a new code that waited beside the old one is taken, and the page carries on sealed', async () => {
-    const page = await consolePage()
-    await page.get('/api/warm')
-    await until(page.pinned, 'the pin', 4000)
+  it('the new code the Mac vouches for, waiting beside the old one, is taken, and the page carries on sealed', async () => {
+    const page = await pinnedPage()
     const next = await rotate()
     page.storage.setItem(`${page.codeKey}.next`, encoded(next))
     const answer = await page.get('/api/with-the-new-code')
     expect(answer.status).toBe(200)
     expect(page.storage.getItem(page.codeKey)).toBe(encoded(next))
     expect(page.pinned()).toBe(true)
+  })
+
+  it('a waiting code the Mac did not vouch for (a link anybody could make) is never taken', async () => {
+    const page = await pinnedPage()
+    const held = page.storage.getItem(page.codeKey)
+    await rotate()
+    const planted = encoded(newConnectCode())
+    page.storage.setItem(`${page.codeKey}.next`, planted)
+    expect((await page.get('/api/planted')).status).toBe(401)
+    expect(page.storage.getItem(page.codeKey)).toBe(held)
+    expect(page.storage.getItem(`${page.codeKey}.next`)).toBe(planted)
+  })
+
+  it('a forged "no such code" with a code waiting: re-pair, the held code kept, and nothing in the clear', async () => {
+    const page = await pinnedPage()
+    const held = page.storage.getItem(page.codeKey)
+    // A fresh page load on the same storage: no session open yet, so the next request shakes hands.
+    const fresh = await consolePage(false)
+    page.storage.setItem(`${page.codeKey}.next`, encoded(newConnectCode()))
+    carrier = 'forge-code'
+    const since = seen.length
+    expect((await fresh.get('/api/forged')).status).toBe(401)
+    carrier = 'pass'
+    // Past the refusal kept in memory (refusedMs), the same held code opens sealed again.
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    for (let n = 0; n < 3; n += 1) await fresh.get(`/api/after-forged-${n}`).catch(() => null)
+    expect(fresh.storage.getItem(fresh.codeKey)).toBe(held)
+    expect(fresh.pinned()).toBe(true)
+    // Whatever came after went sealed or not at all: never in the clear on the relay line.
+    expect(seen.slice(since).some((request) => request.plain)).toBe(false)
+    expect(seen.slice(since).some((request) => request.path?.startsWith('/api/after-forged') && !request.plain)).toBe(true)
   })
 })

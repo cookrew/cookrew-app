@@ -48,6 +48,6 @@ export async function openApproveApi(): Promise<ApproveApi | null> {
   const code = authStore().connectCode()
   if (code === null) return null
   const base = clientBase()
-  const client = await openSeal({ url: (path) => `${base}${path}`, code, fetchFn: sealFetchFor(base), pin: sealPinFor(codeKeyForBase(base), code) })
+  const client = await openSeal({ url: (path) => `${base}${path}`, code, fetchFn: sealFetchFor(base), pin: sealPinFor(codeKeyForBase(base)) })
   return sealedApproveApi(client, authHeaders)
 }

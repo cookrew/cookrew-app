@@ -24,6 +24,6 @@ const probe = spawnSync(path.join(root, 'watch/.build/debug/seal2-probe'), [pref
 world.stdin.end()
 const result = JSON.parse(probe.stdout.trim().split('\n').at(-1) ?? '{}')
 console.log(JSON.stringify(result, null, 2))
-const ok = result.ok === true && result.one?.startsWith('200 /api/swift-one') && result.post?.startsWith('200 /api/swift-post got 3000000') && result.picture === 3_000_000 && result.pictureIntact === true && result.many === 40
+const ok = result.ok === true && result.one?.startsWith('200 /api/swift-one') && result.post?.startsWith('200 /api/swift-post got 3000000') && result.picture === 3_000_000 && result.pictureIntact === true && result.many === 90 && result.badHeader === 'refused' && result.afterBad === 200
 console.log(ok ? 'PASS: the Swift client and the TypeScript terminus speak cookrew-seal/2 through the registry' : 'FAIL')
 process.exit(ok ? 0 : 1)

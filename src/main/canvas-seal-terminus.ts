@@ -12,6 +12,7 @@ import { HTTP_KIND } from '../shared/seal2/http'
 import { ABORT } from '../shared/seal2/spec'
 import type { Seal2Stream } from '../shared/seal2/stream'
 import { openSeal2Live } from './seal2-live'
+import { proveSuccessor } from '../shared/seal2/successor'
 import { RELAY_LINE_MARKER } from './seal-proof'
 import { RELAY_SESSION_HEADER } from '../shared/machine-relay'
 import { serveHttpStream } from './seal2-serve-http'
@@ -95,6 +96,8 @@ export interface SealTerminusDeps {
   codeFor(id: string): Uint8Array | null
   /** For a code this Mac replaced: the key that proves so (connect-code.ts). Absent = it only ever says no. */
   replacedKeyFor?(id: string): Uint8Array | null
+  /** This Mac's current code's id: a replaced code's refusal names its successor with it (seal2/successor.ts). */
+  currentCodeId?(): Promise<string>
   readonly dial: BridgeDialer
   readonly handshakesPerMinute?: number
   /** Stream kinds besides "http". */
@@ -511,7 +514,10 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
       const asked = typeof body.id === 'string' && typeof body.e === 'string' && /^[A-Za-z0-9_-]{43}$/.test(body.e)
       const was = asked ? (deps.replacedKeyFor?.(body.id as string) ?? null) : null
       if (was === null) return reply(response, 403, { error: 'no such code' })
-      return reply(response, 403, { error: 'code replaced', replaced: await proveReplaced(was, { id: body.id as string, e: body.e as string }) })
+      const replaced = await proveReplaced(was, { id: body.id as string, e: body.e as string })
+      const current = (await deps.currentCodeId?.().catch(() => null)) ?? null
+      const successor = current === null ? {} : { successor: await proveSuccessor(was, body.id as string, current) }
+      return reply(response, 403, { error: 'code replaced', replaced, ...successor })
     }
     const v2 = offersSeal2(body)
     const accepted = v2 ? await acceptCodeHandshake(code, body) : await acceptHandshake(code, body as unknown as SealHello)
