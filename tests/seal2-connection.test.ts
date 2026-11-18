@@ -374,6 +374,7 @@ describe('sealedFetch and a caller\'s abort', () => {
     late.abort()
     await expect(asked).rejects.toMatchObject({ name: 'AbortError' })
   })
+})
 
 describe('stream kinds', () => {
   it('a kind named for what every object answers to is no kind, either way on the wire', () => {

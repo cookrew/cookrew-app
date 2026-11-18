@@ -1,0 +1,79 @@
+import { createPortal } from 'react-dom'
+import { useCallback, useEffect, useState } from 'react'
+import { cookrew } from './api'
+import './grant-surface.css'
+import './team-fork.css'
+
+/**
+ * ANOTHER OF YOUR COMPUTERS, MET FOR THE FIRST TIME (main/seal-pins.ts).
+ *
+ * Two desktops of one account seal with each other on their account keys; which
+ * keys are the owner's is cookrew.dev's word until the owner has compared. Both
+ * screens show these same six words for the pair. Same: the pair is pinned. Not
+ * the same: that computer is refused from now on, whatever the account lists.
+ */
+
+export interface WaitingPeer {
+  readonly deviceId: string
+  readonly words: readonly string[]
+}
+
+export type PeerAnswer = 'same' | 'not-same' | 'later'
+
+export function SealPeerWordsView({ peer, busy, onAnswer }: { peer: WaitingPeer; busy: boolean; onAnswer: (answer: PeerAnswer) => void }): React.JSX.Element {
+  return (
+    <div className="gs-scrim cr-sheet" role="dialog" aria-modal="true" aria-label="Compare words with another computer">
+      <div className="gs-sheet gs-small cr-sheet">
+        <header className="gs-sheet-head">
+          <h2>Another of your computers</h2>
+        </header>
+        <p className="gs-consequence">
+          This computer just connected to another one on your account ({peer.deviceId.slice(0, 8)}). Does the other computer show these same six words?
+        </p>
+        <p className="gs-words" lang="en">
+          {peer.words.join(' ')}
+        </p>
+        <p className="gs-consequence">Same words: the two trust each other's keys from now on. Not the same: that computer is refused, whatever your account says.</p>
+        <div className="gs-sheet-foot">
+          <button type="button" className="gs-ghost" onClick={() => onAnswer('later')} disabled={busy}>
+            LATER
+          </button>
+          <button type="button" className="gs-ghost" onClick={() => onAnswer('not-same')} disabled={busy}>
+            NOT THE SAME
+          </button>
+          <button type="button" className="gs-primary" onClick={() => onAnswer('same')} disabled={busy}>
+            SAME WORDS
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const POLL_MS = 5000
+
+/** Asked of this Mac while the app runs: nothing shows unless a computer waits. */
+export function SealPeerWords(): React.JSX.Element | null {
+  const api = cookrew()
+  const [waiting, setWaiting] = useState<readonly WaitingPeer[]>([])
+  const [busy, setBusy] = useState(false)
+  const ask = useCallback(() => {
+    void api.sealPeersWaiting?.().then(setWaiting, () => undefined)
+  }, [api])
+  useEffect(() => {
+    if (api.sealPeersWaiting === undefined) return undefined
+    ask()
+    const timer = setInterval(ask, POLL_MS)
+    return () => clearInterval(timer)
+  }, [api, ask])
+  const peer = waiting[0]
+  if (peer === undefined || typeof document === 'undefined') return null
+  const onAnswer = (answer: PeerAnswer): void => {
+    setBusy(true)
+    void (api.sealPeerAnswer?.(peer.deviceId, answer) ?? Promise.resolve(false)).finally(() => {
+      setBusy(false)
+      ask()
+    })
+  }
+  return createPortal(<SealPeerWordsView peer={peer} busy={busy} onAnswer={onAnswer} />, document.body)
+}

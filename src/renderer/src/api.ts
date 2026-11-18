@@ -905,6 +905,12 @@ export interface CookrewApi {
   /** One code for a watch anywhere: the account's join code, armed on this Mac as the claim too. */
   watchInvite?: (current: string) => Promise<WatchInvite>;
   watchForget?: () => Promise<unknown>;
+  /** Desktops of the account met for the first time, with the six words both screens show (main/seal-pins.ts). */
+  sealPeersWaiting?: () => Promise<Array<{ deviceId: string; words: string[] }>>;
+  sealPeerAnswer?: (deviceId: string, answer: 'same' | 'not-same' | 'later') => Promise<boolean>;
+  /** Refuse every plain request over the relay (main/seal-marks.ts): the owner's switch, off by default. */
+  sealedOnly?: () => Promise<boolean>;
+  setSealedOnly?: (on: boolean) => Promise<boolean>;
   /** A phone's join code and the link its QR holds, under the account's step-up. No menu offers it until the phone app ships. Absent in the demo. */
   phoneInvite?: (current: string) => Promise<PhoneInvite>;
   /** Phones that joined with a code this Mac showed, waiting for its Keep (owner 2026-11-17). */

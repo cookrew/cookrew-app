@@ -6,6 +6,8 @@
 // A row closes the menu from the menu's own React onClick, which runs after
 // the row's: closing from a native listener instead unmounts the menu before
 // React sees a trusted click, and the row would never act.
+import { SealPeerWords } from './SealPeerWords'
+import { SealedOnlyRow } from './SealedOnlyRow'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CrIcon } from './icons'
 import { registerZoomMenuClose, setZoomMenuSlot } from './zoom-bar'
@@ -248,6 +250,7 @@ export function HeaderMore({
           )}
           {update && <UpdateRows status={update} />}
           <TelemetryRow />
+          <SealedOnlyRow />
           <LaunchSettingsRow
             onOpen={() => {
               close()
@@ -261,6 +264,7 @@ export function HeaderMore({
         </div>
       )}
     </div>
+    <SealPeerWords />
     {pairingWatch && <WatchPairSheet onClose={() => setPairingWatch(false)} />}
     {launchSheet && <LaunchSettingsSheet onClose={closeLaunchSheet} />}
     {skinSheet && <SkinSheet onClose={closeSkinSheet} />}

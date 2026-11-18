@@ -185,6 +185,7 @@ import { createSealMarks } from './seal-marks'
 import { createSealDevice } from './seal-device'
 import { createSealPeers } from './seal-peers'
 import { createSealPinStore } from './seal-pins'
+import { pairWords } from '../shared/seal2/handshake'
 import { sealedSwitchMemory } from './remote-switch-memory'
 import { singleConfirm } from './remote-switch-confirm'
 import { createConnectCodes } from './connect-code'
@@ -1829,6 +1830,7 @@ const sealPeers = createSealPeers({
     return sent.response
   },
   pins: sealPins,
+  onContact: (peer) => void sealPins.contact(peer),
   log: (line) => console.error(`[cookrew] ${line}`)
 })
 const sealMarks = createSealMarks(path.join(homedir(), '.cookrew', 'seal-marks.json'))
@@ -1841,6 +1843,8 @@ const sealTerminus = createSealTerminus({
   // Desktops are not marked: their own machine calls still go in the clear until they move onto sealPeers.
   onSealed: ({ peer, outer }) => {
     if (peer.mode === 'code' && outer.device !== undefined) sealMarks.mark(outer.device)
+    // Another desktop met for the first time: its words wait for the owner on both screens (seal-pins.ts).
+    if (peer.mode === 'device') sealPins.contact(peer.deviceId)
   },
   dial: loopbackDialer(MOBILE_PORT, undefined, sealProofHeaders()),
   // What the paced uplink still holds counts too: since relay-uplink.ts, an
@@ -9945,6 +9949,39 @@ function registerIpc(handlers: RestoreHandlers): void {
       sealed: true,
       claims: watchPairing.claims
     }))
+  )
+  // Another desktop of the account, met for the first time: the six words both screens show (seal-pins.ts).
+  ipcMain.handle(
+    'seal:peers-waiting',
+    ownerOnly(async () => {
+      const self = sealDevice.self()
+      if (self === null) return []
+      return Promise.all(sealPins.waiting().map(async (deviceId) => ({ deviceId, words: (await pairWords(self.deviceId, deviceId)).words })))
+    })
+  )
+  ipcMain.handle(
+    'seal:peer-answer',
+    ownerOnly((deviceId: unknown, answer: unknown) => {
+      if (typeof deviceId !== 'string' || !/^[0-9a-f-]{36}$/.test(deviceId)) return false
+      if (answer === 'same') sealPins.pin(deviceId)
+      else if (answer === 'later') sealPins.later(deviceId)
+      else if (answer === 'not-same') {
+        // Not this owner's desktop, whatever the listing says: refused from now on, and every open session ends.
+        sealPins.block(deviceId)
+        sealPeers.close()
+        sealTerminus.endSessions('a desktop the owner did not recognise')
+      } else return false
+      return true
+    })
+  )
+  // Owner ruling 2026-11-19: refusing every plain request over the relay is a switch the owner flips, off by default.
+  ipcMain.handle('seal:sealed-only', ownerOnly(() => sealMarks.sealedOnly()))
+  ipcMain.handle(
+    'seal:set-sealed-only',
+    ownerOnly((on: unknown) => {
+      if (typeof on === 'boolean') sealMarks.setSealedOnly(on)
+      return sealMarks.sealedOnly()
+    })
   )
   ipcMain.handle(
     'watch:invite',

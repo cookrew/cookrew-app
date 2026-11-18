@@ -34,6 +34,8 @@ export interface SealPeersDeps {
   relayed(deviceId: string, route: string, init: RequestInit): Promise<Response>
   /** With the policy at "pinned", only pairs whose words the owner compared are dialled. */
   readonly pins?: SealPinStore
+  /** A session to this desktop opened: first contact is when its words are offered to the owner. */
+  onContact?(peer: string): void
   readonly retryMs?: number
   log?(line: string): void
 }
@@ -64,6 +66,7 @@ export function createSealPeers(deps: SealPeersDeps): SealPeers {
     }
     const started = await startDeviceHandshake({ self, to: peer, verify: deps.verify })
     const done = await shakeHandsOverHttp(http, started, async (said) => new Seal2RefusedError('device', `The other machine refused: ${typeof said?.error === 'string' ? said.error : 'no reason'}.`))
+    deps.onContact?.(peer)
     return runSeal2Link(http, done.session, {
       onClose: (why) => {
         log(`seal peers: the session to ${peer} ended, ${why}`)

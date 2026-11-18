@@ -312,6 +312,7 @@ describe('the Mac keeps v1', () => {
 })
 
 describe('openStream(peer, kind) for other lanes (main/seal-peers.ts)', () => {
+  const contacts: string[] = []
   const peersFor = async () => {
     const { createSealPeers } = await import('../src/main/seal-peers')
     const { machineRelayPath } = await import('../src/shared/machine-relay')
@@ -320,6 +321,7 @@ describe('openStream(peer, kind) for other lanes (main/seal-peers.ts)', () => {
       self: () => world.otherDesktop.signer,
       verify: verifyDevice,
       relayed: (deviceId, route, init) => capture(`${world.site.origin}${machineRelayPath(deviceId, route)}`, init),
+      onContact: (peer) => contacts.push(peer),
       retryMs: 50
     })
   }
@@ -338,6 +340,9 @@ describe('openStream(peer, kind) for other lanes (main/seal-peers.ts)', () => {
     const third = await peers.fetch(world.macDevice.id, { method: 'GET', path: '/api/peers-3', headers: { authorization: MACHINE_KEY } })
     expect(text(await readBody(third.body))).toBe(REPLY)
     expect(seen.at(-1)).toMatchObject({ path: '/api/peers-3', device: world.otherDesktop.id })
+    // Both ends meet the other: the dialler on each session it opened, the Mac on each it let in (index.ts → seal-pins contact).
+    expect(contacts.filter((peer) => peer === world.macDevice.id).length).toBeGreaterThanOrEqual(2)
+    expect(sealed.some((notice) => notice.peer.mode === 'device' && notice.peer.deviceId === world.otherDesktop.id)).toBe(true)
     peers.close()
   })
 

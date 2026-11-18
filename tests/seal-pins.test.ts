@@ -47,4 +47,27 @@ describe('seal pins', () => {
     writeFileSync(file, JSON.stringify({ policy: 'pinned', pins: { 'not-an-id': { at: 1 }, [A]: { at: 1 } } }))
     expect(pins.pinned()).toEqual([A])
   })
+
+  it('first contact waits for the owner\'s words; same pins, not the same blocks both ways, later waits for the next launch', () => {
+    const file = fileIn()
+    const pins = createSealPinStore(file)
+    expect(pins.contact(A)).toBe(true)
+    expect(pins.contact(A)).toBe(false)
+    expect(pins.waiting()).toEqual([A])
+    pins.later(A)
+    expect(pins.waiting()).toEqual([])
+    expect(createSealPinStore(file).waiting()).toEqual([A])
+    pins.pin(A)
+    expect(createSealPinStore(file).waiting()).toEqual([])
+    expect(pins.contact(A)).toBe(false)
+    pins.contact(B)
+    pins.block(B)
+    expect(pins.allows(B)).toBe(false)
+    expect(pins.waiting()).toEqual([])
+    // The account policy still lets in a desktop never compared; a blocked one never.
+    expect(pins.allows('0f0e0d0c-0b0a-4908-8706-050403020100')).toBe(true)
+    pins.pin(B)
+    expect(pins.allows(B)).toBe(true)
+  })
 })
+
