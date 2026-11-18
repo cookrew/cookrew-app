@@ -5,9 +5,9 @@ import { MAGPIE_KEY_PATH, MAGPIE_KEY_RETURN_PATH, magpieHeaders, modelRoute, typ
 import { readRequest } from '../../shared/seal2/http'
 import { ABORT } from '../../shared/seal2/spec'
 import type { Seal2Stream } from '../../shared/seal2/stream'
-import type { KeyRow } from '../route/share-keys'
+import { DEVICE_CONCURRENCY, type KeyRow } from '../route/share-keys'
 import { ISSUE_WINDOW_MS, keyHash, type BoundKey, type BoundKeys } from './bound-keys'
-import { readWholeBody, sendToMagpie } from './proxy'
+import { bodyBudget, readWholeBody, sendToMagpie } from './proxy'
 import { remoteSwitchedOn } from './switches'
 
 /**
@@ -76,21 +76,6 @@ function answerJson(stream: Seal2Stream, status: number, body: unknown): void {
 
 const refuse = (stream: Seal2Stream, status: number, message: string): void => answerJson(stream, status, { error: { type: 'cookrew_sealed', message } })
 
-async function readSmall(stream: Seal2Stream): Promise<string | null> {
-  const reader = stream.readable.getReader()
-  const parts: Uint8Array[] = []
-  let size = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    size += value.length
-    if (size > CONTROL_BODY_MAX) return null
-    parts.push(value)
-  }
-  const all = new Uint8Array(size)
-  parts.reduce((at, part) => (all.set(part, at), at + part.length), 0)
-  return new TextDecoder().decode(all)
-}
 
 /** The key the request carries: every credential header it has must say the same key. */
 export function presentedKey(headers: Readonly<Record<string, string>>): string | null {
@@ -125,6 +110,12 @@ export function sealedDeviceName(name: string, peer: string): string {
 export const KEYS_PER_DAY = 3
 /** How long a sealed model request's body may take to arrive. */
 export const MAGPIE_BODY_MS = 120_000
+/** Model requests one computer may have in flight here, as many as its key may run at once in Magpie. */
+export const PER_COMPUTER_REQUESTS = DEVICE_CONCURRENCY
+/** Bytes of request bodies held in main at once, for every computer together. */
+export const BODY_BUDGET_BYTES = 128 * 1024 * 1024
+/** How long a key request's tiny body may take: the per-computer lane must not wait on it. */
+const CONTROL_BODY_MS = 10_000
 
 export type MagpieServe = SealStreamHandler & {
   /**
@@ -138,20 +129,38 @@ export type MagpieServe = SealStreamHandler & {
 export function createMagpieServe(deps: MagpieServeDeps): MagpieServe {
   const now = deps.now ?? Date.now
   /**
-   * Magpie's key list, read for a request only by a read that STARTED after that request's
-   * body was in hand; requests at the same moment share one read.
+   * Magpie's key list, read for a request only by a read that STARTS after the request asks
+   * (its body in hand). One read runs at a time; whoever asks while it runs shares ONE read
+   * that starts when it ends. Ordered by when reads start, never by the clock.
    */
-  let latest: { at: number; rows: Promise<KeyRow[]> } | null = null
-  const rowsSince = (since: number): Promise<KeyRow[]> => {
-    if (latest !== null && latest.at >= since) return latest.rows
-    const fresh = deps.listKeys()
-    const entry = { at: now(), rows: fresh }
-    latest = entry
-    fresh.catch(() => {
-      if (latest === entry) latest = null
-    })
-    return fresh
+  let running: Promise<KeyRow[]> | null = null
+  let next: Promise<KeyRow[]> | null = null
+  const begin = (): Promise<KeyRow[]> => {
+    const read = Promise.resolve().then(() => deps.listKeys())
+    running = read
+    const done = (): void => {
+      if (running === read) running = null
+    }
+    read.then(done, done)
+    return read
   }
+  const rowsAfterNow = (): Promise<KeyRow[]> => {
+    if (running === null) return begin()
+    if (next !== null) return next
+    const after = running.then(
+      () => undefined,
+      () => undefined
+    )
+    const follow = after.then(() => {
+      next = null
+      return begin()
+    })
+    next = follow
+    return follow
+  }
+  /** Requests in flight per computer, counted before a body is read. */
+  const perComputer = new Map<string, number>()
+  const budget = bodyBudget(BODY_BUDGET_BYTES)
   const switchedOn = (): boolean => remoteSwitchedOn(() => deps.switches())
 
   /** The streams in flight by the bound key id they were let in with. */
@@ -174,7 +183,6 @@ export function createMagpieServe(deps: MagpieServeDeps): MagpieServe {
     }
     for (const stream of inFlight.get(id) ?? []) stream.abort(ABORT.refused, 'key revoked')
     inFlight.delete(id)
-    latest = null
   }
 
   const bindingOf = (peer: string, key: string): BoundKey | null => {
@@ -185,18 +193,17 @@ export function createMagpieServe(deps: MagpieServeDeps): MagpieServe {
     }
   }
 
-  /** Bound to this device, still bound after the read, and Magpie lists it enabled with its tail, by a read begun after `since`. */
-  const validSince = async (peer: string, key: string, since: number): Promise<BoundKey | null> => {
+  /** Bound to this device, still bound after the read, and Magpie lists it enabled with its tail, by a read begun after this call. */
+  const validNow = async (peer: string, key: string): Promise<BoundKey | null> => {
     const bound = bindingOf(peer, key)
     if (bound === null) return null
-    const listed = (await rowsSince(since)).find((row) => row.id === bound.id)
+    const listed = (await rowsAfterNow()).find((row) => row.id === bound.id)
     if (bindingOf(peer, key)?.id !== bound.id) return null
     // Only a key Magpie holds as enabled: anything else could be met at loopback as no key at all.
     return listed !== undefined && listed.state === 'enabled' && listed.tail !== null && key.endsWith(listed.tail) ? bound : null
   }
 
-  const giveKey = async (stream: Seal2Stream, peer: string): Promise<void> => {
-    const text = await readSmall(stream)
+  const giveKey = async (stream: Seal2Stream, peer: string, text: string): Promise<void> => {
     let name = ''
     try {
       const body = JSON.parse(text ?? '') as { name?: unknown }
@@ -216,7 +223,7 @@ export function createMagpieServe(deps: MagpieServeDeps): MagpieServe {
     if (recent >= KEYS_PER_DAY) return answerJson(stream, 429, { ok: false, why: `${deps.name()} has given this computer ${KEYS_PER_DAY} keys in the last day. Try again tomorrow.` } satisfies MagpieKeyAnswer)
     let listed: readonly KeyRow[]
     try {
-      listed = await rowsSince(now())
+      listed = await rowsAfterNow()
     } catch {
       return answerJson(stream, 503, { ok: false, why: `${deps.name()} could not read its Magpie's keys.` } satisfies MagpieKeyAnswer)
     }
@@ -238,18 +245,16 @@ export function createMagpieServe(deps: MagpieServeDeps): MagpieServe {
       await deps.revoke(made.id)
       return answerJson(stream, 500, { ok: false, why: `${deps.name()} could not record the key it made, so it took it back.` } satisfies MagpieKeyAnswer)
     }
-    latest = null
     deps.log(`magpie remote: made a key for ${peer.slice(0, 8)}… (${made.id})`)
     answerJson(stream, 200, { ok: true, key: made.key, id: made.id } satisfies MagpieKeyAnswer)
   }
 
   const returnKey = async (stream: Seal2Stream, peer: string): Promise<void> => {
-    await readSmall(stream)
     let mine: readonly BoundKey[]
     let listed: readonly KeyRow[]
     try {
       mine = deps.keys.list().filter((k) => k.peer === peer)
-      listed = await rowsSince(now())
+      listed = await rowsAfterNow()
     } catch {
       return answerJson(stream, 500, { ok: false, why: 'The list of keys is not readable.' })
     }
@@ -280,16 +285,36 @@ export function createMagpieServe(deps: MagpieServeDeps): MagpieServe {
     if (key === null) return refuse(stream, 401, `This computer has no key for ${deps.name()}’s Magpie. Connect it again.`)
     // A first look before the body is taken in: a stranger's key is refused at once.
     if (bindingOf(peer, key) === null) return refuse(stream, 401, `${deps.name()} no longer accepts this computer’s key. Connect it again.`)
-    const whole = await readWholeBody(stream, MAGPIE_BODY_MAX, MAGPIE_BODY_MS)
-    if (!whole.ok) return stream.abort(whole.code, whole.reason)
-    // The body is in hand: the key is checked now, against a list read from now on, and Magpie gets both at once.
-    const bound = await validSince(peer, key, now()).catch(() => null)
-    if (bound === null) return refuse(stream, 401, `${deps.name()} no longer accepts this computer’s key. Connect it again.`)
-    if (!switchedOn()) return refuse(stream, 403, `Magpie remote is switched off on ${deps.name()}.`)
-    const port = deps.gatewayPort()
-    if (port === null) return refuse(stream, 503, `Magpie is not running on ${deps.name()}.`)
-    track(bound.id, stream)
-    sendToMagpie(stream, { method: request.method, path: request.path, headers: magpieHeaders(request.headers, key) }, whole.body, { dial: deps.dial(port), log: deps.log })
+    // As many at once as its key may run in Magpie, counted BEFORE any body is held in main.
+    const count = perComputer.get(peer) ?? 0
+    if (count >= PER_COMPUTER_REQUESTS) return refuse(stream, 429, `${deps.name()} is already answering ${count} requests from this computer.`)
+    perComputer.set(peer, count + 1)
+    const done = (): void => {
+      const left = (perComputer.get(peer) ?? 1) - 1
+      if (left <= 0) perComputer.delete(peer)
+      else perComputer.set(peer, left)
+    }
+    let whole: Awaited<ReturnType<typeof readWholeBody>> | null = null
+    try {
+      whole = await readWholeBody(stream, MAGPIE_BODY_MAX, MAGPIE_BODY_MS, budget)
+      if (!whole.ok) return stream.abort(whole.code, whole.reason)
+      // The body is in hand: the key is checked now, against a list read from now on, and Magpie gets both at once.
+      const bound = await validNow(peer, key).catch(() => null)
+      if (bound === null) return refuse(stream, 401, `${deps.name()} no longer accepts this computer’s key. Connect it again.`)
+      if (!switchedOn()) return refuse(stream, 403, `Magpie remote is switched off on ${deps.name()}.`)
+      const port = deps.gatewayPort()
+      if (port === null) return refuse(stream, 503, `Magpie is not running on ${deps.name()}.`)
+      // Once more, in the same turn as the dial: an unbind since the read is honoured.
+      if (bindingOf(peer, key)?.id !== bound.id) return refuse(stream, 401, `${deps.name()} no longer accepts this computer’s key. Connect it again.`)
+      track(bound.id, stream)
+      sendToMagpie(stream, { method: request.method, path: request.path, headers: magpieHeaders(request.headers, key) }, whole.parts, { dial: deps.dial(port), log: deps.log })
+      // Handed to Node's request: main's own hold on the bytes ends here.
+      whole.release()
+      await stream.closed.catch(() => undefined)
+    } finally {
+      whole?.release()
+      done()
+    }
   }
 
   const handle = async (stream: Seal2Stream, peer: SealPeer): Promise<void> => {
@@ -297,8 +322,15 @@ export function createMagpieServe(deps: MagpieServeDeps): MagpieServe {
     const request = readRequest(stream.fields)
     if (request === null) return stream.abort(ABORT.refused, 'bad-request')
     if (!switchedOn()) return refuse(stream, 403, `Magpie remote is switched off on ${deps.name()}.`)
-    if (request.method === 'POST' && request.path === MAGPIE_KEY_PATH) return oneAtATime(peer.deviceId, () => giveKey(stream, peer.deviceId))
-    if (request.method === 'POST' && request.path === MAGPIE_KEY_RETURN_PATH) return oneAtATime(peer.deviceId, () => returnKey(stream, peer.deviceId))
+    const control = request.method === 'POST' && (request.path === MAGPIE_KEY_PATH || request.path === MAGPIE_KEY_RETURN_PATH)
+    if (control) {
+      // Read before the per-computer lane, with a time limit: a held body must not hold up that computer's other asks.
+      const small = await readWholeBody(stream, CONTROL_BODY_MAX, CONTROL_BODY_MS)
+      if (!small.ok) return stream.abort(small.code, small.reason)
+      const text = Buffer.concat(small.parts.map((p) => Buffer.from(p))).toString('utf8')
+      if (request.path === MAGPIE_KEY_PATH) return oneAtATime(peer.deviceId, () => giveKey(stream, peer.deviceId, text))
+      return oneAtATime(peer.deviceId, () => returnKey(stream, peer.deviceId))
+    }
     if (!modelRoute(request.method, request.path)) return refuse(stream, 404, 'Only model requests are served here.')
     return model(stream, peer.deviceId, request)
   }

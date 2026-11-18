@@ -74,10 +74,13 @@ describe('openMagpieCardSession', () => {
 
 describe('the cookie stays on its own port', () => {
   it('sends a magpie_web cookie only to the port it names', () => {
-    expect(cookieAllowedFor('http://127.0.0.1:3433/x', 3433)).toBe(true)
-    expect(cookieAllowedFor('http://127.0.0.1:8080/', 3433)).toBe(false)
-    expect(cookieAllowedFor('http://localhost:3433/', 3433)).toBe(false)
-    expect(cookieAllowedFor('not a url', 3433)).toBe(false)
+    expect(cookieAllowedFor('http://127.0.0.1:3433/x', 3433, 'same-origin')).toBe(true)
+    expect(cookieAllowedFor('http://127.0.0.1:8080/', 3433, 'same-origin')).toBe(false)
+    expect(cookieAllowedFor('http://localhost:3433/', 3433, 'same-origin')).toBe(false)
+    expect(cookieAllowedFor('not a url', 3433, 'same-origin')).toBe(false)
+    // No Sec-Fetch-Site: only the card's own page load carries it.
+    expect(cookieAllowedFor('http://127.0.0.1:3433/', 3433, undefined, true)).toBe(true)
+    expect(cookieAllowedFor('http://127.0.0.1:3433/api', 3433)).toBe(false)
   })
 
   it('holds it back from a request another origin started (another loopback port is the same site)', () => {

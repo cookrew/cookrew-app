@@ -38,8 +38,16 @@ export interface MagpieRemoteDeps {
   selfId(): string | null
   readonly sealer: SecretSealer | null
   magpieBin(): string | null
-  /** The Seatbelt lane's served-seat gate: asked before the forwarder opens and before every connect. */
-  seatGate?(): Promise<boolean>
+  /**
+   * The served-seat gate (lane Seatbelt's servedSeatGate once it lands): every served seat runs
+   * today's profile. Asked before the forwarder opens, before every connect, and (cached briefly)
+   * on every forwarded request. False or a throw refuses. Required: there is no default.
+   */
+  seatGate(): Promise<boolean>
+  /** Is this loopback connection's far end this user's magpie (caller.ts)? */
+  callerIsMagpie(clientPort: number): Promise<boolean>
+  /** The forwarder's port; tests pass 0. */
+  readonly forwardPort?: number
   env(): DiscoveryEnv
   log(line: string): void
 }
@@ -57,6 +65,9 @@ export interface MagpieRemote {
   connect(peer: unknown, name: unknown): Promise<ConnectAnswer>
   disconnect(peer: unknown): Promise<{ ok: true } | { ok: false; why: string }>
 }
+
+/** How long the gate's answer is kept for forwarded requests. */
+const GATE_MS = 5_000
 
 const myName = (): string => os.hostname().replace(/\.local$/i, '') || 'this computer'
 
@@ -92,29 +103,45 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
     log: (line) => deps.log(line)
   })
 
+  /** The gate's answer for forwarded requests, kept a few seconds: a check per request could be slow. */
+  let gateSeen: { at: number; ok: Promise<boolean> } | null = null
+  const gateNow = (): Promise<boolean> => {
+    if (gateSeen === null || Date.now() - gateSeen.at > GATE_MS || Date.now() < gateSeen.at) gateSeen = { at: Date.now(), ok: deps.seatGate().catch(() => false) }
+    return gateSeen.ok
+  }
   const forwarder = createMagpieForwarder({
     switches: () => deps.switches(),
     keyFor: (peer) => remotes.keyFor(peer),
     openStream: (peer, kind, fields) => deps.openStream(peer, kind, fields),
+    callerAllowed: (request) => deps.callerIsMagpie(request.socket.remotePort ?? 0),
+    open: gateNow,
     log: (line) => deps.log(line)
   })
+  const forwardPort = deps.forwardPort ?? MAGPIE_FORWARD_PORTS[0]
+  /** Open the forwarder if it is not, once the gate passes. True when it runs. */
+  const ensureForwarder = async (): Promise<boolean> => {
+    if (forwarder.port() !== null) return true
+    // A served seat on an old profile could dial or take the port: it stays shut until the gate passes.
+    if (!(await deps.seatGate().catch(() => false))) {
+      deps.log('magpie remote: the forwarder stays shut: a served session runs under an older sandbox')
+      return false
+    }
+    try {
+      await forwarder.listen(forwardPort)
+      return true
+    } catch (error) {
+      deps.log(`magpie remote: the forwarder could not take 127.0.0.1:${forwardPort}: ${error instanceof Error ? error.message : 'unknown'}`)
+      return false
+    }
+  }
 
   return {
     serve,
     unbind: (id) => serve.unbind(id),
     boundKeys,
+    // One port, always the same: Magpie's providers name it, so taking another would send them elsewhere.
     start: async () => {
-      // A served seat on an old profile could dial the forwarder: it stays shut until the gate passes.
-      if (deps.seatGate !== undefined && !(await deps.seatGate().catch(() => false))) {
-        deps.log('magpie remote: the forwarder stays shut: a served session runs under an older sandbox')
-        return
-      }
-      // One port, always the same: Magpie's providers name it, so taking another would send them elsewhere.
-      try {
-        await forwarder.listen(MAGPIE_FORWARD_PORTS[0])
-      } catch (error) {
-        deps.log(`magpie remote: the forwarder could not take 127.0.0.1:${MAGPIE_FORWARD_PORTS[0]}: ${error instanceof Error ? error.message : 'unknown'}`)
-      }
+      await ensureForwarder()
     },
     stop: () => forwarder.close(),
     port: () => forwarder.port(),
@@ -144,7 +171,10 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
     },
     // One lane for every computer: two computers of one name must not both take one provider id.
     connect: (peer, name) =>
-      lane('connect', () => connectRemote(peer, name, {
+      lane('connect', async () => {
+        // A gate that failed at start may pass now: the forwarder is opened here then, not reported as taken.
+        await ensureForwarder()
+        return connectRemote(peer, name, {
         switches: () => deps.switches(),
         store: remotes,
         askKey,
@@ -154,9 +184,10 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
         removeProvider: (id) => providers.remove(id),
         providers: () => providers.entries(),
         forwarderPort: () => forwarder.port(),
-        ...(deps.seatGate ? { seatGate: deps.seatGate } : {}),
+        seatGate: () => deps.seatGate(),
         myName
-      })),
+      })
+      }),
     disconnect: (peer) => lane('connect', () => disconnectRemote(peer, { store: remotes, returnKey, removeProvider: (id) => providers.remove(id) }))
   }
 }

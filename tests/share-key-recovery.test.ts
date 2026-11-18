@@ -241,3 +241,20 @@ describe('review round 2: a key made for another computer is not this panel\'s w
     expect((await sealed).ok).toBe(true)
   })
 })
+
+describe('review round 3: every revoke unbinds first', () => {
+  it('tells the sealed path before Magpie removes a key, by revoke and by revoke-and-check', async () => {
+    const magpie = fakeMagpie()
+    const left = `device-laptop--${'b'.repeat(32)}`
+    magpie.rows.push({ id: 'c'.repeat(24), name: left, tail: 'aaaaaa' }, { id: 'e'.repeat(24), name: 'device-solis', tail: 'bbbbbb' })
+    const order: string[] = []
+    const run: MagpieRun = async (args) => {
+      if (args[1] === 'remove') order.push(`remove ${args[2]}`)
+      return magpie.run(args)
+    }
+    const keys = new ShareKeys({ run, intents: memoryIntentStore([{ name: left, device: 'laptop', at: 'x' }]), nonce: () => NONCE, processes: async () => [], beforeRevoke: (id) => order.push(`unbind ${id}`) })
+    await keys.revoke('e'.repeat(24))
+    await keys.resolve(left)
+    expect(order).toEqual([`unbind ${'e'.repeat(24)}`, `remove ${'e'.repeat(24)}`, `unbind ${'c'.repeat(24)}`, `remove ${'c'.repeat(24)}`])
+  })
+})

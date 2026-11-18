@@ -102,6 +102,11 @@ export interface ShareKeysDeps {
   nonce?: () => string
   /** Every running process's command line, for the process check; injected for tests. */
   processes?: () => Promise<string[]>
+  /**
+   * Told just BEFORE a key is removed from Magpie, every way this module removes one: the sealed path
+   * stops honouring it and cuts its streams first (magpie-remote/serve.ts · unbind).
+   */
+  beforeRevoke?: (id: string) => void
   now?: () => Date
 }
 
@@ -227,6 +232,7 @@ export class ShareKeys {
 
   private async revokePass(name: string): Promise<{ left: number }> {
     for (const row of (await this.rows()).filter((r) => r.name === name)) {
+      this.deps.beforeRevoke?.(row.id)
       await this.deps.run(['gateway-key', 'remove', row.id]).catch(() => null)
     }
     const left = (await this.rows()).filter((r) => r.name === name).length
@@ -302,6 +308,7 @@ export class ShareKeys {
     if (typeof id !== 'string' || !ID_RE.test(id)) return { ok: false, why: 'No such key.' }
     const mine = (await this.keys()).some((row) => row.id === id)
     if (!mine) return { ok: false, why: 'Only a key made here for a device can be revoked here.' }
+    this.deps.beforeRevoke?.(id)
     const removed = await this.deps.run(['gateway-key', 'remove', id])
     if (removed.code !== 0) return { ok: false, why: firstLine(removed.stderr) ?? 'Magpie did not remove the key.' }
     if (this.handed?.id === id) this.handed = null

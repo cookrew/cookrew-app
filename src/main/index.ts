@@ -330,6 +330,7 @@ import type { LiveValues } from '../shared/launch-settings'
 import { magpieBinary, magpieRunner, ShareKeys } from './route/share-keys'
 import { fileIntentStore, INTENT_FILE } from './route/share-intents'
 import { createMagpieRemote } from './magpie-remote/setup'
+import { callerIsMagpie } from './magpie-remote/caller'
 import { MAGPIE_REMOTE_KIND } from '../shared/remote-magpie'
 import { AccessStore, probeEndpoint } from './agent-access'
 import { macKeychain } from './pane-keychain'
@@ -1897,7 +1898,8 @@ let shareKeysHeld: ShareKeys | null = null
 const shareKeysNow = (): ShareKeys | null => {
   if (shareKeysHeld !== null) return shareKeysHeld
   const bin = magpieBinary(defaultDiscoveryEnv())
-  if (bin !== null) shareKeysHeld = new ShareKeys({ run: magpieRunner(bin), intents: fileIntentStore(path.join(homedir(), '.cookrew', INTENT_FILE)) })
+  // Every revoke, from any path, unbinds the key from the sealed path first (a key Magpie forgets has no limit on loopback).
+  if (bin !== null) shareKeysHeld = new ShareKeys({ run: magpieRunner(bin), intents: fileIntentStore(path.join(homedir(), '.cookrew', INTENT_FILE)), beforeRevoke: (id) => magpieRemote.unbind(id) })
   return shareKeysHeld
 }
 /**
@@ -1921,6 +1923,10 @@ const magpieRemote = createMagpieRemote({
   sealer: electronSealer(safeStorage),
   magpieBin: () => magpieBinary(defaultDiscoveryEnv()),
   env: () => defaultDiscoveryEnv(),
+  // INTERIM, stricter than lane Seatbelt's servedSeatGate, which replaces it when that lane lands:
+  // while any served terminal is on the canvas (one may predate this build's sandbox), it is shut.
+  seatGate: async () => !store.terminalsAcross().some((node) => Boolean(node.servedSession) || ptys.isServed(node.id) || isServedWorkspace(store.ownerOf(node.id))),
+  callerIsMagpie: (clientPort) => callerIsMagpie(clientPort, magpieBinary(defaultDiscoveryEnv())),
   log: (line) => console.error(`[cookrew] ${line}`)
 })
 const sealTerminus = createSealTerminus({
@@ -9105,9 +9111,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   // a key is minted on the owner's gateway, so only the owner's top frame may ask.
   registerShareIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
     enabled: () => launchLive?.() ?? null,
-    makeKeys: shareKeysNow,
-    // A key about to be revoked here stops being honoured over the seal first, its streams cut.
-    beforeRevoke: (id) => magpieRemote.unbind(id)
+    makeKeys: shareKeysNow
   })
   // Another computer's Magpie over the seal (magpie-remote/setup.ts): owner's window only.
   ipcMain.handle('magpie-remote:list', ownerOnly(() => magpieRemote.list()))
@@ -9852,7 +9856,7 @@ function registerIpc(handlers: RestoreHandlers): void {
           const headers = { ...details.requestHeaders }
           for (const name of Object.keys(headers)) {
             const site = Object.entries(details.requestHeaders).find(([n]) => n.toLowerCase() === 'sec-fetch-site')?.[1]
-            if (name.toLowerCase() !== 'cookie' || cookieAllowedFor(details.url, port, site)) continue
+            if (name.toLowerCase() !== 'cookie' || cookieAllowedFor(details.url, port, site, details.resourceType === 'mainFrame')) continue
             const kept = stripMagpieCookies(headers[name])
             if (kept === '') delete headers[name]
             else headers[name] = kept

@@ -12,6 +12,7 @@ import { createMagpieForwarder } from '../src/main/magpie-remote/forward'
 import { createMagpieServe, presentedKey } from '../src/main/magpie-remote/serve'
 import { magpieHeaders, modelRoute } from '../src/shared/remote-magpie'
 import type { KeyRow } from '../src/main/route/share-keys'
+import type { Seal2Stream } from '../src/shared/seal2/stream'
 import type { LiveValues } from '../src/shared/launch-settings'
 import { MAGPIE_KEY_PATH, MAGPIE_REMOTE_KIND, SEALED_PLACEHOLDER_KEY } from '../src/shared/remote-magpie'
 import { requestFields } from '../src/shared/seal2/http'
@@ -53,7 +54,7 @@ interface World {
   magpie: Awaited<ReturnType<typeof fakeMagpie>>
   forwardPort: number
   b: { switches: LiveValues | null; listed: KeyRow[]; keys: BoundKeys; peer: SealPeer; issued: string[]; revoked: string[] }
-  a: { switches: LiveValues | null; key: string | null }
+  a: { switches: LiveValues | null; key: string | null; caller: boolean; gate: boolean }
   pair: Awaited<ReturnType<typeof seal2Pair>>
   serve: ReturnType<typeof createMagpieServe>
   close(): Promise<void>
@@ -84,11 +85,13 @@ async function build(): Promise<World> {
     log: () => undefined
   })
   const pair = await seal2Pair((stream) => serve(stream, b.peer, {} as never))
-  const a: World['a'] = { switches: ON, key: KEY }
+  const a: World['a'] = { switches: ON, key: KEY, caller: true, gate: true }
   const forwarder = createMagpieForwarder({
     switches: () => a.switches,
     keyFor: (peer) => (peer === A.replace('deviceA', 'deviceB') ? a.key : null),
     openStream: async (_peer, kind, fields) => pair.a.openStream(kind, fields),
+    callerAllowed: async () => a.caller,
+    open: async () => a.gate,
     log: () => undefined
   })
   const forwardPort = await forwarder.listen(0)
@@ -442,5 +445,69 @@ describe('review round 2: a key revoked while a body is held never reaches Magpi
       return (await stream.head).status
     }
     expect([await ask(), await ask(), await ask(), await ask()]).toEqual([200, 200, 200, 429])
+  })
+})
+
+describe('review round 3: who may use the forwarder, and how much B holds', () => {
+  it('serves only this computer’s magpie, and nothing while the served-seat gate is shut', async () => {
+    world.a.caller = false
+    expect((await call('/v1/messages')).status).toBe(403)
+    world.a.caller = true
+    world.a.gate = false
+    expect((await call('/v1/messages')).status).toBe(403)
+    expect(world.magpie.seen).toEqual([])
+  })
+
+  it('answers at most eight requests from one computer at once, counted before any body is held', async () => {
+    const held = Array.from({ length: 8 }, () => {
+      const stream = world.pair.a.openStream(MAGPIE_REMOTE_KIND, requestFields('POST', '/v1/messages', { 'content-type': 'application/json', 'x-api-key': KEY }))
+      void stream.writable.getWriter().write(new TextEncoder().encode('{"a":'))
+      return stream
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    const ninth = world.pair.a.openStream(MAGPIE_REMOTE_KIND, requestFields('POST', '/v1/messages', { 'content-type': 'application/json', 'x-api-key': KEY }))
+    expect((await ninth.head).status).toBe(429)
+    for (const stream of held) stream.abort(1, 'test over')
+  })
+})
+
+describe('review round 3: a request is checked by a key list read that started after its body arrived', () => {
+  it('does not reuse a read already running when its body arrived, and shares one read after it', async () => {
+    const reads: Array<{ resolve: (rows: KeyRow[]) => void }> = []
+    const listed: KeyRow = { id: 'id-of-a-key-00000001', name: 'device-laptop--x', limit: null, tail: 'tail42', state: 'enabled' }
+    const handler = createMagpieServe({
+      switches: () => ON,
+      gatewayPort: () => world.magpie.port,
+      keys: world.b.keys,
+      listKeys: () => new Promise<KeyRow[]>((resolve) => reads.push({ resolve })),
+      issue: async () => ({ ok: false, why: 'no' }),
+      revoke: async () => ({ ok: true }),
+      dial: (port) => loopbackDialer(port),
+      name: () => 'Solis-Core',
+      log: () => undefined
+    })
+    const { a } = await seal2Pair((s) => handler(s, { mode: 'device', deviceId: A }, {} as never))
+    const send = async (): Promise<Seal2Stream> => {
+      const stream = a.openStream(MAGPIE_REMOTE_KIND, requestFields('POST', '/v1/messages', { 'content-type': 'application/json', 'x-api-key': KEY }))
+      const writer = stream.writable.getWriter()
+      await writer.write(new TextEncoder().encode('{"model":"claude/claude-opus-5-5","stream":true}'))
+      await writer.close()
+      return stream
+    }
+    const first = await send()
+    for (let i = 0; i < 50 && reads.length === 0; i += 1) await new Promise((r) => setTimeout(r, 5))
+    const second = await send()
+    const third = await send()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(reads).toHaveLength(1)
+    // The first read (begun before the later bodies) still lists the key; the one after it does not.
+    reads[0].resolve([listed])
+    for (let i = 0; i < 50 && reads.length < 2; i += 1) await new Promise((r) => setTimeout(r, 5))
+    expect(reads).toHaveLength(2)
+    reads[1].resolve([])
+    expect((await first.head).status).toBe(200)
+    expect((await second.head).status).toBe(401)
+    expect((await third.head).status).toBe(401)
+    expect(reads).toHaveLength(2)
   })
 })

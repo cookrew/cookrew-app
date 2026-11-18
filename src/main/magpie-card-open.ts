@@ -112,8 +112,9 @@ export async function openMagpieCardSession(offered: unknown, deps: MagpieCardDe
  * every 127.0.0.1 port as one site, so a page on another port could otherwise post to Magpie's
  * settings with the cookie (Sec-Fetch-Site: same-site).
  */
-export function cookieAllowedFor(url: string, port: number, fetchSite?: string): boolean {
-  if (fetchSite !== undefined && fetchSite !== 'same-origin' && fetchSite !== 'none') return false
+export function cookieAllowedFor(url: string, port: number, fetchSite?: string, navigation = false): boolean {
+  // No Sec-Fetch-Site and not the card's own page load: who started it cannot be told, so no cookie.
+  if (fetchSite === undefined ? !navigation : fetchSite !== 'same-origin' && fetchSite !== 'none') return false
   try {
     const u = new URL(url)
     return u.hostname === '127.0.0.1' && Number(u.port) === port

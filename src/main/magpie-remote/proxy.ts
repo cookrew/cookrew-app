@@ -14,9 +14,42 @@ import type { Seal2Stream } from '../../shared/seal2/stream'
  * Magpie dialled, with the body in hand.
  */
 
-export type WholeBody = { readonly ok: true; readonly body: Buffer } | { readonly ok: false; readonly code: number; readonly reason: string }
+export type WholeBody = { readonly ok: true; readonly parts: readonly Uint8Array[]; readonly size: number } | { readonly ok: false; readonly code: number; readonly reason: string }
 
-export async function readWholeBody(stream: Seal2Stream, max: number, ms: number): Promise<WholeBody> {
+/** Bytes held in main for bodies being read: shared by every computer, so none can fill main's memory. */
+export interface BodyBudget {
+  take(bytes: number): boolean
+  give(bytes: number): void
+}
+
+export function bodyBudget(max: number): BodyBudget & { held(): number } {
+  let held = 0
+  return {
+    take: (bytes) => {
+      if (held + bytes > max) return false
+      held += bytes
+      return true
+    },
+    give: (bytes) => {
+      held = Math.max(0, held - bytes)
+    },
+    held: () => held
+  }
+}
+
+/** The body as it came, in its own chunks (never copied whole); its bytes are taken from `budget` and stay taken until `release`. */
+export async function readWholeBody(stream: Seal2Stream, max: number, ms: number, budget: BodyBudget = bodyBudget(Infinity)): Promise<WholeBody & { release(): void }> {
+  let taken = 0
+  const release = (): void => {
+    budget.give(taken)
+    taken = 0
+  }
+  const answer = await readInto(stream, max, ms, budget, (n) => (taken += n))
+  if (!answer.ok) release()
+  return { ...answer, release }
+}
+
+async function readInto(stream: Seal2Stream, max: number, ms: number, budget: BodyBudget, took: (n: number) => void): Promise<WholeBody> {
   const reader = stream.readable.getReader()
   const parts: Uint8Array[] = []
   let size = 0
@@ -31,9 +64,11 @@ export async function readWholeBody(stream: Seal2Stream, max: number, ms: number
       if (next.done) break
       size += next.value.length
       if (size > max) return { ok: false, code: ABORT.tooLarge, reason: 'body-too-large' }
+      if (!budget.take(next.value.length)) return { ok: false, code: ABORT.busy, reason: 'too-much-in-flight' }
+      took(next.value.length)
       parts.push(next.value)
     }
-    return { ok: true, body: Buffer.concat(parts) }
+    return { ok: true, parts, size }
   } catch {
     return { ok: false, code: ABORT.cancel, reason: 'the request body stopped' }
   } finally {
@@ -47,7 +82,7 @@ export interface SendDeps {
 }
 
 /** Dial Magpie with the whole body and carry the answer back at the pace the far reader takes it. */
-export function sendToMagpie(stream: Seal2Stream, input: { method: string; path: string; headers: Record<string, string> }, body: Buffer, deps: SendDeps): void {
+export function sendToMagpie(stream: Seal2Stream, input: { method: string; path: string; headers: Record<string, string> }, body: readonly Uint8Array[], deps: SendDeps): void {
   let settled = false
   let call: ReturnType<BridgeDialer> | null = null
   const fail = (code: number, reason: string): void => {
@@ -92,6 +127,6 @@ export function sendToMagpie(stream: Seal2Stream, input: { method: string; path:
   } catch (error) {
     return failed(error instanceof Error ? error : new Error(String(error)))
   }
-  if (body.length > 0) call.write(body)
+  for (const part of body) call.write(Buffer.from(part.buffer, part.byteOffset, part.byteLength))
   call.end()
 }

@@ -9,6 +9,8 @@ import type { BrowserNodeData, CanvasNode } from '../../../shared/model'
  * wall and the phone) ever holds (main/magpie-card-open.ts).
  */
 export const MAGPIE_CARD_NAME = 'Magpie'
+/** As many card ids as main takes in one ask (main/magpie-card-open.ts). */
+const OFFER_MAX = 2000
 
 /** The card pointed at the page: its url, and the tab it shows, since a card with tabs shows its active tab. */
 function pointedAt(card: BrowserNodeData, url: string): Partial<BrowserNodeData> {
@@ -34,7 +36,9 @@ export async function openMagpieSettings(): Promise<string | null> {
     const state = await api.getWorkspace()
     // Every browser card is offered; main reuses one only if it signed that card in before, whatever it is called now.
     const browsers = state.nodes.filter((n): n is BrowserNodeData => n.kind === 'browser')
-    const answer = await open(browsers.map((n) => n.id))
+    // Cards named Magpie first, and no more than main takes.
+    const offered = [...browsers.filter((n) => n.name === MAGPIE_CARD_NAME), ...browsers.filter((n) => n.name !== MAGPIE_CARD_NAME)].slice(0, OFFER_MAX)
+    const answer = await open(offered.map((n) => n.id))
     if (!answer.ok) return answer.why
     if (!BARE_RE.test(answer.url)) return 'Could not open Magpie’s settings.'
     const held = browsers.find((n) => n.id === answer.cardId)

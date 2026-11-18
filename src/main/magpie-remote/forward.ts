@@ -39,6 +39,10 @@ export interface ForwardDeps {
   /** The key the desktop gave this computer, or null when this computer is not connected to it. */
   keyFor(peer: string): string | null
   openStream(peer: string, kind: string, fields: Fields): Promise<Seal2Stream>
+  /** Is the process that opened this connection allowed to use the forwarder (caller.ts)? Asked once per connection. */
+  callerAllowed(request: http.IncomingMessage): Promise<boolean>
+  /** Asked on every request: false or a throw refuses (the served-seat gate). */
+  open(): Promise<boolean>
   log(line: string): void
 }
 
@@ -79,6 +83,15 @@ export function createMagpieForwarder(deps: ForwardDeps): {
   let bound: number | null = null
 
   const switchedOn = (): boolean => remoteSwitchedOn(() => deps.switches())
+  /** One answer per connection: a keep-alive connection is one caller. */
+  const callers = new WeakMap<object, Promise<boolean>>()
+  const callerOk = (request: http.IncomingMessage): Promise<boolean> => {
+    const known = callers.get(request.socket)
+    if (known !== undefined) return known
+    const asked = deps.callerAllowed(request).catch(() => false)
+    callers.set(request.socket, asked)
+    return asked
+  }
 
   const handle = async (request: http.IncomingMessage, response: http.ServerResponse): Promise<void> => {
     const port = bound ?? request.socket.localPort ?? 0
@@ -89,6 +102,8 @@ export function createMagpieForwarder(deps: ForwardDeps): {
     const [, peer, path] = m
     if (!modelRoute(request.method ?? 'GET', path)) return refuse(response, 404, 'Only model requests go to another computer.')
     if (!switchedOn()) return refuse(response, 403, 'Magpie remote is switched off in Launch settings on this computer.')
+    if (!(await callerOk(request))) return refuse(response, 403, 'Only this computer’s Magpie may use this.')
+    if (!(await deps.open().catch(() => false))) return refuse(response, 403, 'A served session runs under an older sandbox: other computers’ Magpies are shut until it is restarted.')
     let key: string | null
     try {
       key = deps.keyFor(peer)
@@ -124,7 +139,9 @@ export function createMagpieForwarder(deps: ForwardDeps): {
       await carry(request, response, open)
       // The answer is whole; a request body the far end never read (a refusal) would hold the stream open
       // on both ends for good, each of them a slot of the session's few. Let it go.
-      await Promise.race([open.closed.catch(() => undefined), new Promise<void>((r) => setTimeout(r, SETTLE_MS))])
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([open.closed.catch(() => undefined), new Promise<void>((r) => (timer = setTimeout(r, SETTLE_MS)))])
+      clearTimeout(timer)
     } finally {
       // Whatever ended this (a throw included), the stream is not left holding a slot at either end.
       if (!closed) open.abort(ABORT.cancel, 'answered')

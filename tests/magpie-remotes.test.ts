@@ -72,6 +72,7 @@ function deps(over: Partial<ConnectDeps> = {}): ConnectDeps & { returned: string
     removeProvider: async () => {},
     providers: async () => [{ id: 'solis', preset: 'remote-magpie', urls: ['http://127.0.0.1:13425'] }],
     forwarderPort: () => 3428,
+    seatGate: async () => true,
     myName: () => 'drej-mac',
     returned,
     added,
@@ -188,7 +189,8 @@ describe('the served-seat gate (lane Seatbelt)', () => {
 describe('the forwarder waits on the served-seat gate', () => {
   it('stays shut when the gate fails, and opens when it passes', async () => {
     const { createMagpieRemote } = await import('../src/main/magpie-remote/setup')
-    const make = (gate: () => Promise<boolean>) =>
+    const asked: boolean[] = []
+    const make = (answer: boolean) =>
       createMagpieRemote({
         base: dir,
         switches: () => ({ magpie: true, magpieRemote: true }),
@@ -201,12 +203,18 @@ describe('the forwarder waits on the served-seat gate', () => {
         magpieBin: () => null,
         env: () => ({ home: dir, env: {} }),
         log: () => undefined,
-        seatGate: gate
+        seatGate: async () => {
+          asked.push(answer)
+          return answer
+        },
+        callerIsMagpie: async () => true,
+        forwardPort: 0
       })
-    const shut = make(async () => false)
+    const shut = make(false)
     await shut.start()
     expect(shut.port()).toBeNull()
-    const open = make(async () => true)
+    expect(asked).toEqual([false])
+    const open = make(true)
     await open.start()
     try {
       expect(open.port()).not.toBeNull()

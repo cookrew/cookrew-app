@@ -29,8 +29,6 @@ export interface ShareIpcDeps {
   interfaces?: () => ReturnType<typeof os.networkInterfaces>
   /** Read on each issue; unavailable or disabled must never mint a key. */
   enabled?: () => LiveValues | null
-  /** A key is about to be revoked here: the sealed path stops honouring it first and cuts its streams (magpie-remote/serve.ts · unbind). */
-  beforeRevoke?: (id: string) => void
 }
 
 const NO_MAGPIE = 'Magpie is not installed on this computer.'
@@ -78,11 +76,8 @@ export function shareHandlers(deps: ShareIpcDeps = {}): {
       return guarded((k) => k.issue({ device: form.device, dailyUsd: form.dailyUsd }, permitted))
     },
     revoke: (id) =>
-      guarded(async (k) => {
-        // Unbound before Magpie forgets it: a key Magpie no longer knows has no limit on loopback.
-        if (typeof id === 'string') deps.beforeRevoke?.(id)
-        return k.revoke(id)
-      }),
+      // ShareKeys unbinds a key from the sealed path before Magpie forgets it (ShareKeysDeps.beforeRevoke).
+      guarded((k) => k.revoke(id)),
     resolve: (name) => guarded((k) => k.resolve(name)),
     clear: (name) => guarded((k) => k.clear(name)),
     done: (id) => {
