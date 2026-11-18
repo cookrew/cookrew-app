@@ -1,10 +1,11 @@
 import http from 'node:http'
 import type { LiveValues } from '../../shared/launch-settings'
-import { MAGPIE_REMOTE_KIND } from '../../shared/remote-magpie'
+import { MAGPIE_REMOTE_KIND, modelRoute } from '../../shared/remote-magpie'
 import type { Fields } from '../../shared/seal2/frames'
 import { plainHeaders, requestFields } from '../../shared/seal2/http'
 import { ABORT } from '../../shared/seal2/spec'
 import type { Seal2Stream } from '../../shared/seal2/stream'
+import { remoteSwitchedOn } from './switches'
 
 /**
  * THIS COMPUTER'S WAY TO ANOTHER ONE'S MAGPIE: A FORWARDER ONTO THE SEAL.
@@ -42,6 +43,8 @@ export interface ForwardDeps {
 }
 
 const PEER_PATH = /^\/peer\/([A-Za-z0-9_-]{8,128})(\/.*)$/
+/** How long a whole answer waits for its stream to close by itself before it is let go. */
+const SETTLE_MS = 1_000
 const HOP = new Set(['host', 'connection', 'keep-alive', 'proxy-authorization', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'cookie', 'origin', 'referer', 'content-length', 'expect'])
 
 function refuse(response: http.ServerResponse, status: number, message: string): void {
@@ -78,14 +81,7 @@ export function createMagpieForwarder(deps: ForwardDeps): {
   let server: http.Server | null = null
   let bound: number | null = null
 
-  const switchedOn = (): boolean => {
-    try {
-      const s = deps.switches()
-      return s?.magpie === true && s.magpieRemote === true
-    } catch {
-      return false
-    }
-  }
+  const switchedOn = (): boolean => remoteSwitchedOn(() => deps.switches())
 
   const handle = async (request: http.IncomingMessage, response: http.ServerResponse): Promise<void> => {
     const port = bound ?? request.socket.localPort ?? 0
@@ -94,7 +90,7 @@ export function createMagpieForwarder(deps: ForwardDeps): {
     const m = PEER_PATH.exec(request.url ?? '')
     if (m === null) return refuse(response, 404, 'No such computer.')
     const [, peer, path] = m
-    if (!path.split('?')[0].startsWith('/v1/') && path !== '/v1') return refuse(response, 404, 'Only model requests go to another computer.')
+    if (!modelRoute(request.method ?? 'GET', path)) return refuse(response, 404, 'Only model requests go to another computer.')
     if (!switchedOn()) return refuse(response, 403, 'Magpie remote is switched off in Launch settings on this computer.')
     let key: string | null
     try {
@@ -109,17 +105,21 @@ export function createMagpieForwarder(deps: ForwardDeps): {
     } catch {
       return refuse(response, 400, 'Not a request the seal carries.')
     }
-    let stream: Seal2Stream
+    // Listened for before the handshake: a caller that leaves while the session is opening is seen.
+    let stream: Seal2Stream | null = null
+    let gone = false
+    response.once('close', () => {
+      if (response.writableFinished) return
+      gone = true
+      stream?.abort(ABORT.cancel, 'the caller went away')
+    })
     try {
       stream = await deps.openStream(peer, MAGPIE_REMOTE_KIND, fields)
     } catch (error) {
       deps.log(`magpie remote: no sealed way to ${peer.slice(0, 8)}…: ${error instanceof Error ? error.message : 'unknown'}`)
       return refuse(response, 502, 'The other computer could not be reached over the sealed relay.')
     }
-    const stop = (): void => stream.abort(ABORT.cancel, 'the caller went away')
-    response.once('close', () => {
-      if (!response.writableFinished) stop()
-    })
+    if (gone) return stream.abort(ABORT.cancel, 'the caller went away')
     void pumpBody(request, stream).catch(() => stream.abort(ABORT.cancel, 'the request body stopped'))
     let head: Awaited<Seal2Stream['head']>
     try {
@@ -135,6 +135,10 @@ export function createMagpieForwarder(deps: ForwardDeps): {
     const { 'content-length': _length, 'transfer-encoding': _te, connection: _c, ...kept } = headers
     response.writeHead(head.status, kept)
     await pumpAnswer(stream, response)
+    // The answer is whole; a request body the far end never read (a refusal) would hold the stream open
+    // on both ends for good, each of them a slot of the session's few. Let it go.
+    const settled = await Promise.race([stream.closed.then(() => true, () => true), new Promise<false>((r) => setTimeout(() => r(false), SETTLE_MS))])
+    if (!settled) stream.abort(ABORT.cancel, 'answered')
   }
 
   return {

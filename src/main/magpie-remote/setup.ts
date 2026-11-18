@@ -13,7 +13,7 @@ import type { Fields } from '../../shared/seal2/frames'
 import type { Seal2Stream } from '../../shared/seal2/stream'
 import { BOUND_KEYS_FILE, createBoundKeys, fileStorage, type BoundKeys } from './bound-keys'
 import { createMagpieForwarder } from './forward'
-import { connectRemote, createRemotesStore, disconnectRemote, REMOTES_FILE, type ConnectAnswer } from './remotes'
+import { connectRemote, createRemotesStore, disconnectRemote, perComputer, REMOTES_FILE, type ConnectAnswer } from './remotes'
 import { createMagpieServe } from './serve'
 import { askKeyOver, magpieProviders, returnKeyOver } from './wire'
 
@@ -61,6 +61,7 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
   const remotes = createRemotesStore(path.join(deps.base, REMOTES_FILE), deps.sealer)
   const providers = magpieProviders(() => deps.magpieBin(), () => deps.env())
   const askKey = askKeyOver((peer, kind, fields) => deps.openStream(peer, kind, fields))
+  const lane = perComputer()
   const returnKey = returnKeyOver((peer, kind, fields) => deps.openStream(peer, kind, fields))
 
   const serve = createMagpieServe({
@@ -75,7 +76,7 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
     issue: async (device, permitted) => {
       const keys = deps.shareKeys()
       if (keys === null) return { ok: false, why: 'Magpie is not installed on that computer.' }
-      const made = await keys.issue({ device, dailyUsd: DEFAULT_DAILY_USD }, permitted)
+      const made = await keys.issue({ device, dailyUsd: DEFAULT_DAILY_USD }, permitted, { handover: false })
       return made.ok ? { ok: true, key: made.key, id: made.shared.id } : made
     },
     revoke: async (id) => {
@@ -132,17 +133,18 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
       }
     },
     connect: (peer, name) =>
-      connectRemote(peer, name, {
+      lane(typeof peer === 'string' ? peer : '', () => connectRemote(peer, name, {
         switches: () => deps.switches(),
         store: remotes,
         askKey,
         returnKey,
         addProvider: (id, url) => providers.add(id, url),
+        setProvider: (id, url) => providers.set(id, url),
         removeProvider: (id) => providers.remove(id),
         providerIds: () => providers.ids(),
         forwarderPort: () => forwarder.port(),
         myName
-      }),
-    disconnect: (peer) => disconnectRemote(peer, { store: remotes, returnKey, removeProvider: (id) => providers.remove(id) })
+      })),
+    disconnect: (peer) => lane(typeof peer === 'string' ? peer : '', () => disconnectRemote(peer, { store: remotes, returnKey, removeProvider: (id) => providers.remove(id) }))
   }
 }

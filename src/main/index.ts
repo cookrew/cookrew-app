@@ -324,7 +324,7 @@ import { bootStep, paintFailure } from './boot-failure'
 import { registerAccessIpc } from './access-ipc'
 import { registerShareIpc } from './share-ipc'
 import { MagpieWeb, MAGPIE_WEB_FILE } from './route/magpie-web'
-import { openMagpieCardSession } from './magpie-card-open'
+import { cookieAllowedFor, fileSignedCards, MAGPIE_CARDS_FILE, openMagpieCardSession, stripMagpieCookies } from './magpie-card-open'
 import { plainRemoteProviders, remoteLoopbackPorts, remoteLoopbackProviders } from './route/remote-ports'
 import type { LiveValues } from '../shared/launch-settings'
 import { magpieBinary, magpieRunner, ShareKeys } from './route/share-keys'
@@ -1021,6 +1021,8 @@ const routeBus = new EventEmitter()
 let launchLive: (() => LiveValues) | null = null
 /** Magpie's own settings page, opened in a browser card (route/magpie-web.ts). */
 const magpieWeb = new MagpieWeb({ bin: () => magpieBinary(defaultDiscoveryEnv()), file: path.join(homedir(), '.cookrew', MAGPIE_WEB_FILE) })
+/** The cards signed in to Magpie's page: only these are reused (magpie-card-open.ts). */
+const magpieCards = fileSignedCards(path.join(homedir(), '.cookrew', MAGPIE_CARDS_FILE))
 const routeService = new RouteService({
   // Read on every route choice and dispatch; before the store exists, or if it throws, nothing routes (remote-gate.ts).
   switches: () => launchLive?.() ?? null,
@@ -9842,15 +9844,30 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('launch-settings:set-live', (event, input: unknown) => (ownerFrame(event) ? launchSettings.setLive(input) : { ok: false, reason: 'not-owner' }))
   // Magpie's settings page in a card: main signs that card's own browser session in, and the
   // renderer gets the bare address only (magpie-card-open.ts). Only the owner's window may ask.
-  ipcMain.handle('magpie-web:open', (event, browserId: unknown) => {
+  ipcMain.handle('magpie-web:open', (event, offered: unknown) => {
     if (!ownerFrame(event)) return { ok: false, why: 'not_owner' }
-    return openMagpieCardSession(browserId, {
+    return openMagpieCardSession(offered, {
       switchedOn: () => launchSettings.live().magpie,
       open: () => magpieWeb.open(),
       setPartitionCookie: async (partition, cookie) => {
         await session.fromPartition(partition).cookies.set(cookie)
       },
-      primeHeadless: (id, cookies) => browserManager.primeCookies(id, cookies)
+      // Cookies are scoped by host, not port: in this card's session the page's cookie goes to its own port only.
+      guardPartition: (partition, port) => {
+        session.fromPartition(partition).webRequest.onBeforeSendHeaders({ urls: ['http://127.0.0.1/*', 'https://127.0.0.1/*', 'ws://127.0.0.1/*', 'wss://127.0.0.1/*'] }, (details, done) => {
+          const headers = { ...details.requestHeaders }
+          for (const name of Object.keys(headers)) {
+            if (name.toLowerCase() !== 'cookie' || cookieAllowedFor(details.url, port)) continue
+            const kept = stripMagpieCookies(headers[name])
+            if (kept === '') delete headers[name]
+            else headers[name] = kept
+          }
+          done({ requestHeaders: headers })
+        })
+      },
+      primeHeadless: (id, cookies) => browserManager.primeCookies(id, cookies),
+      signed: magpieCards,
+      newId: () => randomUUID()
     })
   })
   ipcMain.handle('launch-settings:status', (event) => (ownerFrame(event) ? launchSettings.status() : null))

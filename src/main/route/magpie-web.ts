@@ -192,11 +192,15 @@ export class MagpieWeb {
     child.once('exit', () => {
       if (this.child === child) this.child = null
     })
+    // A binary that cannot be started (moved mid-update, no permission) is an answer, not a crash of main.
+    child.once('error', () => {
+      if (this.child === child) this.child = null
+    })
     this.child = child
     this.held = held
     const wait = this.deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
     for (let waited = 0; waited < READY_MS; waited += STEP_MS) {
-      if (child.exitCode !== null) return { ok: false, why: 'Magpie’s page stopped as it started. Run `magpie web` in a terminal to see why.' }
+      if (child.exitCode !== null || this.child !== child) return { ok: false, why: 'Magpie’s page stopped as it started. Run `magpie web` in a terminal to see why.' }
       if (await answers(port)) {
         if (!(await this.ours(child, port))) return this.squatted(port)
         return opened(held)

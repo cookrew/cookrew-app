@@ -231,13 +231,14 @@ export class HeadlessBrowserManager {
    */
   async primeCookies(browserId: string, cookies: readonly HeadlessCookie[]): Promise<void> {
     this.primed.set(browserId, cookies)
+    // A Chrome that cannot take them now (stopped, crashed) gets them from `primed` when it starts again.
     const live = this.instances.get(browserId)
-    if (live?.setCookies) await live.setCookies(cookies)
+    if (live?.setCookies) await live.setCookies(cookies).catch(() => undefined)
     // One still starting got its options before this: set them once it is up.
     const starting = this.starting.get(browserId)
     if (starting) {
       const instance = await starting.promise
-      if (instance?.setCookies) await instance.setCookies(cookies)
+      if (instance?.setCookies) await instance.setCookies(cookies).catch(() => undefined)
     }
   }
 

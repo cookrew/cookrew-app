@@ -508,7 +508,7 @@ export function createDemoApi(): CookrewApi {
       demoLiveListeners.add(cb)
       return () => void demoLiveListeners.delete(cb)
     },
-    magpieWebOpen: () => Promise.resolve({ ok: true as const, url: 'http://127.0.0.1:3431/', port: 3431 }),
+    magpieWebOpen: () => Promise.resolve({ ok: true as const, url: 'http://127.0.0.1:3431/', port: 3431, cardId: 'demo-magpie-card', fresh: true }),
     // Share with my devices: a demo key list in memory, and a key that is plainly not one.
     routeShareList: () => Promise.resolve({ ok: true as const, keys: demoShared, where: { onNetwork: false, urls: ['http://192.168.1.20:3425', 'http://100.101.102.103:3425'] }, pending: [], issuing: false, handover: null }),
     routeShareIssue: ({ device }) => {

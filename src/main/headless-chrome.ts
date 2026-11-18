@@ -945,13 +945,13 @@ export class HeadlessInstance {
     return { ...state, viewport: `${viewport.width}x${viewport.height}` }
   }
 
-  /** Update the node-card fallback without clobbering a viewer-owned viewport. */
   /** Set cookies in this card's browser now (a running instance); rejects when the browser is not attached. */
   async setCookies(cookies: readonly HeadlessCookie[]): Promise<void> {
     if (this.browserCdp === null) throw new Error('The browser is not running.')
     await this.browserCdp.send('Storage.setCookies', { cookies })
   }
 
+  /** Update the node-card fallback without clobbering a viewer-owned viewport. */
   async resize(width: number, height: number): Promise<void> {
     this.viewportCoordinator.setDefault({ width, height, mobile: false })
   }

@@ -187,3 +187,40 @@ describe('the intent file', () => {
     expect(() => fileIntentStore(file).read()).toThrow()
   })
 })
+
+describe('whose screen a key is shown on', () => {
+  it('holds a key for the owner’s window only when the owner made it here, never one made for another computer over the seal', async () => {
+    const magpie = fakeMagpie()
+    const keys = keysWith(magpie.run, memoryIntentStore())
+    const sealed = await keys.issue({ device: 'other-mac', dailyUsd: 5 }, () => true, { handover: false })
+    expect(sealed.ok).toBe(true)
+    expect((await keys.list()).handover).toBeNull()
+  })
+})
+
+describe('review fixes: recovery waits its turn behind a key being made', () => {
+  it('does not resolve or clear while an issue is between its intent and its add', async () => {
+    const magpie = fakeMagpie()
+    const intents = memoryIntentStore()
+    let releaseAdd: () => void = () => {}
+    const run: MagpieRun = async (args) => {
+      if (args[1] === 'add') await new Promise<void>((r) => (releaseAdd = r))
+      return magpie.run(args)
+    }
+    const keys = keysWith(run, intents)
+    const issuing = keys.issue({ device: 'laptop', dailyUsd: 5 })
+    for (let i = 0; i < 50 && intents.read().length === 0; i += 1) await new Promise((r) => setTimeout(r, 2))
+    const name = intents.read()[0].name
+    let resolved = false
+    const resolving = keys.resolve(name).then((a) => {
+      resolved = true
+      return a
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(resolved).toBe(false)
+    releaseAdd()
+    expect((await issuing).ok).toBe(true)
+    // Once the issue settled, its intent is gone: nothing is left to resolve.
+    expect(await resolving).toMatchObject({ ok: false })
+  })
+})

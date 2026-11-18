@@ -55,6 +55,8 @@ export interface KeyRow {
   limit: string | null
   /** The key's last characters as Magpie shows them, or null when it shows none. */
   tail: string | null
+  /** Magpie's STATE column: only `enabled` is a key in use. */
+  state: string
 }
 
 /** Magpie's `gateway-key list` table: columns are two or more spaces apart. */
@@ -69,9 +71,9 @@ export function parseKeyTable(text: string): KeyRow[] {
     const cells = line.trim().split(/\s{2,}/)
     // An unreadable row cannot safely be mistaken for an empty list during recovery.
     if (cells.length !== 8) throw new Error('Magpie returned an unreadable gateway key row.')
-    const [id, name, , masked, limit] = cells
+    const [id, name, state, masked, limit] = cells
     if (!ID_RE.test(id)) throw new Error('Magpie returned an invalid gateway key ID.')
-    return { id, name, limit: limit && limit !== '-' ? limit : null, tail: masked.match(MASK_TAIL_RE)?.[1] ?? null }
+    return { id, name, limit: limit && limit !== '-' ? limit : null, tail: masked.match(MASK_TAIL_RE)?.[1] ?? null, state }
   })
 }
 
@@ -149,16 +151,20 @@ export class ShareKeys {
   /** One issue at a time: two adds racing could hand out a key nobody capped. */
   private queue: Promise<unknown> = Promise.resolve()
 
-  issue(input: { device: unknown; dailyUsd: unknown }, permitted: () => boolean = () => true): Promise<ShareIssueAnswer> {
+  /**
+   * `handover: false` for a key made for another computer over the seal (magpie-remote/serve.ts):
+   * it goes to that computer, and is never held for this one's window.
+   */
+  issue(input: { device: unknown; dailyUsd: unknown }, permitted: () => boolean = () => true, options: { handover?: boolean } = {}): Promise<ShareIssueAnswer> {
     this.busy += 1
-    const next = this.queue.then(() => this.issueNow(input, permitted)).finally(() => {
+    const next = this.queue.then(() => this.issueNow(input, permitted, options.handover !== false)).finally(() => {
       this.busy -= 1
     })
     this.queue = next.catch(() => undefined)
     return next
   }
 
-  private async issueNow(input: { device: unknown; dailyUsd: unknown }, permitted: () => boolean): Promise<ShareIssueAnswer> {
+  private async issueNow(input: { device: unknown; dailyUsd: unknown }, permitted: () => boolean, handover: boolean): Promise<ShareIssueAnswer> {
     const device = deviceSlug(typeof input.device === 'string' ? input.device : '')
     if (!DEVICE_RE.test(device)) return refusal('Name the device, such as “laptop”.')
     const daily = typeof input.dailyUsd === 'number' && Number.isFinite(input.dailyUsd) ? Math.round(input.dailyUsd * 100) / 100 : NaN
@@ -194,7 +200,7 @@ export class ShareKeys {
       if (!permitted()) return await this.revokeAll(name, 'Magpie sharing was switched off.')
       const shared: SharedKey = { id: row.id, name, device, limit: `$${daily} per day` }
       this.settle(name)
-      this.handed = { id: row.id, device, key }
+      if (handover) this.handed = { id: row.id, device, key }
       return { ok: true, key, shared }
     } catch (error) {
       return await this.revokeAll(name, errorText(error))
@@ -230,8 +236,19 @@ export class ShareKeys {
     this.deps.intents.write(this.readIntents().map((i) => (i.name === name ? { ...i, ...patch } : i)))
   }
 
+  /** Work that must not interleave with a key being made (its intent, add and caps): the issue queue. */
+  private inTurn<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(work, work)
+    this.queue = next.catch(() => undefined)
+    return next
+  }
+
   /** The owner's "Revoke and check": one revoke pass, then one process check, both recorded on the intent. */
-  async resolve(name: unknown): Promise<{ ok: true; left: number; live: number } | { ok: false; why: string }> {
+  resolve(name: unknown): Promise<{ ok: true; left: number; live: number } | { ok: false; why: string }> {
+    return this.inTurn(() => this.resolveNow(name))
+  }
+
+  private async resolveNow(name: unknown): Promise<{ ok: true; left: number; live: number } | { ok: false; why: string }> {
     if (typeof name !== 'string' || !this.readIntents().some((i) => i.name === name)) return { ok: false, why: 'No such key being made.' }
     try {
       const { left } = await this.revokePass(name)
@@ -244,7 +261,11 @@ export class ShareKeys {
   }
 
   /** Clear an intent by hand: only once a revoke pass left none of its keys and a process check found no add running. */
-  async clear(name: unknown): Promise<{ ok: true } | { ok: false; why: string }> {
+  clear(name: unknown): Promise<{ ok: true } | { ok: false; why: string }> {
+    return this.inTurn(() => this.clearNow(name))
+  }
+
+  private async clearNow(name: unknown): Promise<{ ok: true } | { ok: false; why: string }> {
     let intents: readonly ShareIntent[]
     try {
       intents = this.readIntents()

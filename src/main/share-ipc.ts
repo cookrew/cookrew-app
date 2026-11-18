@@ -5,6 +5,7 @@ import type { LiveValues } from '../shared/launch-settings'
 import { defaultDiscoveryEnv, type DiscoveryEnv } from './route/discovery'
 import { magpieBinary, magpieRunner, ShareKeys, shareWhere } from './route/share-keys'
 import { fileIntentStore, INTENT_FILE } from './route/share-intents'
+import { remoteSwitchedOn } from './magpie-remote/switches'
 
 /**
  * The owner-only channels behind "Share with my devices". Registered through
@@ -59,14 +60,7 @@ export function shareHandlers(deps: ShareIpcDeps = {}): {
     return held
   }
   /** Both switches, read now; anything unreadable is off. */
-  const permitted = (): boolean => {
-    try {
-      const values = deps.enabled?.() ?? null
-      return values?.magpie === true && values.magpieRemote === true
-    } catch {
-      return false
-    }
-  }
+  const permitted = (): boolean => remoteSwitchedOn(() => deps.enabled?.() ?? null)
   const guarded = async <T>(work: (k: ShareKeys) => Promise<T>): Promise<T | { ok: false; why: string }> => {
     const k = keys()
     if (k === null) return { ok: false, why: NO_MAGPIE }

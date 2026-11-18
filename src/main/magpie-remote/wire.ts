@@ -68,32 +68,39 @@ const lastLine = (text: string): string =>
     ?.replace(/^magpie:\s*/, '')
     .slice(0, 200) ?? 'Magpie did not add the provider.'
 
-/** Provider ids in this computer's Magpie (ids only; nothing else is read out of the file). */
-export function providerIds(d: DiscoveryEnv, read: (file: string) => string = (file) => readFileSync(file, 'utf8')): string[] {
+/** Provider ids in this computer's Magpie (ids only); [] when there is no list yet, null when it cannot be read. */
+export function providerIds(d: DiscoveryEnv, read: (file: string) => string = (file) => readFileSync(file, 'utf8')): string[] | null {
+  let text: string
   try {
-    const parsed = JSON.parse(read(providersFile(d))) as { providers?: unknown }
-    return Array.isArray(parsed.providers) ? parsed.providers.flatMap((p) => (typeof (p as { id?: unknown })?.id === 'string' ? [(p as { id: string }).id] : [])) : []
+    text = read(providersFile(d))
+  } catch (error) {
+    return (error as { code?: unknown })?.code === 'ENOENT' ? [] : null
+  }
+  try {
+    const parsed = JSON.parse(text) as { providers?: unknown }
+    if (parsed.providers === undefined) return []
+    if (!Array.isArray(parsed.providers)) return null
+    return parsed.providers.flatMap((p) => (typeof (p as { id?: unknown })?.id === 'string' ? [(p as { id: string }).id] : []))
   } catch {
-    return []
+    return null
   }
 }
 
 export function magpieProviders(bin: () => string | null, env: () => DiscoveryEnv): {
   add(providerId: string, url: string): Promise<{ ok: true } | { ok: false; why: string }>
+  set(providerId: string, url: string): Promise<{ ok: true } | { ok: false; why: string }>
   remove(providerId: string): Promise<void>
-  ids(): Promise<string[]>
+  ids(): Promise<string[] | null>
 } {
+  const magpie = async (args: string[]): Promise<{ ok: true } | { ok: false; why: string }> => {
+    const b = bin()
+    if (b === null) return { ok: false, why: 'Magpie is not installed on this computer.' }
+    const done = await run(b, args)
+    return done.code === 0 ? { ok: true } : { ok: false, why: lastLine(done.stderr) }
+  }
   return {
-    add: async (providerId, url) => {
-      const b = bin()
-      if (b === null) return { ok: false, why: 'Magpie is not installed on this computer.' }
-      // The same id again (connected before): point it at the forwarder rather than add a second.
-      const args = providerIds(env()).includes(providerId)
-        ? ['provider', 'set', providerId, `url=${url}`]
-        : ['provider', 'add', 'remote-magpie', SEALED_PLACEHOLDER_KEY, `url=${url}`, `id=${providerId}`]
-      const done = await run(b, args)
-      return done.code === 0 ? { ok: true } : { ok: false, why: lastLine(done.stderr) }
-    },
+    add: (providerId, url) => magpie(['provider', 'add', 'remote-magpie', SEALED_PLACEHOLDER_KEY, `url=${url}`, `id=${providerId}`]),
+    set: (providerId, url) => magpie(['provider', 'set', providerId, `url=${url}`]),
     remove: async (providerId) => {
       const b = bin()
       if (b !== null) await run(b, ['provider', 'rm', providerId])

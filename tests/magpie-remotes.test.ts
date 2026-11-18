@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { connectRemote, createRemotesStore, disconnectRemote, providerIdFor, type ConnectDeps } from '../src/main/magpie-remote/remotes'
+import { connectRemote, createRemotesStore, disconnectRemote, perComputer, providerIdFor, type ConnectDeps } from '../src/main/magpie-remote/remotes'
 import type { SecretSealer } from '../src/main/secrets-store'
 
 const PEER = 'deviceB0000000000000000000000002'
@@ -65,6 +65,10 @@ function deps(over: Partial<ConnectDeps> = {}): ConnectDeps & { returned: string
       added.push([id, url])
       return { ok: true }
     },
+    setProvider: async (id, url) => {
+      added.push([`set:${id}`, url])
+      return { ok: true }
+    },
     removeProvider: async () => {},
     providerIds: async () => ['solis'],
     forwarderPort: () => 3428,
@@ -113,5 +117,48 @@ describe('connecting to another computer’s Magpie', () => {
     expect(d.store.keyFor(PEER)).toBeNull()
     expect(d.returned).toEqual([PEER])
     expect(removed).toEqual(['solis-core'])
+  })
+})
+
+describe('review fixes: never repoint a provider that is not ours, and one connect per computer', () => {
+  it('fails rather than guess when Magpie’s provider list cannot be read', async () => {
+    const d = deps({ providerIds: async () => null })
+    expect(await connectRemote(PEER, 'Solis Core', d)).toMatchObject({ ok: false })
+    expect(d.added).toEqual([])
+  })
+
+  it('adds under a free id when the owner has a provider of that name, and points only our own one again', async () => {
+    const d = deps({ providerIds: async () => ['solis-core'] })
+    expect(await connectRemote(PEER, 'Solis Core', d)).toEqual({ ok: true, providerId: 'solis-core-2' })
+    expect(d.added).toEqual([['solis-core-2', `http://127.0.0.1:3428/peer/${PEER}`]])
+    const again = deps({ store: d.store, providerIds: async () => ['solis-core', 'solis-core-2'] })
+    expect(await connectRemote(PEER, 'Solis Core', again)).toEqual({ ok: true, providerId: 'solis-core-2' })
+    expect(again.added).toEqual([['set:solis-core-2', `http://127.0.0.1:3428/peer/${PEER}`]])
+  })
+
+  it('never names a provider group, which Magpie reads as its own routing groups', () => {
+    expect(providerIdFor('Group', [])).toBe('group-computer')
+  })
+
+  it('runs one connect or disconnect per computer at a time', async () => {
+    const order: string[] = []
+    let release: () => void = () => {}
+    const d = deps({
+      askKey: async () => {
+        order.push('ask')
+        await new Promise<void>((r) => (release = r))
+        return { ok: true, key: KEY, id: 'id1' }
+      },
+      returnKey: async () => void order.push('return')
+    })
+    const lane = perComputer()
+    const first = lane(PEER, () => connectRemote(PEER, 'Solis', d))
+    const second = lane(PEER, () => disconnectRemote(PEER, d))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(order).toEqual(['ask'])
+    release()
+    await first
+    await second
+    expect(order).toEqual(['ask', 'return'])
   })
 })

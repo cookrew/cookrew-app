@@ -85,3 +85,26 @@ export interface MagpieRemoteList {
   readonly desktopsKnown: boolean
   readonly desktops: readonly GuideDesktop[]
 }
+
+/**
+ * WHAT ANOTHER COMPUTER MAY ASK THIS ONE'S MAGPIE, over the seal: the model endpoints and
+ * the read-only quota view, by exact path and method. Magpie serves far more under /v1/
+ * (keys, limits, library, update, join, mcp, native, profiling: 0.1.3935), and Go's router
+ * decodes `%6d` in a path, so nothing is matched by prefix and no escaped or dotted path
+ * is let through. Asked at both ends (main/magpie-remote/forward.ts and serve.ts).
+ */
+export const MAGPIE_REMOTE_ROUTES: Readonly<Record<string, readonly string[]>> = {
+  POST: ['/v1/messages', '/v1/messages/count_tokens', '/v1/chat/completions', '/v1/responses', '/v1/completions', '/v1/embeddings'],
+  GET: ['/v1/models', '/v1/magpie/quotas']
+}
+
+/** A plain query: names, values, `=`, `&` and a few safe marks; never an escape. */
+const PLAIN_QUERY = /^[A-Za-z0-9_.,:=&-]*$/
+
+export function modelRoute(method: string, path: string): boolean {
+  const at = path.indexOf('?')
+  const bare = at < 0 ? path : path.slice(0, at)
+  const query = at < 0 ? '' : path.slice(at + 1)
+  if (!PLAIN_QUERY.test(query) || /[%\\]/.test(bare)) return false
+  return (MAGPIE_REMOTE_ROUTES[method] ?? []).includes(bare)
+}

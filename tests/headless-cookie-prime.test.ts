@@ -80,4 +80,16 @@ describe('primeCookies', () => {
     await m.syncNode(card())
     expect(made.at(-1)?.cookies).toBeUndefined()
   })
+
+  it('keeps the cookie for the next start when the running Chrome cannot take it now', async () => {
+    const instance = fake()
+    instance.setCookies.mockRejectedValueOnce(new Error('The browser is not running.'))
+    const made: HeadlessOptions[] = []
+    const m = manager((o) => {
+      made.push(o)
+      return instance
+    })
+    await m.syncNode(card())
+    await expect(m.primeCookies(card().id, [COOKIE])).resolves.toBeUndefined()
+  })
 })

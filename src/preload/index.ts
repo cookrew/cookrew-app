@@ -663,7 +663,7 @@ const api = {
     ipcRenderer.on('launch-live', listener)
     return () => ipcRenderer.removeListener('launch-live', listener)
   },
-  magpieWebOpen: (browserId: string) => ipcRenderer.invoke('magpie-web:open', browserId),
+  magpieWebOpen: (offered: string[]) => ipcRenderer.invoke('magpie-web:open', offered),
   updateStatus: () => ipcRenderer.invoke('update:status'),
   setUpdateCheck: (on: boolean) => ipcRenderer.invoke('update:set', on),
   restartToUpdate: () => ipcRenderer.invoke('update:restart'),

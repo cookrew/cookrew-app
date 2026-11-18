@@ -2,12 +2,13 @@ import type { BridgeDialer } from '../canvas-bridge'
 import type { SealPeer, SealStreamHandler } from '../canvas-seal-terminus'
 import { serveHttpStream } from '../seal2-serve-http'
 import type { LiveValues } from '../../shared/launch-settings'
-import { MAGPIE_KEY_PATH, MAGPIE_KEY_RETURN_PATH, type MagpieKeyAnswer } from '../../shared/remote-magpie'
+import { MAGPIE_KEY_PATH, MAGPIE_KEY_RETURN_PATH, modelRoute, type MagpieKeyAnswer } from '../../shared/remote-magpie'
 import { readRequest } from '../../shared/seal2/http'
 import { ABORT } from '../../shared/seal2/spec'
 import type { Seal2Stream } from '../../shared/seal2/stream'
 import type { KeyRow } from '../route/share-keys'
 import { keyHash, type BoundKey, type BoundKeys } from './bound-keys'
+import { remoteSwitchedOn } from './switches'
 
 /**
  * THIS COMPUTER'S MAGPIE, SERVED TO ANOTHER OF THE ACCOUNT'S COMPUTERS OVER THE SEAL.
@@ -21,7 +22,7 @@ import { keyHash, type BoundKey, type BoundKeys } from './bound-keys'
  *   - a key this computer gave THAT device (bound-keys.ts), still listed by
  *     Magpie under the same id and tail, so a key revoked in Magpie's own window
  *     stops at once (the list is read at most every LIST_MS);
- *   - model paths only (`/v1/…`, never Magpie's management API).
+ *   - the model endpoints only, by exact path and method (remote-magpie.ts · modelRoute).
  *
  * Then the request goes to Magpie on loopback WITH that key, and Magpie holds it
  * to the key's own daily cap, concurrency and models. Without the checks above,
@@ -111,11 +112,20 @@ export function forwardedHeaders(asked: Readonly<Record<string, string>>): Recor
   return Object.fromEntries(Object.entries(asked).filter(([name]) => !DROPPED.has(name) && !name.startsWith('x-cookrew-')))
 }
 
-/** A model path: anything under /v1/ except Magpie's management API. */
-export function modelPath(path: string): boolean {
-  const bare = path.split('?')[0]
-  return bare.startsWith('/v1/') && !bare.startsWith('/v1/magpie/admin') && !bare.includes('/../') && !bare.endsWith('/..')
+/**
+ * The name a sealed key goes by on this Magpie: the asking computer's name and the start of its
+ * device id, so two computers called "MacBook Pro" (or a hand-made "laptop" key) never collide.
+ */
+export function sealedDeviceName(name: string, peer: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 25)
+    .replace(/-+$/, '')
+  return `${slug === '' ? 'computer' : slug}-${peer.slice(0, 6).toLowerCase().replace(/[^a-z0-9]/g, '0')}`
 }
+
 
 export function createMagpieServe(deps: MagpieServeDeps): SealStreamHandler {
   const now = deps.now ?? Date.now
@@ -134,14 +144,7 @@ export function createMagpieServe(deps: MagpieServeDeps): SealStreamHandler {
   const forgetList = (): void => {
     cached = null
   }
-  const switchedOn = (): boolean => {
-    try {
-      const s = deps.switches()
-      return s?.magpie === true && s.magpieRemote === true
-    } catch {
-      return false
-    }
-  }
+  const switchedOn = (): boolean => remoteSwitchedOn(() => deps.switches())
 
   /** The bound entry for this key from this device, if Magpie still lists it as that key. */
   const stillValid = async (peer: string, key: string): Promise<BoundKey | null> => {
@@ -153,7 +156,8 @@ export function createMagpieServe(deps: MagpieServeDeps): SealStreamHandler {
     }
     if (bound === null) return null
     const listed = (await rows()).find((row) => row.id === bound?.id)
-    return listed !== undefined && listed.tail !== null && key.endsWith(listed.tail) ? bound : null
+    // Only a key Magpie holds as enabled: anything else could be met at loopback as no key at all.
+    return listed !== undefined && listed.state === 'enabled' && listed.tail !== null && key.endsWith(listed.tail) ? bound : null
   }
 
   const giveKey = async (stream: Seal2Stream, peer: string): Promise<void> => {
@@ -172,14 +176,24 @@ export function createMagpieServe(deps: MagpieServeDeps): SealStreamHandler {
     } catch {
       return answerJson(stream, 500, { ok: false, why: `${deps.name()} cannot read its list of keys given to other computers.` } satisfies MagpieKeyAnswer)
     }
-    // Asking again replaces the key: the old one is revoked before a new one is made.
+    // Asking again replaces the key: the old one is revoked before a new one is made. One Magpie no
+    // longer lists (revoked in Magpie's own window) is already gone: only its binding is left to drop.
+    forgetList()
+    let listed: readonly KeyRow[]
+    try {
+      listed = await rows()
+    } catch {
+      return answerJson(stream, 503, { ok: false, why: `${deps.name()} could not read its Magpie's keys.` } satisfies MagpieKeyAnswer)
+    }
     for (const old of mine) {
-      const gone = await deps.revoke(old.id)
-      if (!gone.ok) return answerJson(stream, 409, { ok: false, why: `${deps.name()} could not revoke the key it gave this computer before: ${gone.why}` } satisfies MagpieKeyAnswer)
+      if (listed.some((row) => row.id === old.id)) {
+        const gone = await deps.revoke(old.id)
+        if (!gone.ok) return answerJson(stream, 409, { ok: false, why: `${deps.name()} could not revoke the key it gave this computer before: ${gone.why}` } satisfies MagpieKeyAnswer)
+      }
       deps.keys.remove(old.id)
     }
     forgetList()
-    const made = await deps.issue(name, switchedOn)
+    const made = await deps.issue(sealedDeviceName(name, peer), switchedOn)
     if (!made.ok) return answerJson(stream, 409, made)
     try {
       deps.keys.add({ id: made.id, tail: made.key.slice(-6), hash: keyHash(made.key), peer, device: name, at: new Date(now()).toISOString() })
@@ -200,12 +214,26 @@ export function createMagpieServe(deps: MagpieServeDeps): SealStreamHandler {
     } catch {
       return answerJson(stream, 500, { ok: false, why: 'The list of keys is not readable.' })
     }
+    const failed: string[] = []
     for (const old of mine) {
       const gone = await deps.revoke(old.id)
       if (gone.ok) deps.keys.remove(old.id)
+      else failed.push(old.id)
     }
     forgetList()
-    answerJson(stream, 200, { ok: true })
+    answerJson(stream, failed.length === 0 ? 200 : 409, failed.length === 0 ? { ok: true } : { ok: false, why: `${deps.name()} could not revoke ${failed.length} key(s); revoke them in its Magpie.` })
+  }
+
+  /** One key request (or return) per computer at a time: two at once would each make a key and multiply its cap. */
+  const lanes = new Map<string, Promise<void>>()
+  const oneAtATime = (peer: string, work: () => Promise<void>): Promise<void> => {
+    const next = (lanes.get(peer) ?? Promise.resolve()).then(work, work)
+    const tail = next.catch(() => undefined)
+    lanes.set(peer, tail)
+    void tail.then(() => {
+      if (lanes.get(peer) === tail) lanes.delete(peer)
+    })
+    return next
   }
 
   const handle = async (stream: Seal2Stream, peer: SealPeer): Promise<void> => {
@@ -213,9 +241,9 @@ export function createMagpieServe(deps: MagpieServeDeps): SealStreamHandler {
     const request = readRequest(stream.fields)
     if (request === null) return stream.abort(ABORT.refused, 'bad-request')
     if (!switchedOn()) return refuse(stream, 403, `Magpie remote is switched off on ${deps.name()}.`)
-    if (request.method === 'POST' && request.path === MAGPIE_KEY_PATH) return giveKey(stream, peer.deviceId)
-    if (request.method === 'POST' && request.path === MAGPIE_KEY_RETURN_PATH) return returnKey(stream, peer.deviceId)
-    if (!modelPath(request.path)) return refuse(stream, 404, 'Only model requests are served here.')
+    if (request.method === 'POST' && request.path === MAGPIE_KEY_PATH) return oneAtATime(peer.deviceId, () => giveKey(stream, peer.deviceId))
+    if (request.method === 'POST' && request.path === MAGPIE_KEY_RETURN_PATH) return oneAtATime(peer.deviceId, () => returnKey(stream, peer.deviceId))
+    if (!modelRoute(request.method, request.path)) return refuse(stream, 404, 'Only model requests are served here.')
     const key = presentedKey(request.headers)
     if (key === null) return refuse(stream, 401, `This computer has no key for ${deps.name()}’s Magpie. Connect it again.`)
     const bound = await stillValid(peer.deviceId, key).catch(() => null)

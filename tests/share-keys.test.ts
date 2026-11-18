@@ -20,8 +20,8 @@ const TABLE = `ID                        NAME           STATE    GATEWAY KEY    
 describe('parseKeyTable', () => {
   it('reads id, name and limit off Magpie’s table', () => {
     expect(parseKeyTable(TABLE)).toEqual([
-      { id: '9ed61cf285e943f9a28bfb6a', name: 'solis-compare', limit: '$0.00/$20.00 per day', tail: '5102ac' },
-      { id: '7133291de0e0a098f9496f86', name: 'device-solis', limit: '$1.25/$20.00 per day', tail: 'aa11bb' }
+      { id: '9ed61cf285e943f9a28bfb6a', name: 'solis-compare', limit: '$0.00/$20.00 per day', tail: '5102ac', state: 'enabled' },
+      { id: '7133291de0e0a098f9496f86', name: 'device-solis', limit: '$1.25/$20.00 per day', tail: 'aa11bb', state: 'enabled' }
     ])
   })
   it('reads a dash as no limit, and an empty list as nothing', () => {

@@ -666,8 +666,11 @@ export interface CookrewApi {
   setLaunchLive?: (values: Partial<LiveValues>) => Promise<LaunchSaveResult>;
   onLaunchLive?: (cb: (values: LiveValues) => void) => () => void;
   /** Owner-only: start Magpie's own settings page on loopback; the sign-in link to open in a card. */
-  /** Signs the card `browserId` in to Magpie's page in main and answers with the bare address only. */
-  magpieWebOpen?: (browserId: string) => Promise<{ ok: true; url: string; port: number } | { ok: false; why: string }>;
+  /**
+   * Signs a card in to Magpie's page in main and answers with the bare address only. Offered: the ids of
+   * the cards named "Magpie"; main reuses one it signed before (`fresh: false`) or names a new one.
+   */
+  magpieWebOpen?: (offered: string[]) => Promise<{ ok: true; url: string; port: number; cardId: string; fresh: boolean } | { ok: false; why: string }>;
   updateStatus?: () => Promise<unknown>;
   setUpdateCheck?: (on: boolean) => Promise<unknown>;
   restartToUpdate?: () => Promise<unknown>;

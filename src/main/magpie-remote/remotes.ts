@@ -3,6 +3,7 @@ import path from 'node:path'
 import type { LiveValues } from '../../shared/launch-settings'
 import type { MagpieKeyAnswer } from '../../shared/remote-magpie'
 import type { SecretSealer } from '../secrets-store'
+import { remoteSwitchedOn } from './switches'
 
 /**
  * THE OTHER COMPUTERS WHOSE MAGPIE THIS ONE USES, AND THE KEY EACH GAVE IT.
@@ -122,6 +123,8 @@ export function providerIdFor(name: string, taken: readonly string[]): string {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')
       .slice(0, 40) || 'remote'
+  // `group/…` is how Magpie names its own routing groups (route/remote-gate.ts reads it so).
+  if (base === 'group') return providerIdFor('group computer', taken)
   if (!taken.includes(base)) return base
   for (let n = 2; ; n += 1) if (!taken.includes(`${base}-${n}`)) return `${base}-${n}`
 }
@@ -133,11 +136,13 @@ export interface ConnectDeps {
   askKey(peer: string, myName: string): Promise<MagpieKeyAnswer>
   /** Give the key back over the seal: the other computer revokes it. */
   returnKey(peer: string): Promise<void>
-  /** `magpie provider add remote-magpie <placeholder> url=<url> id=<id>`, or set the URL of the one that is there. */
+  /** `magpie provider add remote-magpie <placeholder> url=<url> id=<id>`: a new provider, never one that is there. */
   addProvider(providerId: string, url: string): Promise<{ ok: true } | { ok: false; why: string }>
+  /** Point a provider THIS store made at the forwarder again. */
+  setProvider(providerId: string, url: string): Promise<{ ok: true } | { ok: false; why: string }>
   removeProvider(providerId: string): Promise<void>
-  /** Magpie's own provider ids now, so a new one does not take an owner's. */
-  providerIds(): Promise<string[]>
+  /** Magpie's own provider ids now, so a new one does not take an owner's; null when they cannot be read. */
+  providerIds(): Promise<string[] | null>
   forwarderPort(): number | null
   myName(): string
   now?(): Date
@@ -147,13 +152,7 @@ export type ConnectAnswer = { readonly ok: true; readonly providerId: string } |
 
 export async function connectRemote(peer: unknown, peerName: unknown, deps: ConnectDeps): Promise<ConnectAnswer> {
   if (typeof peer !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(peer) || typeof peerName !== 'string' || peerName.trim() === '') return { ok: false, why: 'Not one of your computers.' }
-  let switches: LiveValues | null = null
-  try {
-    switches = deps.switches()
-  } catch {
-    switches = null
-  }
-  if (switches?.magpie !== true || switches.magpieRemote !== true) return { ok: false, why: 'Turn on Magpie and Magpie remote in Launch settings first.' }
+  if (!remoteSwitchedOn(() => deps.switches())) return { ok: false, why: 'Turn on Magpie and Magpie remote in Launch settings first.' }
   const port = deps.forwarderPort()
   if (port === null) return { ok: false, why: 'This computer’s forwarder to other Magpies is not running: another program holds its port.' }
   let known: readonly RemoteMagpie[]
@@ -163,7 +162,11 @@ export async function connectRemote(peer: unknown, peerName: unknown, deps: Conn
     return { ok: false, why: error instanceof Error ? error.message : 'The list of connected computers is not readable.' }
   }
   const existing = known.find((r) => r.peer === peer)
-  const providerId = existing?.providerId ?? providerIdFor(peerName, [...known.map((r) => r.providerId), ...(await deps.providerIds().catch(() => []))])
+  // Unreadable is not empty: a guess could take, and then repoint, one of the owner's own providers.
+  const ids = await deps.providerIds().catch(() => null)
+  if (ids === null) return { ok: false, why: 'This computer’s Magpie providers could not be read.' }
+  const providerId = existing?.providerId ?? providerIdFor(peerName, [...known.map((r) => r.providerId), ...ids])
+  const ours = existing !== undefined && ids.includes(providerId)
   const answer = await deps.askKey(peer, deps.myName()).catch((error: unknown): MagpieKeyAnswer => ({ ok: false, why: error instanceof Error ? error.message : 'The other computer did not answer.' }))
   if (!answer.ok) return { ok: false, why: answer.why }
   try {
@@ -172,7 +175,8 @@ export async function connectRemote(peer: unknown, peerName: unknown, deps: Conn
     await deps.returnKey(peer).catch(() => undefined)
     return { ok: false, why: 'Could not keep the key it gave this computer, so it was given back.' }
   }
-  const added = await deps.addProvider(providerId, `http://127.0.0.1:${port}/peer/${peer}`)
+  const url = `http://127.0.0.1:${port}/peer/${peer}`
+  const added = ours ? await deps.setProvider(providerId, url) : await deps.addProvider(providerId, url)
   if (!added.ok) {
     deps.store.remove(peer)
     await deps.returnKey(peer).catch(() => undefined)
@@ -195,4 +199,22 @@ export async function disconnectRemote(peer: unknown, deps: Pick<ConnectDeps, 's
   await deps.returnKey(peer).catch(() => undefined)
   await deps.removeProvider(found.providerId).catch(() => undefined)
   return { ok: true }
+}
+
+/**
+ * One connect or disconnect per computer at a time, in main: the panel's own guard is lost
+ * when the window reloads, and two connects at once would each ask for a key and then
+ * give back the other's.
+ */
+export function perComputer(): <T>(peer: string, work: () => Promise<T>) => Promise<T> {
+  const lanes = new Map<string, Promise<unknown>>()
+  return (peer, work) => {
+    const next = (lanes.get(peer) ?? Promise.resolve()).then(work, work)
+    const tail = next.catch(() => undefined)
+    lanes.set(peer, tail)
+    void tail.then(() => {
+      if (lanes.get(peer) === tail) lanes.delete(peer)
+    })
+    return next
+  }
 }
