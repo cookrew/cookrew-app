@@ -250,7 +250,11 @@ export function seatbeltProfile(input: ProfileInput): string {
   return [
     '(version 1)',
     '(deny default)',
-    '(allow process-exec process-fork signal)',
+    '(allow process-exec process-fork)',
+    // Signals reach only this seat's own processes. Unfiltered, a seat could kill
+    // the app, the gateway or another seat, and killing its own pane is what makes
+    // the app respawn it (tests/served-signal.test.ts).
+    '(allow signal (target same-sandbox))',
     '(allow sysctl-read mach-lookup mach-priv-task-port)',
     '(allow file-read*)',
     `(allow file-write* (subpath ${sandbox}))`,
