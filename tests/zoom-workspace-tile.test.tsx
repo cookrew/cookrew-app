@@ -12,6 +12,8 @@ import { deckOf } from '../src/renderer/src/zoom/use-zoom-fleet'
 import { deckDepth, sameTile, WorkspaceTile } from '../src/renderer/src/zoom/WorkspaceTile'
 import { buildZoomModel, type AgentView, type MarkView } from '../src/renderer/src/zoom/zoom-model'
 import { byStatus, type InkStatus } from '../src/renderer/src/zoom/ink-status'
+import { machineViewOf } from '../src/renderer/src/zoom/machine-view'
+import { DevicesAgents } from '../src/renderer/src/zoom/DevicesAgents'
 import { modelOf, paintAt } from './zoom-qa-helpers'
 
 const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `w${i}`)
@@ -292,6 +294,25 @@ describe("a tile's agents, by state", () => {
     const order = byStatus([view('off', 'offline'), view('rest1', 'idle'), view('work', 'working'), view('wait', 'waiting'), view('rest2', 'idle'), view('read', 'done'), view('fail', 'failed')]).map((a) => a.id)
     expect(order).toEqual(['wait', 'fail', 'read', 'work', 'rest1', 'rest2', 'off'])
   })
+  // Owner, 2026-11-18: "workspace card里面的agents还没有按照状态排序" on the console, where every tile is another machine's.
+  it('stand by state on another machine’s tile and its devices screen, from its feed', () => {
+    const view = machineViewOf({
+      id: 'solis', name: 'Solis-Core', local: false, online: true, detail: 'live',
+      workspaces: [{ id: 'w', name: 'Dev', agents: [
+        { id: 'idle', name: 'idle', harness: 'claude', phase: 'idle' },
+        { id: 'think', name: 'think', harness: 'codex', phase: 'thinking' },
+        { id: 'off', name: 'off', harness: 'claude', phase: 'offline' },
+        { id: 'reply', name: 'reply', harness: 'claude', phase: 'replied' },
+        { id: 'wait', name: 'wait', harness: 'claude', phase: 'waiting' }
+      ], counts: { agents: 5, waiting: 1 } }]
+    } as never)
+    const want = ['wait', 'reply', 'think', 'idle', 'off']
+    const tile = renderToStaticMarkup(<WorkspaceTile mark={view.marks[0]} bind={bind} onOpen={() => undefined} onOpenItems={() => undefined} />)
+    expect([...tile.matchAll(/class="dm-head"[^>]*aria-label="([^"]+)"/g)].map((m) => m[1])).toEqual(want)
+    const screen = renderToStaticMarkup(<DevicesAgents machine="solis" name="Solis-Core" marks={view.marks} frame={{ w: 400, h: 300 }} k={1} onOpenWorkspace={() => undefined} />)
+    expect([...screen.matchAll(/class="da-face"[^>]*aria-label="([a-z]+),/g)].map((m) => m[1])).toEqual(want)
+  })
+
   it('draws each face with its own agent’s logo once sorted', () => {
     const agents = [view('a', 'idle', 'Claude Code'), view('b', 'waiting', 'Codex')]
     const html = renderToStaticMarkup(<WorkspaceTile mark={mark({ presets: ['Claude Code', 'Codex'], agents })} bind={bind} onOpen={() => undefined} onOpenItems={() => undefined} />)
