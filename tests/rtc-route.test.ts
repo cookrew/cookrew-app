@@ -102,6 +102,8 @@ describe('the rtc row in a path report', () => {
     // The offer goes out one way only: path/rtc-offer.ts, sealed whenever the page has a session (step 2).
     expect(src).toContain('post: (sdp) => postRtcOffer(sdp)')
     expect(src).not.toContain("'/api/rtc/offer'")
+    // A knock skipped while the seal was undecided is owed when the pin lands, for the machine in scope.
+    expect(src).toMatch(/onSealPinned\(\(base\) => \{\s*if \(!live\(\) \|\| base !== scopeBase\(\)\) return\s*owedAKnock\(\)\s*raceNow\(\)/)
     // A link that ended, however, is knocked again at once, not after the gap.
     expect(src).toMatch(/ended: \(row\) => \{[\s\S]{0,400}lastRtcAt = 0[\s\S]{0,40}onEnd\(\)/)
     // The knocks and the navigation home are gone with the offer that drove them.

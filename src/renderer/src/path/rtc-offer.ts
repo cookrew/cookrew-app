@@ -10,20 +10,25 @@
  *   path/seal-plane.ts) the offer goes inside it, always, the first knock
  *   included. A knock is the first thing a page asks at boot, before the
  *   quiet try has found out whether the Mac speaks sealed, and planeFetch
- *   would send that one plain. So the try is started and waited for first;
- *   if it has not answered within `decideMs` the knock is skipped (the next
- *   race asks again), never sent plain.
+ *   would send that one plain. So the try is started and waited for first.
+ *   Only an ANSWER counts (seal-plane.ts · sealOutcome): a try that failed,
+ *   hung past `decideMs` or waits to go again leaves the question open, and
+ *   the knock is skipped, never sent plain. The pin, when it lands, knocks
+ *   again (companion.ts).
  *
- *   WITH NO SESSION (a page that holds no code, or a Mac that does not speak
- *   v2) the plain knock stays, so those consoles keep their direct link. The
- *   residual risk, stated: the relay reads both addresses and can deny the
- *   direct link (drop or spoil the answer); it cannot read anything sealed,
- *   and it cannot put itself in the link (the binding).
+ *   WITH NO SESSION (a page that holds no code, or a Mac that said, sealed,
+ *   that it has no v2) the plain knock stays, so those consoles keep their
+ *   direct link. The residual risk, stated: the relay reads both addresses
+ *   and can deny the direct link (drop or spoil the answer); it cannot read
+ *   anything sealed, and it cannot put itself in the link (the binding). A
+ *   relay that fails every handshake of a page never pinned keeps that
+ *   page's knocks from going out at all: no direct link, and no addresses.
  */
 import { apiPath } from '../api-base'
 import { authHeaders } from '../auth-gate'
 import { planeFetch } from '../plane-fetch'
-import { probeSettled, viaSeal } from './seal-plane'
+import { heldScope } from '../machine-scope'
+import { probeSettled, sealOutcome } from './seal-plane'
 import { readRtcAnswer } from './rtc-trust'
 import type { RtcAnswer } from './rtc-link'
 
@@ -34,28 +39,33 @@ export interface RtcOfferOptions {
   readonly decideMs?: number
 }
 
+/** Plain is allowed only where no session can exist; a sealed one goes through planeFetch sealed. */
+const mayGo = (url: string): boolean => sealOutcome(url) !== 'undecided'
+
 /**
- * Has the page found out whether this machine speaks sealed? True at once
- * for a pinned machine (planeFetch seals the request) and for one this page
- * holds no code for (no session can exist); otherwise the try is started and
- * waited for, and false when it does not answer in time.
+ * Has the page an answer on whether this machine speaks sealed? At once when
+ * it has; otherwise the try (started by sealOutcome) is waited for, up to
+ * `ms`, and asked again: a try that failed is no answer.
  */
 const sealDecided = async (url: string, ms: number): Promise<boolean> => {
-  // viaSeal both answers "pinned" and, for a code not yet pinned, starts the try.
-  if (viaSeal(url) !== null) return true
+  if (mayGo(url)) return true
   let timer: ReturnType<typeof setTimeout> | undefined
-  const late = new Promise<false>((resolve) => void (timer = setTimeout(() => resolve(false), ms)))
+  const late = new Promise<void>((resolve) => void (timer = setTimeout(resolve, ms)))
   try {
-    return await Promise.race([probeSettled(url).then(() => true as const), late])
+    await Promise.race([probeSettled(url), late])
   } finally {
     clearTimeout(timer)
   }
+  return mayGo(url)
 }
 
 /** POST the offer to the machine in scope: its answer and binding, or null (no answer, or not sent this round). */
 export const postRtcOffer = async (sdp: string, options: RtcOfferOptions = {}): Promise<RtcAnswer | null> => {
   const url = apiPath('/api/rtc/offer')
+  const sameMachine = heldScope()
   if (!(await sealDecided(url, options.decideMs ?? SEAL_DECIDE_MS))) return null
+  // Left while it waited: the offer was for a machine no longer in scope.
+  if (!sameMachine()) return null
   const response = await planeFetch(url, {
     method: 'POST',
     headers: { ...authHeaders(), 'content-type': 'application/json' },

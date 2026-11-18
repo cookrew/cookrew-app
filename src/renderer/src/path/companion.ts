@@ -1,4 +1,5 @@
-import { heldScope, machineScope, registerScopeState } from '../machine-scope'
+import { heldScope, machineScope, registerScopeState, scopeBase } from '../machine-scope'
+import { onSealPinned } from './seal-plane'
 import { apiPath, clientBase } from '../api-base'
 import { cookrew, isRemoteMode } from '../api'
 import { authHeaders } from '../auth-gate'
@@ -338,6 +339,14 @@ const startPlaneSwitch = (): (() => void) => {
       owedAKnock()
       raceNow()
     }) ?? ((): void => undefined),
+    // THE MAC WAS JUST FOUND TO SPEAK SEALED (path/seal-plane.ts). A knock
+    // skipped while that was undecided (path/rtc-offer.ts) is owed now, not
+    // after the gap. Only for the machine in scope; a refusal's wait holds.
+    onSealPinned((base) => {
+      if (!live() || base !== scopeBase()) return
+      owedAKnock()
+      raceNow()
+    }),
     startRaceLoop({
       ready: (run) => void (raceNow = run),
       race: async () => {

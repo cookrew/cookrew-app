@@ -85,6 +85,8 @@ interface Probe {
 
 const links = new Map<string, Held>()
 const probes = new Map<string, Probe>()
+/** Machine and code whose Mac said, inside the sealed v1 session, that it has no v2: an older Mac. */
+const oldMacs = new Set<string>()
 /** A refused or unreachable machine, answered from memory until `until`. */
 const failures = new Map<string, { readonly until: number; readonly answer: () => Response | Error }>()
 const pinnedListeners = new Set<(base: string) => void>()
@@ -221,9 +223,14 @@ function probe(base: string, code: string): void {
       if (opened.version === 1) {
         opened.client.close()
         // The Mac said, sealed, that it has no v2: an old Mac. Asked again later, it may have been updated.
-        return opened.mac === 'no-v2' ? after(0, timing.oldMacMs) : after(nextDelay(held), nextDelay(held))
+        if (opened.mac === 'no-v2') {
+          if (gen === generation) oldMacs.add(key)
+          return after(0, timing.oldMacMs)
+        }
+        return after(nextDelay(held), nextDelay(held))
       }
       if (gen !== generation) return opened.link.close()
+      oldMacs.delete(key)
       keep(base, { code, link: Promise.resolve(opened.link) })
       probes.delete(key)
       pinned(base)
@@ -327,6 +334,24 @@ export function viaSeal(url: string): SealRoute | null {
   return { path: url.slice(base.length).split('#')[0], request: (call) => sendSealed(base, code, call, true) }
 }
 
+/**
+ * WHAT THIS PAGE KNOWS OF A SEALED SESSION WITH THIS URL'S MACHINE, for a
+ * request that must never cross the relay plain when one can exist (the
+ * direct link's offer, path/rtc-offer.ts): `sealed` (pinned; planeFetch seals
+ * it), `no-code` (no session can exist), `old-mac` (the Mac said, sealed, it
+ * has no v2), or `undecided`: the try has not answered, failed, or waits to go
+ * again. Starts the try when one is due, as viaSeal does.
+ */
+export type SealOutcome = 'sealed' | 'no-code' | 'old-mac' | 'undecided'
+
+export function sealOutcome(url: string): SealOutcome {
+  const base = machineBaseFor(url)
+  const code = base === null ? null : storage()?.getItem(codeKeyForBase(base))
+  if (base === null || code == null || !CODE_SHAPE.test(code)) return 'no-code'
+  if (viaSeal(url) !== null) return 'sealed'
+  return oldMacs.has(`${base}\n${code}`) ? 'old-mac' : 'undecided'
+}
+
 /** Did the machine refuse this plain request because this device is to speak sealed? */
 export async function refusedInTheClear(response: Response): Promise<boolean> {
   // Read from a copy, so the caller still has the whole answer; anything that cannot be copied is no such refusal.
@@ -373,6 +398,7 @@ registerScopeState(
       void held.link.then((link) => link.close()).catch(() => undefined)
     }
     probes.clear()
+    oldMacs.clear()
     failures.clear()
   },
   'clear'

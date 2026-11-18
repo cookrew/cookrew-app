@@ -27,9 +27,15 @@ const OFFER = `v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=cand
 const ANSWER = `v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=candidate:1 1 udp 2122260223 ${MAC_ADDRESS} 50001 typ host\r\n`
 
 const offers: Array<{ plain: boolean; sdp: string }> = []
+/** A Mac from before cookrew-seal/2: asked inside the sealed v1 session, it knows no version route. */
+let oldMac = false
 const companion = (terminus: () => SealTerminus | undefined): Server =>
   createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://mac')
+    if (oldMac && url.pathname === '/~seal/version') {
+      response.writeHead(404, { 'content-type': 'application/json' })
+      return void response.end('{}')
+    }
     if (isSealPath(url.pathname)) return void routeSeal(request, response, terminus())
     const plain = cameOverRelayLine(request)
     let body = ''
@@ -43,8 +49,8 @@ const companion = (terminus: () => SealTerminus | undefined): Server =>
 
 const current = { code: newConnectCode(), id: '' }
 let world: RelayWorld
-/** What the carrier does to a handshake: pass it, or hold it with no answer (as a relay may). */
-let carrier: 'pass' | 'hang' = 'pass'
+/** What the carrier does to a handshake: pass it, hold it, fail it (502), or take v2's offer off it, as a relay may. */
+let carrier: 'pass' | 'hang' | 'fail' | 'strip' = 'pass'
 const realFetch = globalThis.fetch
 const routeOf = (input: RequestInfo | URL, init?: RequestInit): string => new Headers(init?.headers).get('x-cookrew-route') ?? String(input)
 
@@ -57,7 +63,14 @@ beforeAll(async () => {
     dial: loopbackDialer(port)
   }))
   vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
-    if (carrier === 'hang' && routeOf(input, init).endsWith('~seal/hello')) return new Promise<Response>(() => undefined)
+    if (routeOf(input, init).endsWith('~seal/hello')) {
+      if (carrier === 'hang') return new Promise<Response>(() => undefined)
+      if (carrier === 'fail') return Promise.resolve(new Response('{}', { status: 502 }))
+      if (carrier === 'strip' && typeof init?.body === 'string') {
+        const { vs: _offer, ...v1 } = JSON.parse(init.body) as Record<string, unknown>
+        return realFetch(input, { ...init, body: JSON.stringify(v1) })
+      }
+    }
     return realFetch(input, init)
   })
 })
@@ -65,6 +78,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.stubGlobal('window', bareWindow('https://console.cookrew.dev/'))
   carrier = 'pass'
+  oldMac = false
   offers.length = 0
 })
 
@@ -115,6 +129,43 @@ describe('the knock\'s offer, with a sealed session', () => {
     await new Promise((resolve) => setTimeout(resolve, 100))
     expect(offers).toEqual([])
     expect(relayRead(at.lines, at.exchanges)).not.toContain(PHONE_ADDRESS)
+  })
+})
+
+describe('a try that fails is not an answer', () => {
+  it('a handshake the relay fails (502) leaves the question open: the offer is not sent, not even in the back-off after it', async () => {
+    carrier = 'fail'
+    const page = await consolePage(true)
+    const at = { lines: world.lines.length, exchanges: world.exchanges.length }
+    expect(await page.postRtcOffer(OFFER, { decideMs: 1_000 })).toBeNull()
+    // The try has failed and is waiting to go again: a knock now is still undecided.
+    expect(await page.postRtcOffer(OFFER, { decideMs: 200 })).toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(offers).toEqual([])
+    expect(relayRead(at.lines, at.exchanges)).not.toContain(PHONE_ADDRESS)
+  })
+
+  it('a Mac that said, sealed, it has no v2 (an older Mac) gets the plain knock: no session can exist with it', async () => {
+    carrier = 'strip'
+    oldMac = true
+    const page = await consolePage(true)
+    const answer = await page.postRtcOffer(OFFER, { decideMs: 3_000 })
+    expect(answer?.sdp).toBe(ANSWER)
+    expect(offers).toEqual([{ plain: true, sdp: OFFER }])
+  })
+
+  it('a Mac whose v2 offer the relay takes off the hello is still found to speak sealed: the offer never goes plain', async () => {
+    carrier = 'strip'
+    const page = await consolePage(true)
+    // Pinned on the Mac's sealed word; a relay that goes on stripping then fails the knock, it never makes it plain.
+    await page.postRtcOffer(OFFER, { decideMs: 3_000 }).catch(() => null)
+    expect(offers.filter((offer) => offer.plain)).toEqual([])
+    carrier = 'pass'
+    // A refused session is answered from memory for refusedMs (400 here), then asked again.
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    expect((await page.postRtcOffer(OFFER))?.sdp).toBe(ANSWER)
+    expect(offers.map((offer) => offer.plain)).not.toContain(true)
+    expect(offers.at(-1)).toEqual({ plain: false, sdp: OFFER })
   })
 })
 
