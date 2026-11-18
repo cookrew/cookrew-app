@@ -3,11 +3,17 @@
 // registry reads on both sides, the Mac's line and the callers' requests, is
 // searched for every canary; a request in the clear through the same relay
 // shows the search finds them when they are there.
+import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { EXCHANGES_PER_LINK } from '../registry/src/v2-canvas-relay'
 import { RELAY_MARKER } from '../src/main/canvas-bridge'
 import type { SealedNotice, SealTerminus } from '../src/main/canvas-seal-terminus'
+import { createSealMarks, SEALED_ONLY_ERROR } from '../src/main/seal-marks'
+import { cameOverRelayLine } from '../src/main/seal-proof'
+import { takeRelayDevice } from '../src/main/relay-device'
 import { connectCodeId, newConnectCode } from '../src/shared/canvas-seal'
 import { startCodeHandshake, startDeviceHandshake } from '../src/shared/seal2/handshake'
 import { readBody, sealedFetch } from '../src/shared/seal2/http'
@@ -26,10 +32,21 @@ const seen: Array<{ authorization?: string; relayed?: string; device?: string; b
 let events: ((chunk: string) => void) | null = null
 const PICTURE = Buffer.from(Array.from({ length: 1_000_000 }, (_, i) => i % 251))
 
+const marksDir = mkdtempSync(path.join(tmpdir(), 'seal2-marks-'))
+const marks = createSealMarks(path.join(marksDir, 'seal-marks.json'))
+
+/** The companion's own order (mobile-server.ts · handle): the seal first, then the relay device, then the marks. */
 const companion = (terminus: () => SealTerminus | undefined): Server =>
   createServer((request, response) => {
     const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
     if (isSealPath(url.pathname)) return void routeSeal(request, response, terminus())
+    const device = takeRelayDevice(request)
+    if (cameOverRelayLine(request) && marks.refuses(device?.deviceId ?? null)) {
+      response.writeHead(403, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: SEALED_ONLY_ERROR }))
+      return
+    }
+    if (device) request.headers['x-cookrew-device'] = device.deviceId
     if (url.pathname === '/api/events') {
       response.writeHead(200, { 'content-type': 'text/event-stream' })
       response.write(': open\n\n')
@@ -74,13 +91,17 @@ beforeAll(async () => {
         void stream.readable.pipeTo(stream.writable).catch(() => undefined)
       }
     },
-    onSealed: (notice) => sealed.push(notice)
+    onSealed: (notice) => {
+      sealed.push(notice)
+      if (notice.peer.mode === 'code' && notice.outer.device !== undefined) marks.mark(notice.outer.device)
+    }
   }))
 })
 
 afterAll(async () => {
   for (const link of opened) link.close()
   await world?.close()
+  rmSync(marksDir, { recursive: true, force: true })
 })
 
 /** A phone or console holding the code: the v2 handshake, then the carrier. */
@@ -124,7 +145,8 @@ describe('code mode (phone and console) through the real relay', () => {
 
   it('the same canaries in the clear are found by the same search', async () => {
     const [from, fromExchange] = mark()
-    const plain = world.capture(world.phoneSession)
+    // The other desktop: it has not spoken v2 on the code, so it may still speak in the clear.
+    const plain = world.capture(world.otherDesktop.session)
     const answer = await plain(`${world.prefix()}${ROUTE}`, { method: 'POST', headers: { authorization: BEARER }, body: UPLOAD })
     expect(await answer.text()).toBe(REPLY)
     const read = world.relayCouldRead(from, fromExchange)
@@ -321,5 +343,37 @@ describe('openStream(peer, kind) for other lanes (main/seal-peers.ts)', () => {
     const { pairWords } = await import('../src/shared/seal2/handshake')
     expect(await peers.words(world.macDevice.id)).toEqual(await pairWords(world.macDevice.id, world.otherDesktop.id))
     peers.close()
+  })
+})
+
+describe('a v2 caller is answered nothing in the clear on the relay line', () => {
+  it('the phone, once sealed, is refused in the clear and still answered sealed', async () => {
+    await phone()
+    const plain = await world.capture(world.phoneSession)(`${world.prefix()}${ROUTE}`, { method: 'POST', headers: { authorization: BEARER }, body: UPLOAD })
+    expect(plain.status).toBe(403)
+    expect(await plain.json()).toEqual({ error: SEALED_ONLY_ERROR })
+    const link = await phone()
+    const answer = await sealedFetch(link.connection, { method: 'GET', path: ROUTE, headers: { authorization: BEARER } })
+    expect(text(await readBody(answer.body))).toBe(REPLY)
+  })
+
+  it('a device that has not spoken v2 still is answered in the clear, until the owner says sealed only', async () => {
+    const other = world.capture(world.otherDesktop.session)
+    expect((await other(`${world.prefix()}/api/still-plain`, { headers: { authorization: MACHINE_KEY } })).status).toBe(200)
+    marks.setSealedOnly(true)
+    try {
+      expect((await other(`${world.prefix()}/api/still-plain`, { headers: { authorization: MACHINE_KEY } })).status).toBe(403)
+      const peer = await otherDesktop()
+      const sealedAnswer = await sealedFetch(peer.connection, { method: 'GET', path: '/api/sealed-anyway', headers: { authorization: MACHINE_KEY } })
+      expect(sealedAnswer.status).toBe(200)
+    } finally {
+      marks.setSealedOnly(false)
+    }
+  })
+
+  it('a new connect code clears the marks: the phone can reach the pairing page again', async () => {
+    marks.clearDevices()
+    const plain = await world.capture(world.phoneSession)(`${world.prefix()}/api/after-rotation`, { headers: { authorization: BEARER } })
+    expect(plain.status).toBe(200)
   })
 })

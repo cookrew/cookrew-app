@@ -1,0 +1,77 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { writeFileAtomic } from './atomic-file'
+
+/**
+ * WHO IS REFUSED IN THE CLEAR ON THE RELAY LINE (cookrew-seal/2 enforcement).
+ *
+ * A device that opened a v2 session on the connect code sends everything
+ * through it from then on (renderer path/seal-plane.ts), so this Mac refuses
+ * that device's plain requests over the relay. And the owner can refuse ALL
+ * plain requests over the relay line once every client they use speaks v2:
+ * the Alma rule, "a desktop with end-to-end on answers no plaintext".
+ *
+ * WHAT EACH STOPS, said plainly: the relay names the device a request comes
+ * from, so a relay that lies can name another device or none. The per-device
+ * mark therefore stops a correct client's own mistakes and an honest relay
+ * carrying a stolen token in that device's name; it does NOT stop a relay
+ * that lies. Only `sealedOnly` does, and it is off by default because it also
+ * shuts out every phone, console and desktop not on v2 yet.
+ *
+ * A new connect code clears the marks: a device holding the old code can no
+ * longer open a session, and must be able to reach the page that pairs it.
+ */
+
+export interface SealMarks {
+  /** Should a plain request that came over the relay line, in this device's name (or none), be refused? */
+  refuses(deviceId: string | null): boolean
+  mark(deviceId: string): void
+  marked(): string[]
+  sealedOnly(): boolean
+  setSealedOnly(on: boolean): void
+  /** The connect code changed. */
+  clearDevices(): void
+}
+
+interface MarksFile {
+  readonly sealedOnly: boolean
+  readonly devices: Readonly<Record<string, { readonly at: number }>>
+}
+
+const DEVICE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/** A file that is there and cannot be read fails closed: sealed only, until the owner says otherwise at the Mac. */
+function readMarks(file: string): MarksFile {
+  if (!existsSync(file)) return { sealedOnly: false, devices: {} }
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<MarksFile>
+    if (typeof parsed !== 'object' || parsed === null || typeof parsed.sealedOnly !== 'boolean') return { sealedOnly: true, devices: {} }
+    const devices = typeof parsed.devices === 'object' && parsed.devices !== null ? parsed.devices : {}
+    return { sealedOnly: parsed.sealedOnly, devices: Object.fromEntries(Object.entries(devices).filter(([id]) => DEVICE_ID.test(id))) }
+  } catch {
+    return { sealedOnly: true, devices: {} }
+  }
+}
+
+export function createSealMarks(file: string, now: () => number = Date.now): SealMarks {
+  // Read once, kept in memory: this is asked on every relayed request.
+  let held = readMarks(file)
+  const write = (next: MarksFile): void => {
+    held = next
+    writeFileAtomic(file, `${JSON.stringify(next, null, 2)}\n`)
+  }
+  return {
+    refuses: (deviceId) => held.sealedOnly || (deviceId !== null && Object.prototype.hasOwnProperty.call(held.devices, deviceId.toLowerCase())),
+    mark(deviceId) {
+      const id = deviceId.toLowerCase()
+      if (!DEVICE_ID.test(id) || Object.prototype.hasOwnProperty.call(held.devices, id)) return
+      write({ ...held, devices: { ...held.devices, [id]: { at: now() } } })
+    },
+    marked: () => Object.keys(held.devices),
+    sealedOnly: () => held.sealedOnly,
+    setSealedOnly: (on) => write({ ...held, sealedOnly: on }),
+    clearDevices: () => write({ ...held, devices: {} })
+  }
+}
+
+/** What the page reads in a refusal: the registry passes back no header of ours, so it is in the body. */
+export const SEALED_ONLY_ERROR = 'sealed-only'

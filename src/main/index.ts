@@ -180,7 +180,8 @@ import { createNetworkWatch } from './network-watch'
 import { createCanvasRelay } from './canvas-relay'
 import { loopbackDialer } from './canvas-bridge'
 import { createSealTerminus } from './canvas-seal-terminus'
-import { sealProofHeaders } from './seal-proof'
+import { relayLineHeaders, sealProofHeaders } from './seal-proof'
+import { createSealMarks } from './seal-marks'
 import { createSealDevice } from './seal-device'
 import { createSealPeers } from './seal-peers'
 import { createSealPinStore } from './seal-pins'
@@ -1793,7 +1794,8 @@ const canvasRelay = createCanvasRelay({
     if (!session || session.exp <= Date.now()) return null
     return { token: session.token, deviceId: account.deviceId }
   },
-  dial: loopbackDialer(MOBILE_PORT),
+  // Its requests carry the line's own proof: what seal-marks.ts refuses in the clear is this line's, not the direct link's.
+  dial: loopbackDialer(MOBILE_PORT, undefined, relayLineHeaders()),
   log: (message) => console.error(`[cookrew] ${message}`)
 })
 const canvasLink = canvasRelay.link
@@ -1829,10 +1831,16 @@ const sealPeers = createSealPeers({
   pins: sealPins,
   log: (line) => console.error(`[cookrew] ${line}`)
 })
+const sealMarks = createSealMarks(path.join(homedir(), '.cookrew', 'seal-marks.json'))
 const sealTerminus = createSealTerminus({
   codeFor: (id) => connectCodes.codeFor(id),
   replacedKeyFor: (id) => connectCodes.replacedKeyFor(id),
   device: sealDevice.device,
+  // A phone or console on v2 sends everything sealed from now on; its plain requests on the relay line are refused.
+  // Desktops are not marked: their own machine calls still go in the clear until they move onto sealPeers.
+  onSealed: ({ peer, outer }) => {
+    if (peer.mode === 'code' && outer.device !== undefined) sealMarks.mark(outer.device)
+  },
   dial: loopbackDialer(MOBILE_PORT, undefined, sealProofHeaders()),
   // What the paced uplink still holds counts too: since relay-uplink.ts, an
   // answer waits there rather than in Node's socket buffer.
@@ -8320,6 +8328,7 @@ app.whenReady().then(() => {
         connectCodes.rotate()
       } finally {
         sealTerminus.endSessions('the pairing was rotated')
+        sealMarks.clearDevices()
       }
       return rotated
     },
@@ -8624,6 +8633,7 @@ app.whenReady().then(() => {
     // 159 dependent requests and a relayed link never finishes them.
     rendererDir: path.join(dirname, '../renderer'),
     sealTerminus: () => sealTerminus,
+    sealMarks: () => sealMarks,
     rendererDevUrl: process.env.ELECTRON_RENDERER_URL,
     rendererSrcDir: path.join(app.getAppPath(), 'src/renderer/src')
   })

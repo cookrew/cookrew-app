@@ -235,3 +235,47 @@ describe('openSeal', () => {
     expect(terminus.stats().listening).toBe(0)
   })
 })
+
+describe('openSeal across versions', () => {
+  /** A Mac from before v2 reads only v1's fields: what reaches it is the hello without its offer. */
+  const asOldMac = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    if (!String(input).endsWith('/~seal/hello') || typeof init?.body !== 'string') return fetch(input, init)
+    const { vs: _offer, ...v1 } = JSON.parse(init.body) as Record<string, unknown>
+    return fetch(input, { ...init, body: JSON.stringify(v1) })
+  }
+
+  const pinned = (start: boolean) => {
+    let v2 = start
+    return { v2: () => v2, sawV2: () => void (v2 = true), held: () => v2 }
+  }
+
+  it('speaks v2 to a Mac that does, and remembers it', async () => {
+    const { url, code } = await bed()
+    const pin = pinned(false)
+    const client = await openSeal({ url, code: encoded(code), retryMs: 5, pin })
+    clients.push(client)
+    expect(pin.held()).toBe(true)
+    expect(JSON.parse(text((await client.request({ method: 'GET', path: '/v2', headers: {} })).body))).toMatchObject({ path: '/v2' })
+  })
+
+  it('still works with a Mac from before v2, sealed on v1, and remembers nothing', async () => {
+    const { url, code } = await bed()
+    const pin = pinned(false)
+    const client = await openSeal({ url, code: encoded(code), retryMs: 5, fetchFn: asOldMac, pin })
+    clients.push(client)
+    expect(pin.held()).toBe(false)
+    const answer = await client.request({ method: 'POST', path: '/v1', headers: { authorization: 'Bearer t' }, body: 'b' })
+    expect(JSON.parse(text(answer.body))).toEqual({ method: 'POST', path: '/v1', auth: 'Bearer t', body: 'b' })
+  })
+
+  it('once pinned to v2, a v1 answer is refused: no quieter session, and nothing sent', async () => {
+    const { url, code } = await bed()
+    let asked = 0
+    const counting = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (String(input).includes('/~seal/up')) asked += 1
+      return asOldMac(input, init)
+    }
+    await expect(openSeal({ url, code: encoded(code), retryMs: 5, fetchFn: counting, pin: pinned(true) })).rejects.toMatchObject({ why: 'proof' })
+    expect(asked).toBe(0)
+  })
+})

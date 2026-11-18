@@ -25,3 +25,23 @@ export function carriesSealProof(request: Pick<http.IncomingMessage, 'headers'>)
   const [held, given] = [Buffer.from(PROOF), Buffer.from(said)]
   return held.length === given.length && timingSafeEqual(held, given)
 }
+
+/**
+ * WHAT SAYS A REQUEST CAME DOWN THE RELAY LINE, in the clear: the canvas relay's
+ * own dialer adds it (index.ts), and nothing else does. The direct WebRTC link
+ * and the sealed session's inner requests carry the relay marker too, so the
+ * marker alone cannot tell them apart from the relay. A per-launch value, as
+ * the seal's proof is, and taken off whatever arrives (canvas-bridge.ts).
+ */
+export const RELAY_LINE_MARKER = 'x-cookrew-relay-line'
+
+const LINE = randomBytes(32).toString('base64url')
+
+export const relayLineHeaders = (): Record<string, string> => ({ [RELAY_LINE_MARKER]: LINE })
+
+export function cameOverRelayLine(request: Pick<http.IncomingMessage, 'headers'>): boolean {
+  const said = request.headers[RELAY_LINE_MARKER]
+  if (typeof said !== 'string') return false
+  const [held, given] = [Buffer.from(LINE), Buffer.from(said)]
+  return held.length === given.length && timingSafeEqual(held, given)
+}

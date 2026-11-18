@@ -12,6 +12,7 @@ import { HTTP_KIND } from '../shared/seal2/http'
 import { ABORT } from '../shared/seal2/spec'
 import type { Seal2Stream } from '../shared/seal2/stream'
 import { openSeal2Live } from './seal2-live'
+import { RELAY_LINE_MARKER } from './seal-proof'
 import { serveHttpStream } from './seal2-serve-http'
 
 /**
@@ -141,7 +142,7 @@ export async function routeSeal(request: http.IncomingMessage, response: http.Se
 /** Hop by hop, and everything only the bridge may say. The dialer writes host and the marker itself. */
 const NOT_FROM_INSIDE = new Set([
   'host', 'connection', 'keep-alive', 'proxy-connection', 'proxy-authorization', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'content-length', 'expect',
-  'x-real-ip', RELAY_MARKER, RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER, DOOR_MARKER
+  'x-real-ip', RELAY_MARKER, RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER, DOOR_MARKER, RELAY_LINE_MARKER
 ])
 
 export function innerHeaders(asked: Readonly<Record<string, string>>, outer: SealOuter): Record<string, string> {

@@ -19,6 +19,7 @@ import { createV2 } from '../../registry/src/v2-routes'
 import { deviceIdFor } from '../../src/main/account-v2'
 import { createCanvasBridge, loopbackDialer } from '../../src/main/canvas-bridge'
 import { createCanvasLink, type CanvasLink } from '../../src/main/canvas-link'
+import { relayLineHeaders } from '../../src/main/seal-proof'
 import { createSealTerminus, isSealPath, routeSeal, type SealTerminus, type SealTerminusDeps } from '../../src/main/canvas-seal-terminus'
 import type { DeviceKey, DeviceSigner, DeviceVerifier } from '../../src/shared/seal2/handshake'
 import { RELAY_SESSION_HEADER } from '../../src/shared/machine-relay'
@@ -147,7 +148,8 @@ export async function startRelayWorld(companion: (terminus: () => SealTerminus |
       lines.push(line)
       link.send(line)
     },
-    dial: loopbackDialer(port)
+    // As index.ts dials the canvas line: with the line's own proof (seal-proof.ts).
+    dial: loopbackDialer(port, undefined, relayLineHeaders())
   })
   link.onFrame((line) => {
     lines.push(line)

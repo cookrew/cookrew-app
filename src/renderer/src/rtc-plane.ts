@@ -14,6 +14,7 @@ import { heldScope, machineLeft, registerScopeState, relayRequestFor } from './m
 import { authHeaders, tokenParam } from './auth-gate'
 import { BridgeWebSocket } from './path/bridge-socket'
 import { planeFetch } from './plane-fetch'
+import { sealedFetchFor } from './path/seal-plane'
 import { dataPlane } from './data-plane'
 import { RtcEventSource, type RtcLink } from './path/rtc-link'
 import { socketUrl } from './browser-stream'
@@ -152,7 +153,9 @@ const headerStream = (url: string): Pick<RtcLink, 'request'> => {
       // The relay's own stream: the same request options as any relayed call, and the account session judged by its
       // address; on the relay, at its one address like every other call (machine-scope.ts · relayRequestFor).
       const sent = relayRequestFor(url, { ...headers, ...authHeaders() })
-      const response = await fetch(sent.url, { method, signal, ...apiRequestInit(), headers: sent.headers })
+      // On the sealed session when the machine is on v2 here (path/seal-plane.ts): an event stream is a body that has not ended.
+      const sealed = sealedFetchFor(url, { method, signal, headers: { ...headers, ...authHeaders() } })
+      const response = await (sealed ?? fetch(sent.url, { method, signal, ...apiRequestInit(), headers: sent.headers }))
       // A page where a stream was due is a failed connect, as EventSource holds it.
       const stream = response.headers.get('content-type')?.includes('text/event-stream') === true
       return stream || !response.ok ? response : new Response(null, { status: 502 })

@@ -3,6 +3,8 @@ import { cookrew } from '../api'
 import { clientBase } from '../api-base'
 import { authHeaders, authStore } from '../auth-gate'
 import { openSeal, type SealClient } from '../path/seal-client'
+import { codeKeyForBase } from '../pairing-scope'
+import { sealPinFor } from '../path/seal-pin'
 import { sealFetchFor } from './seal-fetch'
 import { onTheMacsOwnPage } from './unlock-reach'
 
@@ -46,6 +48,6 @@ export async function openApproveApi(): Promise<ApproveApi | null> {
   const code = authStore().connectCode()
   if (code === null) return null
   const base = clientBase()
-  const client = await openSeal({ url: (path) => `${base}${path}`, code, fetchFn: sealFetchFor(base) })
+  const client = await openSeal({ url: (path) => `${base}${path}`, code, fetchFn: sealFetchFor(base), pin: sealPinFor(codeKeyForBase(base), code) })
   return sealedApproveApi(client, authHeaders)
 }

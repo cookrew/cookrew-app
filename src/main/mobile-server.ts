@@ -1,3 +1,5 @@
+import { cameOverRelayLine } from './seal-proof'
+import { SEALED_ONLY_ERROR, type SealMarks } from './seal-marks'
 import http from 'node:http'
 import https from 'node:https'
 import type net from 'node:net'
@@ -335,6 +337,8 @@ export interface MobileServerDeps {
   rendererDir: string
   /** The sealed session's end (canvas-seal-terminus.ts). */
   sealTerminus?: () => SealTerminus | undefined
+  /** Who is refused in the clear on the relay line (seal-marks.ts). */
+  sealMarks?: () => SealMarks | undefined
   /** electron-vite renderer URL; proxied to phones in development. */
   rendererDevUrl?: string
   /**
@@ -1268,6 +1272,13 @@ export async function handle(
   // `x-cookrew-device` headers are taken off the request whatever they say, so
   // only the bridge can name a phone here. See relay-device.ts.
   const bridgeDevice = takeRelayDevice(request)
+
+  // A device that speaks cookrew-seal/2, or every device once the owner said so,
+  // is answered nothing in the clear on the relay line (seal-marks.ts says what
+  // that does and does not stop). Sealed requests and the direct link are not this.
+  if (cameOverRelayLine(request) && deps.sealMarks?.()?.refuses(bridgeDevice?.deviceId ?? null)) {
+    return respondJson(response, 403, { error: SEALED_ONLY_ERROR })
+  }
 
   // Step 3: /<slug>/... addresses ONE workspace session. The path is rewritten
   // to what the existing handlers expect, and `scope` carries which session

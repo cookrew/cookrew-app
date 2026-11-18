@@ -30,6 +30,7 @@ const REGISTERED: Record<string, readonly string[]> = {
   'machine-session.ts': ['machine session'],
   'path-link.ts': ['path link'],
   'path/companion.ts': ['path switch memory'],
+  'path/seal-plane.ts': ['sealed sessions'],
   'pictures/use-picture.ts': ['pictures'],
   'plane-health.ts': ['plane health'],
   'prompt/input-refused.ts': ['refused input'],

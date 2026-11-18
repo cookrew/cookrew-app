@@ -1,13 +1,23 @@
-import { checkReplaced, concat, startHandshake, type SealRecord, type SealSession } from '../../../shared/canvas-seal'
+import { checkReplaced, concat, type SealRecord, type SealSession } from '../../../shared/canvas-seal'
 import { createInbox, createRecordReader, decodeFrame, encodeFrame, encodeRecord, type Inbox, type SealFrame } from '../../../shared/canvas-seal-wire'
+import { startCodeHandshake } from '../../../shared/seal2/handshake'
+import { readBody, sealedFetch } from '../../../shared/seal2/http'
+import { runSeal2Link, Seal2RefusedError, shakeHandsOverHttp } from '../../../shared/seal2/http-link'
+import type { Seal2Session } from '../../../shared/seal2/records'
 
 /**
  * THE PHONE'S END OF THE SEALED SESSION (main/canvas-seal-terminus.ts).
  *
- * One handshake on the connect code, then HTTP exchanges as frames inside records:
- * a long GET down, POSTs up, because the relay carries no WebSocket. The relay sees
- * ciphertext and sizes. It has never seen the code, so it cannot finish the handshake
- * as either end, and nothing is sent until the Mac has proved it holds the code too.
+ * One handshake on the connect code, then HTTP exchanges inside records: a long
+ * GET down, POSTs up, because the relay carries no WebSocket. The relay sees
+ * ciphertext and sizes. It has never seen the code, so it cannot finish the
+ * handshake as either end, and nothing is sent until the Mac has proved it holds
+ * the code too.
+ *
+ * cookrew-seal/2 FIRST (shared/seal2/): the hello offers v2 in v1's own shape, so
+ * a Mac from before v2 answers v1 and this still works with it. Once a code's Mac
+ * has answered v2, `pin` remembers it and a v1 answer for that code is refused:
+ * a carrier that strips the offer gets an error, never a quieter session.
  */
 
 /** Well inside the Mac's SEAL_SILENT_MS: a phone that only reads is taken for gone. */
@@ -22,6 +32,12 @@ const DOWN_TRIES = 8
 
 export type SealRefusal = 'code' | 'replaced' | 'proof'
 
+/** What this page remembers of a code's Mac: that it speaks v2 (path/seal-pin.ts). */
+export interface SealVersionPin {
+  v2(): boolean
+  sawV2(): void
+}
+
 const REFUSED: Record<SealRefusal, string> = {
   code: 'This Mac no longer knows that connect code.',
   // Said only when the Mac PROVED it with the old code (canvas-seal.ts · checkReplaced): its word, not a relay's.
@@ -30,9 +46,9 @@ const REFUSED: Record<SealRefusal, string> = {
 }
 
 /** The code is wrong, old or replaced, or the far end could not prove it. Nothing was sent. */
-export class SealRefusedError extends Error {
-  constructor(readonly why: SealRefusal) {
-    super(REFUSED[why])
+export class SealRefusedError extends Seal2RefusedError {
+  constructor(override readonly why: SealRefusal) {
+    super(why, REFUSED[why])
   }
 }
 
@@ -62,6 +78,8 @@ export interface SealClientDeps {
   readonly retryMs?: number
   readonly requestMs?: number
   readonly upMs?: number
+  /** Absent: v1 is always allowed, and nothing is remembered. */
+  readonly pin?: SealVersionPin
 }
 
 interface Waiting {
@@ -79,28 +97,51 @@ const codeBytes = (encoded: string): Uint8Array => {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
-async function shakeHands(deps: SealClientDeps, fetchFn: typeof fetch): Promise<SealSession> {
-  const post = (path: string, body: unknown): Promise<Response> => fetchFn(deps.url(path), { method: 'POST', body: JSON.stringify(body) })
-  const started = await startHandshake(codeBytes(deps.code))
-  const hello = await post('/~seal/hello', started.hello)
-  if (hello.status === 403) {
-    const said = (await hello.json().catch(() => null)) as { replaced?: unknown } | null
-    const replaced = said !== null && typeof said === 'object' && (await checkReplaced(codeBytes(deps.code), started.hello, said.replaced).catch(() => false))
-    throw new SealRefusedError(replaced ? 'replaced' : 'code')
+/** v2 if the Mac speaks it, v1 if it is a Mac from before (and the pin allows), and nothing else. */
+async function shakeHands(deps: SealClientDeps, fetchFn: typeof fetch) {
+  const code = codeBytes(deps.code)
+  const started = await startCodeHandshake(code, { allowV1: !(deps.pin?.v2() ?? false) })
+  const http = { url: deps.url, fetchFn, retryMs: deps.retryMs, upMs: deps.upMs }
+  const done = await shakeHandsOverHttp(http, started, async (said) => {
+    const replaced = said !== null && (await checkReplaced(code, started.hello, said.replaced).catch(() => false))
+    return new SealRefusedError(replaced ? 'replaced' : 'code')
+  }).catch((error: unknown) => {
+    throw error instanceof Seal2RefusedError && !(error instanceof SealRefusedError) ? new SealRefusedError('proof') : error
+  })
+  if (done.version === 2) deps.pin?.sawV2()
+  return done
+}
+
+/** The same client, on a v2 session: each request one stream. */
+function seal2Client(deps: SealClientDeps, fetchFn: typeof fetch, session: Seal2Session): SealClient {
+  const link = runSeal2Link({ url: deps.url, fetchFn, retryMs: deps.retryMs, upMs: deps.upMs }, session)
+  return {
+    async request(input) {
+      if (link.connection.closed) throw new Error('The sealed session has ended.')
+      const stop = new AbortController()
+      const timer = setTimeout(() => stop.abort(), deps.requestMs ?? REQUEST_MS)
+      try {
+        const answer = await sealedFetch(link.connection, { method: input.method, path: input.path, headers: input.headers, body: input.body, signal: stop.signal })
+        return { status: answer.status, body: await readBody(answer.body) }
+      } catch (error) {
+        throw stop.signal.aborted ? new Error('No answer from the Mac.') : error instanceof Error ? error : new Error(String(error))
+      } finally {
+        clearTimeout(timer)
+      }
+    },
+    close: () => link.close()
   }
-  if (!hello.ok) throw new Error(`The sealed session did not open (${hello.status}).`)
-  const answer = (await hello.json()) as { session: string; accept: { e: string; proof: string } }
-  const done = await started.finish(answer.accept).catch(() => null)
-  if (done === null) throw new SealRefusedError('proof')
-  const finish = await post('/~seal/finish', { session: answer.session, ...done.finish })
-  if (finish.status === 403) throw new SealRefusedError('proof')
-  if (!finish.ok) throw new Error(`The sealed session did not open (${finish.status}).`)
-  return done.session
 }
 
 export async function openSeal(deps: SealClientDeps): Promise<SealClient> {
   const fetchFn = deps.fetchFn ?? ((input, init) => fetch(input, init))
-  const session = await shakeHands(deps, fetchFn)
+  const done = await shakeHands(deps, fetchFn)
+  if (done.version === 2) return seal2Client(deps, fetchFn, done.session as Seal2Session)
+  return seal1Client(deps, fetchFn, done.session)
+}
+
+/** A Mac from before v2: canvas-seal.ts records, JSON frames, one session-wide window. */
+function seal1Client(deps: SealClientDeps, fetchFn: typeof fetch, session: SealSession): SealClient {
   const waiting = new Map<number, Waiting>()
   const stop = new AbortController()
   let closed = false

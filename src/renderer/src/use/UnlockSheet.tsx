@@ -13,6 +13,7 @@ import { codeKeyForBase, takeNextCode } from '../pairing-scope'
 import { authHeaders, authStore, connectCodeFromInput } from '../auth-gate'
 import { seated } from '../device-seat'
 import { openSeal, SealRefusedError, type SealClient } from '../path/seal-client'
+import { sealPinFor } from '../path/seal-pin'
 import { closeUnlockSheet, subscribeUnlockSheet, unlockSheetOpen } from './unlock-sheet-store'
 import { openUnlockGrantSheet } from './unlock-grant-store'
 import { prepareUnlock, runUnlock, type UnlockFlowDeps } from './unlock-flow'
@@ -175,7 +176,7 @@ function useUnlockWay(attempt: number): Way {
     // or a slug. Read once: the session is with the machine it was opened to,
     // and stays there if another is entered before the sheet is gone.
     const base = clientBase()
-    openSeal({ url: (path) => `${base}${path}`, code, fetchFn: sealFetchFor(base) })
+    openSeal({ url: (path) => `${base}${path}`, code, fetchFn: sealFetchFor(base), pin: sealPinFor(codeKeyForBase(base), code) })
       .then((opened) => {
         client = opened
         if (!alive) return opened.close()
