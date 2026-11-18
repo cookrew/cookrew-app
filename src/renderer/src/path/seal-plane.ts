@@ -328,7 +328,8 @@ export function viaSeal(url: string): SealRoute | null {
 
 /** Did the machine refuse this plain request because this device is to speak sealed? */
 export async function refusedInTheClear(response: Response): Promise<boolean> {
-  if (response.status !== 403) return false
+  // Read from a copy, so the caller still has the whole answer; anything that cannot be copied is no such refusal.
+  if (response.status !== 403 || typeof response.clone !== 'function') return false
   const said = (await response.clone().json().catch(() => null)) as { error?: unknown } | null
   return said?.error === SEALED_ONLY
 }
