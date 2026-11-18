@@ -246,7 +246,10 @@ describe('the setup card and the entry', () => {
   it('has no other way to open by itself, on the phone or a relayed page', () => {
     const src = path.join(__dirname, '../src')
     const read = (file: string): string => readFileSync(path.join(src, file), 'utf8')
-    const files = readdirSync(src, { recursive: true, encoding: 'utf8' }).filter((file) => /\.tsx?$/.test(file))
+    // Named with '/' on every OS: Windows lists them with backslashes.
+    const files = readdirSync(src, { recursive: true, encoding: 'utf8' })
+      .filter((file) => /\.tsx?$/.test(file))
+      .map((file) => file.split(path.sep).join('/'))
     const naming = (word: RegExp): string[] => files.filter((file) => word.test(read(file)))
     expect(naming(/shouldAutoOpen|cr-routing-seen/)).toEqual([])
     expect(naming(/<RoutingPanel\b/)).toEqual(['renderer/src/App.tsx'])

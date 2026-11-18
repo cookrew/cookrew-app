@@ -1,9 +1,10 @@
 import http from 'node:http'
 import { X509Certificate } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { createDesktopCert, RENEW_BEFORE_MS, type AuthedFetch } from '../src/main/desktop-cert'
 import { NameCertStore, namesCertDir } from '../src/main/name-cert-store'
 import { DEFAULT_NAME_ZONE, wildcardFor } from '../src/shared/reach-names'
@@ -181,7 +182,7 @@ describe('ordering a certificate for this Mac’s names', () => {
     // Key and chain both land 0600 in ~/.cookrew/certs/names.
     const dir = namesCertDir(base)
     for (const file of ['key.pem', 'chain.pem']) {
-      expect(statSync(path.join(dir, file)).mode & 0o777).toBe(0o600)
+      expectMode(path.join(dir, file), 0o600)
     }
     expect(readFileSync(path.join(dir, 'key.pem'), 'utf8')).toContain('PRIVATE KEY')
     expect(log.join('\n')).toContain('a certificate for')

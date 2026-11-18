@@ -1,4 +1,7 @@
 import { LEGAL_PUBLISHED } from './site-legal-entity'
+import type { DemoKey } from './site-frames'
+import { currentLang } from './site-lang'
+import { ZH_COMPARE, ZH_DEFINITION, ZH_FAQ, ZH_FEATURES, ZH_HEADLINE, ZH_HEADLINE_SUB, ZH_PILLARS, ZH_ROADMAP, ZH_START_FAQ, ZH_START_HOWTO, ZH_STATUS } from './site-content-zh'
 
 /**
  * THE WORDS — every sentence cookrew.dev says about itself, in one place.
@@ -10,7 +13,11 @@ import { LEGAL_PUBLISHED } from './site-legal-entity'
  * questions with one-paragraph answers — and the same sentences appear in
  * the HTML, in the JSON-LD, and in llms.txt, so every reader gets one story.
  *
- * Nothing here is a claim about the future. Every number carries its date.
+ * Nothing here is a claim about the future, except a claim that says so: the
+ * three pillars and the roadmap give every sentence a STATUS (shipped, in
+ * dev, beta, manual experiment, planned), and the page prints that status
+ * beside it. A planned thing never appears without its label. Every number
+ * carries its date.
  */
 
 export const SITE_NAME = 'Cookrew'
@@ -19,15 +26,18 @@ export const GITHUB_REPO = 'https://github.com/cookrew/cookrew-app'
 
 /** The one-sentence entity definition. Meta description, JSON-LD, llms.txt, the hero. */
 export const DEFINITION =
-  'Cookrew is an open-source desktop workspace for running a team of AI coding agents on one canvas. It runs Claude Code, Codex, OpenCode and Pi side by side, records every agent turn as a checkpoint, and can serve a saved team at a cookrew.dev address where anyone can open a live session from the Cookrew app.'
+  'Cookrew is an open-source desktop workspace for AI coding agents on every machine you use. Claude Code, Codex, OpenCode and Pi work side by side on one canvas, every agent turn is a checkpoint, and one account lets you follow and answer your agents from the desktop or any browser.'
 
-export const HEADLINE = 'Run a team of AI coding agents on one canvas — or rent someone’s.'
+export const HEADLINE = 'Any device. Any harness. Any model.'
+
+/** The line under the headline: what "any model" means today, so it does not read as a gateway we run. */
+export const HEADLINE_SUB = 'One account — and the models you bring: your subscriptions, API keys or local models.'
 
 export const MARKET_DEFINITION =
   'The Cookrew marketplace lists served teams: teams of AI agents that stay on their author’s machine. A caller signs in with a cookrew.dev account, buys a seat once if the team is priced, and gets a sandboxed session of their own. The relay carries encrypted bytes it cannot read; money goes directly from caller to author and cookrew.dev takes no cut.'
 
 export const CHECKPOINT_DEFINITION =
-  'In Cookrew every agent turn is a checkpoint. You can scrub back through a session and fork a new agent from any past turn. Exporting, serving or calling a team copies from a checkpoint and never touches the original session.'
+  'In Cookrew every agent turn is a checkpoint. You can scrub back through a session and fork a new agent from any past turn. Forking or exporting copies from a checkpoint and never touches the original session.'
 
 /** Dated facts. The date is part of the fact; an undated number is a rumour. */
 export const FACTS = {
@@ -48,7 +58,7 @@ export const FAQ: Faq[] = [
   { q: 'What is Cookrew?', a: DEFINITION },
   {
     q: 'Is Cookrew free and open source?',
-    a: `Yes. Cookrew is ${FACTS.license}-licensed and developed in the open at ${GITHUB_REPO}. The desktop app is free. Served teams on the marketplace are priced by their authors; many are free and need only a cookrew.dev account.`
+    a: `Yes. Cookrew is ${FACTS.license}-licensed and developed in the open at ${GITHUB_REPO}. The desktop app is free.`
   },
   {
     q: 'Which AI coding agents does Cookrew run?',
@@ -56,34 +66,25 @@ export const FAQ: Faq[] = [
   },
   {
     q: 'Can I run Claude Code and Codex together?',
-    a: 'Yes. Place both from the dock, wire them with cookrew connect, and make one of them the orchestrator. Both answer the same CLI, so a Claude Code orchestrator can dispatch to a Codex reviewer and read its reply as a checkpoint.'
+    a: 'Yes. Start both — from the prompt box at the foot of the window, or with cookrew recruit --preset — wire them with cookrew connect, and make one of them the orchestrator. Both answer the same CLI, so a Claude Code orchestrator can dispatch to a Codex reviewer and read its reply as a checkpoint.'
   },
   {
     q: 'Do I need my own API keys?',
-    a: 'Each harness uses its own login or key on your machine, exactly as it does in a terminal. Cookrew adds none of its own and never sees them. Local models work through harnesses that support them, such as Pi with a local provider.'
-  },
-  { q: 'What is the Cookrew marketplace?', a: MARKET_DEFINITION },
-  {
-    q: 'What does “serving a team” mean?',
-    a: 'Serving publishes a saved team at cookrew.dev/@you/team-name. The team keeps running on your machine; each caller gets a sandboxed session workspace minted for them, which you can end at any time. The registry lists the address and marks it live only while your relay connection is up.'
+    a: 'You bring the models; Cookrew offers none of its own. By default a card runs its harness directly, on that harness’s own login or key, exactly as in a terminal. Install Magpie (usemagpie.ai) on the same machine and pick a default model in the Routing panel, and new Claude Code, Codex, OpenCode and Pi cards are routed through it instead, using the subscriptions, API keys or local models you set up there. Either way the provider keys stay out of Cookrew. An official Cookrew gateway is planned.'
   },
   {
-    q: 'How much does a seat cost, and who gets the money?',
-    a: 'The author sets the price of a seat, charged once at the door and never per question — the seat follows you to any device you sign in on, and the author can end it. Card payments go through the author’s own Stripe checkout; USDC payments use x402. cookrew.dev holds none of it and takes nothing.'
+    q: 'Can other people join my workspace?',
+    a: 'Not yet. Today a workspace belongs to one account: its agents, notes and browsers. Cloud Workspace — teammates, clients or family working with agents in one workspace, with roles, an isolated sandbox and an audit trail — is planned, and waits on security work that has to land first.'
   },
   {
     q: 'Is my code sent to cookrew.dev?',
-    a: `cookrew.dev does not store your code. A served session runs on the author’s machine inside a sandbox. A call carried by the relay is sealed in the caller’s app (${FACTS.relayCipher}) to the door’s key, so the relay moves ciphertext it cannot read. Your own canvas stays on your machine unless you serve a team, publish a preset, or reach your own machine through the relay, a path that is not end-to-end sealed yet${LEGAL_PUBLISHED ? ` (see ${SITE_ORIGIN}/privacy)` : ''}.`
+    a: `cookrew.dev does not store your code. Saving a team writes a file on your machine. Your canvas leaves it only if you publish a team or a preset to cookrew.dev, or open it from the console through the relay. The console takes the local network or Tailscale when it can; through the relay the traffic is encrypted in transit and not end-to-end sealed yet${LEGAL_PUBLISHED ? ` (see ${SITE_ORIGIN}/privacy)` : ''}.`
   },
   {
     q: 'Can I reach my agents from a browser or from my phone?',
-    a: 'Yes. Sign in to the console and every machine of your account is there with its workspaces, agents and transcripts, in any browser and on a phone. It takes the local network or Tailscale when it can and the relay when it cannot; through the relay the traffic is encrypted in transit and not end-to-end sealed yet. A served team of someone else’s opens in the Cookrew app.'
+    a: 'Yes. Sign in to the console and every machine of your account is there with its workspaces, agents and transcripts, in any browser and on a phone. It takes the local network or Tailscale when it can and the relay when it cannot; through the relay the traffic is encrypted in transit and not end-to-end sealed yet.'
   },
   { q: 'What is a checkpoint?', a: CHECKPOINT_DEFINITION },
-  {
-    q: 'How do I install a team from a link?',
-    a: 'Paste the team’s address into Cookrew → Import a team. The app shows the team’s face first and asks before placing anything; a link on its own never installs.'
-  }
 ]
 
 export interface CompareRow {
@@ -100,8 +101,8 @@ export const COMPARE: CompareRow[] = [
   { question: 'Can you go back to an earlier turn?', chat: 'Scroll up', singleAgent: 'Rewind in some harnesses', cookrew: 'Every turn is a checkpoint; fork an agent from any of them' },
   { question: 'Can you see the whole team’s state?', chat: 'No', singleAgent: 'One terminal at a time', cookrew: 'Every agent’s state under its name, across machines' },
   { question: 'Can you save and reuse a team?', chat: 'No', singleAgent: 'Config files', cookrew: 'Save a team; create a workspace from it in one command' },
-  { question: 'Can someone else use your team?', chat: 'Share a prompt', singleAgent: 'Share a repo', cookrew: 'Serve it at cookrew.dev; they get a live sandboxed session' },
-  { question: 'Works from a phone?', chat: 'Yes', singleAgent: 'No', cookrew: 'The companion: the same zoom, cards, transcripts, voice' }
+  { question: 'Can each agent use the models you choose?', chat: 'The vendor’s', singleAgent: 'One provider per CLI', cookrew: 'Every harness routed through your own gateway' },
+  { question: 'Works from a phone?', chat: 'Yes', singleAgent: 'No', cookrew: 'The console in any browser: machines, agents, transcripts' }
 ]
 
 export interface FeatureSpec {
@@ -111,8 +112,10 @@ export interface FeatureSpec {
   short: string
   definition: string
   pts: string[]
-  /** Frame keys from site-frames.ts (overview) — detailed step sequences are added from sequences. */
-  frames: string[]
+  /** Pictures from site-frames.ts DEMO: the current UI on demo data. Empty: no picture shows this yet, and none stands in. */
+  frames: DemoKey[]
+  /** The twenty-second clip on demo data (site-motion.ts CANVAS_CLIP), above the stills. */
+  clip?: true
   faq: Faq[]
   related: string[]
 }
@@ -125,7 +128,8 @@ export const FEATURES: FeatureSpec[] = [
     definition:
       'The Cookrew canvas is a zoom you walk by clicking: your machines, a machine’s workspaces, one workspace’s crew tied by ink cables, one agent’s card, and its whole transcript. Each agent is a live terminal with a name, a role and a turn tracker; sticky notes hold specs and handovers; browser cards are real Chromium tabs an agent can drive; and the cables say who hands work to whom.',
     pts: ['Agent terminals with a name, a role and a live turn tracker', 'Sticky notes for specs, reviews and handovers', 'Connected browser cards that agents can drive', 'Wires say who hands work to whom, and who reviews whom'],
-    frames: ['canvas', 'task'],
+    frames: ['hitlDesk', 'artifacts'],
+    clip: true,
     faq: [
       { q: 'Is the terminal on a card a real terminal?', a: 'Yes. Each card is a PTY hosted by tmux or herdr, running the harness’s own CLI. What you see is what the agent sees.' },
       { q: 'Can an agent use a browser card?', a: 'Yes. Browser cards are Chromium pages driven over the DevTools protocol; an agent can navigate, click, fill and read them with the cookrew browser commands.' }
@@ -135,11 +139,11 @@ export const FEATURES: FeatureSpec[] = [
   {
     slug: 'harnesses',
     title: 'Run Claude Code, Codex, OpenCode and Pi in one team',
-    short: 'Claude Code, Codex, OpenCode, Pi and a plain shell ship in the dock. Add by link brings somebody else’s crew into your dock.',
+    short: 'Claude Code, Codex, OpenCode, Pi and a plain shell ship as presets. Each runs on its own login, or through your own Magpie gateway.',
     definition:
       'A harness is an agent CLI Cookrew knows how to host, watch and dispatch to. Claude Code, Codex, OpenCode and Pi ship as presets; each declares its capabilities in Cookrew’s registry, so orchestration is the same command line whatever answers.',
-    pts: ['Pick a preset, click the canvas, the teammate boots and its card opens', 'One CLI for every harness; the orchestrator does not care which one answers', 'The turn tracker reports thinking, waiting and replied from the harness itself, no scraping', 'Add by link puts a team someone else serves into your dock'],
-    frames: ['harness'],
+    pts: ['Pick a preset, click the canvas, the teammate boots and its card opens', 'One CLI for every harness; the orchestrator does not care which one answers', 'The turn tracker reports thinking, waiting and replied from the harness itself, no scraping', 'Route each harness through your own Magpie gateway, or run it directly on its own login'],
+    frames: ['board'],
     faq: [
       { q: 'Can I add a harness Cookrew does not ship?', a: 'A harness is a registry entry that declares how it starts, how its turns are detected and what it can do. New ones are added there without touching call sites.' }
     ],
@@ -151,9 +155,9 @@ export const FEATURES: FeatureSpec[] = [
     short: 'Scrub back through a session and fork a new agent from any past turn; nothing ever touches the original.',
     definition: CHECKPOINT_DEFINITION,
     pts: ['The rail beside the live terminal lists every turn as it lands', 'Hold the rail and drag: the transcript follows you back; drag far and the checkpoints open as a list of titled turns', 'Fork from turn N; the original keeps running', 'History trace: each checkpoint carries the block the agent actually produced'],
-    frames: ['trace', 'rail'],
+    frames: [],
     faq: [
-      { q: 'What happens to my session when I fork or export?', a: 'Nothing. Forking, exporting and serving all copy from a checkpoint; the original session is never touched.' },
+      { q: 'What happens to my session when I fork or export?', a: 'Nothing. Forking and exporting both copy from a checkpoint; the original session is never touched.' },
       { q: 'Where do checkpoints come from?', a: 'From the harness’s own session record: Cookrew reads the transcript the agent writes, so a checkpoint is the turn as the agent saw it, not a scrape of the screen.' }
     ],
     related: ['canvas', 'board', 'marketplace']
@@ -165,7 +169,7 @@ export const FEATURES: FeatureSpec[] = [
     definition:
       'Cookrew’s fleet view is the top of the zoom: every machine with its workspaces and how many agents each one holds, and inside a workspace every agent with its state — working, done, resting, offline or waiting on you — under its name. Red is kept for the agent that is waiting on you.',
     pts: ['Machines, then workspaces, then a crew: one click each', 'Each agent shows working, done, resting, offline or waiting', 'Red is kept for the agent waiting on you', 'The command box gathers what is waiting on you in one list'],
-    frames: ['board'],
+    frames: ['devices'],
     faq: [{ q: 'Does the fleet view show offline agents?', a: 'Yes. An agent with no live pane shows as offline under its name; its history is still there.' }],
     related: ['checkpoints', 'workspaces']
   },
@@ -175,20 +179,20 @@ export const FEATURES: FeatureSpec[] = [
     short: 'People and agents share one CLI. Whatever you can type, the orchestrating agent can type too.',
     definition:
       'The cookrew CLI is the one interface for people and agents alike: recruit a teammate, connect two cards, ask an agent and wait for its reply, read its status, fork it from a turn, save a team, create a workspace from a template. An orchestrating agent runs the same commands you do.',
-    pts: ['recruit, connect, ask, status, fork, team save, workspace create', 'ask waits for the reply and returns it; status is thinking, waiting, replied or idle', 'Saved teams snapshot nodes, wires and turn histories in one file', 'The same CLI works from the phone companion and from a served session'],
+    pts: ['recruit, connect, ask, status, fork, team save, workspace create', 'ask waits for the reply and returns it; status is thinking, waiting, replied or idle', 'Saved teams snapshot nodes, wires and turn histories in one file', 'Every agent on every harness answers the same commands'],
     frames: [],
     faq: [{ q: 'Can an agent orchestrate other agents?', a: 'Yes. Make an agent the workspace’s orch; it can recruit, connect, ask and read status exactly as a person can, which is what makes a commander leading a crew a native way to work.' }],
     related: ['harnesses', 'workspaces']
   },
   {
     slug: 'mobile',
-    title: 'The phone companion: your crew, cards and transcripts on a phone',
-    short: 'Scan a QR code and the same canvas is in your pocket: tap a card for the full session, dictate a brief, hear the reply.',
+    title: 'Your agents on a phone: the console, or the companion on your Wi-Fi',
+    short: 'Open the console in a phone’s browser and every machine of your account is there: crews, cards, transcripts and a box to reply. On the same Wi-Fi, the companion opens from a QR code.',
     definition:
-      'The Cookrew phone companion is the same workspace served to a phone over Wi-Fi or Tailscale: the same zoom by touch — crew, card, whole transcript with its rail — voice input and spoken replies, and a fixed slug URL per workspace for a bookmark.',
-    pts: ['cookrew mobile prints the QR code; scan it and you are in', 'The same zoom by touch: crew, card, transcript', 'Voice in, spoken replies out', 'Served teams can be imported from the phone too'],
-    frames: ['mobile'],
-    faq: [{ q: 'Does the phone need the app installed?', a: 'No. The companion is a web page served by your desktop app; a paired phone opens it in any browser.' }],
+      'A phone reaches your agents two ways. Signed in, the console opens in any phone browser, on any network, with every machine of your account. On the same Wi-Fi or Tailscale, the companion your desktop app hosts opens from a QR code: the same zoom by touch — crew, card, whole transcript with its rail — voice input and spoken replies, and a fixed slug URL per workspace for a bookmark.',
+    pts: ['The console: any phone browser, any network, every machine of your account', 'The companion: cookrew mobile prints a QR code on your Wi-Fi or Tailscale', 'The same zoom by touch: crew, card, transcript', 'Voice in, spoken replies out'],
+    frames: ['hitlPhone', 'phoneWorkspaces'],
+    faq: [{ q: 'Does the phone need an app installed?', a: 'No. The console and the companion are both web pages; a phone opens either in its browser.' }],
     related: ['canvas', 'board']
   },
   {
@@ -197,9 +201,9 @@ export const FEATURES: FeatureSpec[] = [
     short: 'Switching a workspace switches the whole team and the whole canvas. Create one from a saved template and a full crew is on duty at once.',
     definition:
       'A Cookrew workspace is a project directory with its own canvas, team and history. A saved team is a template of nodes, wires and turn histories; cookrew workspace create --team puts a saved formation to work in a new directory immediately.',
-    pts: ['Named workspaces beside the session workspaces minted for callers', 'workspace create --team puts a saved formation to work immediately', 'One window per workspace is a flag the dev machine runs in production'],
-    frames: ['workspaces'],
-    faq: [{ q: 'What is a session workspace?', a: 'A workspace minted for one caller of a served team, sandboxed, and destroyed when the session ends, by the caller or by you.' }],
+    pts: ['A workspace is a project directory with its own canvas, crew and history', 'workspace create --team puts a saved formation to work immediately', 'Every workspace of every machine is listed in the console'],
+    frames: ['browserCard', 'docsCrew'],
+    faq: [{ q: 'What is in a saved team?', a: 'Its cards, the wires between them and their turn histories, in one file. Saving a team never touches the original session.' }],
     related: ['cli', 'marketplace']
   },
   {
@@ -208,7 +212,7 @@ export const FEATURES: FeatureSpec[] = [
     short: 'The marketplace lists doors, not copies. A team stays on its author’s machine; you sign in, buy a seat once if it is priced, and get a live sandboxed session of your own.',
     definition: MARKET_DEFINITION,
     pts: ['One cookrew.dev link: served on the author’s side, opened on yours', 'The relay carries bytes it cannot read; the author can end a session any time', '200 signed delivery · 401 sign in · 402 pay · 403 not covered — money goes straight to the author', 'The placed card is the team’s own terminal, the same PTY its author sees'],
-    frames: ['market'],
+    frames: [],
     faq: [
       { q: 'Can the team’s author see what I type?', a: 'Yes. The session runs on their machine, so the author can see what you send and what their agents do with it, and can end the session. The relay in between cannot read it.' },
       { q: 'What can a served team access on my computer?', a: 'No files and no programs: it runs on the author’s machine in a sandbox, and the app only carries keystrokes and screen bytes. Like any terminal, text you select in its card is copied to your clipboard, so a served team can place text there; it cannot read your clipboard.' }
@@ -217,11 +221,19 @@ export const FEATURES: FeatureSpec[] = [
   }
 ]
 
+/**
+ * THE FEATURES THE SITE POINTS AT (2026-11-16). The marketplace page is still
+ * built, so an old link lands somewhere true, but nothing lists it — not the
+ * front page, the sitemap, llms.txt or another feature's related links —
+ * while sharing a team waits on security work and the owner's ruling.
+ */
+export const LISTED_FEATURES: readonly FeatureSpec[] = FEATURES.filter((f) => f.slug !== 'marketplace')
+
 /** The two steps on /start. Orchestration is the orch's work; a person places one agent and asks. */
 export const START_HOWTO: { name: string; text: string; detail: string[] }[] = [
   {
     name: 'Place an agent, and let it orchestrate your workflow',
-    text: 'Install Cookrew, pick a preset in the dock — Claude Code, Codex, OpenCode or Pi — and click the canvas. Make that agent the orch and tell it what you want done. It recruits teammates, drops notes and opens browsers with the same CLI you have; you read the replies on the rail.',
+    text: 'Install Cookrew and type what you want done into the prompt box at the foot of the window: with nobody targeted it starts a new agent — Claude Code, Codex, OpenCode or Pi — and names it from what you wrote. Make that agent the orch. It recruits teammates, drops notes and opens browsers with the same CLI you have; you read the replies on the rail.',
     detail: [
       'cookrew orch "Forge" — one agent is the door; the rest is its crew',
       'Ask it: "recruit a reviewer on Codex, a note with the spec, a browser on the docs" — it runs cookrew recruit, connect, note create, browser create',
@@ -229,23 +241,122 @@ export const START_HOWTO: { name: string; text: string; detail: string[] }[] = [
     ]
   },
   {
-    name: 'Save the team as a preset, and choose to publish it',
-    text: 'Select the cards and save the team: nodes, wires and turn histories in one file, the original session untouched. Keep it as a preset for your next workspace, or press SERVE to publish it at cookrew.dev/@you/team — free or priced, with a one-sentence summary and tags — where anyone can open a sandboxed session from the Cookrew app.',
+    name: 'Save the team, and start the next project with it',
+    text: 'Select the cards and save the team: nodes, wires and turn histories in one file, the original session untouched. Create your next workspace from it and the whole crew is on duty at once.',
     detail: [
-      'cookrew team save "MY CREW" · cookrew workspace create "Next project" --team "MY CREW"',
-      'SERVE: your cookrew.dev account signs the listing; it is live while your relay connection is up',
-      'You can end any caller’s session at any time; money, when priced, goes straight to you'
+      'cookrew team save "MY CREW"',
+      'cookrew workspace create "Next project" --team "MY CREW"',
+      'Follow the new crew from the console, on any machine of your account'
     ]
   }
 ]
 
 export const START_FAQ: Faq[] = [
   { q: 'What do I need before installing Cookrew?', a: 'A Mac with Apple Silicon or Windows (preview), Node 20+ if you build from source, tmux or herdr to host terminals, and the agent CLIs you want to run (Claude Code, Codex, OpenCode, Pi) with their own logins.' },
-  { q: 'Do I need an account to use Cookrew?', a: 'No. The app runs entirely on your machine. A cookrew.dev account is needed only to reach your machines from the console, to serve a team on the marketplace, or to open someone else’s.' }
+  { q: 'Do I need an account to use Cookrew?', a: 'No. The app runs entirely on your machine. A cookrew.dev account is needed only to reach your machines from the console.' }
 ]
 
 /** Everything a crawler or a model needs, as plain text: /llms.txt. */
 export function llmsText(): string {
+  return llmsBody()
+}
+
+/**
+ * WHERE A CLAIM STANDS. The page prints the label beside the claim; the
+ * meaning is the legend. Checked against git and the release tags on
+ * 2026-11-16: "shipped" means in the released app (v0.6.15), "in dev" means
+ * merged on dev and not in a release.
+ */
+export type ClaimStatus = 'shipped' | 'in-dev' | 'beta' | 'experiment' | 'planned'
+
+export const STATUS: Readonly<Record<ClaimStatus, { label: string; meaning: string }>> = {
+  shipped: { label: 'Shipped', meaning: 'in the released app today' },
+  'in-dev': { label: 'In dev', meaning: 'built on the dev branch, not in a release yet' },
+  beta: { label: 'Beta', meaning: 'in use on our own devices, not distributed' },
+  experiment: { label: 'Manual experiment', meaning: 'tested once by hand, not a product feature' },
+  planned: { label: 'Planned', meaning: 'designed or intended, not built' }
+}
+
+export interface Claim {
+  status: ClaimStatus
+  title: string
+  text: string
+}
+
+export interface Pillar {
+  /** The section's anchor on the home page. */
+  id: 'gateway' | 'everywhere' | 'workspace'
+  kicker: string
+  title: string
+  lede: string
+  claims: readonly Claim[]
+  /**
+   * Its pictures (site-frames.ts DEMO), each with a sentence of what it is not when the claims beside it say
+   * more than the picture shows. Every one is the current UI on demo data, labelled as an illustration.
+   */
+  /** span: of 12 columns on a desktop (default 12, the full width); every figure takes the full width on a phone. */
+  media: readonly { key: DemoKey; span?: 4 | 6 | 8 | 12 }[]
+}
+
+export const PILLARS: readonly Pillar[] = [
+  {
+    id: 'everywhere',
+    kicker: 'see and prompt everywhere',
+    title: 'Answer your agents from anywhere',
+    lede: 'You do not have to sit at the machine your agents run on. Every machine of your account is in the console, in any browser, with its workspaces, agents and transcripts — and a reply box.',
+    claims: [
+      { status: 'shipped', title: 'The console', text: 'console.cookrew.dev lists every machine of your account. Open one and its workspaces, agents and transcripts are there to read and answer.' },
+      { status: 'shipped', title: 'Your phone is the console', text: 'On a phone the same console opens in the browser. There is no app to install.' },
+      { status: 'shipped', title: 'A machine’s screen, when you allow it', text: 'With remote control turned on for a machine, your devices can take control of its screen card for 15 minutes at a time.' },
+      { status: 'shipped', title: 'One bar for what needs you', text: 'Agents waiting on you and new replies, gathered from every workspace of a machine into one bar.' },
+      { status: 'shipped', title: 'The bar on all your machines, an alert on your phone', text: 'Since 0.6.23 the same bar also gathers what waits on you on the account’s other machines, and the console can alert your phone when an agent needs you.' },
+      { status: 'beta', title: 'Apple Watch', text: 'See who is waiting and reply from the wrist. Running on our own watches; not on the App Store or TestFlight.' },
+      { status: 'planned', title: 'One request, any device, every machine', text: 'A request that waits on you is answered once, from whichever device is at hand, across every machine of the account.' }
+    ],
+    media: [
+      { key: 'crewPhone', span: 4 },
+      { key: 'watch', span: 8 },
+      { key: 'ops' }
+    ]
+  },
+  {
+    id: 'gateway',
+    kicker: 'one route for every harness',
+    title: 'Every harness, the models you choose',
+    lede: 'Claude Code, Codex, OpenCode and Pi each expect a different model API. Cookrew can send all four through Magpie, yetone’s open-source model gateway (MIT, usemagpie.ai), installed separately on the same machine, so every agent uses the subscriptions, API keys or local models you set up there. Until you pick a default model in the Routing panel, a card runs its harness directly, on its own login.',
+    claims: [
+      { status: 'shipped', title: 'Four harnesses, one route', text: 'Claude Code, Codex, OpenCode and Pi can each be routed through the machine’s own Magpie. A plain shell is not routed.' },
+      { status: 'shipped', title: 'Provider keys stay in the gateway', text: 'Subscriptions and API keys are set up in Magpie. A routed agent is given the local gateway’s address, its gateway key and a tag naming its card — never a provider key.' },
+      { status: 'shipped', title: 'Usage per agent', text: 'Every request carries the card that made it, so the gateway counts usage agent by agent.' },
+      { status: 'experiment', title: 'Borrow another machine’s model', text: 'On 12 November 2026, Codex on one Mac ran its tools on that Mac while its model was answered by another machine’s Magpie, over an SSH tunnel set up by hand. One model, one run; no card is wired this way.' },
+      { status: 'planned', title: 'A gateway across your machines', text: 'Reach another machine’s gateway through your account, without a hand-made tunnel.' },
+      { status: 'planned', title: 'An official model gateway', text: 'Models offered through Cookrew itself. No provider agreement is in place.' }
+    ],
+    media: [{ key: 'routing' }]
+  },
+  {
+    id: 'workspace',
+    kicker: 'a room for the crew',
+    title: 'A workspace your crew shares',
+    lede: 'Today a workspace is one person’s crew: agents on different harnesses, notes and browsers on one canvas, handing work to each other. Bringing people into the same room is the next big step, and it is not built yet.',
+    claims: [
+      { status: 'shipped', title: 'Mixed harnesses, one crew', text: 'Claude Code, Codex, OpenCode and Pi agents in one workspace, wired by who can ask whom.' },
+      { status: 'shipped', title: 'Agents ask each other', text: 'Any agent can ask another and read its reply with the cookrew CLI. Notes and browser cards belong to the whole crew.' },
+      { status: 'shipped', title: 'Every turn is a checkpoint', text: 'Scrub back through a session and fork a new agent from any past turn; the original keeps running.' },
+      { status: 'planned', title: 'Cloud Workspace', text: 'Teammates, clients or family working with agents in one workspace, with roles, an isolated sandbox and an audit trail. Not available: it waits on security work that has to land first.' }
+    ],
+    media: [{ key: 'agents' }, { key: 'workspaces' }]
+  }
+]
+
+/** The roadmap, after the pitch of 2026-11-16: what is here, what is next, and what is only intended. */
+export const ROADMAP: readonly { phase: string; status: ClaimStatus; items: readonly string[] }[] = [
+  { phase: 'Now', status: 'shipped', items: ['Every machine of the account on one canvas', 'The console, in any browser and on a phone', 'Harnesses routed through your own gateway', 'One bar for what needs you, across every workspace and machine, with an alert on your phone'] },
+  { phase: 'Build', status: 'planned', items: ['Cloud Workspace: people, agents, files and evidence', 'Roles, isolation and an audit trail', 'A gateway across your machines'] },
+  { phase: 'Later', status: 'planned', items: ['Agents dispatching work between workspaces', 'Machines and models scheduled by load', 'An official model gateway'] }
+]
+
+function llmsBody(): string {
   return [
     `# ${SITE_NAME}`,
     '',
@@ -254,22 +365,53 @@ export function llmsText(): string {
     `- Website: ${SITE_ORIGIN}`,
     `- Source: ${GITHUB_REPO} (${FACTS.license})`,
     `- Getting started: ${SITE_ORIGIN}/start`,
-    `- Features: ${FEATURES.map((f) => `${SITE_ORIGIN}/features/${f.slug}`).join(', ')}`,
+    `- Features: ${LISTED_FEATURES.map((f) => `${SITE_ORIGIN}/features/${f.slug}`).join(', ')}`,
     '',
     '## Definitions',
     '',
-    `- Marketplace: ${MARKET_DEFINITION}`,
     `- Checkpoint: ${CHECKPOINT_DEFINITION}`,
+    '',
+    // Only what is shipped: a label does not travel with a sentence lifted out of this file.
+    '## What is shipped',
+    '',
+    ...PILLARS.flatMap((p) => [`### ${p.title}`, '', ...p.claims.filter((c) => c.status === 'shipped').map((c) => `- ${c.title}: ${c.text}`), '']),
+    `Everything else on ${SITE_ORIGIN}/#status (in dev, beta, a manual experiment or planned) is not available, and is not to be described as available.`,
     '',
     '## Facts',
     '',
     `- Harnesses: ${FACTS.harnesses.join(', ')}`,
     `- Platforms: ${FACTS.platforms.join(', ')}`,
-    `- Tests green: ${FACTS.testsGreen.value} (${FACTS.testsGreen.date}, ${FACTS.testsGreen.note})`,
-    `- Relay cipher: ${FACTS.relayCipher}; the relay cannot read calls to a served team. An owner reaching their own Mac through the relay is not end-to-end sealed yet${LEGAL_PUBLISHED ? ` (${SITE_ORIGIN}/privacy)` : ''}`,
+    `- Relay: an owner reaching their own machine through the relay is encrypted in transit and not end-to-end sealed yet${LEGAL_PUBLISHED ? ` (${SITE_ORIGIN}/privacy)` : ''}`,
     '',
     '## FAQ',
     '',
     ...FAQ.flatMap((f) => [`### ${f.q}`, '', f.a, ''])
   ].join('\n')
 }
+
+/**
+ * THE WORDS IN THE LANGUAGE BEING DRAWN (owner 2026-11-18: English and Chinese). The constants above are the English
+ * text and stay as they are (llms.txt and the tests read them); the page builders ask these instead. Chinese text is
+ * site-content-zh.ts, the same facts and the same status labels.
+ */
+const zh = (): boolean => currentLang() === 'zh'
+export const definition = (): string => (zh() ? ZH_DEFINITION : DEFINITION)
+export const headline = (): string => (zh() ? ZH_HEADLINE : HEADLINE)
+export const headlineSub = (): string => (zh() ? ZH_HEADLINE_SUB : HEADLINE_SUB)
+export const faq = (): readonly Faq[] => (zh() ? ZH_FAQ : FAQ)
+export const compare = (): readonly CompareRow[] => (zh() ? ZH_COMPARE : COMPARE)
+export const startHowto = (): readonly { name: string; text: string; detail: readonly string[] }[] => (zh() ? ZH_START_HOWTO : START_HOWTO)
+export const startFaq = (): readonly Faq[] => (zh() ? ZH_START_FAQ : START_FAQ)
+export const status = (): Readonly<Record<ClaimStatus, { label: string; meaning: string }>> => (zh() ? ZH_STATUS : STATUS)
+const featureIn = (f: FeatureSpec): FeatureSpec => (zh() && ZH_FEATURES[f.slug] ? { ...f, ...ZH_FEATURES[f.slug] } : f)
+export const features = (): readonly FeatureSpec[] => FEATURES.map(featureIn)
+export const listedFeatures = (): readonly FeatureSpec[] => LISTED_FEATURES.map(featureIn)
+export const pillars = (): readonly Pillar[] =>
+  zh()
+    ? PILLARS.map((p) => {
+        const w = ZH_PILLARS[p.id]
+        return { ...p, kicker: w.kicker, title: w.title, lede: w.lede, claims: p.claims.map((c, i) => ({ ...c, ...w.claims[i] })) }
+      })
+    : PILLARS
+export const roadmap = (): typeof ROADMAP =>
+  zh() ? ROADMAP.map((r) => ({ ...r, ...ZH_ROADMAP[r.phase as keyof typeof ZH_ROADMAP] })) : ROADMAP

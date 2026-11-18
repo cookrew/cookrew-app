@@ -122,3 +122,28 @@ export interface Check {
 export function renderSection(title: string, section: { checks: readonly Check[]; verdict: Verdict }): string
 export function renderBuckets(buckets: Record<string, number>): string
 export function worstOf(verdicts: readonly Verdict[]): Verdict
+
+export interface ZoomMotionBudgets {
+  zoomScroll: { commits: Budget; cardRenders: Budget }
+  zoomStop: { commits: Budget; cardRenders: Budget }
+}
+
+/** A motion's census, as much of it as the verdicts read. */
+export interface MotionCensus {
+  frames: number
+  commits: number
+  keyedCount?: number
+}
+
+export interface ZoomMotionProbe {
+  pan: MotionCensus | null
+  /** How far the wheel was asked to scroll, px. */
+  scrollRequestedPx?: number
+  /** How far the crew's faces moved, on average per face, px. */
+  scrolledPerFacePx?: number
+  zoom: MotionCensus | null
+  zoomTravel?: boolean
+}
+
+/** The zoom view motion's checks: totals per motion; unmoved or jumped = warn, never ok. */
+export function zoomMotionChecks(probe: ZoomMotionProbe, budgets: ZoomMotionBudgets): Check[]

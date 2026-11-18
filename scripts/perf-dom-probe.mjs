@@ -40,6 +40,7 @@
  */
 import { spawn } from 'node:child_process'
 import { guardChromeWithParent, reapOrphans } from './chrome-reaper.mjs'
+import { ZOOM_POINT, wheelScroll, zoomTo } from './perf-zoom-motion.mjs'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import http from 'node:http'
 import { createServer } from 'node:net'
@@ -247,6 +248,16 @@ export const HOOK_SCRIPT = `(() => {
   // WHICH cards rendered, by node id — a count says how many times, this says
   // how many cards. One renamed card must be one id here.
   let cards = new Set()
+  // The same question for any keyed list: component name → the React keys of
+  // the instances that rendered (the zoom view keys AgentNode by agent id).
+  let keyed = {}
+  // How many times a keyed instance rendered, all names together: a count,
+  // where \`keyed\` is a set. Names do not survive a minified build; this does.
+  let keyedCount = 0
+  // React's tag for memo(Component, compare): an outer fiber holding the key
+  // around an inner one that renders. The outer is not counted (it would count
+  // each render twice); the inner takes its key.
+  const MEMO_COMPONENT = 14
   const nameOf = (fiber) => {
     const t = fiber.type
     if (typeof t === 'function') return t.displayName || t.name || 'anonymous'
@@ -260,10 +271,15 @@ export const HOOK_SCRIPT = `(() => {
     const stack = [root]
     while (stack.length) {
       const fiber = stack.pop()
-      if ((fiber.flags & PERFORMED_WORK) !== 0) {
+      if ((fiber.flags & PERFORMED_WORK) !== 0 && fiber.tag !== MEMO_COMPONENT) {
         const name = nameOf(fiber)
         if (name !== null) renders[name] = (renders[name] || 0) + 1
         if (name === 'NodeWrapper' && fiber.memoizedProps && fiber.memoizedProps.id) cards.add(fiber.memoizedProps.id)
+        const key = fiber.key ?? (fiber.return && fiber.return.tag === MEMO_COMPONENT ? fiber.return.key : null)
+        if (name !== null && key !== null && key !== undefined) {
+          ;(keyed[name] ||= new Set()).add(key)
+          keyedCount += 1
+        }
       }
       if (fiber.sibling) stack.push(fiber.sibling)
       // Descend only into a child list React rebuilt in this commit. A
@@ -287,8 +303,11 @@ export const HOOK_SCRIPT = `(() => {
   }
   Object.defineProperty(window, '__REACT_DEVTOOLS_GLOBAL_HOOK__', { value: hook, configurable: true })
   window.__crRenderCensus = {
-    start() { commits = 0; renders = {}; cards = new Set(); recording = true },
-    stop() { recording = false; return { commits, renders, cards: [...cards] } }
+    start() { commits = 0; renders = {}; cards = new Set(); keyed = {}; keyedCount = 0; recording = true },
+    stop() {
+      recording = false
+      return { commits, renders, cards: [...cards], keyed: Object.fromEntries(Object.entries(keyed).map(([k, v]) => [k, [...v].sort()])), keyedCount }
+    }
   }
 })()`
 
@@ -303,7 +322,8 @@ export const CENSUS = `(() => {
   }
   return {
     total: document.getElementsByTagName('*').length,
-    cards: count('.react-flow__node'),
+    // A canvas card, or (the canvas retired 2026-10-30) a zoom view agent.
+    cards: count('.react-flow__node, .zv-m'),
     kinds,
     edges: count('.react-flow__edge'),
     edgeElements: within('.react-flow__edges'),
@@ -358,6 +378,16 @@ export const PANE_POINT = `(() => {
   return null
 })()`
 
+/**
+ * Renders of keyed instances, all components together — a COUNT: forty
+ * agents rendering on each of sixty frames is 2,400, not 40. Keys are data
+ * (an agent's id), so unlike component names they survive a minified build:
+ * on the production bundle this is the one way to ask "how many cards rendered".
+ */
+export function keyedRenders(census) {
+  return census?.keyedCount ?? 0
+}
+
 // ---------------------------------------------------------------------------
 // Measurements.
 // ---------------------------------------------------------------------------
@@ -406,12 +436,10 @@ export async function recordFrames(page, run) {
   const frames = await run()
   await page.frame()
   const census = await page.evaluate('window.__crRenderCensus.stop()')
-  const topRenders = Object.fromEntries(
-    Object.entries(census.renders)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 16)
-  )
-  return { frames, commits: census.commits, commitsPerFrame: census.commits / Math.max(1, frames), renders: topRenders, cards: census.cards }
+  // EVERY component, most renders first. This was the top 16 only, so a
+  // component that rendered once could fall off and read as zero renders.
+  const renders = Object.fromEntries(Object.entries(census.renders).sort((a, b) => b[1] - a[1]))
+  return { frames, commits: census.commits, commitsPerFrame: census.commits / Math.max(1, frames), renders, cards: census.cards, keyed: census.keyed ?? {}, keyedCount: census.keyedCount ?? 0 }
 }
 
 export async function pan(page, point, frames, step = 6) {
@@ -431,6 +459,7 @@ export async function pan(page, point, frames, step = 6) {
   await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base })
   return frames * 2
 }
+
 
 export async function zoom(page, point, frames, delta = 40) {
   for (let i = 0; i < frames; i += 1) {
@@ -636,11 +665,25 @@ export async function measureCompanion(
   }
   if (gestures) {
     const point = await page.evaluate(PANE_POINT)
+    const zoomPoint = point ? null : await page.evaluate(ZOOM_POINT)
     result.idle = await recordFrames(page, () => idle(page, 3000))
     if (point) {
+      result.motion = 'canvas pan'
       result.pan = await recordFrames(page, () => pan(page, point, frames))
       result.zoom = await recordFrames(page, () => zoom(page, point, frames))
+    } else if (zoomPoint) {
+      // The zoom view (perf-zoom-motion.mjs): in to the crew by the bar's own
+      // button, then the wheel's scroll of it, each saying whether it moved.
+      result.motion = 'zoom view scroll'
+      const leg = await zoomTo(page, 'agents', (run) => recordFrames(page, run)).catch(() => null)
+      result.zoom = leg?.census ?? null
+      result.zoomTravel = leg?.travel ?? false
+      let moved = { perFacePx: 0, requestedPx: 0 }
+      result.pan = await recordFrames(page, () => wheelScroll(page, zoomPoint, frames, (m) => (moved = m)))
+      result.scrolledPerFacePx = moved.perFacePx
+      result.scrollRequestedPx = moved.requestedPx
     } else {
+      result.motion = null
       result.pan = null
       result.zoom = null
     }
@@ -693,9 +736,22 @@ function renderRest(label, rest) {
   return lines.join('\n')
 }
 
-function renderGesture(label, g) {
-  if (!g) return `${label}: no pane point found`
-  return `${label}: ${g.frames} frames, ${g.commits} commits (${fmt(g.commitsPerFrame, 2)}/frame); renders: ${Object.entries(g.renders).map(([k, v]) => `${k} ${v}`).join(', ')}`
+function renderGesture(label, g, missing = 'not measured') {
+  if (!g) return `${label}: ${missing}`
+  return `${label}: ${g.frames} frames, ${g.commits} commits (${fmt(g.commitsPerFrame, 2)}/frame); renders: ${Object.entries(g.renders).slice(0, 16).map(([k, v]) => `${k} ${v}`).join(', ')}`
+}
+
+/** The motion lines, in the words of the view that was moved: a canvas pans, the zoom view scrolls. */
+function renderMotion(result) {
+  if (result.motion === 'zoom view scroll') {
+    const moved = `${Math.round(result.scrolledPerFacePx ?? 0)} px a face of ${Math.round(result.scrollRequestedPx ?? 0)} asked`
+    return [
+      renderGesture('zoom in to the crew', result.zoom, 'no agents stop on the bar'),
+      `${renderGesture('scroll', result.pan)} — moved ${moved}`
+    ]
+  }
+  if (result.motion === 'canvas pan') return [renderGesture('pan', result.pan, 'no pane point found'), renderGesture('zoom', result.zoom, 'no pane point found')]
+  return result.pan !== undefined ? ['motion: no canvas pane and no zoom view — not measured'] : []
 }
 
 export function renderReport(result) {
@@ -703,8 +759,7 @@ export function renderReport(result) {
   if (result.workspace) out.push(`workspace ${result.workspace.name}: ${result.workspace.nodes} nodes (${Object.entries(result.workspace.byKind).map(([k, v]) => `${k} ${v}`).join(', ')}), ${result.workspace.connections} cables`)
   out.push(renderRest(result.attached ? `attached :${result.attached}` : `${result.viewport} ${result.size.width}x${result.size.height} at rest`, result.rest))
   if (result.idle) out.push(renderGesture('idle 3 s', result.idle))
-  if (result.pan !== undefined) out.push(renderGesture('pan', result.pan))
-  if (result.zoom !== undefined) out.push(renderGesture('zoom', result.zoom))
+  out.push(...renderMotion(result))
   if (result.board) {
     out.push(renderRest('board open', result.board.open))
     out.push(renderRest('board closed (after GC)', result.board.closed))

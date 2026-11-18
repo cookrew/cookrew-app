@@ -25,9 +25,9 @@ describe('keepCachesOutOfIndex', () => {
     writeFileSync(path.join(data, 'Code Cache', 'js', 'entry'), 'kept')
     expect(keepCachesOutOfIndex(data, 'darwin')).toEqual(['Cache', 'Code Cache'])
     expect(lstatSync(path.join(data, 'Code Cache')).isSymbolicLink()).toBe(true)
-    expect(readlinkSync(path.join(data, 'Code Cache'))).toBe('caches.noindex/Code Cache')
+    expect(readlinkSync(path.join(data, 'Code Cache'))).toBe(path.join('caches.noindex', 'Code Cache'))
     expect(readFileSync(path.join(data, 'Code Cache', 'js', 'entry'), 'utf8')).toBe('kept')
-    expect(realpathSync(path.join(data, 'Code Cache'))).toContain('/caches.noindex/')
+    expect(realpathSync(path.join(data, 'Code Cache'))).toContain(`${path.sep}caches.noindex${path.sep}`)
   })
 
   it('links a cache Chromium has not made yet, so it is never born in the index', () => {
@@ -43,7 +43,7 @@ describe('keepCachesOutOfIndex', () => {
     // sandbox, and fine under --no-sandbox.
     const data = userData()
     keepCachesOutOfIndex(data, 'darwin')
-    expect(realpathSync(path.join(data, 'Cache')).startsWith(`${realpathSync(data)}/`)).toBe(true)
+    expect(realpathSync(path.join(data, 'Cache')).startsWith(`${realpathSync(data)}${path.sep}`)).toBe(true)
   })
 
   it('repairs its own link when the directory behind it is gone', () => {
@@ -78,9 +78,11 @@ describe('keepCachesOutOfIndex', () => {
 
   it('leaves a symlink somebody else made alone', () => {
     const data = userData()
-    symlinkSync('/somewhere/else', path.join(data, 'Cache'))
+    // Resolved: Windows stores an absolute link target with its drive.
+    const elsewhere = path.resolve('/somewhere/else')
+    symlinkSync(elsewhere, path.join(data, 'Cache'))
     keepCachesOutOfIndex(data, 'darwin')
-    expect(readlinkSync(path.join(data, 'Cache'))).toBe('/somewhere/else')
+    expect(readlinkSync(path.join(data, 'Cache'))).toBe(elsewhere)
   })
 
   it('is a macOS answer to a macOS problem', () => {
@@ -90,6 +92,10 @@ describe('keepCachesOutOfIndex', () => {
   })
 
   it('never throws: a cache in the index is no reason not to boot', () => {
-    expect(keepCachesOutOfIndex('/dev/null/nope', 'darwin')).toEqual([])
+    // Under a plain file: no OS can make a directory there ('/dev/null/nope'
+    // is only that on POSIX; Windows creates it).
+    const file = path.join(userData(), 'a-file')
+    writeFileSync(file, '')
+    expect(keepCachesOutOfIndex(path.join(file, 'nope'), 'darwin')).toEqual([])
   })
 })

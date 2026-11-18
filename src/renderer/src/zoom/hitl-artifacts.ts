@@ -155,7 +155,7 @@ export interface EventApi {
   onEvent?: (cb: (raw: unknown) => void) => () => void
 }
 
-/** How many rows of each type the boot read asks for. */
+/** How many rows of each artifact type the boot read holds (limitPerType: each its own). */
 export const BOOT_LIMIT = 200
 /** A failed boot read is tried again this much later. */
 export const BOOT_RETRY_MS = 15_000
@@ -169,12 +169,19 @@ export interface ArtifactFeed {
 }
 
 /**
- * The log, read once at boot (each type apart, a limit each: the phone's query
- * takes one type at a time), then followed live. The deletions are read with no
- * limit back to the oldest change the boot holds, so a bulk close cannot leave a
- * ghost. The first boot sets the seen book's starting point at the newest change
- * it read, so what was there before is not news; a change that lands while the
- * boot is in flight stays news.
+ * The log, read once at boot in two typed reads (/api/events/query · types),
+ * then followed live. On a phone each read is a relay exchange of the boot; it
+ * was one read per type, seven in all.
+ *
+ * The changes are the newest BOOT_LIMIT of EACH artifact type, in one read
+ * (event-log.ts · limitPerType): the per-type reads' own semantics, so a type
+ * that floods the log (an agent rewriting notes all day) fills its own share
+ * and cannot push an older, unseen change of a quiet type out of the bar.
+ *
+ * The endings are read with no limit back to the oldest change the window
+ * holds, so a bulk close cannot leave a ghost. The first boot sets the seen
+ * book's starting point at the newest change it read, so what was there before
+ * is not news; a change that lands while the boot is in flight stays news.
  */
 export function createArtifactFeed(
   api: EventApi,
@@ -199,9 +206,10 @@ export function createArtifactFeed(
     if (!query) return
     const rows = (lists: unknown[][]): LogEvent[] => lists.flat().flatMap((raw) => asLogEvent(raw) ?? [])
     try {
-      const changes = rows(await Promise.all(ARTIFACT_TYPES.map((type) => query({ type, limit: BOOT_LIMIT }))))
+      // The window of changes, then every ending back to its oldest row (see above).
+      const changes = rows([await query({ types: [...ARTIFACT_TYPES], limitPerType: BOOT_LIMIT })])
       const oldest = changes.reduce((at, e) => Math.min(at, e.timestamp), Number.POSITIVE_INFINITY)
-      const ends = Number.isFinite(oldest) ? rows(await Promise.all(ENDING_TYPES.map((type) => query({ type, since: oldest })))) : []
+      const ends = Number.isFinite(oldest) ? rows([await query({ types: [...ENDING_TYPES], since: oldest })]) : []
       // The machine was left while this was read: it is the last machine's, not this one's.
       if (!alive) return
       apply([...changes, ...ends])

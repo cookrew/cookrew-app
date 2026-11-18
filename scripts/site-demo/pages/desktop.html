@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Demo desktop</title>
+<!-- A neutral desktop for the computer card's composite: two windows on a plain ground. No menu bar, no notifications, no names. -->
+<style>
+body{margin:0;width:1288px;height:673px;overflow:hidden;background:linear-gradient(160deg,#3a4a5a,#24303b);font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;position:relative}
+.win{position:absolute;border-radius:10px;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.12)}
+.bar{height:28px;display:flex;align-items:center;gap:7px;padding:0 12px;background:#e9e4da}
+.bar i{width:11px;height:11px;border-radius:50%;background:#cfc7b8;display:inline-block}
+.bar span{margin-left:14px;font:12px ui-monospace,Menlo,monospace;color:#6d665a}
+.page{position:absolute;left:70px;top:46px;width:640px;height:470px;background:#fbf8f1}
+.page iframe{border:0;width:100%;height:calc(100% - 28px);display:block}
+.term{left:600px;top:250px;width:620px;height:330px;background:#16181d}
+.term .bar{background:#2a2d34}.term .bar i{background:#4a4e57}.term .bar span{color:#9aa0a8}
+.term pre{margin:0;padding:14px 16px;font:14px/1.6 ui-monospace,Menlo,monospace;color:#d7dce2}
+.ok{color:#8fd18a}.dim{color:#7b828c}
+</style></head>
+<body>
+<div class="win page"><div class="bar"><i></i><i></i><i></i><span>notes.example/release-notes.html</span></div><iframe src="release-notes.html"></iframe></div>
+<div class="win term"><div class="bar"><i></i><i></i><i></i><span>release-room — zsh</span></div><pre><span class="dim">$</span> npm run build
+<span class="dim">&gt; release-notes@1.4.0 build</span>
+<span class="dim">&gt; vite build</span>
+
+<span class="ok">✓</span> 42 modules transformed.
+dist/index.html          0.71 kB
+dist/assets/index.js    38.20 kB
+<span class="ok">✓ built in 1.9s</span>
+<span class="dim">$</span> </pre></div>
+</body></html>

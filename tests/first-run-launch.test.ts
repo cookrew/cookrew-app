@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { native } from './support/native-path'
 import { failureReason, failureHtml, bootStep } from '../src/main/boot-failure'
 import { spawn } from 'node:child_process'
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -8,6 +9,7 @@ import path from 'node:path'
 import { ownerOf, runtimeDirFor } from '../src/main/runtime-dir'
 import { launchBlock } from '../src/main/launch-check'
 import { addPaneDirs, panePath, resetPaneDirs } from '../src/main/pane-path'
+import { NO_APP_CLI_SOCKET } from './support/ipc-path'
 
 /**
  * A SECOND LINUX USER GOT A BLACK SCREEN (round 2, bug 13): /tmp/cookrew-runtime
@@ -19,29 +21,31 @@ describe('the runtime dir', () => {
   const on = (over: Partial<Parameters<typeof runtimeDirFor>[0]> = {}) => runtimeDirFor({ tmp: '/tmp', platform: 'linux', uid: 1001, ownerOf: () => null, ...over })
 
   it('is per user on Linux', () => {
-    expect(on()).toBe('/tmp/cookrew-runtime-1001')
+    expect(on()).toBe(native('/tmp/cookrew-runtime-1001'))
   })
 
   it('steps round a dir another user holds', () => {
-    expect(on({ ownerOf: (dir) => (dir === '/tmp/cookrew-runtime' ? 1000 : null) })).toBe('/tmp/cookrew-runtime-1001')
+    expect(on({ ownerOf: (dir) => (dir === native('/tmp/cookrew-runtime') ? 1000 : null) })).toBe(native('/tmp/cookrew-runtime-1001'))
   })
 
   it('keeps the old path for the user who owns it: their panes have it baked in', () => {
-    expect(on({ ownerOf: (dir) => (dir === '/tmp/cookrew-runtime' ? 1001 : null) })).toBe('/tmp/cookrew-runtime')
+    expect(on({ ownerOf: (dir) => (dir === native('/tmp/cookrew-runtime') ? 1001 : null) })).toBe(native('/tmp/cookrew-runtime'))
   })
 
   it('never takes a per-user path someone else planted in a shared tmp', () => {
-    expect(() => on({ ownerOf: (dir) => (dir === '/tmp/cookrew-runtime-1001' ? 1000 : null) })).toThrow(/belongs to another user/)
+    expect(() => on({ ownerOf: (dir) => (dir === native('/tmp/cookrew-runtime-1001') ? 1000 : null) })).toThrow(/belongs to another user/)
   })
 
   it('stays as it is on macOS, where tmp is the user’s own', () => {
-    expect(on({ platform: 'darwin', tmp: '/var/folders/x/T' })).toBe('/var/folders/x/T/cookrew-runtime')
+    expect(on({ platform: 'darwin', tmp: '/var/folders/x/T' })).toBe(native('/var/folders/x/T/cookrew-runtime'))
   })
 })
 
 // A plain shell with no pointer file yet: the CLI's last guess must be the dir the
 // app made for this user, or the second person is sent to the first one's.
-describe('the CLI, guessing the socket', () => {
+// Run where the app serves a Unix-socket CLI (cli-transport.ts; today, not
+// Windows): the guess is where that socket lives.
+describe.skipIf(NO_APP_CLI_SOCKET)('the CLI, guessing the socket', () => {
   const uid = process.getuid?.() ?? 0
   const guessFrom = async (dir: string): Promise<boolean> => {
     // Short: a unix socket path has a low limit.
@@ -109,7 +113,10 @@ describe('a tool for an agent to run', () => {
     expect(launchBlock({ ...check, command: 'first-run-no-such-tool --flag', path: panePath('/nowhere') })).toMatchObject({ kind: 'command-missing', why: 'Command not found: first-run-no-such-tool.' })
   })
 
-  it('is found in a dir the tool check learned', () => {
+  // Skipped on Windows: pane dirs are learned from a POSIX login shell, and
+  // addPaneDirs takes only absolute POSIX paths; Windows has no login shell to
+  // learn from, so a dir is never learned there.
+  it.skipIf(process.platform === 'win32')('is found in a dir the tool check learned', () => {
     writeFileSync(path.join(dir, 'first-run-a-tool'), '#!/bin/sh\n', { mode: 0o755 })
     addPaneDirs([dir])
     expect(launchBlock({ ...check, command: 'first-run-a-tool --flag', path: panePath('/nowhere') })).toBeNull()

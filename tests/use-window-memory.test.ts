@@ -1,8 +1,10 @@
 // WHICH WINDOW A CARD HOLDS, ACROSS A RESTART (main/use-window-memory.ts).
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
+import { expectMode } from './support/file-mode'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
 import { fileWindowMemory, forgetCardWindow } from '../src/main/use-window-memory'
 
@@ -22,7 +24,7 @@ describe('fileWindowMemory', () => {
     fileWindowMemory(file, 'b').write({ ...memo, id: 10 })
     expect(fileWindowMemory(file, 'a').read()).toEqual(memo)
     expect(fileWindowMemory(file, 'b').read()?.id).toBe(10)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expectMode(file, 0o600)
   })
 
   it('a card that goes takes its title with it', () => {
@@ -56,7 +58,7 @@ describe('fileWindowMemory', () => {
 
   it('a served seat cannot read which windows the owner has', () => {
     const denied = ownerSecretPaths('/Users/me/.cookrew', '/Users/me', 'cookrew', {})
-    expect(denied).toContain('/Users/me/.cookrew/use-windows.json')
-    expect(denied).toContain('/Users/me/.cookrew/use-windows.json.tmp')
+    expect(denied).toContain(native('/Users/me/.cookrew/use-windows.json'))
+    expect(denied).toContain(native('/Users/me/.cookrew/use-windows.json.tmp'))
   })
 })

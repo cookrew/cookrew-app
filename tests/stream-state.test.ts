@@ -5,10 +5,11 @@
 // PREVIOUS state whole and readable — the store falls behind the transcript
 // and never claims rows it did not materialise (Codex thread_history.rs:112).
 
-import { existsSync, mkdtempSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import {
   STREAM_STATE_VERSION,
   emptyStreamState,
@@ -69,8 +70,8 @@ describe('writeStreamState', () => {
   it('writes 0600 into a 0700 directory — the owner’s session shape', () => {
     writeStreamState('term-1', state(), { dir })
     const file = streamStateFileFor('term-1', { dir }) as string
-    expect(statSync(file).mode & 0o777).toBe(0o600)
-    expect(statSync(path.dirname(file)).mode & 0o777).toBe(0o700)
+    expectMode(file, 0o600)
+    expectMode(path.dirname(file), 0o700)
   })
 
   it('a crash between the temp file and the rename leaves the OLD state readable', () => {

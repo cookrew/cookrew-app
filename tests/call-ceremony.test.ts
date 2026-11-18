@@ -36,10 +36,12 @@ let issuer: CallCredentialService
 let exports: AgentExportStore
 let caller: KeyPairKeyObjectResult
 
-beforeEach(() => {
+beforeEach(async () => {
   base = mkdtempSync(path.join(tmpdir(), 'cookrew-ceremony-'))
   clock = 1_700_000_000_000
   issuer = new CallCredentialService({ base, now: () => clock })
+  // Proven private before anything signs: async on Windows (file-privacy.ts).
+  await issuer.prepare()
   exports = new AgentExportStore(base)
   caller = generateKeyPairSync('ed25519')
 })

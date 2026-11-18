@@ -5,10 +5,10 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
-  statSync,
   writeFileSync
 } from 'node:fs'
 import path from 'node:path'
+import { filePrivacy } from './file-privacy'
 import { confine } from './session-sandbox'
 import {
   parseEnvFile,
@@ -225,8 +225,11 @@ export function stageGrantedFiles(files: readonly GrantedFile[], sandbox: string
  */
 function warnIfWorldReadable(file: string, log: (message: string) => void): void {
   try {
-    if ((statSync(file).mode & 0o077) !== 0) {
-      log(`service grants: ${file} is readable by other users — chmod 600 it`)
+    // Never waits (file-privacy.ts): a verdict still being checked is not a
+    // finding, and is said once it is in, on a later read.
+    const privacy = filePrivacy(file)
+    if (privacy.open && !privacy.pending) {
+      log(`service grants: ${file} may be readable by other users (${privacy.why}) — ${privacy.fix}`)
     }
   } catch {
     // Unreadable stat is reported by the read that follows.

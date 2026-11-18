@@ -843,9 +843,11 @@ export function createRemoteApi(): CookrewApi {
     queryEvents: async (query) => {
       const params = new URLSearchParams()
       const q = (query ?? {}) as Record<string, unknown>
-      for (const key of ['workspaceId', 'type', 'since', 'until', 'limit']) {
+      for (const key of ['workspaceId', 'type', 'since', 'until', 'limit', 'limitPerType']) {
         if (q[key] !== undefined) params.set(key, String(q[key]))
       }
+      // A few exact types in one read (mobile-api.ts · parseEventQuery): comma-joined.
+      if (Array.isArray(q.types) && q.types.length > 0) params.set('types', q.types.map(String).join(','))
       const result = await req<{ events: unknown[] }>(apiPath(`/api/events/query?${params}`))
       return result.events
     },

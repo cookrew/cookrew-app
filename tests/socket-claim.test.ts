@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, renameSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { NO_APP_CLI_SOCKET } from './support/ipc-path'
 import { claimSocket, probeSocket } from '../src/main/socket-claim'
 import { startSocketServer } from '../src/main/socket-server'
 
@@ -69,7 +70,10 @@ function answers(at: string): Promise<boolean> {
   })
 }
 
-describe('probeSocket', () => {
+// Run where the app serves a Unix-socket CLI (cli-transport.ts; today, not
+// Windows): the claim is a Unix-socket probe plus a hard link of a staged
+// path. Where there is none, cli-transport.test.ts says what happens instead.
+describe.skipIf(NO_APP_CLI_SOCKET)('probeSocket', () => {
   it('says absent when nothing is at the path', async () => {
     expect((await probeSocket(sock)).state).toBe('absent')
   })
@@ -86,7 +90,7 @@ describe('probeSocket', () => {
   })
 })
 
-describe('claimSocket — never steal a live socket', () => {
+describe.skipIf(NO_APP_CLI_SOCKET)('claimSocket — never steal a live socket', () => {
   it('leaves a live socket alone and does not take the path', async () => {
     await foreignLiveAt(sock)
     const before = statSync(sock).ino
@@ -118,7 +122,7 @@ describe('claimSocket — never steal a live socket', () => {
   })
 })
 
-describe('claimSocket — shutdown removes only what this process made', () => {
+describe.skipIf(NO_APP_CLI_SOCKET)('claimSocket — shutdown removes only what this process made', () => {
   it('release unlinks the path when it still holds our socket', async () => {
     const mine = track(net.createServer())
     const claim = await claimSocket(mine, sock)
@@ -156,7 +160,7 @@ describe('claimSocket — shutdown removes only what this process made', () => {
   })
 })
 
-describe('startSocketServer — a second instance boots next to a live app (2026-09-18)', () => {
+describe.skipIf(NO_APP_CLI_SOCKET)('startSocketServer — a second instance boots next to a live app (2026-09-18)', () => {
   it('keeps the live app reachable through the second instance boot AND exit', async () => {
     await foreignLiveAt(sock)
     const deps = { ptys: { socketPath: sock } } as unknown as Parameters<typeof startSocketServer>[0]

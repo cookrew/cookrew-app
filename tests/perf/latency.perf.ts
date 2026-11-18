@@ -32,9 +32,12 @@ import { expectEvery, expectTail, measure, removeRoot, tempRoot, timed } from '.
 const real = {
   readFileSync: fs.readFileSync,
   writeFileSync: fs.writeFileSync,
-  appendFileSync: fs.appendFileSync
+  appendFileSync: fs.appendFileSync,
+  statSync: fs.statSync
 }
-const counters = { on: false, workspaceReads: 0, workspaceWrites: 0, appends: 0, jsonlReads: [] as string[] }
+const counters = { on: false, workspaceReads: 0, workspaceStats: 0, workspaceWrites: 0, appends: 0, jsonlReads: [] as string[] }
+/** node's types declare statSync read-only (it is an overload set); the export itself is writable. */
+const writableFs = fs as unknown as { statSync: typeof fs.statSync }
 
 const isWorkspaceJson = (file: unknown): boolean =>
   typeof file === 'string' && file.endsWith(`${path.sep}workspace.json`)
@@ -50,6 +53,10 @@ beforeAll(() => {
     if (counters.on && isWorkspaceJson(file)) counters.workspaceWrites += 1
     return (real.writeFileSync as (...a: unknown[]) => void).call(this, file, ...rest)
   } as typeof fs.writeFileSync
+  writableFs.statSync = function countedStat(this: unknown, file: Parameters<typeof fs.statSync>[0], ...rest: unknown[]) {
+    if (counters.on && isWorkspaceJson(file)) counters.workspaceStats += 1
+    return (real.statSync as (...a: unknown[]) => fs.Stats).call(this, file, ...rest)
+  } as typeof fs.statSync
   fs.appendFileSync = function countedAppend(this: unknown, ...args: unknown[]) {
     if (counters.on) counters.appends += 1
     return (real.appendFileSync as (...a: unknown[]) => void).call(this, ...args)
@@ -61,11 +68,13 @@ afterAll(() => {
   fs.readFileSync = real.readFileSync
   fs.writeFileSync = real.writeFileSync
   fs.appendFileSync = real.appendFileSync
+  writableFs.statSync = real.statSync
   syncBuiltinESMExports()
 })
 
 const resetCounters = (): void => {
   counters.workspaceReads = 0
+  counters.workspaceStats = 0
   counters.workspaceWrites = 0
   counters.appends = 0
   counters.jsonlReads = []
@@ -108,6 +117,8 @@ interface PasteShape {
   nodes: number
   cables: number
   reads: number
+  /** stat()s of workspace.json: the parked-state cache's stamp check (store.ts · stateOf). */
+  stats: number
   writes: number
   events: number
 }
@@ -149,6 +160,7 @@ async function pasteOnce(n: number) {
       nodes: pasted.nodes.length,
       cables: pasted.connections.length,
       reads: counters.workspaceReads,
+      stats: counters.workspaceStats,
       writes: counters.workspaceWrites,
       events: ops.length
     }
@@ -159,12 +171,23 @@ async function pasteOnce(n: number) {
   }
 }
 
-describe('team paste — batched, two reads, one write', () => {
+/**
+ * The target is parked, so copyTeam looks at it twice: once to plan
+ * (workspaceState) and once to write (appendTeamToWorkspace → patchWorkspace).
+ * It was two reads until d48edbb9 (2026-09-06) taught store.ts · stateOf to
+ * keep a parked state parsed, pinned to the file's size:mtime:ino. The
+ * second look is now a stamp-checked HIT: one read, and one stat per look.
+ * The stats are what keep the 1 honest — a cache that answered without
+ * checking the file (stale after any other writer) would read once with ONE
+ * stat, and losing the cache would read twice.
+ */
+describe('team paste — batched, one read, one write', () => {
   for (const n of [10, 30] as const) {
     it(`n=${n} holds its tail and its shape`, async () => {
       const measured = await measure(`team paste n=${n}`, () => pasteOnce(n))
       expectTail(measured, n === 10 ? LATENCY.teamPaste10 : LATENCY.teamPaste30)
-      expectEvery(measured, 'reads', 2)
+      expectEvery(measured, 'reads', 1)
+      expectEvery(measured, 'stats', 2)
       expectEvery(measured, 'writes', 1)
       expectEvery(measured, 'events', 1)
       expectEvery(measured, 'nodes', n)

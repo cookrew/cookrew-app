@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { expectMode } from './support/file-mode'
 import { directoryTrust, isBroadFolder, prepareChoresDir, trustDirectory } from '../src/main/claude-trust'
 
 function scratch(): { home: string; claudeJson: string; chores: string } {
@@ -46,7 +47,7 @@ describe('trustDirectory', () => {
     const { claudeJson, chores } = scratch()
     writeFileSync(claudeJson, '{}', { mode: 0o640 })
     trustDirectory(chores, claudeJson)
-    expect(statSync(claudeJson).mode & 0o777).toBe(0o640)
+    expectMode(claudeJson, 0o640)
   })
 })
 
@@ -64,7 +65,8 @@ describe('directoryTrust', () => {
   it('reads an exact entry, an ancestor entry, no entry, and an unreadable file', () => {
     const { claudeJson } = scratch()
     expect(directoryTrust('/w/app', claudeJson)).toBe('untrusted')
-    writeFileSync(claudeJson, JSON.stringify({ projects: { '/w': { hasTrustDialogAccepted: true }, '/x': { hasTrustDialogAccepted: false } } }))
+    // Keyed the way the walk reads them: resolved on this host ('/w' is C:\w on Windows).
+    writeFileSync(claudeJson, JSON.stringify({ projects: { [path.resolve('/w')]: { hasTrustDialogAccepted: true }, [path.resolve('/x')]: { hasTrustDialogAccepted: false } } }))
     expect(directoryTrust('/w', claudeJson)).toBe('trusted')
     // Claude walks up from its folder, so a trusted parent answers for the child.
     expect(directoryTrust('/w/app/src', claudeJson)).toBe('trusted')

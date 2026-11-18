@@ -24,7 +24,10 @@ export function parseProcessLine(line: string): ProcessFact {
   return { state: 'running', started: split === -1 ? '' : text.slice(split).trim() }
 }
 
-export function processFact(pid: number): Promise<ProcessFact> {
+export function processFact(pid: number, platform: NodeJS.Platform = process.platform): Promise<ProcessFact> {
+  // Windows has no POSIX ps. The one a runner may have on PATH takes other
+  // flags and exits 1 for every pid, which read as 'gone' for a live process.
+  if (platform === 'win32') return Promise.resolve({ state: 'unknown' })
   return new Promise((resolve) => {
     execFile(
       'ps',

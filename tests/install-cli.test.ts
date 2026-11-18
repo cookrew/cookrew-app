@@ -60,7 +60,9 @@ describe('launcherScript', () => {
  * would name the first person's: EACCES for the second, and running a script
  * another user wrote if the dir were open. Run for real, with a stand-in node.
  */
-describe('the runtime copy a launcher runs', () => {
+// Skipped on Windows: the launcher is POSIX sh run through /bin/sh, which
+// Windows does not have; what it says is still checked by launcherScript above.
+describe.skipIf(process.platform === 'win32')('the runtime copy a launcher runs', () => {
   const cleanup: Array<() => void> = []
   afterEach(() => {
     for (const run of cleanup.splice(0)) run()

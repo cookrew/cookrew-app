@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -28,12 +28,14 @@ describe('landing a lane', () => {
     git(repo, 'init', '-q', '-b', 'dev')
     git(repo, 'config', 'user.name', 't')
     git(repo, 'config', 'user.email', 't@t')
+    // Byte for byte on every OS: a Windows git defaults to core.autocrlf=true.
+    git(repo, 'config', 'core.autocrlf', 'false')
     write(path.join(repo, 'a.txt'), 'one\n')
     write(path.join(repo, '.gitignore'), 'node_modules/\n')
     git(repo, 'add', '-A')
     git(repo, 'commit', '-qm', 'base')
     git(repo, 'worktree', 'add', '-q', '-b', 'daily/x', tree, 'dev')
-    spawnSync('git', ['clone', '-q', `file://${repo}`, lane, '--branch', 'dev'])
+    spawnSync('git', ['clone', '-q', '-c', 'core.autocrlf=false', `file://${repo}`, lane, '--branch', 'dev'])
   })
 
   afterEach(() => rmSync(root, { recursive: true, force: true }))
@@ -47,6 +49,23 @@ describe('landing a lane', () => {
     expect(readFileSync(path.join(tree, 'a.txt'), 'utf8')).toBe('two\n')
     expect(git(tree, 'show', '--stat', '--format=%s', 'HEAD')).toContain('fix: two')
     expect(git(tree, 'show', '--name-only', '--format=', 'HEAD').split('\n').sort()).toEqual(['a.txt', 'new.txt'])
+  })
+
+  // The runner's index holds the stat of the TREE's files, not the lane's. A
+  // lane edit of the same size whose mtime matched that stat looked clean and
+  // was dropped (windows-2022, PR #130: 'one' stayed where 'two' was written).
+  // Windows git checks no inode or ctime; set the same here so it is not luck.
+  it('carries a same-size edit whose stat matches the tree’s entry', () => {
+    git(tree, 'config', 'core.checkStat', 'minimal')
+    git(tree, 'config', 'core.trustctime', 'false')
+    // An entry older than the index itself, so git does not re-read it as "racy".
+    const stamp = new Date(Date.now() - 120_000)
+    utimesSync(path.join(tree, 'a.txt'), stamp, stamp)
+    git(tree, 'update-index', '--refresh')
+    write(path.join(lane, 'a.txt'), 'two\n')
+    utimesSync(path.join(lane, 'a.txt'), stamp, stamp)
+    expect(collectLane({ repo, lane, tree, subject: 'fix: same size', body: 'b' })).toBe(true)
+    expect(readFileSync(path.join(tree, 'a.txt'), 'utf8')).toBe('two\n')
   })
 
   it('reports nothing to collect when the lane changed nothing', () => {
@@ -133,7 +152,9 @@ describe('one run at a time', () => {
   })
 })
 
-describe('stopping a session', () => {
+// Skipped on Windows: stopGroup signals the POSIX process group (kill -pid),
+// which Windows does not have; the daily copilot runs on the owner's Mac.
+describe.skipIf(process.platform === 'win32')('stopping a session', () => {
   it('reaches the process behind the loader, which a plain kill leaves running', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'daily-stop-'))
     const pidFile = path.join(dir, 'pid')

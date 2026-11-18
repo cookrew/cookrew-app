@@ -3,21 +3,36 @@ import http from 'node:http'
 import type net from 'node:net'
 import path from 'node:path'
 import type { BrowserNodeData, GitInfo, NoteNodeData, TerminalNodeData, WorkspaceState } from '../../src/shared/model'
+import { GIT, WORKSPACES, answerJson, fleetSnapshot } from './remote-open-answers'
 
 /**
  * A FIXTURE COMPANION: what a phone's boot talks to, without the app.
  *
- * It serves the BUILT renderer (out/renderer) exactly as mobile-server does —
- * the index with the remote boot marker injected, the hashed assets — and
+ * It serves the BUILT renderer (out/renderer) as mobile-server does — the
+ * index with the remote boot marker injected, every other file of the bundle
+ * (hashed assets immutable, the web-root icons and manifest no-cache) — and
  * answers every API route the boot asks for from a canvas shaped like the
- * owner's (32 terminals with git embedded, 51 notes, 93 browsers). What it
- * records is every request path, which is the whole point: the gate counts
- * them. Nothing here times anything.
+ * owner's (32 terminals with git embedded, 51 notes, 93 browsers), in the
+ * shapes the real handlers send (remote-open-answers.ts). Both streams are
+ * real SSE: /api/events as before, /api/fleet/stream opening on the snapshot
+ * the real fleet builder makes for this canvas.
+ *
+ * What it records is every request, which is the whole point: the gate counts
+ * them. A request it has no answer for is recorded as `known: false`, so a
+ * route the boot grew is a failure to model, not a quiet 404 that changes
+ * what the boot does next. Nothing here times anything.
  */
 
 export interface FixtureRequest {
+  readonly method: string
   readonly path: string
   readonly at: number
+  /** The status the fixture answered with; null while it has not answered. */
+  readonly status: number | null
+  /** False when no route here answers it: the fixture fell through to a 404. */
+  readonly known: boolean
+  /** When its connection closed; null while it is still open (a held stream). */
+  readonly closedAt: number | null
 }
 
 export interface FixtureCompanion {
@@ -25,15 +40,6 @@ export interface FixtureCompanion {
   readonly requests: readonly FixtureRequest[]
   close(): Promise<void>
 }
-
-const GIT: GitInfo = {
-  isRepo: true,
-  root: '/tmp/fixture',
-  branch: 'main',
-  dirty: false,
-  ahead: 0,
-  behind: 0
-} as unknown as GitInfo
 
 /** The owner's canvas in shape: three bands, so the overview fit sees them all. */
 export function fixtureWorkspace(
@@ -80,13 +86,18 @@ export function fixtureWorkspace(
   }
 }
 
+/** mobile-server.ts · STATIC_MIME, the types it serves a bundle file as. */
 const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript',
   '.css': 'text/css',
-  '.woff2': 'font/woff2',
+  '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
   '.svg': 'image/svg+xml',
-  '.png': 'image/png'
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf'
 }
 
 /** The marker mobile-server injects (remoteBoot), minus the viewport tweak. */
@@ -95,11 +106,6 @@ window.COOKREW_SLUG = ""
 window.COOKREW_MOBILE = 1
 document.addEventListener('DOMContentLoaded', () => { document.body.classList.add('cookrew-mobile') })
 </script>`
-
-const json = (response: http.ServerResponse, status: number, body: unknown): void => {
-  response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-  response.end(JSON.stringify(body))
-}
 
 /** The built renderer under test; COOKREW_RENDERER_DIR points the gate at another build. */
 export function rendererDir(): string {
@@ -110,57 +116,71 @@ export function builtRendererPresent(): boolean {
   return existsSync(path.join(rendererDir(), 'index.html'))
 }
 
+/** mobile-server.ts · serveRendererAsset: any non-page file of the bundle, never outside it. */
+function serveBundleFile(root: string, pathname: string, response: http.ServerResponse): boolean {
+  const file = path.resolve(root, `.${pathname}`)
+  const mime = MIME[path.extname(file).toLowerCase()]
+  if (!mime || !file.startsWith(root + path.sep) || !existsSync(file)) return false
+  const immutable = pathname.startsWith('/assets/')
+  response.writeHead(200, { 'content-type': mime, 'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache' })
+  response.end(readFileSync(file))
+  return true
+}
+
+/** An SSE response held open, with a heartbeat, until the page lets go. */
+function openSse(request: http.IncomingMessage, response: http.ServerResponse, frames: string[], heartbeat: string, everyMs: number): void {
+  response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' })
+  for (const frame of frames) response.write(frame)
+  const timer = setInterval(() => response.write(heartbeat), everyMs)
+  request.on('close', () => clearInterval(timer))
+}
+
 export async function startFixtureCompanion(): Promise<FixtureCompanion> {
-  const root = rendererDir()
+  const root = path.resolve(rendererDir())
   const state = fixtureWorkspace()
+  const fleet = `data: ${JSON.stringify({ type: 'snapshot', snapshot: fleetSnapshot(state) })}\n\n`
   const requests: FixtureRequest[] = []
-  const workspaces = { workspaces: [{ id: 'w1', name: 'Fixture', dir: '/tmp/fixture', dirs: ['/tmp/fixture'], icon: '🍳' }], activeId: 'w1' }
   const server = http.createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://fixture.local')
-    requests.push({ path: `${url.pathname}${url.search}`, at: Date.now() })
+    const method = request.method ?? 'GET'
+    const at = requests.length
+    requests.push({ method, path: `${url.pathname}${url.search}`, at: Date.now(), status: null, known: true, closedAt: null })
+    response.on('close', () => {
+      requests[at] = { ...requests[at], closedAt: Date.now() }
+    })
+    const writeHead = response.writeHead.bind(response)
+    response.writeHead = ((status: number, ...rest: unknown[]) => {
+      requests[at] = { ...requests[at], status }
+      return (writeHead as (...a: unknown[]) => http.ServerResponse)(status, ...rest)
+    }) as typeof response.writeHead
     const p = url.pathname
-    if (p === '/' || p === '/index.html') {
+    if (method === 'GET' && (p === '/' || p === '/index.html')) {
       const html = readFileSync(path.join(root, 'index.html'), 'utf8').replace('<head>', `<head>${BOOT}`)
-      response.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' })
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
       response.end(html)
       return
     }
-    if (p.startsWith('/assets/')) {
-      const file = path.resolve(root, `.${p}`)
-      if (file.startsWith(root) && existsSync(file)) {
-        response.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream' })
-        response.end(readFileSync(file))
-        return
-      }
-    }
-    if (p === '/api/auth/status') return json(response, 200, { scope: 'pairing', required: true })
-    if (p === '/api/workspace') return json(response, 200, state)
-    if (p === '/api/workspaces') return json(response, 200, workspaces)
-    if (p === '/api/events') {
-      response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
-      response.write(':ok\n\n')
+    if (method === 'GET' && !p.startsWith('/api/') && serveBundleFile(root, p, response)) return
+    if (method === 'GET' && p === '/api/events') {
       // A boot nonce skips the opening snapshot (the companion spends it once).
-      if (!url.searchParams.get('boot')) {
-        response.write(`event: workspace\ndata: ${JSON.stringify(state)}\n\n`)
-      }
-      response.write(`event: workspaces\ndata: ${JSON.stringify(workspaces)}\n\n`)
-      const heartbeat = setInterval(() => response.write(':hb\n\n'), 5000)
-      request.on('close', () => clearInterval(heartbeat))
+      const opening = url.searchParams.get('boot') ? [] : [`event: workspace\ndata: ${JSON.stringify(state)}\n\n`]
+      openSse(request, response, [':ok\n\n', ...opening, `event: workspaces\ndata: ${JSON.stringify(WORKSPACES)}\n\n`], ':hb\n\n', 5000)
       return
     }
-    if (p === '/api/activity' || p === '/api/presets' || p === '/api/roles' || p === '/api/teams') return json(response, 200, [])
-    if (p === '/api/account') return json(response, 404, { error: 'no account on this desktop' })
-    if (p === '/api/browser/capabilities') return json(response, 200, { interactive: false })
-    if (p === '/api/git') return json(response, 200, GIT)
-    if (p === '/api/browser/thumbs') return json(response, 200, { frames: [] })
-    if (/^\/api\/browser\/[^/]+\/thumb$/.test(p)) return json(response, 404, { error: 'No thumbnail yet' })
-    if (/^\/api\/terminal\/[^/]+\/stream\/open$/.test(p)) return json(response, 200, { blocks: [], total: 0, missing: [], tail: null })
-    if (request.method === 'POST' && p === '/api/beacon') {
-      response.writeHead(204)
-      response.end()
+    // fleet/routes.ts · openStream: unnamed data frames, the snapshot first.
+    if (method === 'GET' && p === '/api/fleet/stream') {
+      openSse(request, response, [fleet], ':\n\n', 15_000)
       return
     }
-    json(response, 404, { error: `fixture has no ${p}` })
+    const answer = answerJson(method, url, state)
+    if (answer) {
+      response.writeHead(answer.status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+      response.end(answer.body === null ? undefined : JSON.stringify(answer.body))
+      return
+    }
+    requests[at] = { ...requests[at], known: false }
+    response.writeHead(404, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ error: `fixture has no ${method} ${p}` }))
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as net.AddressInfo).port

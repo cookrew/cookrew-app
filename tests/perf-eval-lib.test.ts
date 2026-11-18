@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { latencyStats } from '../src/shared/stats'
 import {
@@ -17,8 +19,77 @@ import {
   renderTable,
   servedSessions,
   slopePerHour,
-  worstOf
+  worstOf,
+  zoomMotionChecks
 } from '../scripts/perf-eval-lib.mjs'
+import { BUDGETS } from '../scripts/perf-budgets.mjs'
+
+describe('the installed nightly', () => {
+  // perf-eval-install.mjs copies a fixed list to ~/.cookrew/bin; a module the
+  // eval imports and the list lacks makes the installed copy fail to load.
+  it('ships every local module the eval imports, transitively', () => {
+    const scripts = join(__dirname, '..', 'scripts')
+    const installer = readFileSync(join(scripts, 'perf-eval-install.mjs'), 'utf8')
+    const listed = new Set([...(installer.match(/const SCRIPTS = \[([^\]]*)\]/)?.[1] ?? '').matchAll(/'([^']+\.mjs)'/g)].map((m) => m[1]))
+    const needed = new Set<string>()
+    const walk = (file: string): void => {
+      if (needed.has(file)) return
+      needed.add(file)
+      const source = readFileSync(join(scripts, file), 'utf8')
+      for (const m of source.matchAll(/(?:from|import\()\s*'\.\/([^']+\.mjs)'/g)) walk(m[1])
+    }
+    walk('perf-eval.mjs')
+    expect([...needed].filter((file) => !listed.has(file))).toEqual([])
+  })
+})
+
+describe('the nightly zoom view motion verdicts', () => {
+  const census = (commits: number, keyedCount: number) => ({ frames: 60, commits, keyedCount })
+  // The scroll asked for 1,200 px (30 ticks of 40); a crew that took it moved each face that far.
+  const scrolled = { scrollRequestedPx: 1200, scrolledPerFacePx: 1200 }
+  const verdicts = (probe: Parameters<typeof zoomMotionChecks>[0]) =>
+    Object.fromEntries(zoomMotionChecks(probe, BUDGETS.dom).map((c) => [c.name, c.verdict]))
+
+  it('a scroll that moved the crew and rendered nothing is ok', () => {
+    expect(new Set(Object.values(verdicts({ pan: census(1, 0), ...scrolled, zoom: census(2, 0), zoomTravel: true })))).toEqual(new Set(['ok']))
+  })
+
+  // The regression the CI render gate guards: every agent on every frame.
+  // Per-frame it read 40/60 < 1 and passed; totals per motion fail it.
+  it('every agent rendering on every frame of the scroll FAILS', () => {
+    const v = verdicts({ pan: census(60, 40 * 60), ...scrolled, zoom: census(2, 0), zoomTravel: true })
+    expect(v['zoom view scroll commits']).toBe('fail')
+    expect(v['zoom view scroll card renders']).toBe('fail')
+  })
+
+  // The CI gate's own mutation (AgentNode un-memo'd) measured 41 agent renders
+  // on each of the zoom's 2 commits: the nightly must fail it too.
+  it('every agent rendering on each commit of a stop-to-stop zoom FAILS', () => {
+    expect(verdicts({ pan: census(1, 0), ...scrolled, zoom: census(2, 41 * 2), zoomTravel: true })['zoom in to the crew card renders']).toBe('fail')
+    expect(verdicts({ pan: census(1, 0), ...scrolled, zoom: census(1, 41), zoomTravel: true })['zoom in to the crew card renders']).toBe('fail')
+    expect(verdicts({ pan: census(1, 0), ...scrolled, zoom: census(2, 0), zoomTravel: true })['zoom in to the crew card renders']).toBe('ok')
+  })
+
+  it('a scroll that moved nothing measured nothing: never ok', () => {
+    const v = verdicts({ pan: census(0, 0), scrollRequestedPx: 1200, scrolledPerFacePx: 0, zoom: census(2, 0), zoomTravel: true })
+    expect(v['zoom view scroll moved']).toBe('warn')
+    expect(v['zoom view scroll commits']).toBe('warn')
+    expect(v['zoom view scroll card renders']).toBe('warn')
+  })
+
+  // A sum over forty-odd faces passed 100 px when each face had crept 2-3 px:
+  // movement is judged per face, against the scroll that was asked for.
+  it('faces that moved a sliver of the scroll asked for did not scroll: warn', () => {
+    expect(verdicts({ pan: census(0, 0), scrollRequestedPx: 1200, scrolledPerFacePx: 97, zoom: census(2, 0), zoomTravel: true })['zoom view scroll moved']).toBe('warn')
+    expect(verdicts({ pan: census(0, 0), scrollRequestedPx: 1200, scrolledPerFacePx: 700, zoom: census(2, 0), zoomTravel: true })['zoom view scroll moved']).toBe('ok')
+  })
+
+  it('a zoom that jumped (no travel) or was never made is not a pass', () => {
+    expect(verdicts({ pan: census(0, 0), ...scrolled, zoom: census(1, 0), zoomTravel: false })['zoom in to the crew commits']).toBe('warn')
+    expect(verdicts({ pan: census(0, 0), ...scrolled, zoom: census(1, 0), zoomTravel: false })['zoom in to the crew card renders']).toBe('warn')
+    expect(verdicts({ pan: census(0, 0), ...scrolled, zoom: null, zoomTravel: false })['zoom in to the crew commits']).toBe('warn')
+  })
+})
 
 // The live-machine perf eval (scripts/perf-eval.mjs) is plain JS so launchd
 // can run a copy of it with no checkout behind it. These pin its helpers —

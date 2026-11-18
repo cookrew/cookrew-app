@@ -1,9 +1,11 @@
 // THE SOUS LEDGER (HP round): 0600 from the first byte, every string through
 // scrub(), folded by token, 30 days, and the rows the inbox floats.
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { native } from './support/native-path'
+import { expectMode } from './support/file-mode'
 import { SousLedger, SOUS_LEDGER_TTL_MS } from '../src/main/sous-ledger'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
 
@@ -26,8 +28,8 @@ describe('SousLedger', () => {
     ledger.write({ token: 'a', at: t, sentence: 'push the branch', domain: 'repo', exposure: 2, mode: 'paused', target: { id: 'forge', name: 'Forge' }, alternates: [], outcome: 'pending' })
     t = 2_000
     ledger.write({ token: 'a', ownerResponse: 'send-anyway', proposalText: 'push the branch\n\nBoundaries: push only after the check passes', deliveredTo: 'forge' })
-    expect(statSync(ledger.path()).mode & 0o777).toBe(0o600)
-    expect(statSync(path.dirname(ledger.path())).mode & 0o777).toBe(0o700)
+    expectMode(ledger.path(), 0o600)
+    expectMode(path.dirname(ledger.path()), 0o700)
     expect(readFileSync(ledger.path(), 'utf8').trim().split('\n')).toHaveLength(2)
   })
 
@@ -81,6 +83,6 @@ describe('SousLedger', () => {
   })
 
   it('the ledger path is in the served deny list', () => {
-    expect(ownerSecretPaths('/tmp/base', '/Users/x').some((p) => p.endsWith('/.cookrew/sous-decisions.jsonl'))).toBe(true)
+    expect(ownerSecretPaths('/tmp/base', '/Users/x').some((p) => p.endsWith(native('/.cookrew/sous-decisions.jsonl')))).toBe(true)
   })
 })

@@ -1,8 +1,9 @@
-import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { createPrivateKey, generateKeyPairSync, sign } from 'node:crypto'
 import { homedir, userInfo } from 'node:os'
 import path from 'node:path'
 import { callAssertionPayload } from './call-ceremony'
+import { checkFilePrivacy, writePrivateFile, type FilePrivacyDeps } from './file-privacy'
 
 /**
  * THE CALLER'S ACCOUNT AT SOMEONE ELSE'S DOOR.
@@ -79,12 +80,13 @@ export interface CallerKey {
   jwk: Record<string, unknown>
 }
 
-/** Read one key file, or null when it is absent or unusable. Throws only on
- *  a file this user should not trust — one others can read. */
-export function readCallerKey(file: string): CallerKey | null {
+/** Read one key file, or null when it is absent or unusable. Rejects only on
+ *  a file this user should not trust: one not proven private (file-privacy.ts). */
+export async function readCallerKey(file: string, deps: FilePrivacyDeps = {}): Promise<CallerKey | null> {
   try {
-    if ((statSync(file).mode & 0o077) !== 0) {
-      throw new Error(`${file} is readable by others — chmod 600 it`)
+    const privacy = await checkFilePrivacy(file, deps)
+    if (privacy.open) {
+      throw new Error(`${file} is not private: ${privacy.why} — ${privacy.fix}`)
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -101,17 +103,10 @@ export function readCallerKey(file: string): CallerKey | null {
   }
 }
 
-/** Write a key file privately. `mode` applies at creation only, so the chmod
- *  is unconditional — an existing file keeps whatever it had otherwise. */
-export function writeKeyFile(file: string, key: { pub: unknown; priv: unknown }): void {
-  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  writeFileSync(file, JSON.stringify(key), { mode: 0o600 })
-  chmodSync(file, 0o600)
-}
-
-/** Write a key under the door's identity — the canonical home. */
-export function saveCallerKey(serviceId: string, key: { pub: unknown; priv: unknown }): void {
-  writeKeyFile(callerKeyFile(serviceId), key)
+/** Write a key file privately, PROVEN so before it resolves (file-privacy.ts):
+ *  rejects, leaving nothing, when it cannot be. */
+export function writeKeyFile(file: string, key: { pub: unknown; priv: unknown }, deps: FilePrivacyDeps = {}): Promise<void> {
+  return writePrivateFile(file, JSON.stringify(key), deps)
 }
 
 /** Mint a fresh account key. Minting IS the sign-up, at a door that has no

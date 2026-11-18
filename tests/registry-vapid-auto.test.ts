@@ -3,11 +3,13 @@
 // unsubscribes every phone. So it is made once, on first start, in the data
 // directory (a persistent volume in production, beside token-key.jwk), and
 // read back on every start after. The environment still wins when it is set.
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createECDH } from 'node:crypto'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { loadVapidKeys, VAPID_KEY_FILE, vapidOf } from '../registry/src/v2-push-vapid'
+import { loadVapidKeys, VAPID_KEY_FILE, vapidOf, vapidPairOf } from '../registry/src/v2-push-vapid'
+import { expectMode } from './support/file-mode'
 
 const dir = (): string => mkdtempSync(path.join(tmpdir(), 'cookrew-vapid-'))
 
@@ -18,7 +20,7 @@ describe('the VAPID key on first start and after', () => {
     expect(keys).toBeDefined()
     expect(typeof vapidOf(keys!)).not.toBe('string')
     expect(keys!.subject).toBe('https://cookrew.dev')
-    expect(statSync(path.join(data, VAPID_KEY_FILE)).mode & 0o777).toBe(0o600)
+    expectMode(path.join(data, VAPID_KEY_FILE), 0o600)
   })
 
   it('the same key on every start after', () => {
@@ -62,5 +64,37 @@ describe('the VAPID key on first start and after', () => {
 
   it('the subject from the environment applies to a made key too', () => {
     expect(loadVapidKeys({ COOKREW_VAPID_SUBJECT: 'mailto:ops@cookrew.dev' }, dir())!.subject).toBe('mailto:ops@cookrew.dev')
+  })
+})
+
+// ECDH.getPrivateKey() drops leading zero bytes, so about one fresh pair in 256
+// came out with a 31-byte private key, failed the 32-byte check, and was kept on
+// disk forever with push off (CI main c972436d, macOS).
+// A fixed scalar whose top byte is zero, handed back short the way ECDH does.
+const shortScalarPair = (): { getPublicKey(): Buffer; getPrivateKey(): Buffer } => {
+  const full = Buffer.concat([Buffer.from([0]), Buffer.alloc(31, 0x5a)])
+  const pair = createECDH('prime256v1')
+  pair.setPrivateKey(full)
+  const publicKey = pair.getPublicKey()
+  return { getPublicKey: () => publicKey, getPrivateKey: () => full.subarray(1) }
+}
+
+describe('a private key whose top byte is zero', () => {
+  it('is made as a full 32-byte key that signs', () => {
+    const made = vapidPairOf(shortScalarPair())
+    expect(Buffer.from(made.privateKey, 'base64url').byteLength).toBe(32)
+    expect(typeof vapidOf({ ...made, subject: 'https://cookrew.dev' })).not.toBe('string')
+  })
+
+  it('already stored short is read back as the same key, so no phone is unsubscribed', () => {
+    const pair = shortScalarPair()
+    const stored = { publicKey: pair.getPublicKey().toString('base64url'), privateKey: pair.getPrivateKey().toString('base64url') }
+    const data = dir()
+    writeFileSync(path.join(data, VAPID_KEY_FILE), JSON.stringify(stored), { mode: 0o600 })
+    const keys = loadVapidKeys({}, data)
+    expect(keys?.publicKey).toBe(stored.publicKey)
+    expect(Buffer.from(keys!.privateKey, 'base64url').byteLength).toBe(32)
+    expect(typeof vapidOf(keys!)).not.toBe('string')
+    expect(readFileSync(path.join(data, VAPID_KEY_FILE), 'utf8')).toBe(JSON.stringify(stored))
   })
 })

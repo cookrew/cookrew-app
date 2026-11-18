@@ -2595,7 +2595,13 @@ export function parseEventQuery(params: URLSearchParams): EventQuery {
     since: num("since"),
     until: num("until"),
     limit: num("limit"),
+    // The newest N of each listed type (the HITL bar's boot read): a positive count, else none.
+    limitPerType: positiveCount(num("limitPerType")),
   };
+}
+
+function positiveCount(n: number | undefined): number | undefined {
+  return n !== undefined && Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
 function typesOf(raw: string | null): string[] | undefined {

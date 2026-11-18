@@ -168,6 +168,8 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
   const linePayments: string[] = []
   let walletVerdict: 'ok' | 'refused' | 'unverifiable' = 'ok'
   const issuer = new CallCredentialService({ base: doorDir, now: () => Date.now() + doorSkew })
+  // Proven private before anything signs: async on Windows (file-privacy.ts).
+  await issuer.prepare()
   const callers = new DoorCallers()
   const sessions = new Set<string>()
   const openedBy: string[] = []

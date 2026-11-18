@@ -124,7 +124,11 @@ describe('takeHeavySlot', () => {
   })
 
   it('an unwritable directory never stops a test run', async () => {
-    const out = await takeHeavySlot(opts('/dev/null/nope'))
+    // Under a plain file: no OS can make a directory there. ('/dev/null/nope'
+    // was that only on POSIX; Windows simply created C:\dev\null\nope.)
+    const file = path.join(fresh(), 'a-file')
+    writeFileSync(file, '')
+    const out = await takeHeavySlot(opts(path.join(file, 'nope')))
     expect(out.taken).toBe(false)
   })
 })
@@ -198,6 +202,11 @@ describe('WORKER_GUARD', () => {
     const child = fork(worker, [])
     await new Promise((resolve) => child.once('message', resolve))
     child.disconnect()
-    expect(await new Promise((resolve) => child.once('exit', (_code, signal) => resolve(signal)))).toBe('SIGKILL')
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+      child.once('exit', (code, signal) => resolve({ code, signal }))
+    )
+    // POSIX reports the signal; Windows terminates with exit code 1 and no signal.
+    if (process.platform === 'win32') expect(exit).toEqual({ code: 1, signal: null })
+    else expect(exit.signal).toBe('SIGKILL')
   })
 })

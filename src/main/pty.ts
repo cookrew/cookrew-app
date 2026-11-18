@@ -24,6 +24,7 @@ import { reapOrphansOn } from './orphan-reap'
 import { endPane, type PaneEnd } from './pane-end'
 import { sharedListing, type Listing } from './pane-listing'
 import { processFact } from './process-facts'
+import { childJudge, terminalPid, type OwnChild } from './terminal-pid'
 import { folderFailure } from './launch-check'
 import { installPaneExitHook, paneExitConf } from './pane-exit'
 import { harnessFor } from './harness'
@@ -269,7 +270,7 @@ function pidTaken(pid: number): boolean {
  * longer name it, so without this the next close would find nothing to end and
  * say so. `started` keeps a later retry off whoever holds that pid by then.
  */
-const survivors = new Map<string, { pid: number; started: string | null }>()
+const survivors = new Map<string, { pid: number; started: string | null; child?: OwnChild }>()
 
 /** Kill a cookrew tmux session by NAME (best effort) — no live PTY needed. */
 function killTmuxSessionByName(name: string): void {
@@ -581,7 +582,7 @@ export class PtySession extends EventEmitter {
       terminalId: options.terminalId,
       socketPath: options.socketPath,
       cliDir: options.cliDir,
-      path: `${options.cliDir}:${options.served ? (process.env.PATH ?? '') : panePath()}`,
+      path: `${options.cliDir}${path.delimiter}${options.served ? (process.env.PATH ?? '') : panePath()}`,
       cwd: options.cwd,
       card: options.card,
       ...(options.served ? {} : ownerSpawnExtras(options.route))
@@ -658,6 +659,9 @@ export class PtySession extends EventEmitter {
     })
     proc.onExit(({ exitCode }) => {
       if (this.proc !== proc) return
+      // node-pty's word on THIS child, from its own handle: what a direct
+      // session's end is judged by (terminal-pid.ts · childJudge), never a pid.
+      this.childHasExited = true
       try {
         if (!this.disposed && this.scheduleAttachRecovery({
           exitCode,
@@ -1114,6 +1118,24 @@ export class PtySession extends EventEmitter {
   /** The attach child: the agent itself only when no backend stands between (usesTmux false). */
   get pid(): number | null {
     return this.proc?.pid ?? null
+  }
+
+  private childHasExited = false
+
+  /**
+   * node-pty's own child, for judging a direct session's end (terminal-pid.ts):
+   * exited by node-pty's exit event, ended through node-pty, never by a pid.
+   */
+  get ownChild(): { readonly exited: boolean; terminate(): void } {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const session = this
+    return {
+      // Read live at every poll: the exit lands after the close.
+      get exited() {
+        return session.childHasExited
+      },
+      terminate: () => session.proc.kill()
+    }
   }
 
   /** Terminate the tmux session for good (explicit close: ⌘W / dismiss). */
@@ -1699,31 +1721,23 @@ export class PtyManager {
     const session = this.sessions.get(terminalId)
     const others = allBackends.filter((mux) => mux !== activeMux && mux.available() && mux.sessionExists(name))
     const held = [...(activeMux ? [activeMux] : []), ...others]
-    /** Which process this pid was at the start: a pid can come back as someone else's. */
-    let identity: string | null = null
-    /** A pid remembered with no start time could be anyone's by now: looked at, never signalled. */
-    let unsure = false
-    const panePid = (): number | null =>
-      session && !session.usesTmux ? session.pid : (activeMux?.panePid(name) ?? others[0]?.panePid(name) ?? null)
+    // node-pty's own child (a direct session), or the one an earlier end left
+    // running: judged by node-pty's exit, never by its pid (terminal-pid.ts).
+    const own = session && !session.usesTmux ? session.ownChild : (survivors.get(terminalId)?.child ?? null)
+    // A pid is signalled only once its start time names it (terminal-pid.ts).
+    const root = terminalPid({
+      remembered: () => survivors.get(terminalId),
+      forget: () => survivors.delete(terminalId),
+      panePid: () =>
+        session && !session.usesTmux ? session.pid : (activeMux?.panePid(name) ?? others[0]?.panePid(name) ?? null),
+      fact: (pid) => processFact(pid),
+      taken: pidTaken,
+      kill: (pid, signal) => process.kill(pid, signal)
+    })
+    const judge = childJudge(root, own)
     const end = await endPane(
       {
-        pid: async () => {
-          const known = survivors.get(terminalId)
-          const fact = known ? await processFact(known.pid) : null
-          // Only proof it is over lets it go: a ps that timed out is not that.
-          const over = fact?.state === 'gone' || (fact?.state === 'running' && known?.started != null && fact.started !== known.started)
-          if (known && !over) {
-            identity = known.started
-            unsure = known.started === null
-            return known.pid
-          }
-          survivors.delete(terminalId)
-          const pid = panePid()
-          if (pid === null) return null
-          const now = await processFact(pid)
-          identity = now.state === 'running' ? now.started : null
-          return pid
-        },
+        pid: () => root.pid(),
         close: () => {
           this.closeNow(terminalId)
           this.ownership.release(terminalId)
@@ -1734,25 +1748,13 @@ export class PtyManager {
           if (answers.includes(true)) return true
           return answers.includes(null) ? null : false
         },
-        alive: async (pid) => {
-          if (!pidTaken(pid)) return false
-          const now = await processFact(pid)
-          if (now.state === 'unknown') return true
-          return now.state === 'running' && (identity === null || now.started === identity)
-        },
-        signal: (pid, signal) => {
-          if (unsure) return
-          try {
-            process.kill(pid, signal)
-          } catch {
-            // Gone between the look and the signal: the next poll says so.
-          }
-        }
+        alive: judge.alive,
+        signal: judge.signal
       },
       timeoutMs
     )
     if (end.ended) survivors.delete(terminalId)
-    else if (end.pid !== null) survivors.set(terminalId, { pid: end.pid, started: identity })
+    else if (end.pid !== null) survivors.set(terminalId, { pid: end.pid, started: root.identity(), ...(own ? { child: own } : {}) })
     return end
   }
 

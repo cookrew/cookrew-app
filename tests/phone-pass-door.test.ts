@@ -11,6 +11,7 @@ import { V2Tokens } from '../registry/src/v2-tokens'
 import { jwkThumbprint } from '../src/shared/jwk-thumbprint'
 import { pairTranscript, type PairChallenge } from '../src/shared/account-pair'
 import { fakeAccount, tempBase } from './support/idv2'
+import { expectMode } from './support/file-mode'
 
 /**
  * A TRUSTED PHONE AT A MACHINE'S DOOR (owner 2026-11-16): the native phone app
@@ -159,8 +160,7 @@ describe('a trusted phone at the door', () => {
       createRefusedPhones(refusedFile).add(mine.id, 1_000)
       expect(createRefusedPhones(refusedFile).refuses(mine.id, 1_000)).toBe(true)
       expect(createRefusedPhones(refusedFile).refuses(mine.id.toUpperCase(), 999)).toBe(true)
-      const { statSync } = await import('node:fs')
-      expect(statSync(refusedFile).mode & 0o777).toBe(0o600)
+      expectMode(refusedFile, 0o600)
       const many = createRefusedPhones(refusedFile)
       for (let i = 0; i < 300; i++) many.add(randomUUID(), i)
       // The newest forgetting is never the one dropped; the oldest (this phone, first in) is.

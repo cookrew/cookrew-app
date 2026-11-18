@@ -1,5 +1,7 @@
-import { chmodSync, statSync } from 'node:fs'
+import { chmodSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { CHMOD_CANNOT_LOCK } from './support/file-mode'
+import { expectMode } from './support/file-mode'
 import {
   admittedDevicesFile,
   createAdmittedDeviceStore,
@@ -28,7 +30,7 @@ describe('the admitted-devices file', () => {
   it('is written 0600 — it decides who opens this Mac', () => {
     const store = createAdmittedDeviceStore({ base: temp.base })
     store.record({ deviceId: PHONE })
-    expect(statSync(admittedDevicesFile(temp.base)).mode & 0o777).toBe(0o600)
+    expectMode(admittedDevicesFile(temp.base), 0o600)
   })
 
   it('reads an absent or corrupt file as nobody admitted, never as a crash', () => {
@@ -68,7 +70,8 @@ describe('forgetting an admitted phone answers the question that was asked', () 
     expect(createAdmittedDeviceStore({ base: temp.base }).forget('never-here')).toBe(true)
   })
 
-  it('is FALSE only when the file would not take the change', () => {
+  // Skipped on Windows: chmod cannot lock a path there; see CHMOD_CANNOT_LOCK.
+  it.skipIf(CHMOD_CANNOT_LOCK)('is FALSE only when the file would not take the change', () => {
     const store = createAdmittedDeviceStore({ base: temp.base })
     store.record({ deviceId: PHONE })
     // Readable but not writable: the row can still be seen, so this is a real
@@ -128,7 +131,8 @@ describe('pruning the phones the registry has revoked', () => {
     expect(store.has('phone')).toBe(true)
   })
 
-  it('names nothing when the file would not take the change — the phone IS still admitted', () => {
+  // Skipped on Windows: chmod cannot lock a path there; see CHMOD_CANNOT_LOCK.
+  it.skipIf(CHMOD_CANNOT_LOCK)('names nothing when the file would not take the change — the phone IS still admitted', () => {
     const store = createAdmittedDeviceStore({ base: temp.base })
     store.record({ deviceId: PHONE })
     chmodSync(temp.base, 0o500)

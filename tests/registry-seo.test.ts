@@ -48,18 +48,25 @@ describe('the crawl files', () => {
     // not a sitemap URL, and the old addresses redirect.
     expect(xml).not.toContain('<loc>https://cookrew.dev/start</loc>')
     expect(xml).not.toContain('<loc>https://cookrew.dev/features</loc>')
-    for (const f of FEATURES) expect(xml).toContain(`<loc>https://cookrew.dev/features/${f.slug}</loc><priority>0.7</priority>`)
+    for (const f of FEATURES.filter((f) => f.slug !== 'marketplace')) expect(xml).toContain(`<loc>https://cookrew.dev/features/${f.slug}</loc><priority>0.7</priority>`)
+    // Still built for old links, never listed while sharing waits on security work.
+    expect(xml).not.toContain('/features/marketplace')
     expect(xml).not.toContain('lastmod')
     // No person and no team: those pages are gone, so no address but the site's own is named.
     const listed = [...xml.matchAll(/<loc>https:\/\/cookrew\.dev(\/[^<]*)<\/loc>/g)].map(([, at]) => at)
-    expect(listed.filter((at) => at !== '/' && !at.startsWith('/features/') && at !== '/privacy' && at !== '/terms')).toEqual([])
+    expect(listed.filter((at) => at !== '/' && !at.startsWith('/features/') && at !== '/zh/' && !at.startsWith('/zh/features/') && at !== '/privacy' && at !== '/terms')).toEqual([])
+    // The same pages in Chinese, and the marketplace in neither.
+    expect(xml).toContain('<loc>https://cookrew.dev/zh/</loc>')
+    for (const f of FEATURES.filter((f) => f.slug !== 'marketplace')) expect(xml).toContain(`<loc>https://cookrew.dev/zh/features/${f.slug}</loc>`)
   })
 
   it('llms.txt opens with the definition and answers every FAQ', () => {
     const text = llmsText()
     expect(text.startsWith('# Cookrew\n\n> Cookrew is an open-source desktop workspace')).toBe(true)
     for (const f of FAQ) expect(text).toContain(`### ${f.q}`)
-    expect(text).toContain('https://cookrew.dev/features/marketplace')
+    // The marketplace page is still built for old links, and listed nowhere (LISTED_FEATURES).
+    expect(text).not.toContain('https://cookrew.dev/features/marketplace')
+    expect(text).toContain('https://cookrew.dev/features/harnesses')
   })
 })
 
@@ -75,7 +82,10 @@ describe('the feature and start pages', () => {
       expect(rendered!.body).toContain('"@type":"FAQPage"')
       expect(rendered!.body).toContain(`<link rel="canonical" href="https://cookrew.dev/features/${f.slug}">`)
       expect(rendered!.body).toContain('<meta name="description"')
-      if (f.frames.length > 0) expect(rendered!.body).toContain('● REC')
+      // A picture carries no box or caption (owner 2026-11-18); what it is stays in data-source. A feature with none shows none.
+      if (f.frames.length > 0) expect(rendered!.body).toMatch(/<figure class="shot[^"]*" data-source="(illustration|composite)"/)
+      else expect(rendered!.body).not.toContain('<figure class="shot')
+      expect(rendered!.body).not.toContain('● REC')
     }
     expect(featurePage('nope')).toBeNull()
     expect(featurePage('../x')).toBeNull()
@@ -91,8 +101,10 @@ describe('the feature and start pages', () => {
     })
   )
 
-  it('the homepage links every feature, with the questions and the commits', () => {
-    for (const f of FEATURES) expect(home.body).toContain(`href="/features/${f.slug}"`)
+  it('the homepage links every feature but the marketplace, with the questions and the commits', () => {
+    // The marketplace keeps its page; the front page does not point at serving while sharing waits on security work.
+    for (const f of FEATURES.filter((f) => f.slug !== 'marketplace')) expect(home.body).toContain(`href="/features/${f.slug}"`)
+    expect(home.body).not.toContain('href="/features/marketplace"')
     expect(home.body).toContain('"@type":"FAQPage"')
     expect(home.body).toContain('feat: the web line')
   })

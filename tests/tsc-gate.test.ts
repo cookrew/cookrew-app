@@ -6,7 +6,7 @@
 // with the preload, because what matters is what node does with it.
 import { fork, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
-import { getPriority, tmpdir } from 'node:os'
+import { availableParallelism, getPriority, tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { installTscGate, tscGateEnv, tscGateOptions, TSC_GATE_SOURCE } from '../src/main/tsc-gate'
@@ -33,6 +33,10 @@ function rig() {
   }
   return { gate, slots, tsc, other, vitest, env }
 }
+
+/** Ended by SIGKILL: POSIX reports the signal; Windows terminates with exit code 1 and no signal. */
+const killedHard = ({ code, signal }: { code: number | null; signal: NodeJS.Signals | null }): boolean =>
+  signal === 'SIGKILL' || (process.platform === 'win32' && signal === null && code === 1)
 
 /** A slot held by this live test process, the same way a real run holds one. */
 const holdSlot = (dir: string) => writeFileSync(path.join(dir, `${Date.now() - 1000}-${process.pid}`), '')
@@ -102,7 +106,11 @@ describe('the preload, in a real node', () => {
 
   it('a slot directory it cannot use never stops a typecheck', () => {
     const r = rig()
-    const out = spawnSync(process.execPath, [r.tsc], { env: r.env({ COOKREW_TSC_SLOT_DIR: '/dev/null/nope' }), encoding: 'utf8', timeout: 5000 })
+    // Under a plain file: no OS can make a directory there ('/dev/null/nope'
+    // is only that on POSIX; Windows creates C:\dev\null\nope).
+    const file = path.join(path.dirname(r.slots), 'a-file')
+    writeFileSync(file, '')
+    const out = spawnSync(process.execPath, [r.tsc], { env: r.env({ COOKREW_TSC_SLOT_DIR: path.join(file, 'nope') }), encoding: 'utf8', timeout: 5000 })
     expect(out.stdout).toBe('ran')
     expect(out.status).toBe(0)
   })
@@ -131,7 +139,10 @@ describe('a vitest through the preload, in a real node', () => {
   it('drops to nice 10 and caps the pool, whatever config it loads next', () => {
     const seen = run(rig())
     expect(seen.nice).toBe(Math.max(base, 10))
-    expect(['2', '4']).toContain(seen.forks)
+    // 4, or 2 under load, never more than cores - 1: a 4-core CI runner gets 3.
+    const cores = availableParallelism()
+    const allowed = [2, 4].map((cap) => String(Math.max(1, Math.min(cores - 1, cap))))
+    expect(allowed).toContain(seen.forks)
     expect(seen.threads).toBe(seen.forks)
   })
 
@@ -176,9 +187,38 @@ describe('a pool worker through the preload', () => {
     await new Promise((resolve) => setTimeout(resolve, 300))
     const started = Date.now()
     child.disconnect()
-    const signal = await new Promise((resolve) => child.once('exit', (_code, sig) => resolve(sig)))
-    expect(signal).toBe('SIGKILL')
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+      child.once('exit', (code, signal) => resolve({ code, signal }))
+    )
+    expect(killedHard(exit)).toBe(true)
     expect(Date.now() - started).toBeLessThan(5000)
+  })
+
+  // Windows names a path with backslashes: an entry matched on '/' alone made
+  // the preload do nothing when a Windows node loaded it (windows-2022,
+  // PR #125). A POSIX file name may hold a backslash, so the same argv[1] shape
+  // is tried here; on Windows the vitest and pool-worker tests above run on
+  // real backslash paths.
+  it.skipIf(process.platform === 'win32')('knows its entries when the path is written with backslashes', async () => {
+    const r = rig()
+    const root = path.dirname(r.tsc)
+    // CommonJS: ESM refuses a module path that holds a backslash.
+    const vitest = path.join(root, 'win\\node_modules\\vitest\\vitest')
+    writeFileSync(vitest, readFileSync(r.vitest, 'utf8').replace("import os from 'node:os'", "const os = require('node:os')"))
+    const out = spawnSync(process.execPath, [vitest], { env: r.env(), encoding: 'utf8', timeout: 5000 })
+    expect(JSON.parse(out.stdout).forks).not.toBeNull()
+    const worker = path.join(root, 'win\\node_modules\\tinypool\\dist\\entry\\process.js')
+    writeFileSync(worker, "process.on('message', () => {})\nsetTimeout(() => {}, 30000)\n")
+    const child = fork(worker, [], { env: r.env({ CI: '1' }) })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    child.disconnect()
+    expect(await new Promise((resolve) => child.once('exit', (_code, signal) => resolve(signal)))).toBe('SIGKILL')
+    const tsc = path.join(root, 'win\\node_modules\\typescript\\bin\\tsc')
+    writeFileSync(tsc, "process.stdout.write('ran')\n")
+    holdSlot(r.slots)
+    const held = spawnSync(process.execPath, [tsc], { env: r.env({ COOKREW_TSC_MAX_WAIT_MS: '300', COOKREW_TSC_POLL_MS: '20' }), encoding: 'utf8', timeout: 5000 })
+    expect(held.stdout).toBe('ran')
+    expect(held.stderr).toContain('tsc-gate')
   })
 
   it('never touches a fork that is not a pool worker', async () => {
@@ -202,7 +242,11 @@ describe('installTscGate', () => {
   })
 
   it('reports failure instead of throwing: boot must go on', () => {
-    expect(installTscGate('/dev/null/nope/tsc-gate.cjs')).toBe(false)
+    // Under a plain file: no OS can make a directory there ('/dev/null/nope'
+    // is only that on POSIX; Windows creates C:\dev\null\nope).
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'tsc-gate-')), 'a-file')
+    writeFileSync(file, '')
+    expect(installTscGate(path.join(file, 'nope', 'tsc-gate.cjs'))).toBe(false)
   })
 
   it('leaves an up-to-date file alone: every live pane loads it, so a boot must not truncate it', () => {
@@ -249,6 +293,6 @@ describe('tscGateEnv', () => {
   })
 
   it('carries the gate when it is', () => {
-    expect(tscGateEnv('--trace-warnings', '/g.cjs', () => true)).toEqual({ NODE_OPTIONS: '--trace-warnings --require=/g.cjs' })
+    expect(tscGateEnv('--trace-warnings', '/g.cjs', () => true, 'darwin')).toEqual({ NODE_OPTIONS: '--trace-warnings --require=/g.cjs' })
   })
 })

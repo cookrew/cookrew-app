@@ -12,6 +12,7 @@ import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { testSocketPath } from './support/ipc-path'
 import { BOOLEAN_CLI_FLAGS, staleBooleanFlagError } from '../src/main/cli-flags'
 import { stdinPlaceholderError } from '../src/main/cli-stdin'
 import { HELP_TEXT } from '../src/main/socket-server'
@@ -29,7 +30,7 @@ afterEach(() => {
 })
 
 async function fakeApp(): Promise<{ socketPath: string; seen: Seen[] }> {
-  const socketPath = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-flags-')), 'app.sock')
+  const socketPath = testSocketPath(mkdtempSync(path.join(tmpdir(), 'cookrew-flags-')), 'app.sock')
   const seen: Seen[] = []
   const server = net.createServer((socket) => {
     let buffer = ''

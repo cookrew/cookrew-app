@@ -5,6 +5,7 @@ import { GITHUB_REPO, SITE_ORIGIN } from './site-content'
 import { jsonLd } from './site-seo'
 import { webCopy } from './v3-copy'
 import { LEGAL_PUBLISHED } from './site-legal-entity'
+import { htmlLang, local, otherLang, tr } from './site-lang'
 
 /**
  * THE ONE SHELL — the app's own dress, for the two places a page is still drawn.
@@ -264,6 +265,15 @@ const FONT_FACES = `
 @font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 700;font-display:optional;src:url(${SITE_FONTS}jetbrains-mono.woff2?v=${ASSET_VERSION}) format('woff2')}`
 const PRECONNECT = `<link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}inter.woff2?v=${ASSET_VERSION}" crossorigin>`
 
+/** A page's English path: '/zh/features/canvas' is '/features/canvas', '/zh/' is '/'. */
+export const englishPath = (path: string | undefined): string => (path === undefined ? '/' : path.replace(/^\/zh(\/|$)/, '/'))
+const translated = (path: string): boolean => path === '/' || path.startsWith('/features/')
+/** The page in both languages, for the engines. */
+const alternates = (en: string): string => {
+  const zh = en === '/' ? '/zh/' : `/zh${en}`
+  return `<link rel="alternate" hreflang="en" href="${SITE_ORIGIN}${en}"><link rel="alternate" hreflang="zh-CN" href="${SITE_ORIGIN}${zh}"><link rel="alternate" hreflang="x-default" href="${SITE_ORIGIN}${en}">`
+}
+
 function head(options: ShellOptions): string {
   const url = options.path === undefined ? null : `${SITE_ORIGIN}${options.path}`
   const description = options.description ?? ''
@@ -274,6 +284,7 @@ function head(options: ShellOptions): string {
     description ? `<meta name="description" content="${esc(description)}">` : '',
     options.noindex ? `<meta name="robots" content="noindex">` : '',
     url ? `<link rel="canonical" href="${esc(url)}">` : '',
+    staticSite !== null && options.path !== undefined && translated(englishPath(options.path)) ? alternates(englishPath(options.path)) : '',
     `<meta property="og:site_name" content="Cookrew"><meta property="og:type" content="website">`,
     `<meta property="og:title" content="${esc(options.title)}">`,
     description ? `<meta property="og:description" content="${esc(description)}">` : '',
@@ -296,23 +307,26 @@ function head(options: ShellOptions): string {
 function shell(options: ShellOptions, main: string): string {
   if (staticSite !== null) {
     const top = [
-      ['/', 'Home', 'home'],
-      ['/#download', 'Get the app', 'download']
+      [local('/'), tr('Home', '首页'), 'home'],
+      [local('/#download'), tr('Get the app', '获取应用'), 'download']
     ]
       .map(([href, label, key]) => `<a class="btn sm${options.active === key ? ' primary' : ''}" href="${href}">${label}</a>`)
       .join('')
+    // This page in the other language (a page with no Chinese copy offers the Chinese front page).
+    const other = otherLang(englishPath(options.path))
+    const prefs = `<span class="prefs"><a class="btn sm" href="${esc(other.href)}" hreflang="${other.lang === 'zh' ? 'zh-CN' : 'en'}" lang="${other.lang === 'zh' ? 'zh-CN' : 'en'}">${other.label}</a><span class="theme" role="radiogroup" aria-label="${tr('Theme', '主题')}"><input type="radio" name="th" id="th-auto" checked><label for="th-auto">${tr('Auto', '自动')}</label><input type="radio" name="th" id="th-day"><label for="th-day">${tr('Day', '日间')}</label><input type="radio" name="th" id="th-night"><label for="th-night">${tr('Night', '夜间')}</label></span></span>`
     return `<!doctype html>
-<html lang="en"><head>${head(options)}<style>${FONT_FACES}${SITE_STYLE}</style></head>
+<html lang="${htmlLang()}"><head>${head(options)}<style>${FONT_FACES}${SITE_STYLE}</style></head>
 <body>
 <header class="hdr"><div class="wrap">
-<a class="mark" href="/" aria-label="Cookrew home">${LOGO}</a>
-<span class="chip">an open-source spatial workspace for AI agents</span>
-<nav class="top">${top}<a class="btn sm" href="${esc(staticSite.console)}/">${icon('mac')} Open console</a></nav>
+<a class="mark" href="${local('/')}" aria-label="${tr('Cookrew home', 'Cookrew 首页')}">${LOGO}</a>
+<span class="chip">${tr('your agents on every machine · one account', '每台机器上的 agent · 一个账号')}</span>
+<nav class="top">${top}<a class="btn sm" href="${esc(staticSite.console)}/">${icon('mac')} ${tr('Open console', '打开控制台')}</a></nav>${prefs}
 </div></header>
 ${main}
 <footer><div class="wrap">
-<nav class="row" aria-label="Site"><a href="/#features">Features</a><a href="/#start">Get started</a><a href="/#download">Download</a><a href="${esc(staticSite.console)}/">Console</a><a href="${esc(staticSite.auth)}/account">Account</a><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a>${LEGAL_PUBLISHED ? '<a href="/privacy">Privacy</a><a href="/terms">Terms</a>' : ''}</nav>
-<p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. This site is static: no script runs on it and nothing here signs you in. Your machines are in the console; your account is at ${esc(new URL(staticSite.auth).host)}.</p>
+<nav class="row" aria-label="${tr('Site', '站点')}"><a href="${local('/#features')}">${tr('Features', '功能')}</a><a href="${local('/#start')}">${tr('Get started', '开始使用')}</a><a href="${local('/#download')}">${tr('Download', '下载')}</a><a href="${esc(staticSite.console)}/">${tr('Console', '控制台')}</a><a href="${esc(staticSite.auth)}/account">${tr('Account', '账号')}</a><a href="${GITHUB_REPO}">${tr('Source', '源码')}</a><a href="${GITHUB_REPO}/releases">${tr('Releases', '版本')}</a>${LEGAL_PUBLISHED ? `<a href="/privacy">${tr('Privacy', '隐私（英文）')}</a><a href="/terms">${tr('Terms', '条款（英文）')}</a>` : ''}</nav>
+<p class="meta" style="margin-top:12px">${tr(`Cookrew is open source under the MIT license. This site is static: no script runs on it and nothing here signs you in. Your machines are in the console; your account is at ${esc(new URL(staticSite.auth).host)}.`, `Cookrew 以 MIT 许可开源。本站是静态网站：不运行任何脚本，也不会让你登录。你的机器在控制台里；你的账号在 ${esc(new URL(staticSite.auth).host)}。`)}</p>
 </div></footer>
 </body></html>`
   }
@@ -385,7 +399,7 @@ export function icon(name: keyof typeof ICONS): string {
 }
 
 /** One stylesheet for every document; a second would drift from the first. */
-export const SITE_STYLE = `
+const RAW_STYLE = `
 :root{--cream:#f4efe4;--cream-hi:#fbf8f1;--cream-md:#ebe3d3;--cream-lo:#e3d9c6;--ink:#1d1a16;--ink-soft:#5d554a;
 --muted:#6f675b;--dim:#8c8374;--line:rgba(29,26,22,.42);--line-soft:rgba(29,26,22,.16);--hair:rgba(29,26,22,.16);--amber:#e2b866;--amber-soft:#f3e4c2;--amber-deep:#8f5520;
 --seal:#a8692b;--seal-fill:#96592a;--on-seal:#fbf8f1;--wash:rgba(168,140,98,.16);
@@ -406,7 +420,7 @@ a{color:inherit}
 /* header — the app's own chrome: cream-hi, 2px ink rule */
 .hdr{position:sticky;top:0;z-index:50;background:var(--cream-hi);border-bottom:1px solid var(--hair)}
 .hdr .wrap{display:flex;align-items:center;gap:14px;min-height:56px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
-@media (max-width:760px){.hdr .wrap>.chip{display:none}.hdr nav.top{margin-left:0;width:100%}}
+@media (max-width:760px){.hdr .wrap>.chip{display:none}.hdr nav.top{margin-left:0;width:100%;order:2}.hdr .prefs{margin-left:auto;order:1}}
 .mark{display:flex;align-items:center;gap:9px;text-decoration:none;font:700 15px var(--font-pixel);letter-spacing:.12em}
 .mark-coo{width:25px;height:31px;display:block;flex:0 0 auto;overflow:visible;color:var(--ink)}
 
@@ -442,6 +456,48 @@ code,.mono{font-family:var(--font-mono);font-size:.88em}
 .note{background:var(--note-bg);border:1px solid var(--hair);box-shadow:var(--lift-sm);padding:12px 14px;font-size:14px;transform:rotate(-.6deg)}
 .grid{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
 .grid .card p{color:var(--muted);font-size:14.5px;margin:0}
+/* the pillars (site-pillars.ts): a status pill beside every claim. Shape tells the status as well as colour:
+   a filled dot is in a release, a half dot in dev, an open dot tried by hand, a dashed outline only planned. */
+.st{display:inline-flex;align-items:center;gap:6px;justify-self:start;align-self:start;font:600 9px/1.3 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;padding:3px 9px 3px 7px;border:1px solid currentColor;border-radius:999px;white-space:nowrap;background:var(--cream-hi)}
+.st::before{content:'';width:7px;height:7px;border-radius:50%;background:currentColor;flex:0 0 auto}
+.st-shipped{color:var(--hp)}
+.st-in-dev{color:var(--amber-deep)}.st-in-dev::before{background:linear-gradient(90deg,currentColor 50%,transparent 50%);box-shadow:inset 0 0 0 1px currentColor}
+.st-beta{color:var(--violet)}
+.st-experiment{color:#3f6a8f}.st-experiment::before{background:none;box-shadow:inset 0 0 0 1.5px currentColor}
+.st-planned{color:var(--muted);border-style:dashed}.st-planned::before{background:none;box-shadow:inset 0 0 0 1px currentColor}
+@media (prefers-color-scheme:dark){.st-experiment{color:#8fb4d6}}
+.st-legend{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center}
+.st-legend>div{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted)}
+section.pillars-intro{padding:26px 0 0;border-bottom:none}
+section.pillars-intro::before{display:none}
+.pillar{padding:64px 0}
+.pillar h2{font-size:clamp(28px,3.4vw,42px);line-height:1.1;letter-spacing:-.01em;margin:0 0 12px;max-width:22ch}
+.pillar .lede{max-width:58ch;margin-bottom:28px}
+/* claims in two columns, the pictures the full width under them (12 columns; site-content.ts Pillar.media span) */
+.pillar-body{display:grid;gap:30px}
+.pillar-media{display:grid;gap:18px;grid-template-columns:repeat(12,minmax(0,1fr));align-items:start}
+.pillar-media>*{grid-column:1/-1}.pillar-media>.span-4{grid-column:span 4}.pillar-media>.span-6{grid-column:span 6}.pillar-media>.span-8{grid-column:span 8}
+ul.claims{list-style:none;margin:0;padding:0;border-top:1px solid var(--hair);display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:36px}
+.claim{display:grid;gap:7px;padding:16px 0;border-bottom:1px solid var(--line-soft)}
+.claim b{font:600 16.5px/1.3 var(--font-serif)}
+.claim p{margin:3px 0 0;color:var(--muted);font-size:14.5px;line-height:1.5}
+.claim[data-status=planned] b,.claim[data-status=planned] p{color:var(--dim)}
+.route-diagram{margin:0;padding:16px;border:1px solid var(--hair);background:var(--cream-hi);display:grid;gap:12px}
+.route-diagram ol{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px;position:relative}
+.route-diagram ol>li{position:relative;display:grid;gap:2px;padding:9px 10px;border:1px solid var(--line);background:var(--cream)}
+.route-diagram ol>li+li::before{content:'→';position:absolute;left:-18px;top:50%;transform:translateY(-50%);color:var(--ink-soft);font:14px var(--font-mono)}
+.route-diagram b{font:600 13px/1.25 var(--font-serif)}.route-diagram span{font:10.5px/1.35 var(--font-mono);color:var(--muted)}
+.route-diagram ol.exp>li{border-color:#3f6a8f}.route-diagram ol.exp>li.dashed{border-style:dashed}
+.route-diagram figcaption{font-size:12.5px;color:var(--muted)}
+.route-row{display:flex;gap:10px;align-items:center;margin:2px 0 -4px;font-size:12.5px;color:var(--muted)}
+.roadmap{list-style:none;margin:16px 0 0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.roadmap>li{padding:14px 16px;border:1px solid var(--hair);background:var(--cream-hi)}
+.roadmap-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:8px}
+.roadmap-head b{font:600 20px var(--font-serif)}
+.roadmap ul{margin:0;padding-left:16px;color:var(--muted);font-size:14px}.roadmap ul li{margin:4px 0}
+.hero-sub{font:500 clamp(17px,1.7vw,21px)/1.35 var(--font-serif);color:var(--amber-deep);margin:0 0 14px;max-width:34ch}
+@media (max-width:860px){ul.claims{grid-template-columns:minmax(0,1fr)}.pillar-media>[class*=span-]{grid-column:1/-1}.roadmap{grid-template-columns:1fr 1fr}}
+@media (max-width:520px){.roadmap{grid-template-columns:1fr}.route-diagram ol{grid-template-columns:1fr;gap:18px}.route-diagram ol>li+li::before{content:'↓';left:50%;top:-16px;transform:translateX(-50%)}}
 /* a frame as a card's face (the features index): a 16:10 window onto the
    top-left of the recording, never the image at its own pixel size — the
    only img rule above is scoped to figure.shot, and a 1400px frame dropped
@@ -454,11 +510,36 @@ code,.mono{font-family:var(--font-mono);font-size:.88em}
 .crt::before{content:'';position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(255,255,255,.03) 0,rgba(255,255,255,.03) 1px,transparent 1px,transparent 3px)}
 /* recorded frame */
 figure.shot{margin:0;border:1px solid var(--hair);box-shadow:var(--lift);background:var(--phos-bg);overflow:hidden}
+figure.shot picture{display:block}
+/* a picture's night twin (site-frames.ts): shown at night, the day one hidden */
+figure.shot .v-night{display:none}
+@media (prefers-color-scheme:dark){.v-day{display:none}.v-night{display:block}}
+/* the language and the theme, in the header */
+.prefs{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.theme{display:inline-flex;border:1px solid var(--line);background:var(--cream-hi)}
+.theme input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}
+.theme label{font:600 9.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;padding:6px 9px;cursor:pointer;color:var(--ink-soft)}
+.theme input:checked+label{background:var(--ink);color:var(--cream)}
+.theme input:focus-visible+label{outline:2px solid var(--amber-deep);outline-offset:1px}
 figure.shot img,figure.shot video{display:block;width:100%;height:auto}
-figure.shot video{aspect-ratio:1400/874;background:var(--phos-bg)}
+figure.shot video{aspect-ratio:1024/640;background:var(--phos-bg)}
 figure.shot figcaption{font-size:13px;color:var(--muted);padding:9px 12px;background:var(--cream-hi);border-top:1px solid var(--hair);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 figure.shot .rec{font:8.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;background:var(--hp);color:var(--on-seal);border:1px solid var(--line);padding:2px 6px}
 figure.shot.missing{min-height:220px;display:grid;place-items:center;color:var(--phos-dim);font:18px var(--font-screen)}
+figure.shot.illustration,figure.shot.composite{background:var(--cream-md)}
+/* How it looks: wider than the text column on a large screen (up to 1392 px; the crops are 2880 wide), phone screens
+   side by side; the clip at most its own 1024 px. */
+.feature-shots{display:grid;gap:22px;margin-inline:calc(50% - min(696px, 50vw - 24px))}
+.feature-shots.pair{grid-template-columns:repeat(2,minmax(0,420px));justify-content:center}
+.feature-shots figure.clip{max-width:1024px;width:100%;justify-self:center}
+.feature-shots figure.narrow{max-width:var(--max);width:100%;justify-self:center}
+/* A phone takes each figure's own framing (<picture> source, site-frames.ts PHONE_MEDIA), edge to edge. */
+@media (max-width:640px){
+.feature-shots figure.clip{display:none}
+.feature-shots.pair{grid-template-columns:minmax(0,1fr)}
+figure.shot:not(.narrow){margin-inline:calc(50% - 50vw);border-left:0;border-right:0}
+figure.shot figcaption{padding:8px 16px;font-size:12.5px;gap:4px 10px}
+}
 /* sections */
 section{padding:56px 0;border-bottom:1px solid var(--line-soft)}
 .feature{display:grid;gap:34px;grid-template-columns:minmax(0,5fr) minmax(0,7fr);align-items:center}
@@ -616,9 +697,13 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
      carrying both destinations two rows up — one copy is enough. */
   .toc .jump{display:none}
 }
-.hero .wrap{display:grid;gap:34px;grid-template-columns:minmax(0,6fr) minmax(0,7fr);align-items:center}
-@media (max-width:900px){.hero .wrap{grid-template-columns:1fr}}
-.hero h1{margin-bottom:12px;font-size:clamp(28px,3.3vw,40px)}
+/* the words in two columns over the composite, which takes the page's width */
+.hero .wrap{display:grid;gap:26px;grid-template-columns:minmax(0,1fr)}
+.hero-text{display:grid;gap:8px 40px;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:end}
+@media (max-width:900px){.hero-text{grid-template-columns:minmax(0,1fr)}.hero .wrap .tagline{white-space:normal}}
+.hero h1{margin-bottom:12px;font-size:clamp(34px,4.3vw,56px);max-width:12ch}
+/* a line breaks between the headline's sentences, never inside one (in Chinese too) */
+.hero h1 .hl{display:inline-block}
 /* the lockup is the header's mark writ large — a brand beat, not a billboard.
    site-brand.ts sizes it for a full-width band; in the hero it shares the
    column with the headline, so it is capped here. */
@@ -765,6 +850,39 @@ mark.ph{background:var(--amber);color:#1d1a16;padding:0 4px;border-radius:3px;fo
 .motion figure.shot figcaption{align-items:flex-start}.motion figure.shot figcaption b{font-size:15px;color:var(--ink)}
 dialog.acct{border-radius:14px}
 `
+
+/**
+ * DAY, NIGHT OR THE SYSTEM'S (owner 2026-11-18: day and night versions). The site follows the system's scheme; three
+ * radios in the header (#th-auto, #th-day, #th-night) let a reader pick, with no script (the policy allows none), so
+ * the pick lasts for the page. Every rule the stylesheet keeps for a dark system is drawn a second time for a reader who
+ * picked night, and held back from one who picked day: the same rules, two more selectors.
+ */
+const DAY = ':root:not(:has(#th-day:checked))'
+const NIGHT = ':root:has(#th-night:checked)'
+function themed(css: string): string {
+  const open = '@media (prefers-color-scheme:dark){'
+  let out = ''
+  let forced = ''
+  let at = 0
+  for (;;) {
+    const start = css.indexOf(open, at)
+    if (start === -1) break
+    let depth = 1
+    let i = start + open.length
+    for (; i < css.length && depth > 0; i++) depth += css[i] === '{' ? 1 : css[i] === '}' ? -1 : 0
+    const inner = css.slice(start + open.length, i - 1)
+    const rules = [...inner.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => [m[1]!.trim(), m[2]!] as const)
+    const scope = (prefix: string, sel: string): string =>
+      sel.split(',').map((one) => (one.trim().startsWith(':root') ? one.trim().replace(':root', prefix) : `${prefix} ${one.trim()}`)).join(',')
+    out += css.slice(at, start) + open + rules.map(([sel, body]) => `${scope(DAY, sel)}{${body}}`).join('') + '}'
+    forced += rules.map(([sel, body]) => `${scope(NIGHT, sel)}{${body}}`).join('')
+    at = i
+  }
+  return `${out}${css.slice(at)}\n${forced}\n:root:has(#th-day:checked){color-scheme:light}${NIGHT}{color-scheme:dark}\n`
+}
+
+/** One stylesheet for every document; a second would drift from the first. */
+export const SITE_STYLE = themed(RAW_STYLE)
 /** The sheet's and /me's own dress, appended to the site's one stylesheet. */
 export const ACCOUNT_STYLE = `
 dialog.acct{max-width:420px;width:calc(100vw - 32px);border:1px solid var(--hair);box-shadow:var(--lift);background:var(--cream-hi);color:var(--ink);padding:20px}

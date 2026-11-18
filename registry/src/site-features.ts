@@ -1,8 +1,9 @@
-import { FRAMES, frameImg, type Frame } from './site-frames'
+import { DEMO, figure } from './site-frames'
+import { clipFigure } from './site-motion'
 import { esc, page, type Page } from './site-shell'
-import { COMPARE, DEFINITION, FEATURES, GITHUB_REPO, type FeatureSpec } from './site-content'
+import { compare, definition, features, GITHUB_REPO, listedFeatures, type FeatureSpec } from './site-content'
+import { local, tr } from './site-lang'
 import type { Commit } from './github-commits'
-import { SEQUENCES, type Step } from './site-sequences'
 import { breadcrumbs, faqPage, organization, webPage } from './site-seo'
 
 /**
@@ -19,27 +20,17 @@ import { breadcrumbs, faqPage, organization, webPage } from './site-seo'
  * page.
  */
 
-function stepFigure(step: Step, index: number): string {
-  const frame: Frame = { file: step.file, alt: step.title, caption: step.caption, width: step.width, height: step.height }
-  return `<li class="step"><div class="step-no">${index + 1}</div><div><h3>${esc(step.title)}</h3><figure class="shot">${frameImg(frame, { sizes: '(max-width: 860px) 100vw, 70vw' })}<figcaption><span class="rec">● REC</span>${esc(step.caption)}</figcaption></figure></div></li>`
-}
-
-function overviewFigure(key: string): string {
-  const frame = (FRAMES as Record<string, Frame>)[key]
-  if (!frame) return ''
-  return `<figure class="shot">${frameImg(frame, { sizes: '(max-width: 860px) 100vw, 70vw' })}<figcaption><span class="rec">● REC</span>${esc(frame.caption)}</figcaption></figure>`
-}
-
 export function featurePage(slug: string): Page | null {
-  const f = FEATURES.find((x) => x.slug === slug)
+  const f = features().find((x) => x.slug === slug)
   if (!f) return null
-  const steps = SEQUENCES[slug] ?? []
-  const related = f.related.map((r) => FEATURES.find((x) => x.slug === r)).filter((x): x is FeatureSpec => x !== undefined)
-  const path = `/features/${f.slug}`
-  const visual =
-    steps.length > 0
-      ? `<ol class="steps">${steps.map(stepFigure).join('')}</ol>`
-      : f.frames.map(overviewFigure).join('')
+  const listed = listedFeatures()
+  const related = f.related.map((r) => listed.find((x) => x.slug === r)).filter((x): x is FeatureSpec => x !== undefined)
+  const path = local(`/features/${f.slug}`)
+  // A page still built for old links but listed nowhere is not to be indexed as current (LISTED_FEATURES).
+  const unlisted = !listed.some((x) => x.slug === f.slug)
+  // The current UI on demo data, labelled; a feature no picture shows yet has none, and nothing stands in.
+  const portraits = f.frames.length > 0 && f.frames.every((key) => DEMO[key].height > DEMO[key].width)
+  const visual = (f.clip ? clipFigure() : '') + f.frames.map((key) => figure(DEMO[key], { sizes: portraits ? '(max-width: 640px) 100vw, 420px' : '(max-width: 1440px) 96vw, 1392px' })).join('')
 
   return page(
     {
@@ -48,46 +39,47 @@ export function featurePage(slug: string): Page | null {
       active: 'features',
       description: f.short.slice(0, 160),
       path,
+      noindex: unlisted,
       jsonLd: [
         organization(),
         webPage({ path, name: f.title, description: f.definition }),
         breadcrumbs([
-          { name: 'Cookrew', path: '/' },
-          { name: 'Features', path: '/#features' },
+          { name: 'Cookrew', path: local('/') },
+          { name: tr('Features', '功能'), path: local('/#features') },
           { name: f.title, path }
         ]),
         faqPage(f.faq)
       ]
     },
     `<div class="wrap" style="padding-top:36px">
-<p class="meta"><a href="/">Cookrew</a> / <a href="/#features">Features</a> / ${esc(f.slug)}</p>
+<p class="meta"><a href="${local('/')}">Cookrew</a> / <a href="${local('/#features')}">${tr('Features', '功能')}</a> / ${esc(f.slug)}</p>
 <h1>${esc(f.title)}</h1>
 <p class="lede">${esc(f.definition)}</p>
 <ul class="pts">${f.pts.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
-<p class="row"><a class="btn primary" href="/#download">Get Cookrew</a><a class="btn" href="/#start">Get started</a></p>
+<p class="row"><a class="btn primary" href="${local('/#download')}">${tr('Get Cookrew', '获取 Cookrew')}</a><a class="btn" href="${local('/#start')}">${tr('Get started', '开始使用')}</a></p>
 </div>
-<section><div class="wrap"><p class="kicker"><span class="no">RECORDED</span>${steps.length > 0 ? `${steps.length} steps, captured from the running app` : 'captured from the running app'}</p>
-<h2>How it looks</h2>${visual}</div></section>
-<section id="faq"><div class="wrap"><h2>Questions about ${esc(f.slug === 'cli' ? 'the CLI' : f.slug)}</h2><div class="faq">${f.faq
+${visual ? `<section><div class="wrap">
+<h2>${tr('How it looks', '界面一览')}</h2><div class="feature-shots${portraits ? ' pair' : ''}">${visual}</div></div></section>` : ''}
+<section id="faq"><div class="wrap"><h2>${tr(`Questions about ${esc(f.slug === 'cli' ? 'the CLI' : f.slug)}`, '常见问题')}</h2><div class="faq">${f.faq
       .map((q) => `<details open><summary>${esc(q.q)}</summary><p>${esc(q.a)}</p></details>`)
       .join('')}</div></div></section>
-<section><div class="wrap"><h2>Related</h2><div class="grid">${related
-      .map((r) => `<div class="card"><h3><a href="/features/${r.slug}">${esc(r.title)}</a></h3><p>${esc(r.short)}</p></div>`)
+<section><div class="wrap"><h2>${tr('Related', '相关功能')}</h2><div class="grid">${related
+      .map((r) => `<div class="card"><h3><a href="${local(`/features/${r.slug}`)}">${esc(r.title)}</a></h3><p>${esc(r.short)}</p></div>`)
       .join('')}</div>
-<p class="meta" style="margin-top:18px">${esc(DEFINITION)} <a href="${GITHUB_REPO}">Source on GitHub ↗</a></p></div></section>`
+<p class="meta" style="margin-top:18px">${esc(definition())} <a href="${GITHUB_REPO}">${tr('Source on GitHub ↗', 'GitHub 上的源码 ↗')}</a></p></div></section>`
   )
 }
 
 export function compareTable(): string {
-  return `<table class="cmp"><caption>Chat tab, single agent CLI, or Cookrew — what each can do (2026-09)</caption><thead><tr><th></th><th>A chat tab</th><th>One CLI agent</th><th>Cookrew</th></tr></thead><tbody>${COMPARE.map(
+  return `<table class="cmp"><caption>${tr('Chat tab, single agent CLI, or Cookrew — what each can do (2026-11)', '聊天标签页、单个 agent CLI 还是 Cookrew——各自能做什么（2026-11）')}</caption><thead><tr><th></th><th>${tr('A chat tab', '聊天标签页')}</th><th>${tr('One CLI agent', '单个 CLI agent')}</th><th>Cookrew</th></tr></thead><tbody>${compare().map(
     (r) => `<tr><th scope="row">${esc(r.question)}</th><td>${esc(r.chat)}</td><td>${esc(r.singleAgent)}</td><td><b>${esc(r.cookrew)}</b></td></tr>`
   ).join('')}</tbody></table>`
 }
 
 export function commitsSection(commits: readonly Commit[] | null): string {
   if (!commits || commits.length === 0) return ''
-  return `<section id="built"><div class="wrap"><p class="kicker"><span class="no">PROOF</span>built in the open, by its own crew</p><h2>What landed on the dev branch</h2>
-<p>Cookrew is developed on its own canvas by a crew of agents — Forge writes features, Tinker fixes bugs, Magpie runs QA, Conductor directs — and every recorded frame on these pages comes from that canvas. These are the latest commits, straight from GitHub.</p>
+  return `<section id="built"><div class="wrap"><p class="kicker"><span class="no">${tr('PROOF', '证明')}</span>${tr('built in the open, by its own crew', '由它自己的团队公开构建')}</p><h2>${tr('What landed on the dev branch', 'dev 分支上的最新提交')}</h2>
+<p>${tr('Cookrew is developed on its own canvas by a crew of agents — Forge writes features, Tinker fixes bugs, Magpie runs QA, Conductor directs. These are the latest commits, straight from GitHub.', 'Cookrew 由一支 agent 团队在它自己的画布上开发——Forge 写功能，Tinker 修 bug，Magpie 做 QA，Conductor 指挥。下面是来自 GitHub 的最新提交。')}</p>
 <ol class="commits">${commits
     .slice(0, 10)
     .map((c) => `<li><time datetime="${esc(c.date)}">${esc(c.date)}</time> <a href="${esc(c.url)}"><code>${esc(c.sha)}</code></a> ${esc(c.title)}</li>`)
@@ -95,14 +87,10 @@ export function commitsSection(commits: readonly Commit[] | null): string {
 }
 
 /**
- * Every feature as a card with its first recorded frame — the overview the
- * homepage shows. The frame is a card face (a 16:10 window onto the
- * recording, .card-shot), never the image at its own pixel size.
+ * Every listed feature as a card: its title and one line. No picture: the
+ * front page's figures are each shown once, in the pillars, and a feature's
+ * own page carries its pictures.
  */
 export function featuresGrid(): string {
-  return `<div class="grid shots">${FEATURES.map((f) => {
-    const steps = SEQUENCES[f.slug] ?? []
-    const frame = steps[0] ? { file: steps[0].file, alt: steps[0].title, caption: steps[0].caption, width: steps[0].width, height: steps[0].height } : (FRAMES as Record<string, Frame>)[f.frames[0] ?? '']
-    return `<div class="card" style="padding:0;overflow:hidden">${frame ? `<a class="card-shot" href="/features/${f.slug}">${frameImg(frame, { sizes: '(max-width: 860px) 100vw, 33vw' })}</a>` : ''}<div style="padding:14px 16px"><h3><a href="/features/${f.slug}">${esc(f.title)}</a></h3><p>${esc(f.short)}</p></div></div>`
-  }).join('')}</div>`
+  return `<div class="grid">${listedFeatures().map((f) => `<div class="card"><h3><a href="${local(`/features/${f.slug}`)}">${esc(f.title)}</a></h3><p>${esc(f.short)}</p></div>`).join('')}</div>`
 }

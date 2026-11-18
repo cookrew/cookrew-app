@@ -73,10 +73,11 @@ import {
   renderSection,
   servedSessions,
   slopePerHour,
-  worstOf
+  worstOf,
+  zoomMotionChecks
 } from './perf-eval-lib.mjs'
 import { BUDGETS } from './perf-budgets.mjs'
-import { findChrome, probeCompanion } from './perf-dom-probe.mjs'
+import { findChrome, keyedRenders, probeCompanion } from './perf-dom-probe.mjs'
 
 const MB = 1024 * 1024
 const HOUR = 60 * 60 * 1000
@@ -543,10 +544,17 @@ async function evalDom(opts, now) {
   } catch (error) {
     return { checks: [{ name: 'dom', value: null, unit: '', verdict: 'warn', note: `probe failed: ${error.message}` }], verdict: 'warn' }
   }
-  const pan = result.pan
+  // The canvas's pan, when there is a canvas; the zoom view's scroll is judged
+  // by zoomMotionChecks below and recorded under its own names.
+  const zoomView = result.motion === 'zoom view scroll'
+  const pan = zoomView ? null : result.pan
+  const scroll = zoomView ? result.pan : null
   // A measurement that did not happen is not a pass.
   const judged = (value, budget) => (value === null || value === undefined ? 'warn' : judge(value, budget))
-  const cardRendersPerFrame = pan ? (pan.renders.NodeWrapper ?? 0) / Math.max(1, pan.frames) : null
+  // A canvas card is xyflow's NodeWrapper (names do not survive a minified
+  // bundle; the zoom view's agents are counted by key, perf-dom-probe · keyedRenders).
+  const cardRenders = pan ? (pan.renders.NodeWrapper ?? 0) : null
+  const cardRendersPerFrame = pan ? cardRenders / Math.max(1, pan.frames) : null
   const residue = result.board ? result.board.closed.dom.total - result.rest.dom.total : null
   const record = {
     t: now,
@@ -556,28 +564,42 @@ async function evalDom(opts, now) {
     cards: result.rest.dom.cards,
     layers: result.rest.layers.count,
     heapMb: result.rest.metrics.jsHeapUsedMb,
+    motion: result.motion ?? null,
     commitsPerPanFrame: pan?.commitsPerFrame ?? null,
     cardRendersPerPanFrame: cardRendersPerFrame,
+    // The zoom view's motion, as totals (zoomMotionChecks reads the same).
+    scrollRequestedPx: zoomView ? (result.scrollRequestedPx ?? null) : null,
+    scrolledPerFacePx: zoomView ? (result.scrolledPerFacePx ?? null) : null,
+    scrollCommits: scroll?.commits ?? null,
+    scrollCardRenders: scroll ? keyedRenders(scroll) : null,
+    zoomCardRenders: zoomView && result.zoom ? keyedRenders(result.zoom) : null,
     boardResidueElements: residue
   }
   appendHistory(opts.history, 'dom', record)
   const shape = result.workspace ? `${result.workspace.nodes} nodes, ${result.rest.dom.cards} cards on stage` : ''
+  // The canvas's pan was judged per frame; the zoom view's motion, by totals
+  // (perf-eval-lib.mjs · zoomMotionChecks), where per frame could not fail.
+  const motionChecks = zoomView
+    ? zoomMotionChecks(result, BUDGETS.dom)
+      : [
+          {
+            name: 'card renders per pan frame',
+            value: cardRendersPerFrame,
+            unit: '/frame',
+            verdict: judged(cardRendersPerFrame, BUDGETS.dom.cardRendersPerPanFrame),
+            note: pan ? `${cardRenders} over ${pan.frames} frames of the canvas pan` : 'no canvas pane and no zoom view — motion skipped'
+          },
+          {
+            name: 'commits per pan frame',
+            value: pan?.commitsPerFrame ?? null,
+            unit: '/frame',
+            verdict: judged(pan?.commitsPerFrame ?? null, BUDGETS.dom.commitsPerPanFrame),
+            note: pan ? `${pan.commits} commits; idle ${result.idle?.commits ?? 0} in 3 s` : ''
+          }
+        ]
   const checks = [
     { name: 'elements at rest', value: record.elements, unit: '', verdict: judged(record.elements, BUDGETS.dom.elements), note: shape },
-    {
-      name: 'card renders per pan frame',
-      value: cardRendersPerFrame,
-      unit: '/frame',
-      verdict: judged(cardRendersPerFrame, BUDGETS.dom.cardRendersPerPanFrame),
-      note: pan ? `${pan.renders.NodeWrapper ?? 0} over ${pan.frames} frames` : 'no pane point — pan skipped'
-    },
-    {
-      name: 'commits per pan frame',
-      value: pan?.commitsPerFrame ?? null,
-      unit: '/frame',
-      verdict: judged(pan?.commitsPerFrame ?? null, BUDGETS.dom.commitsPerPanFrame),
-      note: pan ? `${pan.commits} commits; idle ${result.idle?.commits ?? 0} in 3 s` : ''
-    },
+    ...motionChecks,
     { name: 'compositing layers', value: record.layers, unit: '', verdict: judged(record.layers, BUDGETS.dom.layers), note: result.rest.layers.backingMb === null ? 'layer tree not reported' : `${fmtMb(result.rest.layers.backingMb * MB)} backing` },
     {
       name: 'board residue',
@@ -605,6 +627,22 @@ function remoteChecks(label, report, load) {
     const verdict = judge(value, budget)
     return { name: `${label} ${name}`, value, unit: 'ms', verdict: capped(verdict), note: `${note}${shaped(verdict)}` }
   }
+  const thirdParty = {
+    name: `${label} third-party requests`,
+    value: s.thirdParty.requests,
+    unit: '',
+    verdict: judge(s.thirdParty.requests, BUDGETS.remote.thirdPartyRequests),
+    note: s.thirdParty.hosts.join(', ')
+  }
+  // No first card is not a pass: judge() calls a missing number ok, and that
+  // is how a stale marker read green here from the canvas's retirement on.
+  if (s.boot.measured === false) {
+    return [
+      { name: `${label} first card`, value: null, unit: 'ms', verdict: 'fail', note: `no ${report.firstCardSelector ?? 'first card'} within ${report.settleS ?? '?'} s — the page drew no agent, or the marker is stale` },
+      { name: `${label} boot requests`, value: null, unit: '', verdict: 'warn', note: 'not measured: no first card to count from' },
+      thirdParty
+    ]
+  }
   return [
     {
       name: `${label} boot requests`,
@@ -613,13 +651,7 @@ function remoteChecks(label, report, load) {
       verdict: judge(s.boot.requests, BUDGETS.remote.bootRequests),
       note: `${fmtMb(s.boot.bytes)} depth ${s.boot.depth} · ${s.boot.shapes.slice(0, 4).map((r) => `${r.count}× ${r.shape}`).join(', ')}`
     },
-    {
-      name: `${label} third-party requests`,
-      value: s.thirdParty.requests,
-      unit: '',
-      verdict: judge(s.thirdParty.requests, BUDGETS.remote.thirdPartyRequests),
-      note: s.thirdParty.hosts.join(', ')
-    },
+    thirdParty,
     clock('first card', s.firstCardMs, BUDGETS.remote.firstCardMs, `first paint ${s.firstPaintMs ?? '—'} ms`),
     clock('interactive', s.interactiveMs, BUDGETS.remote.interactiveMs),
     {

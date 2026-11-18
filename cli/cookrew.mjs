@@ -24,6 +24,19 @@ function fail(message, exitCode = 1) {
 }
 
 /**
+ * Why the app could not be reached. On Windows it serves no CLI at all
+ * (src/main/cli-transport.ts, whose CLI_NOT_ON_WINDOWS this text matches), so a
+ * failed connection there says so instead of asking whether the app is running.
+ */
+function unreachable(error) {
+  const code = error.code ?? error.message
+  if (process.platform === 'win32') {
+    fail(`The cookrew CLI is not available on Windows yet: the app serves it over a Unix-domain socket, and has no Windows transport. (${code})`)
+  }
+  fail(`Cannot reach the Cookrew app (${code}). Is it running?`)
+}
+
+/**
  * The app's socket.
  *
  * Inside a pane COOKREW_SOCKET is injected. Outside one — a plain shell, once
@@ -113,6 +126,8 @@ const terminalId = process.env.COOKREW_TERMINAL_ID ?? ''
  * deep tree cannot make the CLI slow.
  */
 function ancestorSessionId() {
+  // Windows has no POSIX ps: the one a machine may have on PATH refuses -o.
+  if (process.platform === 'win32') return null
   const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
   const flag = new RegExp(`--(?:session-id|resume)[= ](${uuid})\\b`, 'i')
   try {
@@ -120,7 +135,9 @@ function ancestorSessionId() {
     for (let hop = 0; hop < 6 && pid > 1; hop += 1) {
       const out = execFileSync('ps', ['-o', 'ppid=,command=', '-p', String(pid)], {
         encoding: 'utf8',
-        timeout: 1000
+        timeout: 1000,
+        // A ps that complains must not print into the command's own output.
+        stdio: ['ignore', 'pipe', 'ignore']
       }).trim()
       if (!out) return null
       const match = flag.exec(out)
@@ -332,7 +349,7 @@ function openConversation(session) {
       waiting.delete(answer.id)
     }
   })
-  socket.on('error', (error) => fail(`Cannot reach the Cookrew app (${error.code ?? error.message}). Is it running?`))
+  socket.on('error', unreachable)
   // Whatever was open: the conversation belongs to this connection, so nothing
   // typed after this could reach anyone.
   socket.on('close', () => fail('This sign-in ended: the Cookrew app went away, or nobody answered for ten minutes. Nothing more was sent. Run this again.'))
@@ -510,6 +527,4 @@ socket.on('data', (chunk) => {
   }
 })
 
-socket.on('error', (error) => {
-  fail(`Cannot reach the Cookrew app (${error.code ?? error.message}). Is it running?`)
-})
+socket.on('error', unreachable)

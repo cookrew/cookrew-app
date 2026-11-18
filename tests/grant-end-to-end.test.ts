@@ -84,10 +84,12 @@ let forks = 0
 /** Resolves the ask currently in flight, so a revoke can be raced against it. */
 let answer: ((text: string) => void) | null = null
 
-beforeEach(() => {
+beforeEach(async () => {
   base = mkdtempSync(path.join(tmpdir(), 'cookrew-grant-e2e-'))
   clock = 1_700_000_000_000
   issuer = new CallCredentialService({ base, now: () => clock })
+  // Proven private before anything signs: async on Windows (file-privacy.ts).
+  await issuer.prepare()
   exports = new AgentExportStore(base)
   conversations = new CallConversationStore(base)
   flight = new CallsInFlight()

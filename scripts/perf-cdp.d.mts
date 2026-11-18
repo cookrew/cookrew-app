@@ -1,4 +1,6 @@
 /** Types for the dependency-free CDP client, for the perf gate that imports it. */
+import type { ChildProcess } from 'node:child_process'
+
 export interface CdpClient {
   send(method: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown> & { result?: { value?: unknown } }>
   on(method: string, listener: (params: Record<string, unknown>) => void): () => void
@@ -6,7 +8,7 @@ export interface CdpClient {
 }
 export function chromeBinary(): string | null
 export function launchChrome(options: { userDataDir: string; headless?: boolean; extraArgs?: string[] }): Promise<{
-  child: { kill(signal?: string): void; exitCode: number | null }
+  child: ChildProcess
   port: number
   browserWs: string
 }>

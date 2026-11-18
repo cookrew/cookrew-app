@@ -21,6 +21,7 @@ import {
 import { resolveCallerTerminalId } from '../shared/caller-identity'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
 import { claimSocket, type SocketClaim } from './socket-claim'
+import { cliTransport } from './cli-transport'
 import { noteWriteReply, parseNoteWrite } from './note-write-guard'
 import { bareBrowserHint, bareNoteArgs } from './bare-card'
 import { reachByName, type ReachKind } from './ask-reach'
@@ -66,6 +67,8 @@ import { cmdRemote, type RemoteCliDeps } from './remote-cli'
 import { stdinPlaceholderError } from './cli-stdin'
 
 export interface SocketServerDeps {
+  /** The OS whose CLI transport is served (cli-transport.ts); this one by default. */
+  platform?: NodeJS.Platform
   /** A brief's pictures copied into the attach store, the brief naming the copies (picture-adopt.ts). */
   adoptPictures?: (text: string) => Promise<string>
   store: WorkspaceStore
@@ -255,6 +258,14 @@ export function startSocketServer(deps: SocketServerDeps): SocketServerHandle {
     })
     socket.on('error', () => socket.destroy())
   })
+
+  // No transport on this OS (Windows): nothing is bound, and the reason is said once.
+  const transport = cliTransport(deps.platform)
+  if (transport.kind === 'none') {
+    console.warn(`${transport.reason} This instance runs without a CLI.`)
+    const none: SocketClaim = { owned: false, path: ptys.socketPath, reason: transport.reason, release: () => undefined }
+    return { server, claim: Promise.resolve(none) }
+  }
 
   const claim = claimSocket(server, ptys.socketPath).then(
     (outcome) => {

@@ -151,15 +151,31 @@ function untrackedInMain(repo, file) {
  */
 export function collectLane({ repo, lane, tree, subject, body }) {
   const env = { ...laneEnv(process.env), GIT_DIR: git(tree, 'rev-parse', '--absolute-git-dir'), GIT_WORK_TREE: lane }
+  // The index's stat belongs to the TREE's files, not the lane's: a lane edit of
+  // the same size whose mtime matched looked clean to add and was dropped. An
+  // index with no stat makes add compare every lane file by content.
+  freshIndex(tree)
   const added = run('git', ['add', '-A', '--', '.', `:!${LANE_SCRATCH}`], { cwd: lane, env })
   if (!added.ok) throw new Error(`could not collect the lane: ${added.stderr.trim()}`)
-  if (run('git', ['diff', '--cached', '--quiet'], { cwd: tree }).ok) return false
+  // Plumbing: porcelain `diff --cached --quiet` answered "no change" with a
+  // same-size edit staged, and the lane's work was dropped as nothing to collect.
+  if (run('git', ['diff-index', '--cached', '--quiet', 'HEAD', '--'], { cwd: tree }).ok) return false
   const raw = git(tree, 'diff', '--cached', '--raw', '--no-renames', '--no-abbrev')
   const blockers = collectBlockers({ raw, collides: (file) => untrackedInMain(repo, file) })
   if (blockers.length > 0) throw new Error(`refused the lane's files: ${blockers.join('; ')}`)
   git(tree, 'commit', '-q', '-m', subject, '-m', body, '-m', 'Co-Authored-By: GitHub Copilot <noreply@github.com>')
+  // The index now holds the LANE's stat. A tree file of the same size and mtime
+  // matched it, so reset left the old content in the tree (windows-2022, PR #130:
+  // 'one' stayed where 'two' was committed). An index with no stat rewrites it.
+  freshIndex(tree)
   git(tree, 'reset', '-q', '--hard', 'HEAD')
   return true
+}
+
+/** The tree's index rebuilt from HEAD with no stat information. */
+function freshIndex(tree) {
+  rmSync(git(tree, 'rev-parse', '--path-format=absolute', '--git-path', 'index'), { force: true })
+  git(tree, 'read-tree', 'HEAD')
 }
 
 /** Conflicts are settled in the tree, never in the main tree, which the running app serves. */

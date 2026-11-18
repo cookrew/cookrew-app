@@ -1,6 +1,7 @@
 // Renders the site's share card (1200×630) → registry/assets/site/og-site.jpg, in the ink theme:
 // paper, the ink lockup from registry/src/site-brand.ts (drawn still), the headline in serif, and
-// a real frame of the app (the crew view) on the right.
+// the current interface on demo data (the agents stop of the demo cast, site-frames.ts DEMO.agents) on the
+// right, labelled as such.
 //
 //   node scripts/site-og.mjs [cdpPort]
 //
@@ -16,7 +17,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const brand = readFileSync(path.join(root, 'registry', 'src', 'site-brand.ts'), 'utf8')
 const constant = (name) => JSON.parse(new RegExp(`export const ${name} = (".*")`).exec(brand)[1])
 const lockup = constant('BRAND_LOCKUP_HTML')
-const crew = path.join(root, 'registry', 'assets', 'site', 'seq-canvas-1.jpg')
+const crew = path.join(root, 'registry', 'assets', 'site', 'demo-agents.jpg')
 const dir = mkdtempSync(path.join(tmpdir(), 'og-'))
 const html = `<!doctype html><meta charset="utf-8"><style>
 body{margin:0;width:1200px;height:630px;background:#f4efe4;color:#1d1a16;position:relative;overflow:hidden;font-family:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif}
@@ -26,14 +27,15 @@ h1{position:absolute;left:60px;top:200px;width:560px;font-size:50px;line-height:
 p{position:absolute;left:62px;top:440px;width:540px;font-size:21px;line-height:1.5;color:#5d554a;margin:0}
 .foot{position:absolute;left:62px;bottom:38px;font:600 13px 'SF Mono',Menlo,monospace;letter-spacing:.16em;color:#8f5520}
 .foot::before{content:'';display:inline-block;width:22px;height:1px;background:currentColor;vertical-align:middle;margin-right:10px}
-.shot{position:absolute;right:-60px;top:70px;width:560px;border-radius:14px;overflow:hidden;background:#fbf8f1;box-shadow:0 1px 2px rgba(40,30,15,.08),0 18px 44px rgba(40,30,15,.16);border:1px solid rgba(29,26,22,.12)}
+.shot{position:absolute;right:48px;top:110px;width:500px;border-radius:14px;overflow:hidden;background:#fbf8f1;box-shadow:0 1px 2px rgba(40,30,15,.08),0 18px 44px rgba(40,30,15,.16);border:1px solid rgba(29,26,22,.12)}
 .shot img{display:block;width:100%}
+.shot .chip{display:block;padding:8px 14px;font:600 12px 'SF Mono',Menlo,monospace;letter-spacing:.06em;color:#5d554a;border-top:1px solid rgba(29,26,22,.12)}
 .ink-draw{stroke-dashoffset:0!important;animation:none!important}
 </style><body>
 ${lockup}
-<h1>Run a team of AI coding agents on one canvas — or rent someone’s.</h1>
-<p>Claude Code, Codex, OpenCode and Pi as one crew. Every turn is a checkpoint.</p>
-<div class="shot"><img src="file://${crew}"></div>
+<h1>Any device. Any harness. Any model.</h1>
+<p>One account, and the models you bring. Claude Code, Codex, OpenCode and Pi as one crew.</p>
+<div class="shot"><img src="file://${crew}"><span class="chip">Product UI on demo data · illustration</span></div>
 <div class="foot">OPEN SOURCE · MIT · COOKREW.DEV</div>
 </body>`
 const file = path.join(dir, 'og.html')
