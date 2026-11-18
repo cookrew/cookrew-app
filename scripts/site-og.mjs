@@ -1,7 +1,7 @@
 // Renders the site's share card (1200×630) → registry/assets/site/og-site.jpg, in the ink theme:
-// paper, the ink lockup from registry/src/site-brand.ts (drawn still), the headline in serif, and
-// the current interface on demo data (the agents stop of the demo cast, site-frames.ts DEMO.agents) on the
-// right, labelled as such.
+// paper, the ink lockup from registry/src/site-brand.ts (drawn still), the front page's headline
+// ("Let your tokens flow freely", owner 2026-11-18) and its subline, and the hero picture (the same
+// question on three devices, the current interface on demo data, site-frames.ts DEMO.hero) under them.
 //
 //   node scripts/site-og.mjs [cdpPort]
 //
@@ -17,25 +17,24 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const brand = readFileSync(path.join(root, 'registry', 'src', 'site-brand.ts'), 'utf8')
 const constant = (name) => JSON.parse(new RegExp(`export const ${name} = (".*")`).exec(brand)[1])
 const lockup = constant('BRAND_LOCKUP_HTML')
-const crew = path.join(root, 'registry', 'assets', 'site', 'demo-agents.jpg')
+const crew = path.join(root, 'registry', 'assets', 'site', 'demo-hero-devices-1440.jpg')
 const dir = mkdtempSync(path.join(tmpdir(), 'og-'))
 const html = `<!doctype html><meta charset="utf-8"><style>
 body{margin:0;width:1200px;height:630px;background:#f4efe4;color:#1d1a16;position:relative;overflow:hidden;font-family:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif}
 body::before{content:'';position:absolute;inset:0;background:radial-gradient(900px 420px at 10% -10%,rgba(168,140,98,.18),transparent 70%),radial-gradient(700px 500px at 110% 40%,rgba(168,140,98,.16),transparent 70%)}
-.brand{position:absolute;left:56px;top:40px;color:#1d1a16}.brand svg{width:340px;height:auto;display:block;overflow:visible}
-h1{position:absolute;left:60px;top:200px;width:560px;font-size:50px;line-height:1.08;font-weight:600;margin:0;letter-spacing:-.01em}
-p{position:absolute;left:62px;top:440px;width:540px;font-size:21px;line-height:1.5;color:#5d554a;margin:0}
-.foot{position:absolute;left:62px;bottom:38px;font:600 13px 'SF Mono',Menlo,monospace;letter-spacing:.16em;color:#8f5520}
-.foot::before{content:'';display:inline-block;width:22px;height:1px;background:currentColor;vertical-align:middle;margin-right:10px}
-.shot{position:absolute;right:48px;top:110px;width:500px;border-radius:14px;overflow:hidden;background:#fbf8f1;box-shadow:0 1px 2px rgba(40,30,15,.08),0 18px 44px rgba(40,30,15,.16);border:1px solid rgba(29,26,22,.12)}
+.brand{position:absolute;left:56px;top:34px;color:#1d1a16}.brand svg{width:210px;height:auto;display:block;overflow:visible}
+h1{position:absolute;left:60px;top:128px;width:1080px;font-size:64px;line-height:1.05;font-weight:600;margin:0;letter-spacing:-.015em}
+h1 em{font-style:normal;background:linear-gradient(transparent 62%,#e2b866 62%,#e2b866 92%,transparent 92%);padding:0 .04em}
+p{position:absolute;left:62px;top:212px;width:1080px;font-size:25px;line-height:1.4;color:#5d554a;margin:0}
+.foot{position:absolute;right:60px;top:52px;font:600 13px 'SF Mono',Menlo,monospace;letter-spacing:.16em;color:#8f5520}
+.shot{position:absolute;left:60px;right:60px;top:280px;height:400px;border-radius:16px;overflow:hidden;background:#fbf8f1;box-shadow:0 1px 2px rgba(40,30,15,.08),0 18px 44px rgba(40,30,15,.16);border:1px solid rgba(29,26,22,.12)}
 .shot img{display:block;width:100%}
-.shot .chip{display:block;padding:8px 14px;font:600 12px 'SF Mono',Menlo,monospace;letter-spacing:.06em;color:#5d554a;border-top:1px solid rgba(29,26,22,.12)}
 .ink-draw{stroke-dashoffset:0!important;animation:none!important}
 </style><body>
 ${lockup}
-<h1>Any device. Any harness. Any model.</h1>
-<p>One account, and the models you bring. Claude Code, Codex, OpenCode and Pi as one crew.</p>
-<div class="shot"><img src="file://${crew}"><span class="chip">Product UI on demo data · illustration</span></div>
+<h1>Let your tokens <em>flow freely</em>.</h1>
+<p>One account. Across devices, across agents, across models.</p>
+<div class="shot"><img src="file://${crew}"></div>
 <div class="foot">OPEN SOURCE · MIT · COOKREW.DEV</div>
 </body>`
 const file = path.join(dir, 'og.html')
