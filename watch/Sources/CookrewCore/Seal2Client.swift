@@ -147,6 +147,8 @@ public actor Seal2Client {
     openStreams += 1
     let deadline = Task { [weak self] in
       try? await Task.sleep(for: .seconds(Self.requestSeconds))
+      // Cancelled when the answer came: nothing to expire.
+      guard !Task.isCancelled else { return }
       await self?.expire(stream)
     }
     defer { deadline.cancel() }
@@ -344,6 +346,8 @@ public actor Seal2Client {
       waiting[stream] = pending
     case let .end(stream):
       guard let pending = waiting.removeValue(forKey: stream) else { return }
+      // Answered before the whole body went: the Mac is told this side is done, or it holds the stream.
+      if !pending.unsent.isEmpty || pending.ending { send(.abort(stream: stream, code: 1, reason: "answered before the body ended")) }
       released()
       guard let status = pending.status else { return pending.done.resume(throwing: Seal2ClientError.badAnswer) }
       pending.done.resume(returning: Seal2Answer(status: status, headers: pending.headers, body: pending.body))
