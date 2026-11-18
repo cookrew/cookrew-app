@@ -3,7 +3,6 @@
 // its key's, as account-v2.ts mints them) and a phone, and the Mac's held line.
 // Every line the registry exchanges with the Mac, and every request and answer
 // the callers exchange with the registry, is kept: that is what a relay sees.
-import { createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID, sign, verify, type KeyObject } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -16,16 +15,14 @@ import { createRegistry } from '../../registry/src/server'
 import { StarStore } from '../../registry/src/stars'
 import { RegistryStore } from '../../registry/src/store'
 import { createV2 } from '../../registry/src/v2-routes'
-import { deviceIdFor } from '../../src/main/account-v2'
 import { createCanvasBridge, loopbackDialer } from '../../src/main/canvas-bridge'
 import { createCanvasLink, type CanvasLink } from '../../src/main/canvas-link'
 import { relayLineHeaders } from '../../src/main/seal-proof'
 import { createSealTerminus, isSealPath, routeSeal, type SealTerminus, type SealTerminusDeps } from '../../src/main/canvas-seal-terminus'
-import type { DeviceKey, DeviceSigner, DeviceVerifier } from '../../src/shared/seal2/handshake'
 import { RELAY_SESSION_HEADER } from '../../src/shared/machine-relay'
+import { newDevice, signUp, type Device } from './seal2-accounts'
 import { until } from './seal-phone'
 
-const PASSWORD = 'correct horse battery staple'
 
 export interface Up {
   readonly origin: string
@@ -43,31 +40,6 @@ export const listen = async (server: Server): Promise<Up> => {
       })
   }
 }
-
-export interface Device {
-  readonly id: string
-  readonly jwk: DeviceKey
-  readonly signer: DeviceSigner
-}
-
-export function newDevice(): Device {
-  const { privateKey, publicKey } = generateKeyPairSync('ed25519')
-  const { kty, crv, x } = publicKey.export({ format: 'jwk' }) as { kty: 'OKP'; crv: 'Ed25519'; x: string }
-  const jwk: DeviceKey = { kty, crv, x }
-  const id = deviceIdFor(jwk as unknown as Record<string, unknown>)
-  return { id, jwk, signer: signerFor(id, jwk, privateKey) }
-}
-
-const signerFor = (deviceId: string, jwk: DeviceKey, key: KeyObject): DeviceSigner => ({
-  deviceId,
-  jwk,
-  sign: async (message) => sign(null, Buffer.from(message), key).toString('base64url')
-})
-
-export const verifyDevice: DeviceVerifier = async (jwk, message, sig) =>
-  verify(null, Buffer.from(message), createPublicKey({ key: jwk as never, format: 'jwk' }), Buffer.from(sig, 'base64url'))
-
-export { createPrivateKey }
 
 /** One exchange a caller had with the registry, as the registry read it. */
 export interface CallerExchange {
@@ -98,26 +70,6 @@ export interface RelayWorld {
   /** Everything the registry could read, decoded where it is base64, from line `from` and exchange `fromExchange` on. */
   relayCouldRead(from: number, fromExchange: number): string
   close(): Promise<void>
-}
-
-async function signUp(site: Up, mac: Device, other: Device): Promise<{ desktopToken: string; otherSession: string; phoneSession: string }> {
-  const json = { 'content-type': 'application/json' }
-  const claimed = await fetch(`${site.origin}/v2/accounts`, { method: 'POST', headers: json, body: JSON.stringify({ username: 'owner', password: PASSWORD, device: { id: mac.id, kind: 'desktop', name: 'This Mac', jwk: mac.jwk } }) })
-  const desktopToken = ((await claimed.json()) as { session: { token: string } }).session.token
-  await fetch(`${site.origin}/v2/me/desktops/${mac.id}`, { method: 'PUT', headers: { ...json, authorization: `Bearer ${desktopToken}` }, body: JSON.stringify({ name: 'This Mac', workspaces: [{ id: 'w1', name: 'One' }] }) })
-  const attach = async (device: { id: string; kind: string; name: string; jwk: unknown }): Promise<string> => {
-    const attached = await fetch(`${site.origin}/v2/sessions`, { method: 'POST', headers: json, body: JSON.stringify({ username: 'owner', password: PASSWORD, device }) })
-    const asked = (await attached.json()) as { pending: string; match: string }
-    const request = await fetch(`${site.origin}/v2/sessions/${asked.pending}/approve`, { method: 'POST' })
-    const { approval } = (await request.json()) as { approval: string }
-    await fetch(`${site.origin}/v2/me/approvals/${approval}`, { method: 'POST', headers: { ...json, authorization: `Bearer ${desktopToken}` }, body: JSON.stringify({ decision: 'approve', match: asked.match }) })
-    const done = await fetch(`${site.origin}/v2/sessions/${asked.pending}`)
-    return ((await done.json()) as { token: string }).token
-  }
-  const otherSession = await attach({ id: other.id, kind: 'desktop', name: 'Other Mac', jwk: other.jwk })
-  const phoneJwk = generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' })
-  const phoneSession = await attach({ id: randomUUID(), kind: 'phone', name: 'A phone', jwk: phoneJwk })
-  return { desktopToken, otherSession, phoneSession }
 }
 
 export async function startRelayWorld(companion: (terminus: () => SealTerminus | undefined) => Server, terminusDeps: (port: number, mac: Device, other: Device) => SealTerminusDeps): Promise<RelayWorld> {
@@ -216,3 +168,4 @@ export async function startRelayWorld(companion: (terminus: () => SealTerminus |
 }
 
 export { isSealPath, routeSeal, loopbackDialer, until }
+export { newDevice, signUp, verifyDevice, type Device } from './seal2-accounts'

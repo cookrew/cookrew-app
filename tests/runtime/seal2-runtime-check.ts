@@ -15,7 +15,7 @@ export interface RuntimeReport {
 
 type Vectors = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
 
-const bytes = (hex: string): Uint8Array => Uint8Array.from(hex.match(/../g) ?? [], (pair) => parseInt(pair, 16))
+const bytes = (hex: string): Uint8Array<ArrayBuffer> => Uint8Array.from(hex.match(/../g) ?? [], (pair) => parseInt(pair, 16))
 const hex = (data: Uint8Array): string => Array.from(data, (byte) => byte.toString(16).padStart(2, '0')).join('')
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 const recordOf = (wire: Uint8Array): { seq: number; box: Uint8Array } => {
@@ -32,7 +32,7 @@ async function ed25519(): Promise<{ signerOf(privateHex: string, jwk: DeviceKey,
     return null
   }
   const b64u = (data: Uint8Array): string => btoa(String.fromCharCode(...data)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-  const unb64u = (text: string): Uint8Array => Uint8Array.from(atob(text.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0))
+  const unb64u = (text: string): Uint8Array<ArrayBuffer> => Uint8Array.from(atob(text.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0))
   return {
     async signerOf(privateHex, jwk, id) {
       const key = await crypto.subtle.importKey('pkcs8', bytes(`${ED_PKCS8}${privateHex}`), { name: 'Ed25519' }, false, ['sign'])
