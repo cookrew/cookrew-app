@@ -16,4 +16,9 @@ describe('the watch\'s six words on the Mac', () => {
     expect(html).toContain('SAME WORDS ON THE WATCH')
     expect(html).toContain('NOT THE SAME')
   })
+
+  it('says so when the watch\'s key changed under a confirm', () => {
+    const html = renderToStaticMarkup(<WatchSealWordsView pending={[]} busy={false} note="The watch’s key changed since these words. Compare the new words." onSame={noop} onNotSame={noop} />)
+    expect(html).toContain('key changed')
+  })
 })

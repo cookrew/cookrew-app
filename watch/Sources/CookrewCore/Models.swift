@@ -350,8 +350,11 @@ public struct ClaimReply: Decodable, Sendable {
   public let token: String
   public let desktop: String
   public let bases: [Base]
-  /** A Mac that can seal with this watch: its device, its key, and the six words both screens show. */
-  public let seal: SealPeer?
+  /**
+   * A Mac that can seal with this watch: its device, its key, and this claim's nonce. Not believed yet:
+   * the watch computes the words itself and keeps it only when the owner says they match (WatchRoot).
+   */
+  public let sealOffer: SealOffer?
 
   private struct SealWire: Decodable {
     struct Key: Decodable {
@@ -360,16 +363,16 @@ public struct ClaimReply: Decodable, Sendable {
 
     let deviceId: String
     let jwk: Key
-    let words: [String]
+    let nonce: String
   }
 
   private enum Keys: String, CodingKey { case token, desktop, bases, seal }
 
-  public init(token: String, desktop: String, bases: [Base], seal: SealPeer? = nil) {
+  public init(token: String, desktop: String, bases: [Base], sealOffer: SealOffer? = nil) {
     self.token = token
     self.desktop = desktop
     self.bases = bases
-    self.seal = seal
+    self.sealOffer = sealOffer
   }
 
   public init(from decoder: Decoder) throws {
@@ -377,9 +380,14 @@ public struct ClaimReply: Decodable, Sendable {
     token = try held.decode(String.self, forKey: .token)
     desktop = try held.decode(String.self, forKey: .desktop)
     bases = try held.decode([Base].self, forKey: .bases)
-    // A seal this watch cannot read is no seal: the claim still stands, the old way.
+    // A seal this watch cannot read is no seal: the claim still stands, the old way. A Mac's id is made from
+    // its key, so an offer whose id is not its key's own is not a Mac's.
     let wire = try? held.decodeIfPresent(SealWire.self, forKey: .seal)
-    seal = wire.flatMap { $0.words.count == 6 ? SealPeer(deviceId: $0.deviceId.lowercased(), x: $0.jwk.x, words: $0.words) : nil }
+    sealOffer = wire.flatMap { wire in
+      let id = wire.deviceId.lowercased()
+      let nonce = base64urlDecoded(wire.nonce)
+      return nonce.count == 16 && base64urlDecoded(wire.jwk.x).count == 32 && Seal2.deviceId(x: wire.jwk.x) == id ? SealOffer(deviceId: id, x: wire.jwk.x, nonce: nonce) : nil
+    }
   }
 }
 

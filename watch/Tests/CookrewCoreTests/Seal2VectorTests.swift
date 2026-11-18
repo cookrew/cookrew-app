@@ -192,8 +192,10 @@ struct Seal2VectorTests {
     let b = (v["responderJwk"] as! [String: String])["x"]!
     #expect(Seal2.deviceId(x: a) == v["from"] as! String)
     #expect(Seal2.deviceId(x: b) == v["to"] as! String)
-    #expect(Seal2.keyWords(a, b) == ["pole", "oyster", "try", "split", "air", "prize"])
-    #expect(Seal2.keyWords(b, a) == Seal2.keyWords(a, b))
+    let nonce = hex(v["keyWordsNonce"] as! String)
+    #expect(Seal2.keyWords(a, b, nonce: nonce) == ["purity", "mercy", "enable", "mention", "pet", "above"])
+    #expect(Seal2.keyWords(b, a, nonce: nonce) == Seal2.keyWords(a, b, nonce: nonce))
+    #expect(Seal2.keyWords(a, b, nonce: Data(count: 16)) != Seal2.keyWords(a, b, nonce: nonce))
     #expect(FingerprintWords.all.count == 2048)
     let list = Data((FingerprintWords.all.joined(separator: "\n") + "\n").utf8)
     #expect(Data(SHA256.hash(data: list)).map { String(format: "%02x", $0) }.joined() == "2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda")

@@ -349,7 +349,7 @@ describe('through the real gate', () => {
       seal: {
         offer: async (deviceId, jwk) => {
           offered.push({ deviceId, x: jwk.x })
-          return { deviceId: 'mac-device', jwk: macKey, words: ['able', 'baby', 'cable', 'dance', 'eagle', 'fabric'] }
+          return { deviceId: 'mac-device', jwk: macKey, nonce: 'n', words: ['able', 'baby', 'cable', 'dance', 'eagle', 'fabric'] }
         }
       }
     })
@@ -360,7 +360,7 @@ describe('through the real gate', () => {
     expect(offered).toEqual([])
     const { code } = (await (await post('/api/watch/code', PAIRING)).json()) as { code: string }
     const claimed = (await (await post('/api/watch/claim', null, { code, deviceId: watchId.toUpperCase(), jwk })).json()) as { seal?: unknown }
-    expect(claimed.seal).toEqual({ deviceId: 'mac-device', jwk: macKey, words: ['able', 'baby', 'cable', 'dance', 'eagle', 'fabric'] })
+    expect(claimed.seal).toEqual({ deviceId: 'mac-device', jwk: macKey, nonce: 'n', words: ['able', 'baby', 'cable', 'dance', 'eagle', 'fabric'] })
     expect(offered).toEqual([{ deviceId: watchId, x: jwk.x }])
   })
 

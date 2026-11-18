@@ -29,20 +29,44 @@ const newWatch = () => {
 }
 
 describe('the watch keys this Mac holds', () => {
-  it('a claimed key waits; only the very key confirmed is let in, and a new claim waits again', () => {
+  it('a claimed key waits with a fresh nonce; only the very key confirmed is let in', () => {
     const keys = createSealWatchKeys(path.join(dirIn(), 'keys.json'))
     const watch = newWatch()
-    keys.offer(watch.id, watch.jwk)
+    const nonce = keys.offer(watch.id, watch.jwk)
+    expect(nonce).toHaveLength(16)
     expect(keys.keyOf(watch.id)).toBeNull()
-    expect(keys.pending().map((row) => row.deviceId)).toEqual([watch.id])
+    expect(keys.pending().map((row) => [row.deviceId, Buffer.from(row.nonce).toString('hex')])).toEqual([[watch.id, Buffer.from(nonce as Uint8Array).toString('hex')]])
     expect(keys.confirm(watch.id, newDevice().jwk.x)).toBe(false)
     expect(keys.confirm(watch.id, watch.jwk.x)).toBe(true)
     expect(keys.keyOf(watch.id)).toEqual(watch.jwk)
-    const swapped = newDevice().jwk
-    keys.offer(watch.id, swapped)
-    expect(keys.keyOf(watch.id)).toBeNull()
-    keys.forget(watch.id)
     expect(keys.pending()).toEqual([])
+    // A second claim's nonce is a new one.
+    expect(Buffer.from(keys.offer(watch.id, watch.jwk) as Uint8Array).equals(Buffer.from(nonce as Uint8Array))).toBe(false)
+  })
+
+  it('a claim with another key waits beside the confirmed one: the watch let in stays in, and "not the same" drops only the new key', () => {
+    const keys = createSealWatchKeys(path.join(dirIn(), 'keys.json'))
+    const watch = newWatch()
+    keys.offer(watch.id, watch.jwk)
+    keys.confirm(watch.id, watch.jwk.x)
+    const planted = newDevice().jwk
+    keys.offer(watch.id, planted)
+    expect(keys.keyOf(watch.id)).toEqual(watch.jwk)
+    keys.dropPending(watch.id)
+    expect(keys.pending()).toEqual([])
+    expect(keys.keyOf(watch.id)).toEqual(watch.jwk)
+    keys.forgetAll()
+    expect(keys.keyOf(watch.id)).toBeNull()
+  })
+
+  it('a key that waited a day without the owner\'s word cannot be confirmed', () => {
+    let at = 1_000
+    const keys = createSealWatchKeys(path.join(dirIn(), 'keys.json'), () => at)
+    const watch = newWatch()
+    keys.offer(watch.id, watch.jwk)
+    at += 25 * 60 * 60 * 1000
+    expect(keys.pending()).toEqual([])
+    expect(keys.confirm(watch.id, watch.jwk.x)).toBe(false)
   })
 
   it('a file it cannot read holds nothing: no watch is let in', () => {
@@ -87,8 +111,9 @@ describe('a watch in device mode', () => {
 
   it('both screens show the same words for the two keys, and a swapped key shows others', async () => {
     const watch = newWatch()
-    const onMac = await keyWords(watch.jwk, mac.jwk)
-    expect(await keyWords(mac.jwk, watch.jwk)).toEqual(onMac)
-    expect(await keyWords(newDevice().jwk, mac.jwk)).not.toEqual(onMac)
+    const nonce = new Uint8Array(16).fill(5)
+    const onMac = await keyWords(watch.jwk, mac.jwk, nonce)
+    expect(await keyWords(mac.jwk, watch.jwk, nonce)).toEqual(onMac)
+    expect(await keyWords(newDevice().jwk, mac.jwk, nonce)).not.toEqual(onMac)
   })
 })

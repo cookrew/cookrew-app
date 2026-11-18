@@ -289,7 +289,16 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
           if let tag { headers["if-none-match"] = tag }
           if payload != nil { headers["content-type"] = "application/json" }
           let inner = "/\(path)" + (query.isEmpty ? "" : "?" + (url.query(percentEncoded: true) ?? ""))
-          if let answer = try await sealer.exchange(base: bases[index], method: method, path: inner, headers: headers, body: payload) {
+          let answer: (Data, HTTPURLResponse)?
+          do {
+            answer = try await sealer.exchange(base: bases[index], method: method, path: inner, headers: headers, body: payload, timeout: read ? 10 : 30)
+          } catch {
+            // The sealed relay road failed: a read tries the next road (home, if there is one); a write may
+            // have reached the Mac and stops. Never the plain relay on this same road.
+            if read { continue }
+            throw WatchError.unreachable
+          }
+          if let answer {
             stick(index)
             return answer
           }

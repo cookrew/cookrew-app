@@ -106,16 +106,25 @@ const byteOrder = (x: Uint8Array, y: Uint8Array): number => {
 }
 
 /**
- * The words two devices show for their two KEYS, the same on both screens and on
- * no other pair of keys. For a device whose id is not made from its key (a watch):
+ * The words two devices show for their two KEYS and the Mac's nonce for this claim,
+ * the same on both screens and on no other pair of keys. For a device whose id is not made from its key (a watch):
  * compared once by the owner, they are what lets that key in (main/seal-watch-keys.ts).
  * A key swapped on its way, either way, gives other words.
  */
-export async function keyWords(a: DeviceKey, b: DeviceKey): Promise<KeyFingerprint> {
+export async function keyWords(a: DeviceKey, b: DeviceKey, nonce: Uint8Array): Promise<KeyFingerprint> {
   if (!isDeviceKey(a) || !isDeviceKey(b)) throw new Error('Not a device key')
+  if (nonce.length !== KEY_WORDS_NONCE_BYTES) throw new Error('A words nonce is 16 bytes')
   const [low, high] = [await thumbprintOf(a), await thumbprintOf(b)].sort(byteOrder)
-  return fingerprintOfDigest(await sha256(utf8(`${SEAL2_LABEL} key words`), u8(0), low, high))
+  return fingerprintOfDigest(await sha256(utf8(`${SEAL2_LABEL} key words`), u8(0), low, high, nonce))
 }
+
+/**
+ * The Mac's fresh nonce in the words, one per claim. Someone in the middle has to put
+ * its own watch key in the claim BEFORE it sees the nonce, so making both screens show
+ * the same words is a search for one fixed target during the pairing (2^66), not a
+ * collision it could have searched for beforehand over two public keys (2^33).
+ */
+export const KEY_WORDS_NONCE_BYTES = 16
 
 /** The account device id of a key: the same uuid account-v2.ts · deviceIdFor gives. */
 export async function deviceIdOf(jwk: DeviceKey): Promise<string> {

@@ -121,10 +121,12 @@ describe('cookrew-seal/2 device mode, against node:crypto', () => {
 
   it('speaks the same words for a pair of keys from either side, and other words for another key', async () => {
     const words = fingerprintOfDigest(bytes(v.keyWordsDigest))
-    expect(await keyWords(v.initiatorJwk, v.responderJwk)).toEqual(words)
-    expect(await keyWords(v.responderJwk, v.initiatorJwk)).toEqual(words)
+    const nonce = bytes(v.keyWordsNonce)
+    expect(await keyWords(v.initiatorJwk, v.responderJwk, nonce)).toEqual(words)
+    expect(await keyWords(v.responderJwk, v.initiatorJwk, nonce)).toEqual(words)
     const other = { kty: 'OKP' as const, crv: 'Ed25519' as const, x: Buffer.alloc(32, 9).toString('base64url') }
-    expect(await keyWords(v.initiatorJwk, other)).not.toEqual(words)
+    expect(await keyWords(v.initiatorJwk, other, nonce)).not.toEqual(words)
+    expect(await keyWords(v.initiatorJwk, v.responderJwk, new Uint8Array(16))).not.toEqual(words)
   })
 
   it('speaks the same words for the pair from either side', async () => {

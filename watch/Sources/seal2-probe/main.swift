@@ -30,7 +30,7 @@ if args[1] == "app" {
   let seed = Data(stride(from: 0, to: args[8].count, by: 2).map { UInt8(args[8].dropFirst($0).prefix(2), radix: 16)! })
   let base = URL(string: prefix)!
   let pass = FixedPass(host: base.host() ?? "", port: base.port, session: args[4])
-  let peer = SealPeer(deviceId: args[5], x: args[6], words: Seal2.keyWords(args[6], args[6]))
+  let peer = SealPeer(deviceId: args[5], x: args[6], words: Seal2.keyWords(args[6], args[6], nonce: Data(count: 16)))
   let sealer = WatchSealer(peer: peer, device: WatchDevice(id: args[7], seed: seed), relay: pass, pinned: false)
   let api = HTTPWatchAPI(bases: [base], token: "watch-token", relay: pass, sealer: sealer)
   var out: [String: Any] = [:]
@@ -52,7 +52,7 @@ do {
   if args[1] == "device" {
     let seed = Data(stride(from: 0, to: args[8].count, by: 2).map { UInt8(args[8].dropFirst($0).prefix(2), radix: 16)! })
     let shake = try Seal2.DeviceHandshake(deviceId: args[7], signing: try Curve25519.Signing.PrivateKey(rawRepresentation: seed), to: args[5], macX: args[6])
-    results["words"] = Seal2.keyWords(base64urlEncoded(try Curve25519.Signing.PrivateKey(rawRepresentation: seed).publicKey.rawRepresentation), args[6])
+    results["words"] = Seal2.keyWords(base64urlEncoded(try Curve25519.Signing.PrivateKey(rawRepresentation: seed).publicKey.rawRepresentation), args[6], nonce: Data(count: 16))
     client = try await Seal2Client.open(route: route, device: shake)
   } else {
     client = try await Seal2Client.open(route: route, code: base64urlDecoded(args[5]))

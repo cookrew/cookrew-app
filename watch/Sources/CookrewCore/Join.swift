@@ -50,7 +50,10 @@ private func findMac(code: String, account: WatchAccount, api: RegistryAPI, devi
   for desktop in desktops {
     guard let relay = relayBase(registry: account.registry, desktop: desktop.deviceId) else { continue }
     do {
-      return .mac(relay, try await api.claim(relay: relay, code: code, token: account.token, device: device))
+      let reply = try await api.claim(relay: relay, code: code, token: account.token, device: device)
+      // An offer of any other machine's key than the one this claim went to is no offer.
+      let offer = reply.sealOffer.flatMap { $0.deviceId == desktop.deviceId.lowercased() ? $0 : nil }
+      return .mac(relay, ClaimReply(token: reply.token, desktop: reply.desktop, bases: reply.bases, sealOffer: offer))
     } catch RegistryError.signedOut {
       return .failed(.signedOut)
     } catch {
@@ -131,7 +134,7 @@ public func pairWatch(
     return .failed(why)
   case .mac(let relay, let reply):
     let bases = basesAfterJoin(relay: relay, named: reply.bases)
-    return .paired(WatchSession(desktop: reply.desktop, bases: bases, token: reply.token, seal: reply.seal), account)
+    return .paired(WatchSession(desktop: reply.desktop, bases: bases, token: reply.token, offer: reply.sealOffer), account)
   }
 }
 

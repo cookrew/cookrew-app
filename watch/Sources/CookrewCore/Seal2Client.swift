@@ -61,7 +61,7 @@ public actor Seal2Client {
   private static let creditStep = 64 * 1024
   /** As the Mac ends a session that only reads: a Mac this quiet is gone. */
   private static let silentSeconds: TimeInterval = 90
-  private static let requestSeconds: Double = 60
+  public static let requestSeconds: Double = 60
   private static let maxStreams = 64
   private static let recordMax = 8 + 256 * 1024 + 16
   private static let fieldName = try! NSRegularExpression(pattern: "^:?[!#$%&'*+.^_`|~0-9a-z-]+$")
@@ -150,7 +150,7 @@ public actor Seal2Client {
   }
 
   /** One HTTP exchange, sealed. The answer comes whole, or an error within a minute. */
-  public func request(method: String, path: String, headers: [String: String] = [:], body: Data? = nil) async throws -> Seal2Answer {
+  public func request(method: String, path: String, headers: [String: String] = [:], body: Data? = nil, timeout: Double = Seal2Client.requestSeconds) async throws -> Seal2Answer {
     if let ended { throw Seal2ClientError.ended(ended) }
     let fields = headers.reduce(into: [":method": method, ":path": path]) { $0[$1.key.lowercased()] = $1.value }
     // Checked here, where the caller hears it: a name the Mac cannot read would end the whole session.
@@ -165,7 +165,7 @@ public actor Seal2Client {
     guard open.count <= 256 * 1024, let sealed = try? session.seal(open) else { throw Seal2ClientError.badRequest }
     openStreams += 1
     let deadline = Task { [weak self] in
-      try? await Task.sleep(for: .seconds(Self.requestSeconds))
+      try? await Task.sleep(for: .seconds(timeout))
       // Cancelled when the answer came: nothing to expire.
       guard !Task.isCancelled else { return }
       await self?.expire(stream)

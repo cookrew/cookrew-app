@@ -11,13 +11,21 @@ public struct WatchSession: Equatable, Sendable {
   public let seal: SealPeer?
   /** A sealed session to this Mac has opened once: its relay road is sealed only, from then on. */
   public let sealPinned: Bool
+  /** What the claim just answered, not believed until the owner says the words match. Never kept. */
+  public let offer: SealOffer?
 
-  public init(desktop: String, bases: [Base], token: String, seal: SealPeer? = nil, sealPinned: Bool = false) {
+  public init(desktop: String, bases: [Base], token: String, seal: SealPeer? = nil, sealPinned: Bool = false, offer: SealOffer? = nil) {
     self.desktop = desktop
     self.bases = bases
     self.token = token
     self.seal = seal
     self.sealPinned = sealPinned
+    self.offer = offer
+  }
+
+  /** The same session, with the Mac the owner matched (nil: kept as it was). */
+  public func matched(_ peer: SealPeer?) -> WatchSession {
+    WatchSession(desktop: desktop, bases: bases, token: token, seal: peer, sealPinned: false, offer: nil)
   }
 
   public var urls: [URL] { bases.compactMap { URL(string: $0.url) } }
@@ -54,10 +62,13 @@ public struct SessionShelf: Codable, Equatable, Sendable {
   /** A session paired just now: added, or in its own place if the machine was held, and gone into. */
   @discardableResult public mutating func put(_ session: WatchSession, goIn: Bool = true) -> String {
     let key = sessionKey(session)
-    // Pinned stays pinned for the same Mac key; a new key starts over, and waits for the owner's words.
+    // Pinned stays pinned: a pairing again with no matched seal (none offered, an answer stripped of it, words not
+    // matched) keeps the Mac and the pin held. Only a newly matched, different Mac key starts the pin over.
     let was = entries.first { $0.key == key }
-    let pinned = session.sealPinned || (was?.sealPinned == true && was?.seal?.x == session.seal?.x && session.seal != nil)
-    let entry = Entry(key: key, desktop: session.desktop, bases: session.bases, seal: session.seal ?? was?.seal, sealPinned: pinned)
+    let seal = session.seal ?? was?.seal
+    let samePeer = session.seal == nil || session.seal?.x == was?.seal?.x
+    let pinned = session.sealPinned || (was?.sealPinned == true && samePeer)
+    let entry = Entry(key: key, desktop: session.desktop, bases: session.bases, seal: seal, sealPinned: pinned)
     if let at = entries.firstIndex(where: { $0.key == key }) { entries[at] = entry } else { entries.append(entry) }
     if goIn || active == nil { active = key }
     return key

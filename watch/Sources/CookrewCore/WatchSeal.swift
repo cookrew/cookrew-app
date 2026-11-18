@@ -13,7 +13,30 @@ import Foundation
 //
 // The direct roads (the Mac's own address at home) are not this file's.
 
-/** The Mac this watch seals with, as its claim answered. */
+/** What a claim answer offers: not yet believed (ClaimReply · sealOffer). */
+public struct SealOffer: Equatable, Sendable {
+  public let deviceId: String
+  public let x: String
+  public let nonce: Data
+
+  public init(deviceId: String, x: String, nonce: Data) {
+    self.deviceId = deviceId
+    self.x = x
+    self.nonce = nonce
+  }
+
+  /** The six words, computed HERE from this watch's own key, the offered key and the nonce: never taken from the answer. */
+  public func words(ownX: String) -> [String] {
+    Seal2.keyWords(ownX, x, nonce: nonce)
+  }
+
+  /** The owner said the words match: the Mac this watch seals with. */
+  public func matched(ownX: String) -> SealPeer {
+    SealPeer(deviceId: deviceId, x: x, words: words(ownX: ownX))
+  }
+}
+
+/** The Mac this watch seals with, once the owner said the words match on the watch. */
 public struct SealPeer: Codable, Equatable, Sendable {
   public let deviceId: String
   public let x: String
@@ -35,6 +58,9 @@ public actor WatchSealer {
   private var pinned: Bool
   private var client: Seal2Client?
   private var opening: Task<Seal2Client?, Error>?
+  /** Not let in yet: not asked again before this, so a watch waiting for the owner costs the Mac nothing. */
+  private var refusedUntil = Date.distantPast
+  private var refusedFor: TimeInterval = 0
 
   public init(peer: SealPeer, device: WatchDevice, relay: RelayPass, pinned: Bool, http: URLSession = .shared, onPinned: @escaping @Sendable () -> Void = {}) {
     self.peer = peer
@@ -50,6 +76,11 @@ public actor WatchSealer {
   /** The session, open or opened now; nil when the Mac has not let this watch in and it was never sealed. */
   private func session(base: URL) async throws -> Seal2Client? {
     if let client, await client.isOpen() { return client }
+    if let dead = client {
+      client = nil
+      await dead.close()
+    }
+    if !pinned, Date() < refusedUntil { return nil }
     if let opening { return try await opening.value }
     let task = Task { try await self.open(base: base) }
     opening = task
@@ -65,16 +96,18 @@ public actor WatchSealer {
     do {
       let opened = try await Seal2Client.open(route: route, device: shake, http: http)
       client = opened
+      refusedFor = 0
       if !pinned {
         pinned = true
         onPinned()
       }
       return opened
-    } catch Seal2ClientError.refused where !pinned {
-      // Not let in yet (the words not confirmed on the Mac), or a carrier saying so: the old way, as before.
-      return nil
     } catch {
       if pinned { throw WatchError.unreachable }
+      // Not let in yet (the words not confirmed on the Mac), or a carrier saying so: the old way, as before,
+      // and not asked again for a while, longer each time.
+      refusedFor = min(max(refusedFor * 2, 30), 600)
+      refusedUntil = Date().addingTimeInterval(refusedFor)
       return nil
     }
   }
@@ -83,17 +116,21 @@ public actor WatchSealer {
    * One call down the relay, sealed: nil means "the old way" (never once this watch was sealed).
    * `path` is the Mac's own, with its query.
    */
-  public func exchange(base: URL, method: String, path: String, headers: [String: String], body: Data?) async throws -> (Data, HTTPURLResponse)? {
+  public func exchange(base: URL, method: String, path: String, headers: [String: String], body: Data?, timeout: Double = Seal2Client.requestSeconds) async throws -> (Data, HTTPURLResponse)? {
     guard let client = try await session(base: base) else { return nil }
     do {
-      let answer = try await client.request(method: method, path: path, headers: headers, body: body)
+      let answer = try await client.request(method: method, path: path, headers: headers, body: body, timeout: timeout)
       let url = URL(string: "\(base.absoluteString)\(path)") ?? base
       guard let response = HTTPURLResponse(url: url, statusCode: answer.status, httpVersion: "HTTP/1.1", headerFields: answer.headers) else { throw WatchError.unreachable }
       return (answer.body, response)
     } catch let error as WatchError {
       throw error
     } catch {
-      self.client = nil
+      // One request that failed is not a dead session; one that is gets closed, not left polling.
+      if await !client.isOpen() {
+        self.client = nil
+        await client.close()
+      }
       throw WatchError.unreachable
     }
   }

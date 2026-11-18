@@ -112,6 +112,8 @@ export interface WatchHost {
 export interface WatchSealReply {
   readonly deviceId: string
   readonly jwk: DeviceKey
+  /** This claim's fresh nonce in the words (seal2/handshake.ts · keyWords), base64url. */
+  readonly nonce: string
   readonly words: readonly string[]
 }
 

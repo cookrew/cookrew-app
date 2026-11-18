@@ -178,7 +178,8 @@ const wordsDigest = sha256(Buffer.from(`${LABEL} words`), u8(0), uuidBytes(sorte
 
 // ── words for a pair of KEYS (a watch, whose id is not its key's) ──────────
 const keyThumbs = [thumbprint(jwkA), thumbprint(jwkB)].sort(Buffer.compare)
-const keyWordsDigest = sha256(Buffer.from(`${LABEL} key words`), u8(0), keyThumbs[0], keyThumbs[1])
+const keyWordsNonce = fill(0xe0, 16)
+const keyWordsDigest = sha256(Buffer.from(`${LABEL} key words`), u8(0), keyThumbs[0], keyThumbs[1], keyWordsNonce)
 
 const vectors = {
   label: LABEL,
@@ -228,6 +229,7 @@ const vectors = {
     confirm: hex(deviceKeys.confirm),
     record: { seq: 0, plain: frames[6].bytes, toResponder: hex(sealRecord(deviceKeys.toResponder, 'toResponder', 0, Buffer.from(frames[6].bytes, 'hex')).wire) },
     wordsDigest: hex(wordsDigest),
+    keyWordsNonce: hex(keyWordsNonce),
     keyWordsDigest: hex(keyWordsDigest)
   }
 }

@@ -7,7 +7,7 @@ import { relayedRequest } from './host-gate'
 import { bodiless } from './http-compress'
 import { RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER } from './relay-device'
 import { DOOR_MARKER } from '../shared/remote-unlock'
-import { acceptCodeHandshake, acceptDeviceHandshake, offersSeal2, type AcceptedSeal2, type DeviceKey, type DeviceSigner, type DeviceVerifier } from '../shared/seal2/handshake'
+import { acceptCodeHandshake, acceptDeviceHandshake, offersSeal2, type AcceptedSeal2, type DeviceKey, type DeviceSigner, type DeviceVerifier, deviceIdOf, isDeviceKey } from '../shared/seal2/handshake'
 import { HTTP_KIND, readRequest } from '../shared/seal2/http'
 import { ABORT } from '../shared/seal2/spec'
 import type { Seal2Stream } from '../shared/seal2/stream'
@@ -520,7 +520,8 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
   const hello = async (request: http.IncomingMessage, response: http.ServerResponse, outer: SealOuter): Promise<void> => {
     const body = await readSmallJson(request)
     if (body === null) return reply(response, 400, { error: 'not a hello' })
-    const allowed = [ceiling.take('all'), limiter.take(outer.device ?? 'no-device')].every(Boolean)
+    // Per device first: a device over its own limit spends nothing of everyone's.
+    const allowed = limiter.take(outer.device ?? 'no-device') && ceiling.take('all')
     if (!allowed) return reply(response, 429, { error: 'too many handshakes' })
     if (body.mode === 'device') return deviceHello(body, response, outer)
     const code = typeof body.id === 'string' ? deps.codeFor(body.id) : null
@@ -559,9 +560,16 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     const self = deps.device?.self() ?? null
     if (deps.device === undefined || self === null) return reply(response, 403, { error: 'no device seal here' })
     const accepted = await acceptDeviceHandshake(body, { self, verify: deps.device.verify, ...(deps.device.keyOf ? { keyOf: deps.device.keyOf } : {}) })
-    // A key this Mac does not hold for that id (a watch whose words the owner has not confirmed yet) is told no, as
-    // a refusal: the watch keeps its old way and asks again later.
-    if (accepted === null) return reply(response, 403, { error: 'not let in' })
+    if (accepted === null) {
+      // A well-formed hello to this Mac whose key it does not hold for that id (a watch whose words the owner has
+      // not confirmed yet) is a refusal the watch can read: it keeps its old way and asks again later.
+      const toHere = body.to === self.deviceId
+      // Only for an id that is not its key's own (a watch's): a desktop's malformed hello stays a malformed one.
+      const watchLike = typeof body.from === 'string' && isDeviceKey(body.jwk) && (await deviceIdOf(body.jwk)) !== body.from.toLowerCase()
+      const unheld = toHere && watchLike && (await deps.device.keyOf?.(body.from as string).catch(() => null)) == null
+      if (!toHere) return reply(response, 403, { error: 'not this machine' })
+      return unheld ? reply(response, 403, { error: 'not let in' }) : reply(response, 400, { error: 'not a hello' })
+    }
     const { deviceId } = accepted.peer
     // The relay names who sent this; a hello in another device's name is not believed.
     if (outer.device !== undefined && outer.device !== deviceId) return reply(response, 403, { error: 'not that device' })

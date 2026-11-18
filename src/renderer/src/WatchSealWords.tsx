@@ -22,17 +22,25 @@ const POLL_MS = 1500
 export function WatchSealWordsView({
   pending,
   busy,
+  note = null,
   onSame,
   onNotSame
 }: {
   pending: readonly PendingWatchKey[]
   busy: boolean
+  /** Said once a confirm was refused: the key on the watch changed between the words shown and the click. */
+  note?: string | null
   onSame: (row: PendingWatchKey) => void
   onNotSame: (row: PendingWatchKey) => void
 }): React.JSX.Element | null {
-  if (pending.length === 0) return null
+  if (pending.length === 0 && note === null) return null
   return (
     <section className="gs-seal-words" aria-label="Compare the watch's words">
+      {note !== null && (
+        <p className="gs-paste-error" role="alert">
+          {note}
+        </p>
+      )}
       {pending.map((row) => (
         <div key={`${row.deviceId}:${row.x}`}>
           <p className="gs-consequence">The watch shows six words. Are they these?</p>
@@ -58,6 +66,7 @@ export function WatchSealWords(): React.JSX.Element | null {
   const api = cookrew()
   const [pending, setPending] = useState<readonly PendingWatchKey[]>([])
   const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
   const ask = useCallback(() => {
     void api.watchSealPending?.().then(setPending, () => undefined)
   }, [api])
@@ -66,19 +75,26 @@ export function WatchSealWords(): React.JSX.Element | null {
     const timer = setInterval(ask, POLL_MS)
     return () => clearInterval(timer)
   }, [ask])
-  const answer = (done: Promise<unknown> | undefined): void => {
+  const answer = (done: Promise<unknown> | undefined, confirming: boolean): void => {
     setBusy(true)
-    void (done ?? Promise.resolve()).finally(() => {
-      setBusy(false)
-      ask()
-    })
+    setNote(null)
+    void (done ?? Promise.resolve(false))
+      .then((said) => {
+        if (confirming && said !== true) setNote('The watch’s key changed since these words. Compare the new words.')
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        setBusy(false)
+        ask()
+      })
   }
   return (
     <WatchSealWordsView
       pending={pending}
       busy={busy}
-      onSame={(row) => answer(api.watchSealConfirm?.(row.deviceId, row.x))}
-      onNotSame={(row) => answer(api.watchSealForget?.(row.deviceId))}
+      note={note}
+      onSame={(row) => answer(api.watchSealConfirm?.(row.deviceId, row.x), true)}
+      onNotSame={(row) => answer(api.watchSealForget?.(row.deviceId), false)}
     />
   )
 }

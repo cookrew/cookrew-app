@@ -55,6 +55,11 @@ public struct WatchDevice: Codable, Equatable, Sendable {
     try key()
   }
 
+  /** This watch's account public key, base64url: half of the words it shows. */
+  public var publicX: String {
+    base64urlEncoded((try? key().publicKey.rawRepresentation) ?? Data())
+  }
+
   /** What a claim carries so the Mac can seal with this watch: its account id and public key. */
   public var sealFields: [String: Any] {
     let publicKey = (try? key().publicKey.rawRepresentation) ?? Data()

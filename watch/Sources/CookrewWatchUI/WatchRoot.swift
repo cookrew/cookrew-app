@@ -44,7 +44,7 @@ enum PairNotice: Equatable {
 /** How long the tick stays up before the cards. */
 private let pairedSeconds = 1.2
 /** Long enough to read six words aloud and look at the Mac. */
-private let wordsSeconds = 20.0
+private let wordsSeconds = 60.0
 
 /** Paired or not, and everything that goes with being paired. */
 @MainActor
@@ -54,6 +54,10 @@ final class WatchApp {
   private let origin: String
   private let registry: HTTPRegistryAPI
   private(set) var store: WatchStore?
+  /** The relay road's sealed session for the store in use: closed when the store goes, never left polling. */
+  private var liveSealer: WatchSealer?
+  /** A pairing whose words are on screen, waiting for the owner's Match on the watch. */
+  private var awaitingWords: WatchSession?
   private var keeper: AccountKeeper?
   private(set) var desktop = ""
   private(set) var username: String?
@@ -106,7 +110,15 @@ final class WatchApp {
     let sealer = pass.flatMap { relay in
       session.seal.map { peer in WatchSealer(peer: peer, device: vault.device(), relay: relay, pinned: session.sealPinned, onPinned: { vault.markSealed(key) }) }
     }
+    retireSealer()
+    liveSealer = sealer
     store = WatchStore(api: HTTPWatchAPI(bases: urls, token: session.token, relay: pass, guarded: roams, sealer: sealer), feel: feel)
+  }
+
+  private func retireSealer() {
+    let old = liveSealer
+    liveSealer = nil
+    if let old { Task { await old.close() } }
   }
 
   /** The paired Mac as the account lists it: by its id, or by its name. */
@@ -169,6 +181,7 @@ final class WatchApp {
   /** Pair another machine of the account: its code adds it beside the ones held. */
   func addMachine() {
     store = nil
+    retireSealer()
     enterCode()
   }
 
@@ -194,6 +207,7 @@ final class WatchApp {
   func signInAgain() {
     keeper?.retire()
     store = nil
+    retireSealer()
     enterCode()
   }
 
@@ -242,24 +256,31 @@ final class WatchApp {
   }
 
   private func finish(_ session: WatchSession) async {
-    vault.save(session)
     feel(.sent)
     stage = .paired(session.desktop)
     try? await Task.sleep(nanoseconds: UInt64(pairedSeconds * 1_000_000_000))
-    if let words = session.seal?.words {
-      stage = .words(session.desktop, words)
-      try? await Task.sleep(nanoseconds: UInt64(wordsSeconds * 1_000_000_000))
-      guard case .words = stage else { return }
-    }
-    typed = ""
-    open(session)
+    guard let offer = session.offer else { return keep(session.matched(nil)) }
+    // The words are computed HERE, from this watch's own key and the key offered: words taken from the answer
+    // would be whatever the carrier of the answer wanted. The owner compares them with the Mac's.
+    awaitingWords = session
+    stage = .words(session.desktop, offer.words(ownX: vault.device().publicX))
+    try? await Task.sleep(nanoseconds: UInt64(wordsSeconds * 1_000_000_000))
+    // No answer: no seal. The watch keeps its old way (or the Mac it had already matched).
+    if case .words = stage { wordsAnswered(match: false) }
   }
 
-  /** Past the words: the watch goes in, and its relay road seals once the owner confirms them on the Mac. */
-  func wordsSeen() {
-    guard case .words = stage, let session = vault.load() else { return }
+  /** The owner's answer on the watch: Match keeps the Mac's key; anything else keeps none of it. */
+  func wordsAnswered(match: Bool) {
+    guard case .words = stage, let session = awaitingWords, let offer = session.offer else { return }
+    awaitingWords = nil
+    keep(session.matched(match ? offer.matched(ownX: vault.device().publicX) : nil))
+  }
+
+  private func keep(_ session: WatchSession) {
+    vault.save(session)
     typed = ""
-    open(session)
+    // What the shelf holds now: a pin and a Mac matched before are kept by a pairing that matched none.
+    open(vault.session(sessionKey(session)) ?? session)
   }
 
   private func stopped(_ why: JoinFailure) {
@@ -309,7 +330,7 @@ final class WatchApp {
     do {
       let reply = try await claimWatch(base: base, code: digits, device: vault.device())
       let bases = basesAfterClaim(typed: Base(kind: "typed", url: base.absoluteString), named: reply.bases)
-      let session = WatchSession(desktop: reply.desktop, bases: bases, token: reply.token, seal: reply.seal)
+      let session = WatchSession(desktop: reply.desktop, bases: bases, token: reply.token, offer: reply.sealOffer)
       digits = ""
       await finish(session)
     } catch WatchError.refused(let reason) {
@@ -344,6 +365,7 @@ final class WatchApp {
     UserDefaults.standard.removeObject(forKey: keptZoomKey)
     ThumbPictures.forget()
     store = nil
+    retireSealer()
     username = nil
     heldMachines = []
     current = nil
@@ -581,7 +603,7 @@ private struct PairingView: View {
     case .working(.joining): JoinSteps(done: [], now: "Joining your account…")
     case .working(.finding): JoinSteps(done: ["Joined your account"], now: "Finding your computer…")
     case .paired(let desktop): JoinSteps(done: ["Joined your account", "Paired with \(desktop)"], now: nil)
-    case .words(let desktop, let words): SealWordsView(desktop: desktop, words: words, onDone: app.wordsSeen)
+    case .words(let desktop, let words): SealWordsView(desktop: desktop, words: words, onAnswer: app.wordsAnswered)
     case .notice(let notice): noticeView(notice)
     }
   }
@@ -646,15 +668,16 @@ struct LinkChip: View {
 private struct SealWordsView: View {
   let desktop: String
   let words: [String]
-  let onDone: () -> Void
+  let onAnswer: (Bool) -> Void
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 6) {
         Text("Same words on \(desktop)?").font(.headline)
         Text(words.joined(separator: " ")).font(.system(.title3, design: .rounded)).fixedSize(horizontal: false, vertical: true)
-        Text("Confirm them on the computer, in Apple Watch.").font(.footnote).foregroundStyle(.secondary)
-        Button("Done", action: onDone)
+        Text("Compare them with the computer's Apple Watch sheet, and confirm there too.").font(.footnote).foregroundStyle(.secondary)
+        Button("They match") { onAnswer(true) }
+        Button("They don't", role: .destructive) { onAnswer(false) }
       }
     }
   }

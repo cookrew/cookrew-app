@@ -140,9 +140,9 @@ public enum Seal2 {
   }
 
   /** The six words the watch and its Mac both show for their two keys (seal2/handshake.ts · keyWords). */
-  public static func keyWords(_ a: String, _ b: String) -> [String] {
+  public static func keyWords(_ a: String, _ b: String, nonce: Data) -> [String] {
     let thumbs = [thumbprint(x: a), thumbprint(x: b)].sorted { $0.lexicographicallyPrecedes($1) }
-    let digest = [UInt8](sha256(Data("\(label) key words".utf8), Data([0]), thumbs[0], thumbs[1]))
+    let digest = [UInt8](sha256(Data("\(label) key words".utf8), Data([0]), thumbs[0], thumbs[1], nonce))
     return (0 ..< 6).map { word in
       let index = (0 ..< 11).reduce(0) { value, bit in
         let position = word * 11 + bit

@@ -9980,8 +9980,10 @@ function registerIpc(handlers: RestoreHandlers): void {
       async offer(deviceId: string, jwk: DeviceKey) {
         const self = sealDevice.self()
         if (self === null) return null
-        sealWatchKeys.offer(deviceId, jwk)
-        return { deviceId: self.deviceId, jwk: self.jwk, words: (await keyWords(jwk, self.jwk)).words }
+        const nonce = sealWatchKeys.offer(deviceId, jwk)
+        if (nonce === null) return null
+        // The words go along for an older reader only: the watch computes its own from the keys and the nonce.
+        return { deviceId: self.deviceId, jwk: self.jwk, nonce: Buffer.from(nonce).toString('base64url'), words: (await keyWords(jwk, self.jwk, nonce)).words }
       }
     }
   })
@@ -9991,7 +9993,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     ownerOnly(async () => {
       const self = sealDevice.self()
       if (self === null) return []
-      return Promise.all(sealWatchKeys.pending().map(async (row) => ({ deviceId: row.deviceId, x: row.jwk.x, words: (await keyWords(row.jwk, self.jwk)).words })))
+      return Promise.all(sealWatchKeys.pending().map(async (row) => ({ deviceId: row.deviceId, x: row.jwk.x, words: (await keyWords(row.jwk, self.jwk, row.nonce)).words })))
     })
   )
   ipcMain.handle(
@@ -10001,7 +10003,8 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle(
     'watch:seal-forget',
     ownerOnly((deviceId: unknown) => {
-      if (typeof deviceId === 'string') sealWatchKeys.forget(deviceId)
+      // "Not the same": only the key that waited; a watch already let in stays in.
+      if (typeof deviceId === 'string') sealWatchKeys.dropPending(deviceId)
       return true
     })
   )
@@ -10074,7 +10077,11 @@ function registerIpc(handlers: RestoreHandlers): void {
   )
   ipcMain.handle(
     'watch:forget',
-    ownerOnly(() => watchPairing.unpair())
+    ownerOnly(() => {
+      // A forgotten watch is let in sealed no more either: its keys go with its token.
+      sealWatchKeys.forgetAll()
+      return watchPairing.unpair()
+    })
   )
   ipcMain.handle('menu:answer', (_e, terminalId: string, body: unknown) => {
     const request = parseMenuRequest(body)
