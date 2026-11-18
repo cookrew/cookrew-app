@@ -128,5 +128,13 @@ export const heldAfter = (verdict: KnockVerdict): DirectHeld | null | undefined 
   return verdict.refused === null ? undefined : heldFor(verdict.refused)
 }
 
-/** How long until the next knock, after this one. */
-export const knockGapAfter = (verdict: KnockVerdict): number => (verdict.refused === null ? RTC_EVERY_MS : RTC_REFUSED_EVERY_MS)
+/**
+ * How long until the next knock, after this one: the long wait from a refusal
+ * until an answer proves the Mac (or the machine changes, companion.ts). No
+ * answer proves nothing either way and leaves the gap as it was: the relay
+ * can make an error answer whenever it likes.
+ */
+export const knockGapAfter = (verdict: KnockVerdict, current: number): number => {
+  if (verdict.verified) return RTC_EVERY_MS
+  return verdict.refused === null ? current : RTC_REFUSED_EVERY_MS
+}

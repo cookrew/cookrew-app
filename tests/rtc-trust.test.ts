@@ -174,9 +174,11 @@ describe('what the badge and the next knock make of a verdict', () => {
   it('after a refusal the next knock waits longer: each one hands the relay the Mac\'s addresses for nothing', () => {
     expect(RTC_EVERY_MS).toBe(2 * 60 * 1000)
     expect(RTC_REFUSED_EVERY_MS).toBeGreaterThan(RTC_EVERY_MS)
-    expect(knockGapAfter({ verified: false, refused: RTC_NO_BINDING })).toBe(RTC_REFUSED_EVERY_MS)
-    expect(knockGapAfter({ verified: false, refused: 'binding did not verify' })).toBe(RTC_REFUSED_EVERY_MS)
-    expect(knockGapAfter({ verified: true, refused: null })).toBe(RTC_EVERY_MS)
-    expect(knockGapAfter({ verified: false, refused: null })).toBe(RTC_EVERY_MS)
+    expect(knockGapAfter({ verified: false, refused: RTC_NO_BINDING }, RTC_EVERY_MS)).toBe(RTC_REFUSED_EVERY_MS)
+    expect(knockGapAfter({ verified: false, refused: 'binding did not verify' }, RTC_EVERY_MS)).toBe(RTC_REFUSED_EVERY_MS)
+    expect(knockGapAfter({ verified: true, refused: null }, RTC_REFUSED_EVERY_MS)).toBe(RTC_EVERY_MS)
+    // No answer proves nothing either way: the gap stays what it was (the relay can make an error answer at will).
+    expect(knockGapAfter({ verified: false, refused: null }, RTC_EVERY_MS)).toBe(RTC_EVERY_MS)
+    expect(knockGapAfter({ verified: false, refused: null }, RTC_REFUSED_EVERY_MS)).toBe(RTC_REFUSED_EVERY_MS)
   })
 })

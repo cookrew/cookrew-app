@@ -78,13 +78,19 @@ const stubPhone = () => {
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
 /** Every knock the companion makes, counted where the link would be dialled. */
-const countKnocks = (refusal: string | null = null): { readonly knocks: () => number } => {
+const countKnocks = (
+  refusals: string | null | readonly (string | null)[] = null,
+  during?: (knock: number) => Promise<void>
+): { readonly knocks: () => number } => {
   let knocks = 0
   vi.doMock('../src/renderer/src/path/rtc-link', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../src/renderer/src/path/rtc-link')>()),
-    // With a refusal, the Mac answered and its answer did not prove it (rtc-trust.ts · boundKnock).
+    // With a refusal, the Mac answered and its answer did not prove it (rtc-trust.ts · boundKnock);
+    // a list says it knock by knock (null: no answer at all).
     connectRtcLink: async (deps: { refused?: (why: string) => void }) => {
       knocks += 1
+      await during?.(knocks)
+      const refusal = Array.isArray(refusals) ? (refusals[knocks - 1] ?? null) : refusals
       if (refusal !== null) deps.refused?.(refusal)
       return null
     }
@@ -150,10 +156,32 @@ describe('after a refused answer', () => {
     stop()
   })
 
-  it('entering another machine owes that machine a knock at once', async () => {
+  it('a reach push that lands while the refused knock is out does not cut the wait short either', async () => {
     const phone = stubPhone()
     vi.resetModules()
-    const { knocks } = countKnocks('no binding')
+    let pushMidKnock = (): void => undefined
+    const { knocks } = countKnocks('no binding', async (knock) => {
+      if (knock === 1) pushMidKnock()
+    })
+    await inConsole(DEVICE)
+    const companion = await import('../src/renderer/src/path/companion')
+    pushMidKnock = () => phone.push('reach', { at: 1 })
+    const stop = companion.startCompanionPathSwitch()
+    await vi.waitFor(() => expect(phone.asked().some((url) => url.includes('/api/path/report'))).toBe(true))
+    expect(knocks()).toBe(1)
+    // Any later race (here another push) still finds the wait in force.
+    phone.push('reach', { at: 2 })
+    await settle()
+    await settle()
+    expect(knocks()).toBe(1)
+    stop()
+  })
+
+  it('entering another machine owes it a knock at once, and lets go of the last machine\'s wait', async () => {
+    const phone = stubPhone()
+    vi.resetModules()
+    // A refuses; B does not answer at all, which leaves B's gap as it found it.
+    const { knocks } = countKnocks(['no binding', null, null])
     const scope = await inConsole(DEVICE)
     const companion = await import('../src/renderer/src/path/companion')
     const stopA = companion.startCompanionPathSwitch()
@@ -164,6 +192,10 @@ describe('after a refused answer', () => {
     scope.enterMachine(OTHER)
     const stopB = companion.startCompanionPathSwitch()
     await vi.waitFor(() => expect(knocks()).toBe(2))
+    // B carries none of A's ten minutes: its reach push knocks at once.
+    await vi.waitFor(() => expect(phone.listening()).toBe(true))
+    phone.push('reach', { at: 3 })
+    await vi.waitFor(() => expect(knocks()).toBe(3))
     stopB()
   })
 })

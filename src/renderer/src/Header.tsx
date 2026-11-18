@@ -146,10 +146,6 @@ export function Header({
         {avatar}
         {remote && <CompanionAvatar />}
       </div>
-      {/* UNDER the bar, not inside the menu: the local-network ask has to be
-          visible without a tap, because a permission nobody knows to look for
-          is a permission nobody grants. It renders nothing in three of the
-          four states, so on most phones the bar is exactly as it is. */}
       {pathOpen && <PathSheet view={path} onClose={() => setPathOpen(false)} />}
     </header>
   )

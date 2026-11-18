@@ -50,8 +50,8 @@ const settledPlane = (): 'LAN' | 'TAILNET' | 'RELAY' => {
 /**
  * READ THE LOCAL-NETWORK PERMISSION, AND TELL THE REST OF THE APP.
  *
- * One local read per race, no request: the report carries it to the Mac, and
- * the row under the badge says so when the browser refused it.
+ * One local read per race, no request: the report carries it to the Mac.
+ * Nothing on screen draws it (the WebRTC link does not need it).
  */
 const readLocalNetwork = async (): Promise<void> => {
   setLocalNetwork(await localNetworkState().catch(() => 'unsupported' as const))
@@ -168,7 +168,10 @@ const rtcKnock = async (onEnd: () => void, live: () => boolean): Promise<RtcRow[
   if (live()) {
     const held = heldAfter(knock.verdict())
     if (held !== undefined) setDirectHeld(held)
-    rtcGapMs = knockGapAfter(knock.verdict())
+    rtcGapMs = knockGapAfter(knock.verdict(), rtcGapMs)
+    // The wait runs from the refusal: a push that landed while the knock was
+    // out (the relay knows when one is) zeroed the clock it started on.
+    if (knock.verdict().refused !== null) lastRtcAt = Date.now()
   }
   return probe ? [probe] : []
 }

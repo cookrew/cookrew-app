@@ -176,11 +176,11 @@ body,
   background: var(--cream-hi);
   border-bottom: 2px solid var(--line);
   -webkit-app-region: drag;
-  /* THE BAR OUTRANKS THE CANVAS IT OVERHANGS, and two things depend on it:
-     the local-network ask hangs off the bottom edge of this bar, and the
-     connection sheet is a fixed scrim rendered inside it. Both are painted
-     outside the header's own box, so a header on the stage's own layer puts
-     both UNDER the canvas — which is what folding this selector into the
+  /* THE BAR OUTRANKS THE CANVAS IT OVERHANGS, and the connection sheet
+     depends on it (the local-network row that also hung off this bar is gone,
+     2026-11-19): a fixed scrim rendered inside the header, painted outside
+     the header's own box, so a header on the stage's own layer puts it
+     UNDER the canvas — which is what folding this selector into the
      `.cr-stage, .cr-dock` block below did, silently, for the whole life of
      this file. Bounded above by the sheets and the lock (60+), which must
      cover the bar too. tests/header-layer.test.ts holds the comparison. */
