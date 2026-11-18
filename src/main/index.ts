@@ -329,6 +329,7 @@ import { plainRemoteProviders, remoteLoopbackPorts, remoteLoopbackProviders } fr
 import type { LiveValues } from '../shared/launch-settings'
 import { magpieBinary, magpieRunner, ShareKeys } from './route/share-keys'
 import { fileIntentStore, INTENT_FILE } from './route/share-intents'
+import { fileAuditLog, SHARE_AUDIT_FILE } from './route/share-audit'
 import { createMagpieRemote } from './magpie-remote/setup'
 import { callerIsMagpie } from './magpie-remote/caller'
 import { createTailnetView } from './route/tailnet'
@@ -1900,11 +1901,20 @@ const sealMarks = blockedLanes.marks
  * Magpie is found; asked again while it is not.
  */
 let shareKeysHeld: ShareKeys | null = null
+/** Ruling (a): what ShareKeys clears or keeps on its own goes to a durable file; stderr only when that fails. */
+const shareAuditFile = fileAuditLog(path.join(homedir(), '.cookrew', SHARE_AUDIT_FILE))
+const shareAudit = (line: string): void => {
+  try {
+    shareAuditFile(line)
+  } catch (error) {
+    console.error(`[cookrew] share audit not written (${error instanceof Error ? error.message : 'unknown'}): ${line}`)
+  }
+}
 const shareKeysNow = (): ShareKeys | null => {
   if (shareKeysHeld !== null) return shareKeysHeld
   const bin = magpieBinary(defaultDiscoveryEnv())
   // Every revoke, from any path, unbinds the key from the sealed path first (a key Magpie forgets has no limit on loopback).
-  if (bin !== null) shareKeysHeld = new ShareKeys({ run: magpieRunner(bin), intents: fileIntentStore(path.join(homedir(), '.cookrew', INTENT_FILE)), beforeRevoke: (id) => magpieRemote.unbind(id) })
+  if (bin !== null) shareKeysHeld = new ShareKeys({ run: magpieRunner(bin), intents: fileIntentStore(path.join(homedir(), '.cookrew', INTENT_FILE)), beforeRevoke: (id) => magpieRemote.unbind(id), audit: shareAudit })
   return shareKeysHeld
 }
 /**
@@ -9838,6 +9848,8 @@ function registerIpc(handlers: RestoreHandlers): void {
     : null
   const launchSettings = createLaunchSettings({ file: launchSettingsPath(homedir()), boot: launchBoot, signedIn: () => accounts.account() !== null })
   launchLive = launchSettings.live
+  // Turning Magpie or Magpie remote off cuts other computers' answers still streaming here, at once.
+  launchSettings.onLive(() => magpieRemote.switchesChanged())
   // A Magpie switch moved: the route state says so at once, and the screens that draw Magpie follow.
   launchSettings.onLive((values) => {
     routeService.emit('route', routeService.state())

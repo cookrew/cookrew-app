@@ -50,6 +50,14 @@ export const MAGPIE_KEY_PATH = '/.cookrew/magpie-key'
 /** On a `magpie` stream: the asking computer gives its key back (POST). */
 export const MAGPIE_KEY_RETURN_PATH = '/.cookrew/magpie-key/return'
 /**
+ * On a `magpie` stream: the asking computer has stored the key it was given, durably, and says so
+ * (POST, JSON `{ id }`, the key itself as the credential, never in the body). Until this arrives the
+ * giving computer serves nothing with the key and keeps warning that it is out. Idempotent. A
+ * Cookrew from before this path answers 404, and the asker gives the key back: neither end keeps a
+ * key the other has not confirmed.
+ */
+export const MAGPIE_KEY_ACK_PATH = '/.cookrew/magpie-key/ack'
+/**
  * What the asking computer's own Magpie is told its key is. Not a secret: the
  * real key stays in Cookrew's main process, which puts it on each request it seals.
  */
@@ -67,6 +75,9 @@ export interface MagpieKeyAnswerOk {
   readonly id: string
 }
 export type MagpieKeyAnswer = MagpieKeyAnswerOk | { readonly ok: false; readonly why: string }
+
+/** The answer to MAGPIE_KEY_ACK_PATH, as the asker reads it: `old` when the other end predates acknowledgements. */
+export type MagpieKeyAckAnswer = { readonly ok: true } | { readonly ok: false; readonly why: string; readonly old: boolean }
 
 /** The Routing panel's "Your other computers" (owner-only IPC magpie-remote:list). */
 export interface MagpieRemoteList {

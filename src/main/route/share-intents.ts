@@ -15,11 +15,25 @@ import path from 'node:path'
  * allowed after one revoke pass left no key of that name and one process check
  * found no add of that name still running (share-keys.ts · resolve, clear).
  *
- * The file holds names and times, never a key.
+ * KEY ACKNOWLEDGEMENT (agreed with Relay): a key that was made, capped and handed
+ * over is not done either. Its intent gains `issued` (Magpie's id, and where the
+ * key went) and stays until the key's recipient surely has it: the owner pressed
+ * Done for a key shown in this window (`window`), or the computer a sealed key
+ * went to stored it and acknowledged it over its own device session (`seal`,
+ * magpie-remote/serve.ts). A revoke by that id settles it once Magpie lists no
+ * key of its name. An older Cookrew reads `issued` as nothing and so treats the
+ * intent as a key left behind: it warns, and its recovery revokes. Safe both ways.
+ *
+ * The file holds names, ids and times, never a key.
  */
 
 export const INTENT_NAME_RE = /^device-[a-z0-9][a-z0-9-]{0,31}--[0-9a-f]{32}$/
 export const INTENT_FILE = 'share-intents.json'
+/** Magpie's id for a gateway key (0.1.3935). */
+export const KEY_ID_RE = /^[A-Za-z0-9]{8,64}$/
+
+/** Where an issued key went: shown in this computer's window, or sent over the seal to another computer. */
+export type IssuedVia = 'window' | 'seal'
 
 export interface ShareIntent {
   readonly name: string
@@ -29,6 +43,8 @@ export interface ShareIntent {
   readonly revoked?: { readonly at: string; readonly left: number }
   /** The last process check: when, and how many adds of the name were still running. */
   readonly checked?: { readonly at: string; readonly live: number }
+  /** The key was made, capped and handed over, and waits to be confirmed by whoever got it. */
+  readonly issued?: { readonly at: string; readonly id: string; readonly via: IssuedVia }
 }
 
 export interface IntentStore {
@@ -47,6 +63,16 @@ function stamp(value: unknown, field: 'left' | 'live'): { at: string; left?: num
   return { at: v.at, [field]: v[field] }
 }
 
+/** An issued mark, or undefined when there is none; throws when one is there but broken. */
+function issuedOf(value: unknown): ShareIntent['issued'] {
+  if (value === undefined) return undefined
+  const v = value as Record<string, unknown> | null
+  if (typeof v !== 'object' || v === null || typeof v.at !== 'string' || typeof v.id !== 'string' || !KEY_ID_RE.test(v.id) || (v.via !== 'window' && v.via !== 'seal')) {
+    throw new Error('A key record has a broken hand-over.')
+  }
+  return { at: v.at, id: v.id, via: v.via }
+}
+
 function parseIntent(raw: unknown): ShareIntent {
   const r = raw as Record<string, unknown> | null
   if (typeof r !== 'object' || r === null) throw new Error('A key record is not an object.')
@@ -57,12 +83,14 @@ function parseIntent(raw: unknown): ShareIntent {
   const revoked = stamp(r.revoked, 'left')
   const checked = stamp(r.checked, 'live')
   if (revoked === null || checked === null) throw new Error('A key record has a broken check.')
+  const issued = issuedOf(r.issued)
   return {
     name,
     device,
     at,
     ...(revoked ? { revoked: { at: revoked.at, left: revoked.left as number } } : {}),
-    ...(checked ? { checked: { at: checked.at, live: checked.live as number } } : {})
+    ...(checked ? { checked: { at: checked.at, live: checked.live as number } } : {}),
+    ...(issued ? { issued } : {})
   }
 }
 

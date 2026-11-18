@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { connectRemote, createRemotesStore, disconnectRemote, perComputer, providerIdFor, type ConnectDeps } from '../src/main/magpie-remote/remotes'
+import { connectRemote, createRemotesStore, disconnectRemote, perComputer, providerIdFor, resumeRemotes, type ConnectDeps } from '../src/main/magpie-remote/remotes'
 import type { SecretSealer } from '../src/main/secrets-store'
 
 const PEER = 'deviceB0000000000000000000000002'
@@ -60,6 +60,7 @@ function deps(over: Partial<ConnectDeps> = {}): ConnectDeps & { returned: string
     switches: () => ({ magpie: true, magpieRemote: true }),
     store: createRemotesStore(path.join(dir, 'magpie-remotes.json'), sealer),
     askKey: async () => ({ ok: true, key: KEY, id: 'id1' }),
+    ackKey: async () => ({ ok: true }),
     returnKey: async (peer) => void returned.push(peer),
     addProvider: async (id, url) => {
       added.push([id, url])
@@ -100,8 +101,16 @@ describe('connecting to another computer’s Magpie', () => {
 
   it('gives the key back when the provider cannot be added', async () => {
     const d = deps({ addProvider: async () => ({ ok: false, why: 'magpie said no' }) })
-    expect(await connectRemote(PEER, 'Solis', d)).toEqual({ ok: false, why: 'magpie said no' })
+    expect(await connectRemote(PEER, 'Solis', d)).toEqual({ ok: false, why: 'magpie said no The key was given back.' })
     expect(d.returned).toEqual([PEER])
+    expect(d.store.keyFor(PEER)).toBeNull()
+  })
+
+  it('says so when the other computer would not take its key back, instead of claiming it did', async () => {
+    const d = deps({ addProvider: async () => ({ ok: false, why: 'magpie said no.' }), returnKey: async () => { throw new Error('403 switched off') } })
+    const answer = await connectRemote(PEER, 'Solis', d)
+    expect(answer).toMatchObject({ ok: false, why: expect.stringContaining('could not be given back') })
+    expect(JSON.stringify(answer)).not.toContain('was given back')
     expect(d.store.keyFor(PEER)).toBeNull()
   })
 
@@ -175,6 +184,62 @@ describe('review fixes: never repoint a provider that is not ours, and one conne
   })
 })
 
+describe('acknowledging the key (Relay contract)', () => {
+  it('acknowledges only once the key is kept on disk, and before any provider is added', async () => {
+    const file = path.join(dir, 'magpie-remotes.json')
+    const seen: Array<{ peer: string; key: string; id: string; onDisk: string | null; added: number }> = []
+    const d = deps({
+      ackKey: async (peer, key, id) => {
+        seen.push({ peer, key, id, onDisk: createRemotesStore(file, sealer).unacked(peer)?.key ?? null, added: d.added.length })
+        return { ok: true }
+      }
+    })
+    expect(await connectRemote(PEER, 'Solis Core', d)).toEqual({ ok: true, providerId: 'solis-core' })
+    expect(seen).toEqual([{ peer: PEER, key: KEY, id: 'id1', onDisk: KEY, added: 0 }])
+    expect(d.added).toHaveLength(1)
+  })
+
+  it('fails closed when the other computer refuses the acknowledgement: no key kept, the key given back, no provider', async () => {
+    const d = deps({ ackKey: async () => ({ ok: false, why: 'Solis-Core did not give this computer that key.', old: false }) })
+    expect(await connectRemote(PEER, 'Solis', d)).toEqual({ ok: false, why: 'Solis-Core did not give this computer that key. The key was given back.' })
+    expect(d.store.keyFor(PEER)).toBeNull()
+    expect(d.returned).toEqual([PEER])
+    expect(d.added).toEqual([])
+  })
+
+  it('fails closed against an older Cookrew that cannot acknowledge, and says to update it', async () => {
+    const d = deps({ ackKey: async () => ({ ok: false, why: 'Only model requests are served here.', old: true }) })
+    expect(await connectRemote(PEER, 'Solis', d)).toMatchObject({ ok: false, why: expect.stringContaining('Update Cookrew on Solis') })
+    expect(d.store.keyFor(PEER)).toBeNull()
+    expect(d.returned).toEqual([PEER])
+    expect(d.added).toEqual([])
+  })
+
+  it('asks once more when the acknowledgement’s stream breaks (it is idempotent); after a second break the key waits, unused, to be said again', async () => {
+    let tries = 0
+    const flaky = deps({
+      ackKey: async () => {
+        tries += 1
+        if (tries === 1) throw new Error('stream cut')
+        return { ok: true }
+      }
+    })
+    expect(await connectRemote(PEER, 'Solis', flaky)).toMatchObject({ ok: true })
+    expect(tries).toBe(2)
+    const broken = deps({
+      ackKey: async () => {
+        throw new Error('stream cut')
+      }
+    })
+    expect(await connectRemote(PEER, 'Solis', broken)).toMatchObject({ ok: false })
+    // Unheard is not refused (Relay's ruling): kept with acked false, sent with nothing, never given back yet.
+    expect(broken.store.keyFor(PEER)).toBeNull()
+    expect(broken.store.unacked(PEER)).toMatchObject({ key: KEY, keyId: 'id1' })
+    expect(broken.returned).toEqual([])
+    expect(broken.added).toEqual([])
+  })
+})
+
 describe('the served-seat gate (lane Seatbelt)', () => {
   it('refuses to connect while the gate fails or cannot answer, asking the other computer nothing', async () => {
     const askKey = vi.fn()
@@ -227,6 +292,143 @@ describe('the forwarder waits on the served-seat gate', () => {
       expect(open.port()).not.toBeNull()
     } finally {
       await open.stop()
+    }
+  })
+})
+
+describe('relay ruling (b): a key kept but not yet acknowledged is acknowledged again on start and on reconnect', () => {
+  /** A's crash between keeping the key and acknowledging it: the ack's stream breaks every time. */
+  const crashedBeforeAck = async (): Promise<ReturnType<typeof deps>> => {
+    const d = deps({ ackKey: async () => { throw new Error('stream broke') } })
+    expect(await connectRemote(PEER, 'Solis', d)).toMatchObject({ ok: false })
+    return d
+  }
+
+  it('keeps the key with its id and acked false, and the forwarder gets no key until acknowledged', async () => {
+    const d = await crashedBeforeAck()
+    expect(d.store.list()).toMatchObject([{ peer: PEER, keyId: 'id1', acked: false }])
+    expect(d.store.keyFor(PEER)).toBeNull()
+    expect(JSON.stringify(JSON.parse(readFileSync(path.join(dir, 'magpie-remotes.json'), 'utf8')))).not.toContain(KEY)
+    expect(d.added).toEqual([])
+  })
+
+  it('on start: acknowledges the kept key again, then points the provider at the forwarder, asking for no new key', async () => {
+    const d = await crashedBeforeAck()
+    const askKey = vi.fn(async () => ({ ok: true as const, key: KEY, id: 'id2' }))
+    const acks: string[] = []
+    const again = deps({ store: d.store, askKey, ackKey: async (_p, key, id) => (acks.push(`${id}:${key === KEY}`), { ok: true }) })
+    await resumeRemotes(again)
+    expect(acks).toEqual(['id1:true'])
+    expect(askKey).not.toHaveBeenCalled()
+    expect(again.store.list()).toMatchObject([{ peer: PEER, keyId: 'id1', acked: true }])
+    expect(again.store.keyFor(PEER)).toBe(KEY)
+    // 'solis' is the owner's own provider in this fixture: the kept record's id is used again.
+    expect(again.added).toEqual([[d.store.list()[0].providerId, `http://127.0.0.1:3428/peer/${PEER}`]])
+    expect(again.added[0][0]).toBe('solis-2')
+  })
+
+  it('on start: drops the key and gives it back when the other computer refuses it', async () => {
+    const d = await crashedBeforeAck()
+    const again = deps({ store: d.store, ackKey: async () => ({ ok: false, why: 'no longer has this key', old: false }) })
+    await resumeRemotes(again)
+    expect(again.store.list()).toEqual([])
+    expect(again.returned).toEqual([PEER])
+    expect(again.added).toEqual([])
+  })
+
+  it('on start: leaves it waiting while the other computer cannot be reached or a switch is off', async () => {
+    const d = await crashedBeforeAck()
+    await resumeRemotes(deps({ store: d.store, ackKey: async () => { throw new Error('offline') } }))
+    expect(d.store.list()).toMatchObject([{ acked: false }])
+    const off = deps({ store: d.store, switches: () => ({ magpie: true, magpieRemote: false }), ackKey: vi.fn() })
+    await resumeRemotes(off)
+    expect(off.ackKey).not.toHaveBeenCalled()
+    expect(d.store.list()).toMatchObject([{ acked: false }])
+  })
+
+  it('on reconnect: acknowledges the kept key again instead of asking for another', async () => {
+    const d = await crashedBeforeAck()
+    const askKey = vi.fn(async () => ({ ok: true as const, key: KEY, id: 'id2' }))
+    const again = deps({ store: d.store, askKey })
+    expect(await connectRemote(PEER, 'Solis', again)).toMatchObject({ ok: true })
+    expect(askKey).not.toHaveBeenCalled()
+    expect(again.store.list()).toMatchObject([{ keyId: 'id1', acked: true }])
+  })
+
+  it('on reconnect: asks for a new key when the kept one is refused', async () => {
+    const d = await crashedBeforeAck()
+    let n = 0
+    const again = deps({ store: d.store, askKey: async () => ({ ok: true as const, key: KEY, id: 'id2' }), ackKey: async (_p, _k, id) => (n += 1, id === 'id1' ? { ok: false, why: 'gone', old: false } : { ok: true }) })
+    expect(await connectRemote(PEER, 'Solis', again)).toMatchObject({ ok: true })
+    expect(n).toBe(2)
+    expect(again.store.list()).toMatchObject([{ keyId: 'id2', acked: true }])
+  })
+
+  it('reads a record from before acknowledgements as acknowledged, so old connections keep working', () => {
+    const store = createRemotesStore(path.join(dir, 'magpie-remotes.json'), null)
+    writeFileSync(path.join(dir, 'magpie-remotes.json'), JSON.stringify({ v: 1, remotes: [{ peer: PEER, name: 'Solis', providerId: 'solis', at: 'x', plain: KEY }] }))
+    expect(store.keyFor(PEER)).toBe(KEY)
+  })
+
+  it('refuses an acked field that is not a boolean instead of guessing', () => {
+    const store = createRemotesStore(path.join(dir, 'magpie-remotes.json'), null)
+    writeFileSync(path.join(dir, 'magpie-remotes.json'), JSON.stringify({ v: 1, remotes: [{ peer: PEER, name: 'Solis', providerId: 'solis', at: 'x', plain: KEY, keyId: 'id1', acked: 'no' }] }))
+    expect(() => store.list()).toThrow()
+  })
+})
+
+describe('verification review: the re-acknowledgement timer stops with the app', () => {
+  const make = async () => {
+    const { createMagpieRemote } = await import('../src/main/magpie-remote/setup')
+    return createMagpieRemote({
+      base: dir,
+      switches: () => ({ magpie: true, magpieRemote: true }),
+      shareKeys: () => null,
+      gatewayPort: () => null,
+      openStream: async () => {
+        throw new Error('none')
+      },
+      desktops: async () => [],
+      selfId: () => null,
+      sealer: null,
+      magpieBin: () => null,
+      env: () => ({ home: dir, env: {} }),
+      log: () => undefined,
+      seatGate: async () => true,
+      callerIsMagpie: async () => true,
+      forwardPort: 0
+    })
+  }
+
+  it('sets no retry timer when stop() runs while start() is still under way', async () => {
+    const remote = await make()
+    const intervals = vi.spyOn(globalThis, 'setInterval')
+    try {
+      const starting = remote.start()
+      await remote.stop()
+      await starting
+      expect(intervals.mock.calls.filter(([, ms]) => ms === 5 * 60_000)).toEqual([])
+    } finally {
+      intervals.mockRestore()
+      await remote.stop()
+    }
+  })
+
+  it('sets one retry timer on start, and clears it on stop', async () => {
+    const remote = await make()
+    const intervals = vi.spyOn(globalThis, 'setInterval')
+    const cleared = vi.spyOn(globalThis, 'clearInterval')
+    try {
+      await remote.start()
+      await remote.start()
+      const set = intervals.mock.results.filter((_, i) => intervals.mock.calls[i][1] === 5 * 60_000)
+      expect(set).toHaveLength(1)
+      await remote.stop()
+      expect(cleared).toHaveBeenCalledWith(set[0].value)
+    } finally {
+      intervals.mockRestore()
+      cleared.mockRestore()
+      await remote.stop()
     }
   })
 })

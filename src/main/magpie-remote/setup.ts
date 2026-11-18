@@ -13,9 +13,9 @@ import type { Fields } from '../../shared/seal2/frames'
 import type { Seal2Stream } from '../../shared/seal2/stream'
 import { BOUND_KEYS_FILE, createBoundKeys, fileStorage, type BoundKeys } from './bound-keys'
 import { createMagpieForwarder } from './forward'
-import { connectRemote, createRemotesStore, disconnectRemote, perComputer, REMOTES_FILE, type ConnectAnswer } from './remotes'
+import { connectRemote, createRemotesStore, disconnectRemote, perComputer, REMOTES_FILE, resumeRemotes, unackedPeers, type ConnectAnswer, type ConnectDeps } from './remotes'
 import { createMagpieServe } from './serve'
-import { askKeyOver, magpieProviders, returnKeyOver } from './wire'
+import { ackKeyOver, askKeyOver, magpieProviders, returnKeyOver } from './wire'
 
 /**
  * MAGPIE ACROSS THE OWNER'S COMPUTERS, PUT TOGETHER (lane Magpie). Both ends live
@@ -56,6 +56,8 @@ export interface MagpieRemote {
   readonly serve: SealStreamHandler
   /** Stop honouring a key over the seal and cut its streams, before it is revoked (serve.ts). */
   unbind(id: string): void
+  /** The switches may have changed: answers still streaming are cut when either is off (serve.ts). */
+  switchesChanged(): void
   readonly boundKeys: BoundKeys
   start(): Promise<void>
   stop(): Promise<void>
@@ -67,6 +69,12 @@ export interface MagpieRemote {
 }
 
 /** How long the gate's answer is kept for forwarded requests. */
+/** How long a key request may take: longer than B's slowest issue, so A never drops a key B still makes. */
+const ASK_KEY_MS = 300_000
+/** How long an acknowledgement or a give-back may take before it counts as unheard. */
+const SMALL_TALK_MS = 60_000
+/** How often a key still waiting for its acknowledgement is said again. */
+const RESUME_MS = 5 * 60_000
 const GATE_MS = 5_000
 
 const myName = (): string => os.hostname().replace(/\.local$/i, '') || 'this computer'
@@ -75,9 +83,12 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
   const boundKeys = createBoundKeys(fileStorage(path.join(deps.base, BOUND_KEYS_FILE)))
   const remotes = createRemotesStore(path.join(deps.base, REMOTES_FILE), deps.sealer)
   const providers = magpieProviders(() => deps.magpieBin(), () => deps.env())
-  const askKey = askKeyOver((peer, kind, fields) => deps.openStream(peer, kind, fields))
+  // A key request waits behind B's Magpie CLI: about six calls of up to 20 s each, plus its queue.
+  const askKey = askKeyOver((peer, kind, fields) => deps.openStream(peer, kind, fields), { deadlineMs: ASK_KEY_MS })
+  // Small answers: a minute each, so a silent peer never holds the connect lane for long.
+  const ackKey = ackKeyOver((peer, kind, fields) => deps.openStream(peer, kind, fields), { deadlineMs: SMALL_TALK_MS })
   const lane = perComputer()
-  const returnKey = returnKeyOver((peer, kind, fields) => deps.openStream(peer, kind, fields))
+  const returnKey = returnKeyOver((peer, kind, fields) => deps.openStream(peer, kind, fields), { deadlineMs: SMALL_TALK_MS })
 
   const serve = createMagpieServe({
     switches: () => deps.switches(),
@@ -97,6 +108,11 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
     revoke: async (id) => {
       const keys = deps.shareKeys()
       return keys === null ? { ok: false, why: 'Magpie is not installed here.' } : keys.revoke(id)
+    },
+    // The other computer stored its key and proved it over its own session: B's warning for it is settled.
+    acknowledge: async (id) => {
+      const keys = deps.shareKeys()
+      return keys === null ? { ok: false, why: 'Magpie is not installed here.' } : keys.acknowledge(id)
     },
     dial: (port) => loopbackDialer(port),
     name: myName,
@@ -134,15 +150,66 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
     }
   }
 
+  /**
+   * Keys kept but never acknowledged (a crash, a broken stream) are said again: one computer per turn of
+   * the connect lane, so an owner's Connect or Disconnect waits behind one computer at most (review M2).
+   */
+  let resumeTimer: ReturnType<typeof setInterval> | null = null
+  let stopped = false
+  /** One pass at a time: a pass longer than the timer's beat must not start a second one behind it. */
+  let resuming: Promise<void> | null = null
+  const resume = (): Promise<void> => {
+    if (resuming !== null) return resuming
+    const pass = (async () => {
+      for (const peer of unackedPeers(remotes)) {
+        if (stopped) return
+        await lane('connect', () => resumeRemotes(connectDeps, peer)).catch(() => undefined)
+      }
+    })().finally(() => {
+      resuming = null
+    })
+    resuming = pass
+    return pass
+  }
+  const connectDeps: ConnectDeps = {
+    switches: () => deps.switches(),
+    store: remotes,
+    askKey,
+    ackKey,
+    returnKey,
+    addProvider: (id, url) => providers.add(id, url),
+    setProvider: (id, url) => providers.set(id, url),
+    removeProvider: (id) => providers.remove(id),
+    providers: () => providers.entries(),
+    forwarderPort: () => forwarder.port(),
+    seatGate: () => deps.seatGate(),
+    myName
+  }
+
   return {
     serve,
     unbind: (id) => serve.unbind(id),
+    switchesChanged: () => serve.switchesChanged(),
     boundKeys,
     // One port, always the same: Magpie's providers name it, so taking another would send them elsewhere.
     start: async () => {
+      stopped = false
       await ensureForwarder()
+      await resume()
+      // Still waiting (the other computer offline, the relay down): said again every few minutes, until heard.
+      if (resumeTimer === null && !stopped) {
+        resumeTimer = setInterval(() => {
+          if (unackedPeers(remotes).length > 0) void resume()
+        }, RESUME_MS)
+        resumeTimer.unref?.()
+      }
     },
-    stop: () => forwarder.close(),
+    stop: () => {
+      stopped = true
+      if (resumeTimer !== null) clearInterval(resumeTimer)
+      resumeTimer = null
+      return forwarder.close()
+    },
     port: () => forwarder.port(),
     list: async () => {
       const self = deps.selfId()
@@ -163,7 +230,8 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
           .filter((d) => d.id !== self)
           .map((d) => {
             const c = connected.find((r) => r.peer === d.id)
-            return { id: d.id, name: d.name, online: d.online, providerId: c?.providerId ?? null, os: d.os, arch: d.arch }
+            // Kept but not yet acknowledged: it carries nothing, so it is not shown as connected (Connect says it again).
+            return { id: d.id, name: d.name, online: d.online, providerId: c === undefined || c.acked === false ? null : c.providerId, os: d.os, arch: d.arch }
           }),
         desktopsKnown: desktops !== null
       }
@@ -173,19 +241,7 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
       lane('connect', async () => {
         // A gate that failed at start may pass now: the forwarder is opened here then, not reported as taken.
         await ensureForwarder()
-        return connectRemote(peer, name, {
-        switches: () => deps.switches(),
-        store: remotes,
-        askKey,
-        returnKey,
-        addProvider: (id, url) => providers.add(id, url),
-        setProvider: (id, url) => providers.set(id, url),
-        removeProvider: (id) => providers.remove(id),
-        providers: () => providers.entries(),
-        forwarderPort: () => forwarder.port(),
-        seatGate: () => deps.seatGate(),
-        myName
-      })
+        return connectRemote(peer, name, connectDeps)
       }),
     disconnect: (peer) => lane('connect', () => disconnectRemote(peer, { store: remotes, returnKey, removeProvider: (id) => providers.remove(id) }))
   }

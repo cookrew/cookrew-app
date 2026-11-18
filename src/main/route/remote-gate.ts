@@ -39,7 +39,12 @@ const EMPTY: MagpieRouting = { remote: [], groups: {}, fallback: {} }
 const MAX_DEPTH = 16
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [])
 
-/** Only ids, member lists and fallbacks are kept: never a key or an address. */
+/**
+ * Only ids, member lists and fallbacks are kept: never a key or an address. Ids are kept lower-case and
+ * matched lower-case: whether Magpie tells `Solis` from `solis` is not this gate's to rely on, so ids that
+ * differ only in case count as one, their fallbacks and members joined. That can only find more routes
+ * remote, never fewer.
+ */
 export function parseMagpieRouting(text: string): MagpieRouting | null {
   let parsed: unknown
   try {
@@ -52,22 +57,25 @@ export function parseMagpieRouting(text: string): MagpieRouting | null {
   if (providers !== undefined && !Array.isArray(providers)) return null
   if (groups !== undefined && !Array.isArray(groups)) return null
   const remote: string[] = []
-  const fallback: Record<string, string[]> = {}
+  // No prototype: a provider or group named `constructor` or `__proto__` is an id like any other.
+  const fallback: Record<string, string[]> = Object.create(null) as Record<string, string[]>
   for (const entry of (providers as unknown[] | undefined) ?? []) {
     if (typeof entry !== 'object' || entry === null) return null
     const p = entry as { id?: unknown; preset?: unknown; fallback?: unknown }
     if (typeof p.id !== 'string') return null
-    if (p.preset === REMOTE_MAGPIE_PRESET) remote.push(p.id)
+    const id = p.id.toLowerCase()
+    if (p.preset === REMOTE_MAGPIE_PRESET) remote.push(id)
     const falls = strings(p.fallback)
-    if (falls.length > 0) fallback[p.id] = falls
+    if (falls.length > 0) fallback[id] = [...(fallback[id] ?? []), ...falls]
   }
-  const groupMap: Record<string, string[]> = {}
+  const groupMap: Record<string, string[]> = Object.create(null) as Record<string, string[]>
   for (const entry of (groups as unknown[] | undefined) ?? []) {
     if (typeof entry !== 'object' || entry === null) return null
     const g = entry as { id?: unknown; members?: unknown; off?: unknown }
     if (typeof g.id !== 'string') return null
     const off = new Set(strings(g.off))
-    groupMap[g.id] = strings(g.members).filter((m) => !off.has(m))
+    const id = g.id.toLowerCase()
+    groupMap[id] = [...(groupMap[id] ?? []), ...strings(g.members).filter((m) => !off.has(m))]
   }
   return { remote, groups: groupMap, fallback }
 }
@@ -92,7 +100,8 @@ export function routeReach(route: string, routing: MagpieRouting | null): Remote
   return reachOf(route, routing, new Set(), 0)
 }
 
-function reachOf(route: string, routing: MagpieRouting, seen: Set<string>, depth: number): RemoteReach {
+function reachOf(asked: string, routing: MagpieRouting, seen: Set<string>, depth: number): RemoteReach {
+  const route = asked.toLowerCase()
   if (seen.has(route) || depth > MAX_DEPTH) return 'unknown'
   const path = new Set(seen).add(route)
   const slash = route.indexOf('/')

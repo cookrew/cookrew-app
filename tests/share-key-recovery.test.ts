@@ -17,6 +17,7 @@ interface Row {
   id: string
   name: string
   tail: string
+  access?: string
 }
 
 /** A Magpie that keeps keys in memory and masks them the way 0.1.3935 does. */
@@ -27,11 +28,11 @@ function fakeMagpie(opts: { addCode?: number; addThrows?: boolean; addOut?: stri
   const run: MagpieRun = async (args) => {
     calls.push(args)
     const [, verb, a1] = args
-    if (verb === 'list') return { code: 0, stdout: `${HEAD}\n${rows.map((r) => `${r.id}  ${r.name}  enabled  sk-magpie-key-…${r.tail}  -  all  all  full`).join('\n')}\n`, stderr: '' }
+    if (verb === 'list') return { code: 0, stdout: `${HEAD}\n${rows.map((r) => `${r.id}  ${r.name}  enabled  sk-magpie-key-…${r.tail}  -  all  all  ${r.access ?? 'full'}`).join('\n')}\n`, stderr: '' }
     if (verb === 'add') {
       for (let i = 0; i <= (opts.extraSameName ?? 0); i += 1) {
         n += 1
-        rows.push({ id: String(n).padStart(24, 'f'), name: a1, tail: i === 0 ? KEY.slice(-6) : 'zzzzzz' })
+        rows.push({ id: String(n).padStart(24, 'f'), name: a1, tail: i === 0 ? KEY.slice(-6) : 'zzzzzz', access: args.includes('--read-only') ? 'read-only' : 'full' })
       }
       if (opts.addThrows) throw new Error('runner died after add')
       return { code: opts.addCode ?? 0, stdout: `${opts.addOut ?? KEY}\n`, stderr: opts.addCode ? 'timed out' : '' }
@@ -62,7 +63,29 @@ describe('issuing with a durable intent', () => {
     expect(answer).toMatchObject({ ok: true, key: KEY, shared: { device: 'laptop', name: `device-laptop--${NONCE}` } })
     expect(atAdd).toMatchObject([{ name: `device-laptop--${NONCE}`, device: 'laptop' }])
     expect(INTENT_NAME_RE.test(`device-laptop--${NONCE}`)).toBe(true)
-    expect(intents.read()).toEqual([])
+    expect(intents.read()).toMatchObject([{ name: `device-laptop--${NONCE}` }])
+  })
+
+  it('keeps an on-screen key intent across reload until the owner confirms copying it', async () => {
+    const magpie = fakeMagpie()
+    const intents = memoryIntentStore()
+    const keys = keysWith(magpie.run, intents)
+    const answer = await keys.issue({ device: 'laptop', dailyUsd: 5 })
+    if (!answer.ok) throw new Error(answer.why)
+    expect(intents.read()).toHaveLength(1)
+    const restarted = keysWith(magpie.run, intents)
+    expect((await restarted.list()).pending).toHaveLength(1)
+  })
+
+  it('keeps a capped sealed key intent after a restart before the recipient acknowledges it', async () => {
+    const magpie = fakeMagpie()
+    const intents = memoryIntentStore()
+    const answer = await keysWith(magpie.run, intents).issue({ device: 'laptop', dailyUsd: 5 }, () => true, { handover: false })
+    expect(answer.ok).toBe(true)
+    const restarted = keysWith(magpie.run, intents)
+    expect((await restarted.list()).pending).toMatchObject([{ name: `device-laptop--${NONCE}`, clearable: false }])
+    expect(await restarted.resolve(`device-laptop--${NONCE}`)).toMatchObject({ ok: true, left: 0, live: 0 })
+    expect(magpie.rows.map((row) => row.name)).toEqual(['solis-compare'])
   })
 
   it('asks Magpie for nothing when the intent cannot be written or read', async () => {

@@ -110,6 +110,20 @@ describe('a window that reloads while main makes a key', () => {
     expect(timers).toHaveLength(0)
   })
 
+  it('keeps the key visible until main durably records Done, and retains it on failure', async () => {
+    const answer = listed({ keys: [shared], handover: { id: shared.id, device: 'phone', key: KEY } })
+    let finish!: (value: { ok: boolean; why?: string }) => void
+    const done = vi.fn(() => new Promise<{ ok: boolean; why?: string }>((resolve) => { finish = resolve }))
+    const store = createShareDevicesStore({ routeShareList: vi.fn(async () => answer), routeShareDone: done as never })
+    await store.read()
+    store.done()
+    expect(store.getSnapshot().issued?.key).toBe(KEY)
+    finish({ ok: false, why: 'Could not save confirmation' })
+    await flush()
+    expect(store.getSnapshot().issued?.key).toBe(KEY)
+    expect(problemText(store.getSnapshot())).toContain('Could not save confirmation')
+  })
+
   it('tells main Done and never shows that key again from a read that began before', async () => {
     let answer = listed({ keys: [shared], handover: { id: shared.id, device: 'phone', key: KEY } })
     const done = vi.fn(async () => ({ ok: true as const }))

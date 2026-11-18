@@ -14,8 +14,14 @@ import path from 'node:path'
  * the SHA-256 of the key (never the key), and the account device id it was made
  * for. A key is accepted only from that device's sealed session.
  *
- * Written durably (temp, fsync, rename), 0600, outside any served sandbox
- * (owner-secrets.ts). An unreadable file accepts nothing.
+ * Written durably (temp, fsync, rename, folder sync), 0600, outside any served
+ * sandbox (owner-secrets.ts). An unreadable file accepts nothing.
+ *
+ * A key just given is `pending` until its computer acknowledges it (serve.ts ·
+ * MAGPIE_KEY_ACK_PATH): it is found, so the acknowledgement can be checked, but
+ * no model request is served with it. While any key is pending the file is
+ * written as v2, which an older Cookrew (v1 only) refuses as unreadable: it
+ * accepts nothing rather than honour a key nobody confirmed. Once none is, v1.
  */
 
 export const BOUND_KEYS_FILE = 'magpie-bound-keys.json'
@@ -31,6 +37,8 @@ export interface BoundKey {
   readonly peer: string
   readonly device: string
   readonly at: string
+  /** Given, but not yet acknowledged by its computer: honoured for nothing but that acknowledgement. Absent = live. */
+  readonly pending?: boolean
 }
 
 export const keyHash = (key: string): string => createHash('sha256').update(key, 'utf8').digest('hex')
@@ -50,7 +58,7 @@ interface Stored {
 
 function parse(text: string): Stored {
   const parsed = JSON.parse(text) as { v?: unknown; keys?: unknown; issued?: unknown }
-  if (parsed?.v !== 1 || !Array.isArray(parsed.keys)) throw new Error('The list of keys given to other computers is not readable.')
+  if ((parsed?.v !== 1 && parsed?.v !== 2) || !Array.isArray(parsed.keys)) throw new Error('The list of keys given to other computers is not readable.')
   if (parsed.issued !== undefined && !Array.isArray(parsed.issued)) throw new Error('The list of keys given to other computers is not readable.')
   const issued = ((parsed.issued as unknown[] | undefined) ?? []).map((raw) => {
     const r = raw as Record<string, unknown>
@@ -62,7 +70,8 @@ function parse(text: string): Stored {
     if (typeof k?.id !== 'string' || typeof k.tail !== 'string' || typeof k.hash !== 'string' || !HEX64.test(k.hash) || typeof k.peer !== 'string' || typeof k.device !== 'string' || typeof k.at !== 'string') {
       throw new Error('A key given to another computer is not readable.')
     }
-    return { id: k.id, tail: k.tail, hash: k.hash, peer: k.peer, device: k.device, at: k.at }
+    if (k.pending !== undefined && typeof k.pending !== 'boolean') throw new Error('A key given to another computer is not readable.')
+    return { id: k.id, tail: k.tail, hash: k.hash, peer: k.peer, device: k.device, at: k.at, ...(k.pending === true ? { pending: true } : {}) }
   })
   return { keys, issued }
 }
@@ -74,6 +83,8 @@ export interface BoundKeys {
   /** Throws when the list cannot be read. */
   list(): readonly BoundKey[]
   add(key: BoundKey): void
+  /** Its computer acknowledged the key: it is live. A no-op for a key not held, or one already live. */
+  confirm(id: string): void
   /** Forget a key by Magpie's id (it was revoked). */
   remove(id: string): void
   /** The entry for this key from this device, or null: constant-time on the hash. */
@@ -112,6 +123,14 @@ export function fileStorage(file: string): BoundKeysStorage {
         closeSync(fd)
       }
       renameSync(tmp, file)
+      // The rename itself must survive a crash: a key acknowledged must stay bound.
+      if (process.platform === 'win32') return
+      const dirFd = openSync(dir, 'r')
+      try {
+        fsyncSync(dirFd)
+      } finally {
+        closeSync(dirFd)
+      }
     }
   }
 }
@@ -128,12 +147,17 @@ export function createBoundKeys(storage: BoundKeysStorage): BoundKeys {
     return text === null ? { keys: [], issued: [] } : parse(text)
   }
   const list = (): readonly BoundKey[] => read().keys
-  const save = (next: Stored): void => storage.write(`${JSON.stringify({ v: 1, ...next })}\n`)
+  const save = (next: Stored): void => storage.write(`${JSON.stringify({ v: next.keys.some((k) => k.pending === true) ? 2 : 1, ...next })}\n`)
   return {
     list,
     add: (key) => {
       const now = read()
       save({ ...now, keys: [...now.keys.filter((k) => k.id !== key.id), key] })
+    },
+    confirm: (id) => {
+      const now = read()
+      if (!now.keys.some((k) => k.id === id && k.pending === true)) return
+      save({ ...now, keys: now.keys.map((k) => (k.id === id ? { id: k.id, tail: k.tail, hash: k.hash, peer: k.peer, device: k.device, at: k.at } : k)) })
     },
     remove: (id) => {
       const now = read()

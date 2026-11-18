@@ -6,7 +6,7 @@ import { MAGPIE_PORT, privateHost } from '../../shared/remote-magpie'
 import { isTailnetSelf, type Tailnet } from './tailnet'
 import type { PendingKey, ShareHandover, ShareIssueAnswer, SharedKey, ShareWhere } from '../../shared/share-devices'
 import type { DiscoveryEnv } from './discovery'
-import { INTENT_NAME_RE, type IntentStore, type ShareIntent } from './share-intents'
+import { INTENT_NAME_RE, KEY_ID_RE, type IntentStore, type IssuedVia, type ShareIntent } from './share-intents'
 
 /**
  * SHARING THIS COMPUTER'S MAGPIE WITH THE OWNER'S OTHER DEVICES.
@@ -26,6 +26,13 @@ import { INTENT_NAME_RE, type IntentStore, type ShareIntent } from './share-inte
  * wrong between the add and the hand-over, every key of that random name is
  * revoked by id and a warning stays until the owner clears it by hand.
  *
+ * A key handed over is not done (key acknowledgement, agreed with Relay): its
+ * intent is marked issued, durably, before the key leaves this module, and stays
+ * until whoever got the key surely has it. For a key shown in the owner's window
+ * that is the owner's Done (`done`); for one sent to another computer over the
+ * seal, that computer's acknowledgement (`acknowledge`, from magpie-remote/serve.ts).
+ * Every write to the intents goes through one queue, so none interleave.
+ *
  * The key is handed to the owner's window once, to copy to the other device.
  * These calls are owner-only IPC and never a companion or relay route.
  */
@@ -35,7 +42,7 @@ export const DEVICE_CONCURRENCY = 8
 export const DAILY_USD_MIN = 1
 export const DAILY_USD_MAX = 1000
 const KEY_RE = /^sk-magpie-[A-Za-z0-9_-]{16,256}$/
-const ID_RE = /^[A-Za-z0-9]{8,64}$/
+const ID_RE = KEY_ID_RE
 const DEVICE_RE = /^[a-z0-9][a-z0-9-]{0,31}$/
 /** Before recovery v1 a device key was named `device-<slug>`: still listed and revocable. */
 const LEGACY_NAME_RE = /^device-[a-z0-9][a-z0-9-]{0,31}$/
@@ -58,6 +65,8 @@ export interface KeyRow {
   tail: string | null
   /** Magpie's STATE column: only `enabled` is a key in use. */
   state: string
+  /** Magpie's ACCESS column: `read-only` uses no model (a key not yet confirmed), `full` does. */
+  access: string
 }
 
 /** Magpie's `gateway-key list` table: columns are two or more spaces apart. */
@@ -72,9 +81,9 @@ export function parseKeyTable(text: string): KeyRow[] {
     const cells = line.trim().split(/\s{2,}/)
     // An unreadable row cannot safely be mistaken for an empty list during recovery.
     if (cells.length !== 8) throw new Error('Magpie returned an unreadable gateway key row.')
-    const [id, name, state, masked, limit] = cells
+    const [id, name, state, masked, limit, , , access] = cells
     if (!ID_RE.test(id)) throw new Error('Magpie returned an invalid gateway key ID.')
-    return { id, name, limit: limit && limit !== '-' ? limit : null, tail: masked.match(MASK_TAIL_RE)?.[1] ?? null, state }
+    return { id, name, limit: limit && limit !== '-' ? limit : null, tail: masked.match(MASK_TAIL_RE)?.[1] ?? null, state, access }
   })
 }
 
@@ -108,6 +117,11 @@ export interface ShareKeysDeps {
    * stops honouring it and cuts its streams first (magpie-remote/serve.ts · unbind).
    */
   beforeRevoke?: (id: string) => void
+  /**
+   * One line for each intent this module clears or keeps on its own, with no owner click (Relay's ruling,
+   * 2026-11-19): the name and Magpie's id only, never a key or its tail.
+   */
+  audit?: (line: string) => void
   now?: () => Date
 }
 
@@ -148,9 +162,19 @@ export class ShareKeys {
     }
   }
 
-  /** The device keys, every open intent with whether it may be cleared yet, and what is in flight. */
+  /** Is this intent's key the one on the owner's screen now (held in memory, not yet Done)? */
+  private onScreen(i: ShareIntent): boolean {
+    return this.handed !== null && i.issued?.id === this.handed.id
+  }
+
+  /**
+   * The device keys, every open intent with whether it may be cleared yet, and what is in flight.
+   * The key on screen is the hand-over, not a key left behind: its intent shows again only if it outlives the hand-over.
+   */
   async list(): Promise<{ keys: SharedKey[]; pending: PendingKey[]; issuing: boolean; handover: ShareHandover | null }> {
-    const pending = this.readIntents().map((i) => ({ name: i.name, device: i.device, at: i.at, revoked: i.revoked ?? null, checked: i.checked ?? null, clearable: clearable(i) }))
+    const pending = this.readIntents()
+      .filter((i) => !this.onScreen(i))
+      .map((i) => ({ name: i.name, device: i.device, at: i.at, revoked: i.revoked ?? null, checked: i.checked ?? null, clearable: clearable(i) }))
     return { keys: await this.keys(), pending, issuing: this.busy > 0, handover: this.handed }
   }
 
@@ -183,7 +207,9 @@ export class ShareKeys {
     } catch (error) {
       return refusal(errorText(error))
     }
-    if (intents.some((i) => i.device === device)) return refusal(`A key for “${device}” may have been left behind. Resolve the warning first.`)
+    const open = intents.find((i) => i.device === device)
+    if (open?.issued) return refusal(`The last key for “${device}” has not been confirmed yet. Confirm or revoke it first.`)
+    if (open) return refusal(`A key for “${device}” may have been left behind. Resolve the warning first.`)
     const before = await this.keys()
     if (before.some((row) => row.device === device)) return refusal(`“${device}” already has a key. Revoke it first to make a new one.`)
     if (!permitted()) return refusal('Magpie sharing was switched off.')
@@ -195,7 +221,9 @@ export class ShareKeys {
       return refusal('Cookrew could not write down the key it was about to make, so it made none.')
     }
     try {
-      const added = await this.deps.run(['gateway-key', 'add', name])
+      // Read-only until it has arrived (Done, or the other computer's acknowledgement): until then it uses no model,
+      // in Magpie itself as well as over the seal, whoever holds it.
+      const added = await this.deps.run(['gateway-key', 'add', name, '--read-only'])
       const key = added.stdout.trim()
       const ours = (await this.rows()).filter((row) => row.name === name)
       if (added.code !== 0 || !KEY_RE.test(key)) return await this.revokeAll(name, firstLine(added.stderr) ?? 'Magpie did not return a usable key.')
@@ -203,11 +231,18 @@ export class ShareKeys {
       const [row] = ours
       // The key we hold must be the row we cap: Magpie shows its last characters.
       if (row.tail === null || !key.endsWith(row.tail)) return await this.revokeAll(name, 'The key Magpie returned is not the one it lists.')
+      if (row.access !== 'read-only') return await this.revokeAll(name, 'Magpie did not make the key read-only until it arrives.')
       const capped = await this.capped(row.id, daily)
       if (capped !== null) return await this.revokeAll(name, capped)
       if (!permitted()) return await this.revokeAll(name, 'Magpie sharing was switched off.')
       const shared: SharedKey = { id: row.id, name, device, limit: `$${daily} per day` }
-      this.settle(name)
+      const via: IssuedVia = handover ? 'window' : 'seal'
+      try {
+        // Durable before the key leaves: from here a crash or a lost answer leaves a warning naming its id.
+        this.record(name, { issued: { at: this.now(), id: row.id, via } })
+      } catch {
+        return await this.revokeAll(name, 'Cookrew could not write down the key it made, so it took it back.')
+      }
       if (handover) this.handed = { id: row.id, device, key }
       return { ok: true, key, shared }
     } catch (error) {
@@ -215,13 +250,9 @@ export class ShareKeys {
     }
   }
 
-  /** The key is capped and handed over: it is an ordinary device key now, listed under its own name. */
+  /** Whoever got the key surely has it: its intent is dropped and it is an ordinary device key. Throws when unwritten. */
   private settle(name: string): void {
-    try {
-      this.deps.intents.write(this.readIntents().filter((i) => i.name !== name))
-    } catch {
-      // The intent stays and warns: resolving it would revoke this key, which is the safe side.
-    }
+    this.deps.intents.write(this.readIntents().filter((i) => i.name !== name))
   }
 
   /** Revoke every key Magpie lists under an intent's name, by id; the intent stays and records the pass. */
@@ -241,7 +272,7 @@ export class ShareKeys {
     return { left }
   }
 
-  private record(name: string, patch: Pick<ShareIntent, 'revoked'> | Pick<ShareIntent, 'checked'>): void {
+  private record(name: string, patch: Pick<ShareIntent, 'revoked'> | Pick<ShareIntent, 'checked'> | Pick<ShareIntent, 'issued'>): void {
     this.deps.intents.write(this.readIntents().map((i) => (i.name === name ? { ...i, ...patch } : i)))
   }
 
@@ -258,7 +289,10 @@ export class ShareKeys {
   }
 
   private async resolveNow(name: unknown): Promise<{ ok: true; left: number; live: number } | { ok: false; why: string }> {
-    if (typeof name !== 'string' || !this.readIntents().some((i) => i.name === name)) return { ok: false, why: 'No such key being made.' }
+    const intent = typeof name === 'string' ? this.readIntents().find((i) => i.name === name) : undefined
+    if (typeof name !== 'string' || intent === undefined) return { ok: false, why: 'No such key being made.' }
+    // Not a key left behind: the owner has it in front of them, with Done and Revoke beside it.
+    if (this.onScreen(intent)) return { ok: false, why: ON_SCREEN }
     try {
       const { left } = await this.revokePass(name)
       const live = (await (this.deps.processes ?? runningCommands)()).filter((line) => addsName(line, name)).length
@@ -292,9 +326,53 @@ export class ShareKeys {
     }
   }
 
-  /** The owner copied the key: main forgets it. */
-  done(id: unknown): void {
-    if (this.handed?.id === id) this.handed = null
+  /**
+   * The owner says they copied the key shown in this window: the key is turned on in Magpie, its intent is
+   * settled, and only then does main forget it (a failure keeps it on screen to try again). Also by id
+   * after a restart, for a key the owner copied before Cookrew went down. Never
+   * for a key sent to another computer: the owner never saw it. Done again is harmless. Never rejects.
+   */
+  done(id: unknown): Promise<Settled> {
+    return this.inTurn(async () => {
+      const result = await this.settleIssued(id, 'window')
+      if (result.ok && this.handed?.id === id) this.handed = null
+      return result
+    }).catch(() => ({ ok: false as const, why: UNSETTLED }))
+  }
+
+  /**
+   * The computer a sealed key went to stored it and proved it holds it over its own device session
+   * (magpie-remote/serve.ts checks the key and the device before it asks): the intent is settled.
+   * Idempotent: an id with no intent waiting is already settled. Never rejects.
+   */
+  acknowledge(id: unknown): Promise<Settled> {
+    return this.inTurn(() => this.settleIssued(id, 'seal')).catch(() => ({ ok: false as const, why: UNSETTLED }))
+  }
+
+  private async settleIssued(id: unknown, via: IssuedVia): Promise<Settled> {
+    if (typeof id !== 'string' || !ID_RE.test(id)) return { ok: false, why: 'No such key.' }
+    let intents: readonly ShareIntent[]
+    try {
+      intents = this.readIntents()
+    } catch (error) {
+      return { ok: false, why: errorText(error) }
+    }
+    const intent = intents.find((i) => i.issued?.id === id)
+    if (intent === undefined) return { ok: true }
+    if (intent.issued?.via !== via) {
+      return { ok: false, why: via === 'window' ? 'That key went to another computer: only that computer can confirm it.' : 'That key was shown on this computer, not sent to another one.' }
+    }
+    // Turned on first, then the record cleared: a crash between leaves a working key that still warns.
+    const on = await this.deps.run(['gateway-key', 'access', id, 'full']).catch(() => null)
+    if (on === null || on.code !== 0) return { ok: false, why: `Magpie did not turn the key on${on === null ? '' : `: ${firstLine(on.stderr) ?? 'no answer'}`}. Its warning stays; try again.` }
+    // Recorded while the record is still there: a crash after this leaves both the line and the warning.
+    this.deps.audit?.(`share keys: turned on ${id} (${intent.name}) on ${via === 'seal' ? 'the other computer’s acknowledgement' : 'the owner’s Done'}; intent cleared`)
+    try {
+      this.settle(intent.name)
+      return { ok: true }
+    } catch {
+      return { ok: false, why: UNSETTLED }
+    }
   }
 
   private async capped(id: string, daily: number): Promise<string | null> {
@@ -302,10 +380,18 @@ export class ShareKeys {
     if (limit.code !== 0) return firstLine(limit.stderr) ?? 'Magpie did not set the daily cap.'
     const concurrency = await this.deps.run(['gateway-key', 'concurrency', id, String(DEVICE_CONCURRENCY)])
     if (concurrency.code !== 0) return firstLine(concurrency.stderr) ?? 'Magpie did not set the concurrency cap.'
+    // A new key may use every MCP server of this computer's Magpie (0.1.3935): a device key is for models only.
+    const mcp = await this.deps.run(['gateway-key', 'mcp', id, 'none'])
+    if (mcp.code !== 0) return firstLine(mcp.stderr) ?? 'Magpie did not shut its MCP servers to the key.'
     return null
   }
 
-  async revoke(id: unknown): Promise<{ ok: true } | { ok: false; why: string }> {
+  /** Revoke one device key by id, in turn with every other change to the intents. */
+  revoke(id: unknown): Promise<{ ok: true } | { ok: false; why: string }> {
+    return this.inTurn(() => this.revokeNow(id))
+  }
+
+  private async revokeNow(id: unknown): Promise<{ ok: true } | { ok: false; why: string }> {
     if (typeof id !== 'string' || !ID_RE.test(id)) return { ok: false, why: 'No such key.' }
     const mine = (await this.keys()).some((row) => row.id === id)
     if (!mine) return { ok: false, why: 'Only a key made here for a device can be revoked here.' }
@@ -313,11 +399,39 @@ export class ShareKeys {
     const removed = await this.deps.run(['gateway-key', 'remove', id])
     if (removed.code !== 0) return { ok: false, why: firstLine(removed.stderr) ?? 'Magpie did not remove the key.' }
     if (this.handed?.id === id) this.handed = null
+    await this.forgetIssued(id)
     return { ok: true }
+  }
+
+  /**
+   * A key that was issued is revoked: its intent goes once Magpie lists no key of its name (its add had
+   * finished, so none can come later). Anything unread or unwritten leaves the intent, warning.
+   */
+  private async forgetIssued(id: string): Promise<void> {
+    try {
+      const intent = this.readIntents().find((i) => i.issued?.id === id)
+      if (intent === undefined) return
+      const left = (await this.rows()).filter((row) => row.name === intent.name).length
+      if (left > 0) {
+        this.record(intent.name, { revoked: { at: this.now(), left } })
+        this.deps.audit?.(`share keys: revoked ${id} (${intent.name}) but Magpie still lists ${left} key(s) of the name; warning kept`)
+        return
+      }
+      // Cleared with no owner click and no process check: its add had returned, so none can come later.
+      // Recorded first: a crash between leaves the line and the record, never a clear with no line.
+      this.deps.audit?.(`share keys: revoked ${id} (${intent.name}); Magpie lists none of the name; intent cleared without a process check`)
+      this.settle(intent.name)
+    } catch {
+      // The intent stays and warns: Revoke and check finishes it by hand.
+    }
   }
 }
 
+type Settled = { ok: true } | { ok: false; why: string }
+
 export const INTENTS_UNREADABLE = 'Cookrew cannot read its record of keys being made (~/.cookrew/share-intents.json). No key is made until it can.'
+const UNSETTLED = 'Cookrew could not record that the key arrived; its warning stays until you confirm or revoke it.'
+const ON_SCREEN = 'This key is on screen now: copy it and press Done, or revoke it.'
 
 /** A revoke pass left no key of the name, and a process check after it found no add of the name running. */
 function clearable(i: ShareIntent): boolean {

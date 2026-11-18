@@ -35,6 +35,7 @@ export type ShareProblem =
   | { readonly from: 'issue'; readonly text: string }
   | { readonly from: 'revoke'; readonly id: string; readonly text: string }
   | { readonly from: 'pending'; readonly name: string; readonly text: string }
+  | { readonly from: 'done'; readonly text: string }
 
 export interface ShareDevicesState {
   readonly keys: readonly SharedKey[]
@@ -140,6 +141,7 @@ export function createShareDevicesStore(
   let polling = false
   /** An issue this store sent and is waiting on (as against one main reports from before a reload). */
   let issuingHere = false
+  let confirming = false
   const listeners = new Set<() => void>()
   /** The last read handed out, the newest read whose answer was applied, and the reads that began before a change landed. */
   let started = 0
@@ -160,7 +162,7 @@ export function createShareDevicesStore(
     const listedIds = new Set(listed.keys.map((k) => k.id))
     const pendingNames = new Set(listed.pending.map((p) => p.name))
     // A revoke that failed for a key no longer listed has nothing left to report; the same for a cleared name.
-    const problems = state.problems.filter((p) => p.from === 'issue' || (p.from === 'revoke' && listedIds.has(p.id)) || (p.from === 'pending' && pendingNames.has(p.name)))
+    const problems = state.problems.filter((p) => p.from === 'issue' || p.from === 'done' || (p.from === 'revoke' && listedIds.has(p.id)) || (p.from === 'pending' && pendingNames.has(p.name)))
     // Main still holds the key it made for a window that reloaded before it arrived.
     const handover = listed.handover && !doneIds.includes(listed.handover.id) && listedIds.has(listed.handover.id) ? listed.handover : null
     const issued = state.issued ?? handover
@@ -280,11 +282,25 @@ export function createShareDevicesStore(
     clear: (name) => onPending(name, bridge.routeShareClear),
     done: () => {
       const id = state.issued?.id
-      if (id === undefined) return
-      doneIds = [...doneIds, id]
-      set({ issued: null })
-      // Main forgets the key too; nothing to wait for, and a failure leaves only the copy in main's memory.
-      void call<unknown>(() => bridge.routeShareDone?.(id) ?? Promise.resolve()).catch(() => undefined)
+      const send = bridge.routeShareDone
+      if (id === undefined || confirming) return
+      if (typeof send !== 'function') {
+        fail({ from: 'done', text: 'Could not record confirmation. Try Done again.' })
+        return
+      }
+      confirming = true
+      void call(() => send(id)).then((answer) => {
+        confirming = false
+        if (answer?.ok !== true) {
+          fail({ from: 'done', text: problemOf(answer) })
+          return
+        }
+        doneIds = [...doneIds, id]
+        if (state.issued?.id === id) set({ issued: null, problems: state.problems.filter((p) => p.from !== 'done') })
+      }, () => {
+        confirming = false
+        fail({ from: 'done', text: 'Could not record confirmation. Try Done again.' })
+      })
     }
   }
 }

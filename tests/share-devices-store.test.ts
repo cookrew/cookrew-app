@@ -58,7 +58,8 @@ function heldBridge() {
       const d = deferred<RevokeAnswer>()
       revokes.push(d)
       return d.promise
-    })
+    }),
+    routeShareDone: vi.fn(async (_id: string) => ({ ok: true as const }))
   }
   return { bridge, lists, issues, revokes }
 }
@@ -158,6 +159,7 @@ describe('share devices store: the one-time key', () => {
     expect(store.getSnapshot().issued?.key).toBe('sk-magpie-first')
 
     store.done()
+    await flush()
     expect(store.getSnapshot().issued).toBeNull()
     store.issue('phone', 5)
     expect(bridge.routeShareIssue).toHaveBeenCalledTimes(2)

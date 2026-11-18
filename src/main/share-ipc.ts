@@ -44,7 +44,7 @@ export function shareHandlers(deps: ShareIpcDeps = {}): {
   revoke: (id: unknown) => Promise<ShareRevokeAnswer>
   resolve: (name: unknown) => Promise<ShareResolveAnswer>
   clear: (name: unknown) => Promise<ShareRevokeAnswer>
-  done: (id: unknown) => { ok: true }
+  done: (id: unknown) => Promise<ShareRevokeAnswer>
 } {
   const env = deps.env ?? defaultDiscoveryEnv()
   const interfaces = deps.interfaces ?? (() => os.networkInterfaces())
@@ -83,10 +83,7 @@ export function shareHandlers(deps: ShareIpcDeps = {}): {
       guarded((k) => k.revoke(id)),
     resolve: (name) => guarded((k) => k.resolve(name)),
     clear: (name) => guarded((k) => k.clear(name)),
-    done: (id) => {
-      keys()?.done(id)
-      return { ok: true }
-    }
+    done: (id) => guarded((k) => k.done(id))
   }
 }
 

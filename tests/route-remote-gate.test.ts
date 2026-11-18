@@ -30,6 +30,28 @@ const routing = (raw: unknown = PROVIDERS): MagpieRouting => {
 }
 
 describe('routeReach: can this route land on another computer’s Magpie', () => {
+  it('matches provider and group ids whatever their case, so a case Magpie may ignore never slips past', () => {
+    expect(routeReach('Solis/claude-opus-5-5', routing())).toBe('remote')
+    expect(routeReach('SOLIS/group/auto', routing())).toBe('remote')
+    expect(routeReach('Group/Mixed', routing())).toBe('remote')
+    expect(routeReach('OLLAMA/qwen3:4b', routing())).toBe('remote')
+    const upper = routing({ providers: [{ id: 'Solis', preset: 'remote-magpie' }, { id: 'Ollama', fallback: ['SOLIS/x'] }, { id: 'ollama', fallback: [] }], groups: [{ id: 'Mixed', members: ['solis/x'] }] })
+    expect(routeReach('solis/x', upper)).toBe('remote')
+    expect(routeReach('group/mixed', upper)).toBe('remote')
+    // Two providers whose ids differ only in case: either one's fallback counts.
+    expect(routeReach('ollama/y', upper)).toBe('remote')
+    expect(routeReach('deepseek/deepseek-flash', routing())).toBe('local')
+  })
+
+  it('reads ids such as constructor and __proto__ as ordinary ids, not as the object prototype', () => {
+    const odd = routing({ providers: [{ id: 'solis', preset: 'remote-magpie' }, { id: 'constructor', fallback: ['solis/x'] }, { id: '__proto__', fallback: [] }], groups: [{ id: 'constructor', members: ['solis/x'] }, { id: 'toString', members: ['deepseek/y'] }] })
+    expect(routeReach('constructor/y', odd)).toBe('remote')
+    expect(routeReach('__proto__/y', odd)).toBe('local')
+    expect(routeReach('group/constructor', odd)).toBe('remote')
+    expect(routeReach('group/toString', odd)).toBe('local')
+    expect(routeReach('group/hasOwnProperty', odd)).toBe('unknown')
+  })
+
   it('reads a remote provider’s own models and groups as remote', () => {
     expect(routeReach('solis/claude-opus-5-5', routing())).toBe('remote')
     expect(routeReach('solis/group/auto', routing())).toBe('remote')

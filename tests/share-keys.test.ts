@@ -20,8 +20,8 @@ const TABLE = `ID                        NAME           STATE    GATEWAY KEY    
 describe('parseKeyTable', () => {
   it('reads id, name and limit off Magpie’s table', () => {
     expect(parseKeyTable(TABLE)).toEqual([
-      { id: '9ed61cf285e943f9a28bfb6a', name: 'solis-compare', limit: '$0.00/$20.00 per day', tail: '5102ac', state: 'enabled' },
-      { id: '7133291de0e0a098f9496f86', name: 'device-solis', limit: '$1.25/$20.00 per day', tail: 'aa11bb', state: 'enabled' }
+      { id: '9ed61cf285e943f9a28bfb6a', name: 'solis-compare', limit: '$0.00/$20.00 per day', tail: '5102ac', state: 'enabled', access: 'full' },
+      { id: '7133291de0e0a098f9496f86', name: 'device-solis', limit: '$1.25/$20.00 per day', tail: 'aa11bb', state: 'enabled', access: 'full' }
     ])
   })
   it('reads a dash as no limit, and an empty list as nothing', () => {
@@ -38,8 +38,8 @@ describe('parseKeyTable', () => {
 })
 
 /** A Magpie that keeps its keys in memory, and the calls it was given. */
-function fakeMagpie(opts: { failLimit?: boolean; key?: string; failListAt?: number; slow?: boolean } = {}): { run: MagpieRun; calls: string[][]; rows: { id: string; name: string; tail?: string }[] } {
-  const rows: { id: string; name: string; tail?: string }[] = [{ id: '9ed61cf285e943f9a28bfb6a', name: 'solis-compare' }]
+function fakeMagpie(opts: { failLimit?: boolean; key?: string; failListAt?: number; slow?: boolean } = {}): { run: MagpieRun; calls: string[][]; rows: { id: string; name: string; tail?: string; access?: string }[] } {
+  const rows: { id: string; name: string; tail?: string; access?: string }[] = [{ id: '9ed61cf285e943f9a28bfb6a', name: 'solis-compare' }]
   const made = opts.key ?? 'sk-magpie-' + 'k'.repeat(52)
   const calls: string[][] = []
   let lists = 0
@@ -51,12 +51,12 @@ function fakeMagpie(opts: { failLimit?: boolean; key?: string; failListAt?: numb
     if (verb === 'list') {
       lists += 1
       if (lists === opts.failListAt) throw new Error('magpie list timed out')
-      const lines = rows.map((r) => `${r.id}  ${r.name}  enabled  sk-magpie-key-…${r.tail ?? 'xxxxxx'}  -  all  all  full`)
+      const lines = rows.map((r) => `${r.id}  ${r.name}  enabled  sk-magpie-key-…${r.tail ?? 'xxxxxx'}  -  all  all  ${r.access ?? 'full'}`)
       return { code: 0, stdout: `ID  NAME  STATE  GATEWAY KEY  LIMIT  MODELS  ACCOUNTS  ACCESS\n${lines.join('\n')}\n`, stderr: '' }
     }
     if (verb === 'add') {
       adds += 1
-      rows.push({ id: (adds === 1 ? 'f' : String(adds)).repeat(24).slice(0, 24), name: a1, tail: made.split('\n')[0].slice(-6) })
+      rows.push({ id: (adds === 1 ? 'f' : String(adds)).repeat(24).slice(0, 24), name: a1, tail: made.split('\n')[0].slice(-6), access: args.includes('--read-only') ? 'read-only' : 'full' })
       return { code: 0, stdout: `${made}\n`, stderr: '' }
     }
     if (verb === 'limit' && opts.failLimit) return { code: 1, stdout: '', stderr: 'magpie: Key not found' }
@@ -141,7 +141,7 @@ describe('ShareKeys', () => {
     if (!answer.ok) throw new Error(answer.why)
     expect(answer.key).toMatch(/^sk-magpie-k+$/)
     const id = 'f'.repeat(24)
-    expect(magpie.calls).toContainEqual(['gateway-key', 'add', answer.shared.name])
+    expect(magpie.calls).toContainEqual(['gateway-key', 'add', answer.shared.name, '--read-only'])
     expect(magpie.calls).toContainEqual(['gateway-key', 'limit', id, 'add', 'day', '--cost', '15'])
     expect(magpie.calls).toContainEqual(['gateway-key', 'concurrency', id, '8'])
   })
