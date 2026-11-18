@@ -309,7 +309,7 @@ export const PILLARS: readonly Pillar[] = [
       { status: 'shipped', title: 'Your phone is the console', text: 'On a phone the same console opens in the browser. There is no app to install.' },
       { status: 'shipped', title: 'A machine’s screen, when you allow it', text: 'With remote control turned on for a machine, your devices can take control of its screen card for 15 minutes at a time.' },
       { status: 'shipped', title: 'One bar for what needs you', text: 'Agents waiting on you and new replies, gathered from every workspace of a machine into one bar.' },
-      { status: 'in-dev', title: 'The bar on all your machines, an alert on your phone', text: 'The same bar also gathers what waits on you on the account’s other machines, and your phone gets an alert when an agent needs you. On dev, not in a release yet.' },
+      { status: 'shipped', title: 'The bar on all your machines, an alert on your phone', text: 'Since 0.6.23 the same bar also gathers what waits on you on the account’s other machines, and the console can alert your phone when an agent needs you.' },
       { status: 'beta', title: 'Apple Watch', text: 'See who is waiting and reply from the wrist. Running on our own watches; not on the App Store or TestFlight.' },
       { status: 'planned', title: 'One request, any device, every machine', text: 'A request that waits on you is answered once, from whichever device is at hand, across every machine of the account.' }
     ],
@@ -351,8 +351,7 @@ export const PILLARS: readonly Pillar[] = [
 
 /** The roadmap, after the pitch of 2026-11-16: what is here, what is next, and what is only intended. */
 export const ROADMAP: readonly { phase: string; status: ClaimStatus; items: readonly string[] }[] = [
-  { phase: 'Now', status: 'shipped', items: ['Every machine of the account on one canvas', 'The console, in any browser and on a phone', 'Harnesses routed through your own gateway', 'One bar for what needs you, across every workspace of a machine'] },
-  { phase: 'Next', status: 'in-dev', items: ['The bar across every machine of the account, and an alert on your phone'] },
+  { phase: 'Now', status: 'shipped', items: ['Every machine of the account on one canvas', 'The console, in any browser and on a phone', 'Harnesses routed through your own gateway', 'One bar for what needs you, across every workspace and machine, with an alert on your phone'] },
   { phase: 'Build', status: 'planned', items: ['Cloud Workspace: people, agents, files and evidence', 'Roles, isolation and an audit trail', 'A gateway across your machines'] },
   { phase: 'Later', status: 'planned', items: ['Agents dispatching work between workspaces', 'Machines and models scheduled by load', 'An official model gateway'] }
 ]

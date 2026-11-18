@@ -76,10 +76,10 @@ describe('the pillars say where every claim stands', () => {
     expect(borrowed[0].text).toMatch(/12 November 2026/)
   })
 
-  it('the watch is beta; the cross-workspace bar shipped in 0.6.20, the bar across machines is in dev', () => {
+  it('the watch is beta; the cross-workspace bar shipped in 0.6.20, the bar across machines in 0.6.23', () => {
     for (const c of claims.filter((c) => /watch|wrist/i.test(`${c.title} ${c.text}`))) expect(c.status, c.title).toBe('beta')
     for (const c of claims.filter((c) => /one bar/i.test(c.title))) expect(c.status, c.title).toBe('shipped')
-    for (const c of claims.filter((c) => /^The bar on all your machines/.test(c.title))) expect(c.status, c.title).toBe('in-dev')
+    for (const c of claims.filter((c) => /^The bar on all your machines/.test(c.title))) expect(c.status, c.title).toBe('shipped')
   })
 
   it('the roadmap labels every phase, and anything not built is planned', () => {

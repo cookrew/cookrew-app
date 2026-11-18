@@ -490,7 +490,7 @@ ul.claims{list-style:none;margin:0;padding:0;border-top:1px solid var(--hair);di
 .route-diagram ol.exp>li{border-color:#3f6a8f}.route-diagram ol.exp>li.dashed{border-style:dashed}
 .route-diagram figcaption{font-size:12.5px;color:var(--muted)}
 .route-row{display:flex;gap:10px;align-items:center;margin:2px 0 -4px;font-size:12.5px;color:var(--muted)}
-.roadmap{list-style:none;margin:16px 0 0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.roadmap{list-style:none;margin:16px 0 0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .roadmap>li{padding:14px 16px;border:1px solid var(--hair);background:var(--cream-hi)}
 .roadmap-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:8px}
 .roadmap-head b{font:600 20px var(--font-serif)}

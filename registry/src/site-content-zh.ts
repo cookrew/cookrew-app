@@ -174,7 +174,7 @@ export const ZH_PILLARS: Readonly<Record<'gateway' | 'everywhere' | 'workspace',
       { title: '手机就是控制台', text: '在手机上，同一个控制台在浏览器里打开。不需要安装应用。' },
       { title: '在你允许时操作机器的屏幕', text: '为一台机器打开远程控制后，你的设备可以控制它的屏幕卡片，每次 15 分钟。' },
       { title: '一个栏，汇总所有等你处理的事', text: '等你处理的 agent 和新回复，从一台机器的所有工作空间汇集到一个栏里。' },
-      { title: '跨机器的栏，手机上的提醒', text: '同一个栏也汇集账号下其他机器上等你处理的事；有 agent 需要你时，手机会收到提醒。已在开发分支上，尚未发布。' },
+      { title: '跨机器的栏，手机上的提醒', text: '从 0.6.23 起，同一个栏也汇集账号下其他机器上等你处理的事；有 agent 需要你时，控制台可以提醒你的手机。' },
       { title: 'Apple Watch', text: '在手腕上看到谁在等你并回复。在我们自己的手表上运行；尚未上架 App Store 或 TestFlight。' },
       { title: '一个请求，任何设备，所有机器', text: '一个等你处理的请求只需回复一次，用手边的任何设备，覆盖账号下的所有机器。' }
     ]
@@ -206,8 +206,7 @@ export const ZH_PILLARS: Readonly<Record<'gateway' | 'everywhere' | 'workspace',
 }
 
 export const ZH_ROADMAP = {
-  Now: { phase: '现在', items: ['账号下的每台机器在同一张画布上', '控制台，在任何浏览器和手机上', 'harness 经你自己的网关路由', '一个栏汇总一台机器所有工作空间里等你处理的事'] },
-  Next: { phase: '下一步', items: ['一个栏汇总账号下所有机器等你处理的事，手机上也有提醒'] },
+  Now: { phase: '现在', items: ['账号下的每台机器在同一张画布上', '控制台，在任何浏览器和手机上', 'harness 经你自己的网关路由', '一个栏汇总所有工作空间和机器里等你处理的事，手机上也有提醒'] },
   Build: { phase: '构建中', items: ['Cloud Workspace：人、agent、文件和证据', '角色、隔离和审计记录', '跨机器的网关'] },
   Later: { phase: '以后', items: ['agent 在工作空间之间派发工作', '按负载调度机器和模型', '官方模型网关'] }
 } as const
