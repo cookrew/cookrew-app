@@ -65,7 +65,7 @@ function fakeMagpie(opts: { removeKeeps?: boolean; accessFails?: boolean; mcpFai
   return { run, calls, rows, hold }
 }
 
-const keysWith = (run: MagpieRun, intents: IntentStore, extra: { beforeRevoke?: (id: string) => void; audit?: (line: string) => void } = {}): ShareKeys =>
+const keysWith = (run: MagpieRun, intents: IntentStore, extra: { beforeRevoke?: (id: string) => void; audit?: (line: string) => void | Promise<void> } = {}): ShareKeys =>
   new ShareKeys({ run, intents, nonce: () => NONCE, processes: async () => [], ...extra })
 
 /** An intent store whose writes can be made to fail from a given moment. */
@@ -241,7 +241,7 @@ describe('revoking an issued key by id', () => {
 
   it('writes an audit line when it clears an intent by itself, naming the key by name and id only', async () => {
     const audit: string[] = []
-    const keys = keysWith(fakeMagpie().run, memoryIntentStore(), { audit: (line) => audit.push(line) })
+    const keys = keysWith(fakeMagpie().run, memoryIntentStore(), { audit: (line) => void audit.push(line) })
     await keys.issue({ device: 'laptop', dailyUsd: 5 }, () => true, { handover: false })
     await keys.revoke(ID)
     expect(audit).toHaveLength(1)
@@ -255,7 +255,7 @@ describe('revoking an issued key by id', () => {
   it('writes an audit line when it keeps the warning because Magpie still lists a key of the name', async () => {
     const audit: string[] = []
     const intents = memoryIntentStore()
-    const keys = keysWith(fakeMagpie({ removeKeeps: true }).run, intents, { audit: (line) => audit.push(line) })
+    const keys = keysWith(fakeMagpie({ removeKeeps: true }).run, intents, { audit: (line) => void audit.push(line) })
     await keys.issue({ device: 'laptop', dailyUsd: 5 }, () => true, { handover: false })
     await keys.revoke(ID)
     expect(intents.read()).toMatchObject([{ name: NAME, revoked: { left: 1 } }])
@@ -408,7 +408,7 @@ describe('verification review: a confirmation is audited, before its record goes
   ] as const)('a %s key turned on writes an audit line while its record is still there', async (_via, options, confirm) => {
     const intents = memoryIntentStore()
     const audit: Array<{ line: string; open: number }> = []
-    const keys = keysWith(fakeMagpie().run, intents, { audit: (line) => audit.push({ line, open: intents.read().length }) })
+    const keys = keysWith(fakeMagpie().run, intents, { audit: (line) => void audit.push({ line, open: intents.read().length }) })
     await keys.issue({ device: 'laptop', dailyUsd: 5 }, () => true, options)
     expect(await confirm(keys)).toEqual({ ok: true })
     const turnedOn = audit.filter((a) => /turned on/.test(a.line))
@@ -424,10 +424,54 @@ describe('verification review: a confirmation is audited, before its record goes
   it('the revoke that clears a record writes its line while the record is still there', async () => {
     const intents = memoryIntentStore()
     const audit: Array<{ line: string; open: number }> = []
-    const keys = keysWith(fakeMagpie().run, intents, { audit: (line) => audit.push({ line, open: intents.read().length }) })
+    const keys = keysWith(fakeMagpie().run, intents, { audit: (line) => void audit.push({ line, open: intents.read().length }) })
     await keys.issue({ device: 'laptop', dailyUsd: 5 }, () => true, { handover: false })
     await keys.revoke(ID)
     expect(audit.find((a) => /cleared/.test(a.line))?.open).toBe(1)
     expect(intents.read()).toEqual([])
+  })
+})
+
+describe('relay review of eb001d27: an audit line is on disk BEFORE its record is cleared', () => {
+  /** An audit whose writes are held until the test lets them go. */
+  const heldAudit = () => {
+    const pending: Array<() => void> = []
+    return {
+      audit: (_line: string) => new Promise<void>((resolve) => void pending.push(resolve)),
+      release: () => pending.splice(0).forEach((go) => go()),
+      waiting: () => pending.length
+    }
+  }
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 20; i += 1) await Promise.resolve()
+  }
+
+  it.each([
+    ['Done', undefined, (keys: ShareKeys) => keys.done(ID)],
+    ['acknowledge', { handover: false }, (keys: ShareKeys) => keys.acknowledge(ID)],
+    ['a revoke that clears', { handover: false }, (keys: ShareKeys) => keys.revoke(ID)]
+  ] as const)('%s waits for the audit write before the intent goes', async (_what, options, act) => {
+    const intents = memoryIntentStore()
+    const held = heldAudit()
+    const keys = keysWith(fakeMagpie().run, intents, { audit: held.audit })
+    await keys.issue({ device: 'laptop', dailyUsd: 5 }, () => true, options)
+    let finished = false
+    const doing = act(keys).then((a) => ((finished = true), a))
+    await settle()
+    for (let i = 0; i < 50 && held.waiting() === 0; i += 1) await new Promise((r) => setTimeout(r, 2))
+    expect(held.waiting()).toBe(1)
+    // The audit has not landed: the record must still be there, and the call not answered.
+    expect(intents.read()).toHaveLength(1)
+    expect(finished).toBe(false)
+    held.release()
+    expect(await doing).toEqual({ ok: true })
+    expect(intents.read()).toEqual([])
+  })
+
+  it('a failed audit write is reported elsewhere by its writer and never fails the caller (as before)', async () => {
+    const intents = memoryIntentStore()
+    const keys = keysWith(fakeMagpie().run, intents, { audit: async () => undefined })
+    await keys.issue({ device: 'laptop', dailyUsd: 5 })
+    expect(await keys.done(ID)).toEqual({ ok: true })
   })
 })

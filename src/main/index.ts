@@ -1905,12 +1905,14 @@ const sealMarks = blockedLanes.marks
 let shareKeysHeld: ShareKeys | null = null
 /** Ruling (a): what ShareKeys clears or keeps on its own goes to a durable file; stderr only when that fails. */
 const shareAuditFile = fileAuditLog(path.join(homedir(), '.cookrew', SHARE_AUDIT_FILE))
-const shareAudit = (line: string): void => {
-  // Not awaited: on Windows the log is proven private first (a PowerShell run), and no caller waits for it.
-  void shareAuditFile(line).catch((error: unknown) => {
+/**
+ * Every caller AWAITS this before it clears the record the line is about: the line is on disk first.
+ * A write that fails says so on stderr and resolves, so the caller goes on as it always did.
+ */
+const shareAudit = (line: string): Promise<void> =>
+  shareAuditFile(line).catch((error: unknown) => {
     console.error(`[cookrew] share audit not written (${error instanceof Error ? error.message : 'unknown'}): ${line}`)
   })
-}
 const shareKeysNow = (): ShareKeys | null => {
   if (shareKeysHeld !== null) return shareKeysHeld
   const bin = magpieBinary(defaultDiscoveryEnv())

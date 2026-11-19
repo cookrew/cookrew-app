@@ -139,3 +139,17 @@ describe('the sweep and the owner’s answer reach it', () => {
     expect(blocked.mock.calls).toEqual([[DEVICE]])
   })
 })
+
+describe('relay review of eb001d27: a blocked desktop’s revokes are audited before the record forgets them', () => {
+  it('keeps the keys recorded until every audit line has been written', async () => {
+    const pending: Array<() => void> = []
+    const w = world({ audit: () => new Promise<void>((resolve) => void pending.push(resolve)) })
+    const doing = forgetBlockedDesktop(DEVICE, w.deps)
+    for (let i = 0; i < 100 && pending.length === 0; i += 1) await new Promise((r) => setTimeout(r, 2))
+    expect(pending.length).toBeGreaterThan(0)
+    // Revoked already, but the audit for it is still in flight: the record keeps the keys.
+    expect(w.deps.pending.read()).toEqual({ [DEVICE]: [K1, K2] })
+    while ((await Promise.race([doing.then(() => 'done'), new Promise((r) => setTimeout(() => r('wait'), 5))])) === 'wait') pending.splice(0).forEach((go) => go())
+    expect(w.deps.pending.read()).toEqual({})
+  })
+})

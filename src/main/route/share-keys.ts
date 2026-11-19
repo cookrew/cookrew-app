@@ -119,9 +119,10 @@ export interface ShareKeysDeps {
   beforeRevoke?: (id: string) => void
   /**
    * One line for each intent this module clears or keeps on its own, with no owner click (Relay's ruling,
-   * 2026-11-19): the name and Magpie's id only, never a key or its tail.
+   * 2026-11-19): the name and Magpie's id only, never a key or its tail. AWAITED before the record is
+   * cleared: the line is on disk first. Its writer reports a failed write itself and resolves.
    */
-  audit?: (line: string) => void
+  audit?: (line: string) => void | Promise<void>
   now?: () => Date
 }
 
@@ -366,7 +367,7 @@ export class ShareKeys {
     const on = await this.deps.run(['gateway-key', 'access', id, 'full']).catch(() => null)
     if (on === null || on.code !== 0) return { ok: false, why: `Magpie did not turn the key on${on === null ? '' : `: ${firstLine(on.stderr) ?? 'no answer'}`}. Its warning stays; try again.` }
     // Recorded while the record is still there: a crash after this leaves both the line and the warning.
-    this.deps.audit?.(`share keys: turned on ${id} (${intent.name}) on ${via === 'seal' ? 'the other computer’s acknowledgement' : 'the owner’s Done'}; intent cleared`)
+    await this.deps.audit?.(`share keys: turned on ${id} (${intent.name}) on ${via === 'seal' ? 'the other computer’s acknowledgement' : 'the owner’s Done'}; intent cleared`)
     try {
       this.settle(intent.name)
       return { ok: true }
@@ -414,12 +415,12 @@ export class ShareKeys {
       const left = (await this.rows()).filter((row) => row.name === intent.name).length
       if (left > 0) {
         this.record(intent.name, { revoked: { at: this.now(), left } })
-        this.deps.audit?.(`share keys: revoked ${id} (${intent.name}) but Magpie still lists ${left} key(s) of the name; warning kept`)
+        await this.deps.audit?.(`share keys: revoked ${id} (${intent.name}) but Magpie still lists ${left} key(s) of the name; warning kept`)
         return
       }
       // Cleared with no owner click and no process check: its add had returned, so none can come later.
       // Recorded first: a crash between leaves the line and the record, never a clear with no line.
-      this.deps.audit?.(`share keys: revoked ${id} (${intent.name}); Magpie lists none of the name; intent cleared without a process check`)
+      await this.deps.audit?.(`share keys: revoked ${id} (${intent.name}); Magpie lists none of the name; intent cleared without a process check`)
       this.settle(intent.name)
     } catch {
       // The intent stays and warns: Revoke and check finishes it by hand.

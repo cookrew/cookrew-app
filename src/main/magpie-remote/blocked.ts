@@ -39,8 +39,8 @@ export interface BlockedDeps {
   revoke(id: string): Promise<{ ok: true } | { ok: false; why: string }>
   /** A: drop the remote for that desktop here, key and provider; true when one was there. */
   dropRemote(deviceId: string): Promise<boolean>
-  /** The share-keys audit (route/share-audit.ts): names and ids only. */
-  audit(line: string): void
+  /** The share-keys audit (route/share-audit.ts): names and ids only. Awaited before the record forgets a key. */
+  audit(line: string): void | Promise<void>
 }
 
 export interface BlockedResult {
@@ -62,7 +62,7 @@ export async function forgetBlockedDesktop(deviceId: string, deps: BlockedDeps):
   if (ids.length > 0) {
     // Recorded FIRST: once unbound, the binding is gone, and this record is what a later sweep finds.
     const noted = recorded !== null && tryWrite(deps.pending, { ...recorded, [deviceId]: ids })
-    if (!noted) deps.audit(`magpie remote: blocked ${short(deviceId)}: the keys to revoke (${ids.join(', ')}) were not recorded; revoking now`)
+    if (!noted) await deps.audit(`magpie remote: blocked ${short(deviceId)}: the keys to revoke (${ids.join(', ')}) were not recorded; revoking now`)
   }
   // Every key stops being honoured, and its streams end, before any revoke is asked for.
   for (const id of ids) safe(() => deps.unbind(id), undefined)
@@ -72,16 +72,16 @@ export async function forgetBlockedDesktop(deviceId: string, deps: BlockedDeps):
   for (const id of ids) {
     if (listed !== null && !listed.includes(id)) {
       revoked.push(id)
-      deps.audit(`magpie remote: blocked ${short(deviceId)}: key ${id} unbound; Magpie lists it no more`)
+      await deps.audit(`magpie remote: blocked ${short(deviceId)}: key ${id} unbound; Magpie lists it no more`)
       continue
     }
     const done = await deps.revoke(id).catch((): { ok: false; why: string } => ({ ok: false, why: 'no answer' }))
     if (done.ok) {
       revoked.push(id)
-      deps.audit(`magpie remote: blocked ${short(deviceId)}: key ${id} unbound and revoked`)
+      await deps.audit(`magpie remote: blocked ${short(deviceId)}: key ${id} unbound and revoked`)
     } else {
       failed.push(id)
-      deps.audit(`magpie remote: blocked ${short(deviceId)}: key ${id} unbound but not revoked (${done.why}); kept to revoke again at the next launch`)
+      await deps.audit(`magpie remote: blocked ${short(deviceId)}: key ${id} unbound but not revoked (${done.why}); kept to revoke again at the next launch`)
     }
   }
   if (ids.length > 0) settle(deps.pending, deviceId, failed)
@@ -91,7 +91,7 @@ export async function forgetBlockedDesktop(deviceId: string, deps: BlockedDeps):
   } catch {
     dropped = false
   }
-  if (dropped) deps.audit(`magpie remote: blocked ${short(deviceId)}: its Magpie remote dropped here (key and provider; nothing given back)`)
+  if (dropped) await deps.audit(`magpie remote: blocked ${short(deviceId)}: its Magpie remote dropped here (key and provider; nothing given back)`)
   return { revoked, failed, dropped }
 }
 

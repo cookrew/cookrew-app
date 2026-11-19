@@ -53,7 +53,7 @@ export interface MagpieRemoteDeps {
   env(): DiscoveryEnv
   log(line: string): void
   /** The share-keys audit (route/share-audit.ts), for what a blocked desktop's keys came to; log() when absent. */
-  audit?(line: string): void
+  audit?(line: string): void | Promise<void>
 }
 
 export interface MagpieRemote {
