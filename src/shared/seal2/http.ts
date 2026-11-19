@@ -34,9 +34,13 @@ const CONTROL = /[\u0000-\u001f\u007f]/
 /** What a page may ask. CONNECT and TRACE would each mean something else on the far socket. */
 export const HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
 
-/** A path on this server: never a scheme, never `//host`, nothing that could end the request line. */
+/**
+ * A path on this server: never a scheme, never `//host`, nothing that could end the request line, and no '#':
+ * the companion reads nothing after one, so `/api/watch/item/..#/frame` would be judged as one path and served
+ * as another (Relay round 4, B). A page drops its fragment before it seals a request, as fetch does.
+ */
 export const isLocalPath = (path: unknown): path is string =>
-  typeof path === 'string' && path.startsWith('/') && !path.startsWith('//') && !path.includes('\\') && !CONTROL.test(path) && !path.includes(' ')
+  typeof path === 'string' && path.startsWith('/') && !path.startsWith('//') && !path.includes('\\') && !path.includes('#') && !CONTROL.test(path) && !path.includes(' ')
 
 /** Lower-case names, no pseudo-fields, no control characters. An answer may join several Set-Cookie with a newline. */
 export function plainHeaders(fields: Fields, answer = false): Record<string, string> | null {

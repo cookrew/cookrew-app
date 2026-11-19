@@ -323,7 +323,8 @@ export function viaSeal(url: string): SealRoute | null {
     probe(base, code)
     return null
   }
-  return { path: url.slice(base.length), request: (call) => sendSealed(base, code, call, true) }
+  // What fetch would send: never the fragment (seal2/http.ts · isLocalPath refuses one).
+  return { path: url.slice(base.length).split('#')[0], request: (call) => sendSealed(base, code, call, true) }
 }
 
 /** Did the machine refuse this plain request because this device is to speak sealed? */

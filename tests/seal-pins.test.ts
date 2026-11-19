@@ -40,6 +40,20 @@ describe('seal pins', () => {
     expect(createSealPinStore(file).allows(A)).toBe(false)
   })
 
+  it('says which desktops are blocked, and a hand edit of the file counts at once', () => {
+    const file = fileIn()
+    const pins = createSealPinStore(file)
+    expect(pins.blocks(A)).toBe(false)
+    pins.block(A)
+    expect(pins.blocks(A)).toBe(true)
+    expect(pins.blocks(A.toUpperCase())).toBe(true)
+    expect(pins.blocked()).toEqual([A])
+    writeFileSync(file, JSON.stringify({ policy: 'account', pins: {}, blocked: { [B]: { at: 1 } }, seen: {} }))
+    expect(pins.blocks(A)).toBe(false)
+    expect(pins.blocks(B)).toBe(true)
+    expect(pins.blocked()).toEqual([B])
+  })
+
   it('refuses what is not a device id, and drops one from the file', () => {
     const file = fileIn()
     const pins = createSealPinStore(file)

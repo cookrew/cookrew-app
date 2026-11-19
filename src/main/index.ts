@@ -185,6 +185,7 @@ import { createSealMarks } from './seal-marks'
 import { createSealDevice } from './seal-device'
 import { createSealPeers } from './seal-peers'
 import { createSealPinStore } from './seal-pins'
+import { answerPeer, askForKey, desktopsWithoutBlocked, forgetBlocked, keysWithoutBlocked, marksWithBlocked } from './seal-blocked'
 import { deviceWords } from '../shared/seal2/handshake'
 import { sealedSwitchMemory } from './remote-switch-memory'
 import { singleConfirm } from './remote-switch-confirm'
@@ -1495,7 +1496,13 @@ const admittedDevices = createAdmittedDeviceStore()
  * this machine collects a key for every other one (machine-keys.ts), shortly
  * after start and every ten minutes, and reads them with it.
  */
-const machineKeys = createMachineKeyStore(path.join(homedir(), '.cookrew', 'machine-keys.json'))
+/**
+ * cookrew-seal/2 device mode: which of the account's other desktops the owner compared six words with
+ * (seal-pins.ts). Here, before the machine keys: a desktop the owner said is NOT THE SAME is refused on
+ * every lane, the plain machine-key one as well as the sealed one (seal-blocked.ts).
+ */
+const sealPins = createSealPinStore(path.join(homedir(), '.cookrew', 'seal-pins.json'))
+const machineKeys = keysWithoutBlocked(createMachineKeyStore(path.join(homedir(), '.cookrew', 'machine-keys.json')), sealPins)
 const MACHINE_KEYS_EVERY_MS = 10 * 60_000
 /** Machines of the account the owner forgot here: their passes are turned away at the door. */
 const refusedMachines = createRefusedMachines(path.join(homedir(), '.cookrew', 'machine-refused.json'))
@@ -1561,7 +1568,9 @@ async function collectMachineKeys(): Promise<void> {
     desktops: async () => {
       const answer = await accounts.authed<unknown>('/v2/me/desktops')
       if (!answer.ok) return null
-      return (parseAccountMachines(answer.value, accounts.account()?.deviceId ?? null) ?? []).map((m) => ({ id: m.id, name: m.name, online: m.online }))
+      const rows = (parseAccountMachines(answer.value, accounts.account()?.deviceId ?? null) ?? []).map((m) => ({ id: m.id, name: m.name, online: m.online }))
+      // A blocked desktop is never sent this machine's pass.
+      return desktopsWithoutBlocked(rows, sealPins)
     },
     grant: async () => {
       // Asked every round there is a machine to enter: a desktop signed in with a proof on it is trusted from that
@@ -1612,11 +1621,23 @@ function keyRefused(machineId: string): void {
   forgetRemoteAnswers([machineId])
 }
 
+/** No key yet for a machine (one added since the last round): ask for a round, not for a blocked one (seal-blocked.ts). */
+const askForMachineKey = askForKey(sealPins, () => void collectMachineKeys().catch(() => undefined))
+
+/** What a desktop the owner said is NOT THE SAME holds here (seal-blocked.ts): its admission, and the key held for it. */
+const blockedDesktopHoldings = {
+  forgetAdmission: (deviceId: string): boolean => {
+    const gone = admittedDevices.forget(deviceId)
+    remoteDesk.forgetDevice(`device:${deviceId}`)
+    return gone
+  },
+  forgetKey: keyRefused
+}
+
 async function readAccountMachine(machineId: string, route: RemoteRead): Promise<unknown | null> {
   const key = machineKeys.token(machineId)
   if (key === null) {
-    // No key yet (a machine added since the last round): ask for one, not on every read.
-    void collectMachineKeys().catch(() => undefined)
+    askForMachineKey(machineId)
     return null
   }
   const read = await remoteReads.get(
@@ -1644,7 +1665,7 @@ async function readAccountMachine(machineId: string, route: RemoteRead): Promise
 async function callAccountMachine(machineId: string, call: RemoteMachineCall, body: string | undefined): Promise<RemoteAnswer> {
   const key = machineKeys.token(machineId)
   if (key === null) {
-    void collectMachineKeys().catch(() => undefined)
+    askForMachineKey(machineId)
     return NO_ANSWER
   }
   const send = async (headers: Record<string, string>): Promise<Response | null> => {
@@ -1700,6 +1721,8 @@ const accountPairDoor = createAccountPairDoor({
   // Read when a watch arrives, long after startup: watchPairing is declared further down.
   watch: { enter: (deviceId) => watchPairing.enter(deviceId) },
   refusedMachine: (deviceId) => refusedMachines.has(deviceId),
+  // A desktop the owner said is not the same: every pass it brings, not only its machine pass (seal-blocked.ts).
+  refusedDevice: sealPins.blocks,
   refusedPhone: (deviceId, since) => refusedPhones.refuses(deviceId, since),
   log: (message: string) => console.error(`[cookrew] ${message}`)
 })
@@ -1806,7 +1829,6 @@ const canvasLink = canvasRelay.link
 // paused this stream) the loopback response's own buffer.
 const connectCodes = createConnectCodes(path.join(homedir(), '.cookrew', 'connect-code'))
 // cookrew-seal/2 device mode: this desktop and the account's others (seal-device.ts, seal-pins.ts).
-const sealPins = createSealPinStore(path.join(homedir(), '.cookrew', 'seal-pins.json'))
 const sealDevice = createSealDevice({
   account: () => accounts.account(),
   desktops: async () => {
@@ -1833,7 +1855,8 @@ const sealPeers = createSealPeers({
   onContact: (peer) => void sealPins.contact(peer),
   log: (line) => console.error(`[cookrew] ${line}`)
 })
-const sealMarks = createSealMarks(path.join(homedir(), '.cookrew', 'seal-marks.json'))
+// A blocked desktop is refused in the clear on the relay line too, whatever its marks (seal-blocked.ts).
+const sealMarks = marksWithBlocked(createSealMarks(path.join(homedir(), '.cookrew', 'seal-marks.json')), sealPins)
 const sealTerminus = createSealTerminus({
   codeFor: (id) => connectCodes.codeFor(id),
   replacedKeyFor: (id) => connectCodes.replacedKeyFor(id),
@@ -7724,6 +7747,12 @@ if (selfHosted) {
 let cliSocket: SocketServerHandle | null = null
 
 app.whenReady().then(() => {
+  // A desktop blocked by an older build kept its admission and key: they go now (seal-blocked.ts). Never in the way of the start.
+  try {
+    forgetBlocked(sealPins, blockedDesktopHoldings)
+  } catch (error) {
+    console.error('[cookrew] blocked desktops could not be swept:', error)
+  }
   // A served session's detached process outlives the app under the sandbox it
   // started with, older builds' included (seat-ledger.ts). Said at boot, where
   // the owner's log can show it. Whatever later opens something new on this
@@ -9960,20 +9989,18 @@ function registerIpc(handlers: RestoreHandlers): void {
       return Promise.all(sealPins.waiting().map(async (deviceId) => ({ deviceId, mine, theirs: (await deviceWords(deviceId)).words })))
     })
   )
+  // Same pins, Later asks again next launch, Not the same refuses it on every lane and ends every way it is in.
   ipcMain.handle(
     'seal:peer-answer',
-    ownerOnly((deviceId: unknown, answer: unknown) => {
-      if (typeof deviceId !== 'string' || !/^[0-9a-f-]{36}$/.test(deviceId)) return false
-      if (answer === 'same') sealPins.pin(deviceId)
-      else if (answer === 'later') sealPins.later(deviceId)
-      else if (answer === 'not-same') {
-        // Not this owner's desktop, whatever the listing says: refused from now on, and every open session ends.
-        sealPins.block(deviceId)
-        sealPeers.closePeer(deviceId)
-        sealTerminus.endPeer(deviceId, 'a desktop the owner did not recognise')
-      } else return false
-      return true
-    })
+    ownerOnly((deviceId: unknown, answer: unknown) =>
+      answerPeer(deviceId, answer, {
+        pins: sealPins,
+        peers: sealPeers,
+        terminus: sealTerminus,
+        ...blockedDesktopHoldings,
+        refuseMachine: (id) => refusedMachines.add(id)
+      })
+    )
   )
   // Owner ruling 2026-11-19: refusing every plain request over the relay is a switch the owner flips, off by default.
   ipcMain.handle('seal:sealed-only', ownerOnly(() => sealMarks.sealedOnly()))

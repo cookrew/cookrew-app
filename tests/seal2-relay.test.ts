@@ -269,6 +269,15 @@ describe('device mode (desktop to desktop on one account) through the real relay
     // A path the companion would read as another: refused before the allowlist sees it.
     await expect(sealedFetch(link.connection, { method: 'GET', path: '/api/x/../refused-route', headers: { authorization: MACHINE_KEY } })).rejects.toMatchObject({ code: ABORT.refused })
     await expect(sealedFetch(link.connection, { method: 'GET', path: '/api/%2e%2e/x', headers: { authorization: MACHINE_KEY } })).rejects.toMatchObject({ code: ABORT.refused })
+    // The companion reads nothing after '#': judged whole, this would pass as an /api/ path and arrive as another
+    // (Relay round 4, B). Sent as raw fields, since this side's own sealedFetch will not build such a request.
+    const before = seen.length
+    for (const path of ['/api/refused-route/..#/x', '/api/x/..#/refused-route', '/api/refused-route/.#x', '/api/x#y']) {
+      const stream = link.connection.openStream('http', { ':method': 'GET', ':path': path, authorization: MACHINE_KEY })
+      void stream.writable.getWriter().close().catch(() => undefined)
+      await expect(stream.head, path).rejects.toMatchObject({ code: ABORT.refused })
+    }
+    expect(seen.slice(before)).toEqual([])
   })
 
   it('opens a stream of another kind (openStream), here an echo', async () => {

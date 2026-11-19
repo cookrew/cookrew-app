@@ -153,6 +153,15 @@ describe('the console and a machine on v2', () => {
     expect(seen.at(-1)).toEqual({ path: '/api/after-pin', auth: BEARER, session: undefined, plain: false })
   })
 
+  it('a URL with a fragment goes sealed without it, as fetch would send it (Relay round 4, B)', async () => {
+    const page = await consolePage()
+    await page.get('/api/warm-fragment')
+    await until(page.pinned, 'the pin', 4000)
+    const answer = await page.get('/api/with-fragment?a=1#part')
+    expect(await answer.json()).toEqual({ path: '/api/with-fragment' })
+    expect(seen.at(-1)).toMatchObject({ path: '/api/with-fragment', plain: false })
+  })
+
   it('carries the relay event stream sealed, as it happens', async () => {
     const page = await consolePage()
     await page.get('/api/warm')

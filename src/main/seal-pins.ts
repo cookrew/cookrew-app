@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { writeFileAtomic } from './atomic-file'
 
 /**
@@ -29,6 +29,10 @@ export interface SealPinStore {
   unpin(deviceId: string): void
   /** The owner said the words do not match: this desktop is refused both ways from now on. */
   block(deviceId: string): void
+  /** Did the owner say this desktop's words do not match? Then it is refused on every lane (seal-blocked.ts). */
+  blocks(deviceId: string): boolean
+  /** Every desktop the owner said is not the same. */
+  blocked(): string[]
   /** A sealed session with this desktop opened: true the first time, when its words wait for the owner. */
   contact(deviceId: string): boolean
   /** Desktops met and not yet compared (nor blocked, nor put off): their words wait for the owner. */
@@ -69,8 +73,28 @@ function readPins(file: string): PinFile {
   }
 }
 
+/** What says the file changed: read again only then, since `blocks` is asked on every request down the relay line. */
+function stamp(file: string): string {
+  try {
+    const { mtimeMs, size, ino } = statSync(file)
+    return `${mtimeMs}:${size}:${ino}`
+  } catch {
+    return 'none'
+  }
+}
+
 export function createSealPinStore(file: string, now: () => number = Date.now): SealPinStore {
-  const write = (next: PinFile): void => writeFileAtomic(file, `${JSON.stringify(next, null, 2)}\n`)
+  // The file stays the truth (an owner may edit it by hand); only an unchanged file is not parsed again.
+  let cached: { readonly stamp: string; readonly pins: PinFile } | null = null
+  const current = (): PinFile => {
+    const seen = stamp(file)
+    if (cached === null || cached.stamp !== seen) cached = { stamp: seen, pins: readPins(file) }
+    return cached.pins
+  }
+  const write = (next: PinFile): void => {
+    cached = null
+    writeFileAtomic(file, `${JSON.stringify(next, null, 2)}\n`)
+  }
   /** Put off this launch only: asked again after a restart. */
   const putOff = new Set<string>()
   const checked = (deviceId: string): string => {
@@ -80,38 +104,40 @@ export function createSealPinStore(file: string, now: () => number = Date.now): 
   }
   const without = (held: Stamps, id: string): Stamps => Object.fromEntries(Object.entries(held).filter(([known]) => known !== id))
   return {
-    policy: () => readPins(file).policy,
-    setPolicy: (policy) => write({ ...readPins(file), policy }),
-    pinned: () => Object.keys(readPins(file).pins),
+    policy: () => current().policy,
+    setPolicy: (policy) => write({ ...current(), policy }),
+    pinned: () => Object.keys(current().pins),
     pin(deviceId) {
-      const held = readPins(file)
+      const held = current()
       const id = checked(deviceId)
       write({ ...held, pins: { ...held.pins, [id]: { at: now() } }, blocked: without(held.blocked, id) })
     },
     unpin(deviceId) {
-      const held = readPins(file)
+      const held = current()
       write({ ...held, pins: without(held.pins, checked(deviceId)) })
     },
     block(deviceId) {
-      const held = readPins(file)
+      const held = current()
       const id = checked(deviceId)
       write({ ...held, blocked: { ...held.blocked, [id]: { at: now() } }, pins: without(held.pins, id) })
     },
     contact(deviceId) {
       const id = deviceId.toLowerCase()
       if (!UUID.test(id)) return false
-      const held = readPins(file)
+      const held = current()
       if (has(held.pins, id) || has(held.blocked, id) || has(held.seen, id)) return false
       write({ ...held, seen: { ...held.seen, [id]: { at: now() } } })
       return true
     },
     waiting() {
-      const held = readPins(file)
+      const held = current()
       return Object.keys(held.seen).filter((id) => !has(held.pins, id) && !has(held.blocked, id) && !putOff.has(id))
     },
     later: (deviceId) => void putOff.add(deviceId.toLowerCase()),
+    blocks: (deviceId) => has(current().blocked, deviceId.toLowerCase()),
+    blocked: () => Object.keys(current().blocked),
     allows(deviceId) {
-      const held = readPins(file)
+      const held = current()
       const id = deviceId.toLowerCase()
       if (has(held.blocked, id)) return false
       return held.policy === 'account' || has(held.pins, id)

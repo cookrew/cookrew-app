@@ -45,6 +45,11 @@ export interface PairDoorDeps {
   readonly watch?: { readonly enter: (deviceId: string) => string }
   /** A machine of the account the owner forgot here: its machine pass is turned away (machine-keys.ts · RefusedMachines). */
   readonly refusedMachine?: (deviceId: string) => boolean
+  /**
+   * A desktop the owner said is NOT THE SAME by its six words (seal-blocked.ts): EVERY pass it brings is turned
+   * away, the account pass a password or passkey earns included, not only its machine pass.
+   */
+  readonly refusedDevice?: (deviceId: string) => boolean
   /** A trusted phone the owner forgot here: its passes no newer than then are turned away (refused-phones.ts). */
   readonly refusedPhone?: (deviceId: string, since: number) => boolean
   readonly now?: () => number
@@ -114,6 +119,9 @@ export function createAccountPairDoor(deps: PairDoorDeps): AccountPairDoor {
     }
     const grant = await deps.grants(asking.grant)
     if (grant === null) return refuse(401, 'regrant', 'That pass from cookrew.dev is no longer good. Prove it is you again.')
+    if (deps.refusedDevice?.(asking.deviceId) === true) {
+      return refuse(403, 'refused', word('The owner said on this Mac that this machine is not theirs, and it keeps it out.'))
+    }
     if (grant.machine === true && deps.refusedMachine?.(asking.deviceId) === true) {
       return refuse(403, 'refused', word('This Mac was told to forget that machine, and keeps it out.'))
     }
