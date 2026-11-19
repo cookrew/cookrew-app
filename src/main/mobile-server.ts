@@ -1,4 +1,4 @@
-import { cameOverRelayLine } from './seal-proof'
+import { cameOverRelayLine, sealedV2Of } from './seal-proof'
 import { SEALED_ONLY_ERROR, type SealMarks } from './seal-marks'
 import http from 'node:http'
 import https from 'node:https'
@@ -1545,13 +1545,19 @@ export async function handle(
    * classification here would be a second chance to call a tailnet address a
    * LAN one and switch a phone onto a path that cannot carry it.
    *
-   * BELOW handleMobileApi ON PURPOSE, which is what gates it: the addresses of
-   * someone's Mac and the fingerprint of its certificate are not for anyone who
-   * can reach the port. `relay` is absent because this route cannot know it —
+   * Below handleMobileApi for the ordinary credential gate; the route also
+   * requires owner pairing and v2 seal proof before building the answer.
+   * `relay` is absent because this route cannot know it —
    * the link is index.ts's, and a phone reading this is not looking for the
    * path it is already on.
    */
   if (request.method === 'GET' && url.pathname === '/api/reach') {
+    // This legacy response can contain LAN addresses. Neither the relay nor a
+    // read-only wall credential may receive it without an authenticated v2 seal.
+    if (!sealedV2Of(request)) return respondJson(response, 403, { error: 'sealed session required' })
+    if (!authed.pairingToken || !authed.companionGate(presentedToken(request, url))) {
+      return respondJson(response, 403, { error: 'owner pairing required' })
+    }
     const account = deps.identity?.account() ?? null
     if (!account) {
       respondJson(response, 404, { error: 'no account on this desktop' })
@@ -1592,8 +1598,8 @@ export async function handle(
   /**
    * THE OWNER'S PUBLIC FACE, for the companion's avatar and its path sheet.
    *
-   * Beside /api/reach and gated the same way — below handleMobileApi, so it
-   * needs the pairing token. A phone that holds that token is an admitted
+   * Below handleMobileApi, so it needs a read credential. Unlike /api/reach,
+   * this public-face route does not require a sealed session. A paired phone is an admitted
    * device of this account and may see what any of the account's devices see:
    * a name, two initials, an avatar. companion-account.ts builds the answer
    * member by member; nothing here may grow a field by accident.
