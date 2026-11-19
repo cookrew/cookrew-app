@@ -118,7 +118,8 @@ describe('boundKnock: one knock held to one machine, and what its check decided'
   it('a verified answer whose link never opens is still verified: the Mac proved itself', async () => {
     const a = machine()
     const { knock, peer } = knockWith((offerSdp) => ({ sdp: ANSWER, bind: makeRtcBind({ device: a.deviceId, offerSdp, answerSdp: ANSWER, signer: a.signer }) }), a.deviceId)
-    expect(await knock.connect()).toBeNull()
+    // No link, and the row says where it stuck (path/rtc-link.ts · failed).
+    expect(await knock.connect()).toEqual({ timedOut: expect.stringMatching(/^never opened \(/) })
     expect(peer.remote).toEqual([ANSWER])
     expect(knock.verdict()).toEqual({ verified: true, refused: null })
   })
@@ -134,7 +135,7 @@ describe('boundKnock: one knock held to one machine, and what its check decided'
   it('a Mac that never answers decides nothing', async () => {
     const a = machine()
     const { knock } = knockWith(() => ({ error: 'no direct link offered' }), a.deviceId)
-    expect(await knock.connect()).toBeNull()
+    expect(await knock.connect()).toEqual({ timedOut: 'no answer' })
     expect(knock.verdict()).toEqual({ verified: false, refused: null })
   })
 

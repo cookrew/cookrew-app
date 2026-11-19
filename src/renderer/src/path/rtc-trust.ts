@@ -18,7 +18,7 @@ import {
 } from '../../../shared/rtc-bind'
 import type { DirectHeld } from '../../../shared/path-badge'
 import { connectRtcLink, type RtcAnswer, type RtcLink, type RtcLinkDeps } from './rtc-link'
-import type { RtcUnbound } from './rtc-adopt'
+import type { RtcTimedOut, RtcUnbound } from './rtc-adopt'
 
 /** The largest answer SDP read; the Mac's own route refuses an offer past the same size. */
 export const RTC_ANSWER_MAX = 64_000
@@ -68,7 +68,7 @@ export interface BoundKnockDeps extends RtcTrustInput {
 
 export interface BoundKnock {
   /** Open the link, or say why the answer was refused; null when nothing answered or opened. */
-  readonly connect: () => Promise<RtcLink | RtcUnbound | null>
+  readonly connect: () => Promise<RtcLink | RtcUnbound | RtcTimedOut | null>
   /** What the check decided, once connect has settled. */
   readonly verdict: () => KnockVerdict
 }
@@ -87,7 +87,8 @@ export const boundKnock = (deps: BoundKnockDeps): BoundKnock => {
     decided = { verified: false, refused: why }
     return { unbound: why }
   }
-  const connect = async (): Promise<RtcLink | RtcUnbound | null> => {
+  const connect = async (): Promise<RtcLink | RtcUnbound | RtcTimedOut | null> => {
+    let timedOut: string | null = null
     if (deps.machineId === null) return refuseUnasked(RTC_NO_MACHINE)
     if (!(await ed25519Available())) return refuseUnasked(RTC_NO_ED25519)
     const link = await connectRtcLink({
@@ -99,9 +100,13 @@ export const boundKnock = (deps: BoundKnockDeps): BoundKnock => {
         return verdict
       },
       // Every refusal, the check's own or one it threw: connectRtcLink fails closed either way.
-      refused: (why) => void (decided = { verified: false, refused: why })
+      refused: (why) => void (decided = { verified: false, refused: why }),
+      // No answer, or a link that never opened: not a verdict, a reason for the report's row.
+      failed: (why) => void (timedOut = why)
     })
-    return link ?? (decided.refused === null ? null : { unbound: decided.refused })
+    if (link !== null) return link
+    if (decided.refused !== null) return { unbound: decided.refused }
+    return timedOut === null ? null : { timedOut }
   }
   return { connect, verdict: () => decided }
 }

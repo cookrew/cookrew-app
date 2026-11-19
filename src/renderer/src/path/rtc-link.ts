@@ -72,6 +72,8 @@ export interface RtcLinkDeps {
   readonly trust: (offerSdp: string, answer: RtcAnswer) => Promise<RtcBindVerdict>
   /** An answer `trust` refused, and why: for the path report. */
   readonly refused?: (why: string) => void
+  /** No answer, or an answer that never opened a link, and at which stage: for the path report. */
+  readonly failed?: (why: string) => void
   readonly peer?: () => RTCPeerConnection
   readonly gatherMs?: number
   readonly openMs?: number
@@ -163,6 +165,29 @@ const gathered = (pc: RTCPeerConnection, ms: number): Promise<void> =>
       }
     })
   })
+
+/**
+ * How many candidates of each kind an offer carries: COUNTS ONLY, never an
+ * address. A phone that offers no host candidate at all (or only mDNS names)
+ * tells a different story from one whose candidates never reached the Mac.
+ */
+export const offerCandidateKinds = (sdp: string): string => {
+  const kinds = sdp
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('a=candidate:'))
+    .map((line) => {
+      const parts = line.split(' ')
+      const typ = parts[parts.indexOf('typ') + 1] ?? ''
+      if (typ === 'host') return (parts[4] ?? '').endsWith('.local') ? 'mdns' : 'host'
+      return typ === 'srflx' || typ === 'prflx' ? 'srflx' : 'other'
+    })
+  const count = (kind: string): number => kinds.filter((one) => one === kind).length
+  return `${count('host')} host, ${count('mdns')} mdns, ${count('srflx')} srflx`
+}
+
+/** Where a link that never opened was stuck, in the browser's own words (path report rows are cut at 120). */
+const neverOpened = (pc: RTCPeerConnection, channel: RTCDataChannel, offerSdp: string): string =>
+  `never opened (ice ${pc.iceConnectionState ?? '?'}, conn ${pc.connectionState ?? '?'}, ch ${channel.readyState ?? '?'}; offer ${offerCandidateKinds(offerSdp)})`
 
 /**
  * The binding's verdict on this answer. FAILS CLOSED: a check that throws,
@@ -309,14 +334,16 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
     }
   })
 
+  let offerSdp = ''
   try {
     await pc.setLocalDescription(await pc.createOffer())
     await gathered(pc, deps.gatherMs ?? RTC_GATHER_MS)
     // The offer checked is the very one sent: its fingerprint is this page's own.
-    const offerSdp = pc.localDescription?.sdp ?? ''
+    offerSdp = pc.localDescription?.sdp ?? ''
     const got = await deps.offer(offerSdp)
     if (got === null) {
       shut('no answer')
+      deps.failed?.('no answer')
       return null
     }
     const answer: RtcAnswer = typeof got === 'string' ? { sdp: got } : got
@@ -329,13 +356,18 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
     await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp })
   } catch {
     shut('no answer')
+    deps.failed?.('no answer')
     return null
   }
   const timer = setTimeout(() => via(null), deps.openMs ?? RTC_OPEN_MS)
   const name = await ready
   clearTimeout(timer)
   if (name === null || closed) {
+    // Read before shut() closes the peer, which would make every state 'closed'.
+    const ended = endedAs as RtcLinkEnd | null
+    const why = ended !== null ? `never opened (${ended.reason})` : neverOpened(pc, channel, offerSdp)
     shut('never opened')
+    deps.failed?.(why)
     return null
   }
   startedAt = now()

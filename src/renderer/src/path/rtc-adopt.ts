@@ -28,8 +28,13 @@ export interface RtcUnbound {
   readonly unbound: string
 }
 
+/** No link, and why: no answer, or an answer whose link never opened (path/rtc-link.ts · failed). */
+export interface RtcTimedOut {
+  readonly timedOut: string
+}
+
 export interface RtcAdoptDeps {
-  readonly connect: () => Promise<RtcLink | RtcUnbound | null>
+  readonly connect: () => Promise<RtcLink | RtcUnbound | RtcTimedOut | null>
   readonly plane: () => DataPlane
   readonly adopt: (plane: DataPlane) => void
   readonly fallBack: () => void
@@ -62,6 +67,7 @@ export const adoptRtcLink = async (deps: RtcAdoptDeps): Promise<RtcRow> => {
   const live = (): boolean => deps.live?.() !== false
   const link = await deps.connect().catch(() => null)
   if (!link) return row('timeout', 'webrtc')
+  if ('timedOut' in link) return row('timeout', `webrtc: ${link.timedOut}`)
   // Not adopted: the relay stays the plane, and the report says why.
   if ('unbound' in link) return row('unbound', `webrtc: ${link.unbound}`)
   if (!live()) {
