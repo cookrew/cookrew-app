@@ -5,7 +5,7 @@ import type http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { loopbackDialer } from '../src/main/canvas-bridge'
-import { carriesSealProof, sealProofHeaders } from '../src/main/seal-proof'
+import { carriesSealProof, SEALED_V2_HEADER, sealedV2Of, sealProofHeaders } from '../src/main/seal-proof'
 import { SEALED_MARKER } from '../src/shared/remote-unlock'
 
 const asRequest = (headers: IncomingHttpHeaders): http.IncomingMessage => ({ headers }) as http.IncomingMessage
@@ -17,6 +17,13 @@ describe('the proof', () => {
     expect(carriesSealProof(asRequest({ [SEALED_MARKER]: '1' }))).toBe(false)
     expect(carriesSealProof(asRequest({ [SEALED_MARKER]: '' }))).toBe(false)
     expect(carriesSealProof(asRequest({ [SEALED_MARKER]: ['a', 'b'] }))).toBe(false)
+  })
+
+  it('says a request came out of a v2 session only beside the proof, never on the marker alone', () => {
+    expect(sealedV2Of(asRequest({ ...sealProofHeaders(), [SEALED_V2_HEADER]: '1' }))).toBe(true)
+    expect(sealedV2Of(asRequest({ [SEALED_V2_HEADER]: '1' }))).toBe(false)
+    expect(sealedV2Of(asRequest({ ...sealProofHeaders() }))).toBe(false)
+    expect(sealedV2Of(asRequest({ ...sealProofHeaders(), [SEALED_V2_HEADER]: 'yes' }))).toBe(false)
   })
 })
 

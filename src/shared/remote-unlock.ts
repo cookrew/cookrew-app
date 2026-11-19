@@ -38,12 +38,29 @@ export const SEALED_MARKER = 'x-cookrew-sealed'
 
 /** The seal's label: this key seals nothing else. */
 export const UNLOCK_INFO = 'mac-unlock/1'
+/**
+ * The label of a remembered password's box (Remember on the console): the password and the id the Mac issued
+ * for it, sealed to the Mac's unlock key. The page keeps only this; a captured unlock message is not one.
+ */
+export const REMEMBER_INFO = 'mac-unlock-remember/1'
 export const UNLOCK_PASSWORD_MAX = 128
 
 export const UNLOCK_NEEDS_SEAL = 'A password only reaches this Mac inside its sealed session.'
 
-export type UnlockOutcome = 'unlocked' | 'wrong' | 'not-locked' | 'refused' | 'resting' | 'closed' | 'busy' | 'failed'
+/** `forgotten`: a remembered box whose id this Mac no longer holds; the page drops it and asks for the password. */
+export type UnlockOutcome = 'unlocked' | 'wrong' | 'not-locked' | 'refused' | 'resting' | 'closed' | 'busy' | 'failed' | 'forgotten'
 
-export type UnlockBegin = { readonly ok: true; readonly key: string; readonly challenge: string } | { readonly ok: false; readonly error: string; readonly outcome?: UnlockOutcome }
+/** `remember: 1`: this Mac can issue a remembered password's id on this road (inside a cookrew-seal/2 session). */
+export type UnlockBegin =
+  | { readonly ok: true; readonly key: string; readonly challenge: string; readonly remember?: 1 }
+  | { readonly ok: false; readonly error: string; readonly outcome?: UnlockOutcome }
 
-export type UnlockAnswer = { readonly ok: true; readonly outcome: 'unlocked' } | { readonly ok: false; readonly error: string; readonly outcome?: UnlockOutcome }
+/** `remembered`: the id issued for a password the page asked to remember; the page seals it with the password. */
+export type UnlockAnswer =
+  | { readonly ok: true; readonly outcome: 'unlocked'; readonly remembered?: string }
+  | { readonly ok: false; readonly error: string; readonly outcome?: UnlockOutcome }
+
+/** How an unlock request reached the Mac. Only the terminus can say v2 (seal-proof.ts · sealedV2Of). */
+export interface UnlockRoad {
+  readonly sealedV2: boolean
+}

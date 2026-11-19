@@ -276,6 +276,7 @@ import { linuxHandFor } from './linux-input'
 import { createRemoteDesk, remoteGate } from './remote-desk'
 import { createUpdateCheck } from './update-check'
 import { createUnlockDoor, loadUnlockKey, unlockMissesFile } from './remote-unlock'
+import { createRememberedUnlocks } from './unlock-remembered'
 import { createUnlockGrantDoor } from './unlock-grant'
 import type { SealKeyPair } from '../shared/relay-seal'
 import { fingerprintOfDigest } from '../shared/key-fingerprint'
@@ -1865,6 +1866,11 @@ const canvasLink = canvasRelay.link
 // unconfirmed bytes, what the paced uplink still holds, and (once the bridge has
 // paused this stream) the loopback response's own buffer.
 const connectCodes = createConnectCodes(path.join(homedir(), '.cookrew', 'connect-code'))
+/**
+ * Remembered passwords' ids (unlock-remembered.ts): issued under the connect code in force, so a rotation
+ * refuses every box at once even if its clear below failed. Never a password.
+ */
+const rememberedUnlocks = createRememberedUnlocks(path.join(homedir(), '.cookrew', 'unlock-remembered.json'), { currentCode: () => connectCodes.currentId() })
 // cookrew-seal/2 device mode: this desktop and the account's others (seal-device.ts, seal-pins.ts).
 // Watches whose words the owner confirmed here (seal-watch-keys.ts): a watch's id is not its key's.
 const sealWatchKeys = createSealWatchKeys(path.join(homedir(), '.cookrew', 'seal-watch-keys.json'))
@@ -2225,6 +2231,11 @@ const v2CallTokens = RELAY_ORIGIN
         forgetRemoteAnswers(revoked)
         for (const device of admittedDevices.prune(revoked)) {
           remoteDesk.forgetDevice(`device:${device.deviceId}`)
+          try {
+            rememberedUnlocks.forgetWho(`device:${device.deviceId}`)
+          } catch {
+            // Its token is gone with the admission: no box of its reaches the door now.
+          }
           // One line per phone, named. "Withdrew 1 admission" would leave the
           // owner with no idea which phone in their hand just stopped working.
           console.error(
@@ -7446,7 +7457,9 @@ const unlockDoor = createUnlockDoor({
   },
   typable: (password) => macKeystrokes(password).every((key) => key.code >= 0),
   type: (password) => useInstances.typeAtLock(password),
-  record: (outcome, who) => store.recordEvent('remote.unlock', 'machine', 'this Mac', `${who.name}: ${outcome}`)
+  record: (outcome, who) => store.recordEvent('remote.unlock', 'machine', 'this Mac', `${who.name}: ${outcome}`),
+  // Remember on the console, inside cookrew-seal/2 only (remote-unlock.ts).
+  remembered: rememberedUnlocks
 })
 const remoteTray = createRemoteTray(() => remoteDesk.stopAll(), process.platform)
 /** Who a paired credential is: an admitted phone by its own name, the global token by what it can only be. */
@@ -8477,6 +8490,12 @@ app.whenReady().then(() => {
       } finally {
         sealTerminus.endSessions('the pairing was rotated')
         sealMarks.clearDevices()
+        // Every remembered password goes with the code it was remembered under (already refused by its code id).
+        try {
+          rememberedUnlocks.clear()
+        } catch (error) {
+          console.error('[cookrew] remembered passwords could not be cleared:', error)
+        }
       }
       return rotated
     },
@@ -9178,6 +9197,12 @@ function registerIpc(handlers: RestoreHandlers): void {
         if (keptOut !== null) refusedPhones.add(deviceId, keptOut)
         const forgotten = admittedDevices.forget(deviceId)
         remoteDesk.forgetDevice(`device:${deviceId}`)
+        // A forgotten phone that joins again does not get its remembered password back.
+        try {
+          rememberedUnlocks.forgetWho(`device:${deviceId}`)
+        } catch (error) {
+          console.error('[cookrew] a forgotten device\'s remembered passwords could not be dropped:', error)
+        }
         return forgotten
       }
     },

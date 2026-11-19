@@ -12,7 +12,7 @@ import { EXCHANGES_PER_LINK } from '../registry/src/v2-canvas-relay'
 import { RELAY_MARKER } from '../src/main/canvas-bridge'
 import type { SealedNotice, SealTerminus } from '../src/main/canvas-seal-terminus'
 import { createSealMarks, SEALED_ONLY_ERROR } from '../src/main/seal-marks'
-import { cameOverRelayLine, SEALED_PEER_HEADER } from '../src/main/seal-proof'
+import { cameOverRelayLine, SEALED_PEER_HEADER, SEALED_V2_HEADER } from '../src/main/seal-proof'
 import { takeRelayDevice } from '../src/main/relay-device'
 import { connectCodeId, newConnectCode } from '../src/shared/canvas-seal'
 import { startCodeHandshake, startDeviceHandshake } from '../src/shared/seal2/handshake'
@@ -28,7 +28,7 @@ const ROUTE = '/api/canary-route-44c1'
 const UPLOAD = 'canary-prompt-typed-c05e'
 const MACHINE_KEY = 'Bearer canary-machine-key-d00d'
 
-const seen: Array<{ authorization?: string; relayed?: string; device?: string; peer?: string; body: string; path?: string }> = []
+const seen: Array<{ authorization?: string; relayed?: string; device?: string; peer?: string; v2?: string; body: string; path?: string }> = []
 let events: ((chunk: string) => void) | null = null
 const PICTURE = Buffer.from(Array.from({ length: 1_000_000 }, (_, i) => i % 251))
 
@@ -67,6 +67,7 @@ const companion = (terminus: () => SealTerminus | undefined): Server =>
         relayed: request.headers[RELAY_MARKER] as string | undefined,
         device: request.headers['x-cookrew-device'] as string | undefined,
         peer: request.headers[SEALED_PEER_HEADER] as string | undefined,
+        v2: request.headers[SEALED_V2_HEADER] as string | undefined,
         body: body.length > 1000 ? `${body.length} bytes` : body.toString(),
         path: request.url
       })
@@ -260,6 +261,15 @@ describe('device mode (desktop to desktop on one account) through the real relay
     expect(seen.at(-1)).toMatchObject({ path: '/api/peer-unnamed', peer: undefined })
   })
 
+  it('marks every request out of a v2 session as such, code or device mode, whatever a caller wrote (Remember on the console)', async () => {
+    const mobile = await phone()
+    await readBody((await sealedFetch(mobile.connection, { method: 'GET', path: '/api/v2-phone', headers: { authorization: BEARER, [SEALED_V2_HEADER]: 'forged' } })).body)
+    expect(seen.at(-1)).toMatchObject({ path: '/api/v2-phone', v2: '1' })
+    const desk = await otherDesktop()
+    await readBody((await sealedFetch(desk.connection, { method: 'GET', path: '/api/v2-desk', headers: { authorization: MACHINE_KEY } })).body)
+    expect(seen.at(-1)).toMatchObject({ path: '/api/v2-desk', v2: '1' })
+  })
+
   it('opens on the device keys, carries a machine-keyed request, and the relay reads none of it', async () => {
     const [from, fromExchange] = mark()
     const link = await otherDesktop()
@@ -341,6 +351,16 @@ describe('the Mac keeps v1', () => {
     await old.send({ kind: 'open', stream: 1, method: 'GET', path: '/api/v1-peer', headers: { authorization: BEARER, [SEALED_PEER_HEADER]: world.otherDesktop.id } }, { kind: 'end', stream: 1 })
     await until(() => old.of(1).some((frame) => frame.kind === 'end'), 'the old answer')
     expect(seen.at(-1)).toMatchObject({ path: '/api/v1-peer', peer: undefined })
+    old.hangUp()
+  })
+
+  it('a v1 session is never marked v2, even when the caller writes the marker itself', async () => {
+    const { SealPhone } = await import('./support/seal-phone')
+    const old = new SealPhone(world.prefix(), code, world.phoneSession)
+    await old.connect()
+    await old.send({ kind: 'open', stream: 1, method: 'GET', path: '/api/v1-marked', headers: { authorization: BEARER, [SEALED_V2_HEADER]: '1' } }, { kind: 'end', stream: 1 })
+    await until(() => old.of(1).some((frame) => frame.kind === 'end'), 'the old answer')
+    expect(seen.at(-1)).toMatchObject({ path: '/api/v1-marked', v2: undefined })
     old.hangUp()
   })
 

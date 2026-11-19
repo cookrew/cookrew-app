@@ -42,6 +42,19 @@ export function sealedPeerOf(request: Pick<http.IncomingMessage, 'headers'>): st
 }
 
 /**
+ * WHETHER A REQUEST CAME OUT OF A COOKREW-SEAL/2 SESSION (code or device mode), not v1's: the
+ * terminus sets it on every v2 stream's inner request and takes any copy a caller sent off
+ * the request, on v1 and v2 alike (canvas-seal-terminus.ts · innerHeaders). Believed only
+ * beside the seal's proof. A remembered password is issued and taken only on such a request
+ * (remote-unlock.ts).
+ */
+export const SEALED_V2_HEADER = 'x-cookrew-seal-v2'
+
+export function sealedV2Of(request: Pick<http.IncomingMessage, 'headers'>): boolean {
+  return request.headers[SEALED_V2_HEADER] === '1' && carriesSealProof(request)
+}
+
+/**
  * WHAT SAYS A REQUEST CAME DOWN THE RELAY LINE, in the clear: the canvas relay's
  * own dialer adds it (index.ts), and nothing else does. The direct WebRTC link
  * and the sealed session's inner requests carry the relay marker too, so the
