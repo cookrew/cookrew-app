@@ -82,6 +82,11 @@ export interface SealDeviceDeps {
   readonly verify: DeviceVerifier
   /** Is this device one of this account's machines, allowed to dial this one? Unknown means no. */
   trusted(deviceId: string): Promise<boolean>
+  /**
+   * Is it still let in by what this Mac knows now, asking nobody (a desktop the owner blocked since its hello is
+   * not)? Asked again as its session is confirmed: the hello's `trusted` may have waited on cookrew.dev meanwhile.
+   */
+  admits?(deviceId: string): boolean
 }
 
 /** A v2 session was confirmed: from here that caller is expected to send nothing in the clear. */
@@ -622,7 +627,14 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     const waiting = pending.get(id)
     if (!waiting) return reply(response, 404, { error: 'no such session' })
     if (!(await waiting.accepted.confirm(proof))) return reply(response, 403, { error: 'that proves nothing' })
-    if (pending.get(id) === waiting) promote(id, waiting)
+    // Dropped while it proved itself (endPeer: the owner said NOT THE SAME): no session. Promoted by the same
+    // finish asked twice: the session stands.
+    if (pending.get(id) !== waiting) return sessions.has(id) ? reply(response, 200, {}) : reply(response, 403, { error: 'not let in' })
+    if (waiting.v === 2 && waiting.peer.mode === 'device' && deps.device?.admits?.(waiting.peer.deviceId) === false) {
+      pending.delete(id)
+      return reply(response, 403, { error: 'not let in' })
+    }
+    promote(id, waiting)
     reply(response, 200, {})
   }
 

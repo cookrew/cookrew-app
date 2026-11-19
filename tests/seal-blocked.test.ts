@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { answerPeer, askForKey, desktopsWithoutBlocked, forgetBlocked, keysWithoutBlocked, marksWithBlocked, type PeerAnswerDeps } from '../src/main/seal-blocked'
+import { answerPeer, askForKey, createBlockedLanes, desktopsWithoutBlocked, forgetBlocked, keysWithoutBlocked, marksWithBlocked, type PeerAnswerDeps } from '../src/main/seal-blocked'
 import { createAdmittedDeviceStore } from '../src/main/admitted-devices'
 import { createMachineKeyStore, createRefusedMachines } from '../src/main/machine-keys'
 import { tempBase } from './support/idv2'
@@ -93,9 +93,24 @@ describe('the owner answers another desktop\'s six words (index.ts seal:peer-ans
     expect(answerPeer(A, 'not-same', failing)).toBe(false)
     expect(pins.blocks(A)).toBe(true)
     expect(ended).toEqual([`dialled:${A}`, `let-in:${A}`, `key:${A}`, `forgotten:${A}`])
-    const sweep = forgetBlocked(pins, { forgetAdmission: failing.forgetAdmission, forgetKey: (id) => void ended.push(`swept-key:${id}`) })
+    const sweep = forgetBlocked(pins, { forgetAdmission: failing.forgetAdmission, forgetKey: (id) => void ended.push(`swept-key:${id}`), refuseMachine: failing.refuseMachine })
     expect(sweep).toEqual([A])
-    expect(ended.at(-1)).toBe(`swept-key:${A}`)
+    expect(ended.slice(-2)).toEqual([`swept-key:${A}`, `forgotten:${A}`])
+  })
+
+  it('the block\'s own write failing still ends every session first, still tries the rest, and answers false (Relay round 4, F2)', () => {
+    const { pins, ended, deps } = answering()
+    const failing: PeerAnswerDeps = {
+      ...deps,
+      pins: {
+        ...pins,
+        block: () => {
+          throw new Error('disk full')
+        }
+      }
+    }
+    expect(answerPeer(A, 'not-same', failing)).toBe(false)
+    expect(ended).toEqual([`dialled:${A}`, `let-in:${A}`, `admission:${A}`, `key:${A}`, `forgotten:${A}`])
   })
 
   it('with the real stores: the token a blocked desktop was admitted with opens nothing, and it stays a forgotten machine', () => {
@@ -146,13 +161,55 @@ describe('the owner answers another desktop\'s six words (index.ts seal:peer-ans
 })
 
 describe('a blocked desktop on the lanes that are not sealed (Relay round 4, A)', () => {
-  it('at launch, an admission and a key a blocked desktop still holds (blocked on an older build) go', () => {
+  it('at launch, an admission and a key a blocked desktop still holds (blocked on an older build) go, and it becomes a forgotten machine (F3)', () => {
     const pins = createSealPinStore(fileIn('seal-pins.json'))
+    const forgotten = createRefusedMachines(fileIn('machine-refused.json'))
     const gone: string[] = []
-    expect(forgetBlocked(pins, { forgetAdmission: (id) => (gone.push(`admission:${id}`), true), forgetKey: (id) => void gone.push(`key:${id}`) })).toEqual([])
+    const holdings = { forgetAdmission: (id: string) => (gone.push(`admission:${id}`), true), forgetKey: (id: string) => void gone.push(`key:${id}`), refuseMachine: forgotten.add }
+    expect(forgetBlocked(pins, holdings)).toEqual([])
     pins.block(A)
-    expect(forgetBlocked(pins, { forgetAdmission: (id) => (gone.push(`admission:${id}`), true), forgetKey: (id) => void gone.push(`key:${id}`) })).toEqual([A])
+    expect(forgetBlocked(pins, holdings)).toEqual([A])
     expect(gone).toEqual([`admission:${A}`, `key:${A}`])
+    expect(forgotten.has(A)).toBe(true)
+    expect(forgotten.has(B)).toBe(false)
+  })
+
+  it('createBlockedLanes: the stores index.ts uses, each with a blocked desktop kept off (Relay round 4, S11-S13)', () => {
+    const pins = createSealPinStore(fileIn('seal-pins.json'))
+    const forgotten = createRefusedMachines(fileIn('machine-refused.json'))
+    const rawKeys = createMachineKeyStore(fileIn('machine-keys.json'))
+    const rawMarks = createSealMarks(fileIn('seal-marks.json'))
+    rawKeys.keep(A, 'blocked one', 'key-for-a')
+    rawKeys.keep(B, 'other one', 'key-for-b')
+    const lanes = createBlockedLanes({ pins, keys: rawKeys, marks: rawMarks, forgotten })
+    let rounds = 0
+    const ask = lanes.askForKey(() => void (rounds += 1))
+    const rows = [
+      { id: A, name: 'blocked one', online: true },
+      { id: B, name: 'other one', online: true }
+    ]
+    // Nothing blocked: every lane as it was.
+    expect([lanes.keys.token(A), lanes.marks.refuses(A), lanes.door.refusedDevice(A), lanes.door.refusedMachine(A)]).toEqual(['key-for-a', false, false, false])
+    expect(lanes.desktops(rows)).toEqual(rows)
+    ask(A)
+    expect(rounds).toBe(1)
+    pins.block(A)
+    // Blocked: the key, the relay line, the door (every pass), the pass sent, the key round.
+    expect([lanes.keys.token(A), lanes.marks.refuses(A), lanes.door.refusedDevice(A)]).toEqual([null, true, true])
+    expect(lanes.desktops(rows)).toEqual([rows[1]])
+    ask(A)
+    expect(rounds).toBe(1)
+    lanes.keys.keep(A, 'blocked one', 'new-key')
+    expect(rawKeys.token(A)).toBe('key-for-a')
+    // A forgotten machine is the door's machine-pass refusal, apart from the block.
+    expect(lanes.door.refusedMachine(B)).toBe(false)
+    forgotten.add(B)
+    expect(lanes.door.refusedMachine(B)).toBe(true)
+    expect(lanes.door.refusedDevice(B)).toBe(false)
+    // The rest of each store is the store's own.
+    expect(lanes.keys.token(B)).toBe('key-for-b')
+    lanes.marks.setSealedOnly(true)
+    expect(rawMarks.sealedOnly()).toBe(true)
   })
 
   it('a machine with no key is asked for in a round, unless it is blocked: no round would ever bring one', () => {

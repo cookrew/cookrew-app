@@ -63,7 +63,9 @@ export function createSealDevice(input: SealDeviceInput): SealDevice {
     device: {
       self,
       verify: verifyDevice,
-      trusted: async (deviceId) => input.pins.allows(deviceId) && self() !== null && (await isListed(deviceId))
+      // Asked again after the listing: a NOT THE SAME while cookrew.dev was being asked (a relay can stall it) counts.
+      trusted: async (deviceId) => input.pins.allows(deviceId) && self() !== null && (await isListed(deviceId)) && input.pins.allows(deviceId),
+      admits: (deviceId) => self() !== null && input.pins.allows(deviceId)
     }
   }
 }

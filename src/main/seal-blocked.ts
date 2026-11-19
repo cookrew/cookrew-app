@@ -1,5 +1,6 @@
 import type { SealTerminus } from './canvas-seal-terminus'
-import type { MachineKeyStore, MachineRow } from './machine-keys'
+import type { PairDoorDeps } from './account-pair'
+import type { MachineKeyStore, MachineRow, RefusedMachines } from './machine-keys'
 import type { SealMarks } from './seal-marks'
 import type { SealPeers } from './seal-peers'
 import type { SealPinStore } from './seal-pins'
@@ -26,7 +27,11 @@ import type { SealPinStore } from './seal-pins'
  *               and does not ask cookrew.dev for one each time it is read.
  *
  * Not cut: a plain stream it already holds open ends when it next asks, as with
- * Devices → Forget.
+ * Devices → Forget. Info (Relay round 4, F4/F5): a forgotten machine is never
+ * taken off RefusedMachines (there is no removal), so a block, once also written
+ * there, outlives a later SAME for its machine pass; and the relay line's refusal
+ * keys on the device the RELAY names, so it is defence in depth only: the door,
+ * the dropped admission and the sealed lane are what hold.
  */
 
 type Blocks = Pick<SealPinStore, 'blocks'>
@@ -67,23 +72,31 @@ export function answerPeer(deviceId: unknown, answer: unknown, deps: PeerAnswerD
   if (answer === 'same') deps.pins.pin(deviceId)
   else if (answer === 'later') deps.pins.later(deviceId)
   else if (answer === 'not-same') {
-    // Not this owner's desktop, whatever the listing says: refused from now on, and every way it is in ends.
-    deps.pins.block(deviceId)
-    // In memory, first: every open session ends whatever a write below does.
+    // Not this owner's desktop, whatever the listing says: every open session ends first, in memory, whatever a
+    // write below does; then it is refused from now on, each write tried on its own (Relay round 4, F2).
     deps.peers.closePeer(deviceId)
     deps.terminus.endPeer(deviceId, 'a desktop the owner did not recognise')
-    const written = [tried(() => deps.forgetAdmission(deviceId)), tried(() => deps.forgetKey(deviceId)), tried(() => deps.refuseMachine(deviceId))]
+    const written = [
+      tried(() => deps.pins.block(deviceId)),
+      tried(() => deps.forgetAdmission(deviceId)),
+      tried(() => deps.forgetKey(deviceId)),
+      tried(() => deps.refuseMachine(deviceId))
+    ]
     return written.every(Boolean)
   } else return false
   return true
 }
 
-/** At launch: a blocked desktop's admission and key, left from a block made before they went with it, go now. */
-export function forgetBlocked(pins: Pick<SealPinStore, 'blocked'>, deps: Pick<PeerAnswerDeps, 'forgetAdmission' | 'forgetKey'>): string[] {
+/**
+ * At launch: a blocked desktop's admission and key, left from a block made before they went with it (an older
+ * build, or a write that failed), go now, and it is a forgotten machine too, so the pins file is not its only record.
+ */
+export function forgetBlocked(pins: Pick<SealPinStore, 'blocked'>, deps: Pick<PeerAnswerDeps, 'forgetAdmission' | 'forgetKey' | 'refuseMachine'>): string[] {
   const ids = pins.blocked()
   for (const id of ids) {
     tried(() => deps.forgetAdmission(id))
     tried(() => deps.forgetKey(id))
+    tried(() => deps.refuseMachine(id))
   }
   return ids
 }
@@ -114,3 +127,39 @@ export function keysWithoutBlocked(store: MachineKeyStore, pins: Blocks): Machin
 /** The account's desktops this one would enter: a blocked one is never sent this desktop's pass. */
 export const desktopsWithoutBlocked = (rows: readonly MachineRow[] | null, pins: Blocks): MachineRow[] | null =>
   rows === null ? null : rows.filter((row) => !pins.blocks(row.id))
+
+export interface BlockedLaneStores {
+  readonly pins: Pick<SealPinStore, 'blocks'>
+  readonly marks: SealMarks
+  readonly keys: MachineKeyStore
+  /** Machines forgotten here (machine-keys.ts · RefusedMachines). */
+  readonly forgotten: Pick<RefusedMachines, 'has'>
+}
+
+export interface BlockedLanes {
+  /** The relay line's marks, a blocked desktop refused in the clear. */
+  readonly marks: SealMarks
+  /** The machine keys, none used or kept for a blocked desktop. */
+  readonly keys: MachineKeyStore
+  /** The door's two refusals (account-pair.ts): a forgotten machine's machine pass, and a blocked desktop's every pass. */
+  readonly door: Required<Pick<PairDoorDeps, 'refusedMachine' | 'refusedDevice'>>
+  /** The account's desktops, a blocked one never sent a pass. */
+  desktops(rows: readonly MachineRow[] | null): MachineRow[] | null
+  /** A key round for a machine with none, never for a blocked one. */
+  askForKey(collect: () => void): (machineId: string) => void
+}
+
+/**
+ * EVERY PLAIN LANE, WITH A BLOCKED DESKTOP KEPT OFF IT, built once: index.ts makes one call and uses what this
+ * returns, so a regression in the wiring is one here, where it is tested (Relay round 4, S11-S13).
+ */
+export function createBlockedLanes(stores: BlockedLaneStores): BlockedLanes {
+  const { pins } = stores
+  return {
+    marks: marksWithBlocked(stores.marks, pins),
+    keys: keysWithoutBlocked(stores.keys, pins),
+    door: { refusedMachine: (deviceId) => stores.forgotten.has(deviceId), refusedDevice: (deviceId) => pins.blocks(deviceId) },
+    desktops: (rows) => desktopsWithoutBlocked(rows, pins),
+    askForKey: (collect) => askForKey(pins, collect)
+  }
+}

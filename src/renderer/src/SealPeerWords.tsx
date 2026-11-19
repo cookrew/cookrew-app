@@ -68,6 +68,50 @@ export function SealPeerWordsView({ peer, busy, onAnswer }: { peer: WaitingPeer;
   )
 }
 
+/** Said when NOT THE SAME could not be written whole on this Mac (main/seal-blocked.ts · answerPeer said false). */
+export const BLOCKED_PARTLY =
+  'That computer was cut off, but its block could not be saved in full here. If its words show again, answer again; otherwise quit and reopen Cookrew to finish blocking it.'
+
+/** Did the answer fail? NOT THE SAME says true only when every part of the block was written. */
+export const answerFailed = (answer: PeerAnswer, said: unknown): boolean => answer === 'not-same' && said !== true
+
+export function SealPeerFailedView({ onDismiss }: { onDismiss: () => void }): React.JSX.Element {
+  return (
+    <div className="gs-scrim cr-sheet" role="alertdialog" aria-modal="true" aria-label="The block is not finished">
+      <div className="gs-sheet gs-small cr-sheet">
+        <header className="gs-sheet-head">
+          <h2>Blocked only in part</h2>
+        </header>
+        <p className="gs-consequence">{BLOCKED_PARTLY}</p>
+        <div className="gs-sheet-foot">
+          {/* eslint-disable-next-line jsx-a11y/no-autofocus */}
+          <button type="button" className="gs-primary" onClick={onDismiss} autoFocus>
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Which sheet shows: a block not written whole first (never closed silently, Relay round 4, F2), then a computer waiting. */
+export function SealPeerSheet({
+  peer,
+  failed,
+  busy,
+  onAnswer,
+  onDismiss
+}: {
+  peer: WaitingPeer | undefined
+  failed: boolean
+  busy: boolean
+  onAnswer: (answer: PeerAnswer) => void
+  onDismiss: () => void
+}): React.JSX.Element | null {
+  if (failed) return <SealPeerFailedView onDismiss={onDismiss} />
+  return peer === undefined ? null : <SealPeerWordsView peer={peer} busy={busy} onAnswer={onAnswer} />
+}
+
 const POLL_MS = 5000
 
 /** Asked of this Mac while the app runs: nothing shows unless a computer waits. */
@@ -75,6 +119,7 @@ export function SealPeerWords(): React.JSX.Element | null {
   const api = cookrew()
   const [waiting, setWaiting] = useState<readonly WaitingPeer[]>([])
   const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState(false)
   const ask = useCallback(() => {
     void api.sealPeersWaiting?.().then(setWaiting, () => undefined)
   }, [api])
@@ -85,13 +130,19 @@ export function SealPeerWords(): React.JSX.Element | null {
     return () => clearInterval(timer)
   }, [api, ask])
   const peer = waiting[0]
-  if (peer === undefined || typeof document === 'undefined') return null
+  if (typeof document === 'undefined' || (peer === undefined && !failed)) return null
   const onAnswer = (answer: PeerAnswer): void => {
+    if (peer === undefined) return
     setBusy(true)
-    void (api.sealPeerAnswer?.(peer.deviceId, answer) ?? Promise.resolve(false)).finally(() => {
-      setBusy(false)
-      ask()
-    })
+    void (api.sealPeerAnswer?.(peer.deviceId, answer) ?? Promise.resolve(false))
+      .then(
+        (said) => setFailed(answerFailed(answer, said)),
+        () => setFailed(answerFailed(answer, false))
+      )
+      .finally(() => {
+        setBusy(false)
+        ask()
+      })
   }
-  return createPortal(<SealPeerWordsView peer={peer} busy={busy} onAnswer={onAnswer} />, document.body)
+  return createPortal(<SealPeerSheet peer={peer} failed={failed} busy={busy} onAnswer={onAnswer} onDismiss={() => setFailed(false)} />, document.body)
 }

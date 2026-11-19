@@ -185,7 +185,7 @@ import { createSealMarks } from './seal-marks'
 import { createSealDevice } from './seal-device'
 import { createSealPeers } from './seal-peers'
 import { createSealPinStore } from './seal-pins'
-import { answerPeer, askForKey, desktopsWithoutBlocked, forgetBlocked, keysWithoutBlocked, marksWithBlocked } from './seal-blocked'
+import { answerPeer, createBlockedLanes, forgetBlocked } from './seal-blocked'
 import { deviceWords } from '../shared/seal2/handshake'
 import { sealedSwitchMemory } from './remote-switch-memory'
 import { singleConfirm } from './remote-switch-confirm'
@@ -1502,10 +1502,17 @@ const admittedDevices = createAdmittedDeviceStore()
  * every lane, the plain machine-key one as well as the sealed one (seal-blocked.ts).
  */
 const sealPins = createSealPinStore(path.join(homedir(), '.cookrew', 'seal-pins.json'))
-const machineKeys = keysWithoutBlocked(createMachineKeyStore(path.join(homedir(), '.cookrew', 'machine-keys.json')), sealPins)
-const MACHINE_KEYS_EVERY_MS = 10 * 60_000
 /** Machines of the account the owner forgot here: their passes are turned away at the door. */
 const refusedMachines = createRefusedMachines(path.join(homedir(), '.cookrew', 'machine-refused.json'))
+/** The machine keys, the relay line's marks and the door's refusals, each with a blocked desktop kept off (seal-blocked.ts). */
+const blockedLanes = createBlockedLanes({
+  pins: sealPins,
+  keys: createMachineKeyStore(path.join(homedir(), '.cookrew', 'machine-keys.json')),
+  marks: createSealMarks(path.join(homedir(), '.cookrew', 'seal-marks.json')),
+  forgotten: refusedMachines
+})
+const machineKeys = blockedLanes.keys
+const MACHINE_KEYS_EVERY_MS = 10 * 60_000
 /** Trusted phones forgotten here: out until they join the account again with a new phone's code. */
 const refusedPhones = createRefusedPhones(path.join(homedir(), '.cookrew', 'phone-refused.json'))
 /** Present once cookrew.dev has taken this machine's one proof (registry issueMachineGrant). */
@@ -1570,7 +1577,7 @@ async function collectMachineKeys(): Promise<void> {
       if (!answer.ok) return null
       const rows = (parseAccountMachines(answer.value, accounts.account()?.deviceId ?? null) ?? []).map((m) => ({ id: m.id, name: m.name, online: m.online }))
       // A blocked desktop is never sent this machine's pass.
-      return desktopsWithoutBlocked(rows, sealPins)
+      return blockedLanes.desktops(rows)
     },
     grant: async () => {
       // Asked every round there is a machine to enter: a desktop signed in with a proof on it is trusted from that
@@ -1622,7 +1629,7 @@ function keyRefused(machineId: string): void {
 }
 
 /** No key yet for a machine (one added since the last round): ask for a round, not for a blocked one (seal-blocked.ts). */
-const askForMachineKey = askForKey(sealPins, () => void collectMachineKeys().catch(() => undefined))
+const askForMachineKey = blockedLanes.askForKey(() => void collectMachineKeys().catch(() => undefined))
 
 /** What a desktop the owner said is NOT THE SAME holds here (seal-blocked.ts): its admission, and the key held for it. */
 const blockedDesktopHoldings = {
@@ -1720,9 +1727,8 @@ const accountPairDoor = createAccountPairDoor({
   platform: process.platform,
   // Read when a watch arrives, long after startup: watchPairing is declared further down.
   watch: { enter: (deviceId) => watchPairing.enter(deviceId) },
-  refusedMachine: (deviceId) => refusedMachines.has(deviceId),
-  // A desktop the owner said is not the same: every pass it brings, not only its machine pass (seal-blocked.ts).
-  refusedDevice: sealPins.blocks,
+  // A forgotten machine's machine pass, and every pass a desktop the owner said is not the same brings.
+  ...blockedLanes.door,
   refusedPhone: (deviceId, since) => refusedPhones.refuses(deviceId, since),
   log: (message: string) => console.error(`[cookrew] ${message}`)
 })
@@ -1856,7 +1862,7 @@ const sealPeers = createSealPeers({
   log: (line) => console.error(`[cookrew] ${line}`)
 })
 // A blocked desktop is refused in the clear on the relay line too, whatever its marks (seal-blocked.ts).
-const sealMarks = marksWithBlocked(createSealMarks(path.join(homedir(), '.cookrew', 'seal-marks.json')), sealPins)
+const sealMarks = blockedLanes.marks
 const sealTerminus = createSealTerminus({
   codeFor: (id) => connectCodes.codeFor(id),
   replacedKeyFor: (id) => connectCodes.replacedKeyFor(id),
@@ -7749,7 +7755,7 @@ let cliSocket: SocketServerHandle | null = null
 app.whenReady().then(() => {
   // A desktop blocked by an older build kept its admission and key: they go now (seal-blocked.ts). Never in the way of the start.
   try {
-    forgetBlocked(sealPins, blockedDesktopHoldings)
+    forgetBlocked(sealPins, { ...blockedDesktopHoldings, refuseMachine: (id) => refusedMachines.add(id) })
   } catch (error) {
     console.error('[cookrew] blocked desktops could not be swept:', error)
   }
