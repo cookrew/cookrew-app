@@ -417,6 +417,8 @@ describe('verification review: a confirmation is audited, before its record goes
     expect(turnedOn[0].line).toContain(NAME)
     expect(turnedOn[0].open).toBe(1)
     expect(audit.map((a) => a.line).join('\n')).not.toContain(KEY)
+    // Nor its last six characters, which Magpie shows and which narrow a key down (relay verification L4).
+    expect(audit.map((a) => a.line).join('\n')).not.toContain(KEY.slice(-6))
   })
 
   it('the revoke that clears a record writes its line while the record is still there', async () => {

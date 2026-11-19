@@ -427,3 +427,33 @@ describe('B restarts between giving a key and hearing it acknowledged', () => {
     expect(await second.share.clear(pending.name)).toEqual({ ok: true })
   })
 })
+
+describe('relay verification L3: B confirms the binding before it turns the key on and settles the intent', () => {
+  it('never turns the key on or settles its intent when the binding cannot be confirmed', async () => {
+    const b = makeB()
+    const send = await connect(b)
+    await ask(send)
+    b.keys.confirm = () => {
+      throw new Error('disk full')
+    }
+    expect((await ack(send)).status).toBe(500)
+    // acknowledge is what turns the key full in Magpie and clears its intent: it must not have run.
+    expect(b.acked).toEqual([])
+    expect(b.listed.find((row) => row.id === FRESH_ID)?.access).toBe('read-only')
+  })
+
+  it('confirms first, then acknowledges, in that order', async () => {
+    const order: string[] = []
+    const b = makeB({
+      acknowledge: async (id) => {
+        order.push(`acknowledge:${b.keys.list().find((k) => k.id === id)?.pending === true ? 'pending' : 'live'}`)
+        return { ok: true }
+      }
+    })
+    const send = await connect(b)
+    await ask(send)
+    expect((await ack(send)).status).toBe(200)
+    // When the intent is settled (the key turned full), the binding is already live.
+    expect(order).toEqual(['acknowledge:live'])
+  })
+})

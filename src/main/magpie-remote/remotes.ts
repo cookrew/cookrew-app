@@ -62,6 +62,8 @@ export interface RemotesStore {
   unacked(peer: string): { key: string; keyId: string } | null
   /** The other computer acknowledged this key, used by this provider: the forwarder may use it. Throws for another key. */
   markAcked(peer: string, keyId: string, providerId: string): void
+  /** Back to unacknowledged (the forwarder sends nothing with it), to be said and finished again. Throws for another key. */
+  markUnacked(peer: string, keyId: string): void
   remove(peer: string): void
   /** Are keys sealed with the keychain here? */
   sealed(): boolean
@@ -146,6 +148,11 @@ export function createRemotesStore(file: string, sealer: SecretSealer | null): R
       if (found === undefined || found.acked !== false || found.keyId === undefined) return null
       const key = keyOf(found)
       return key === null ? null : { key, keyId: found.keyId }
+    },
+    markUnacked: (peer, keyId) => {
+      const all = read()
+      if (!all.some((r) => r.peer === peer && r.keyId === keyId)) throw new Error('That key is no longer kept here.')
+      write(all.map((r) => (r.peer === peer && r.keyId === keyId ? { ...r, acked: false } : r)))
     },
     markAcked: (peer, keyId, providerId) => {
       const all = read()
@@ -239,18 +246,46 @@ async function placeFor(peer: string, peerName: string, known: readonly RemoteMa
   return { ok: true, place: { providerId, ours, url: `http://127.0.0.1:${port}/peer/${peer}` } }
 }
 
+/** This key is still kept here, unacknowledged; an unreadable store counts as kept (it is tried again). */
+function stillHeld(peer: string, keyId: string, deps: Pick<ConnectDeps, 'store'>): boolean {
+  try {
+    return deps.store.unacked(peer)?.keyId === keyId
+  } catch {
+    return true
+  }
+}
+
 /** Acknowledged: the key may be used, and the provider is pointed at the forwarder. Anything failing gives it back. */
 async function finish(peer: string, peerName: string, keyId: string, place: Place, deps: ConnectDeps): Promise<ConnectAnswer> {
   try {
     deps.store.markAcked(peer, keyId, place.providerId)
   } catch {
-    dropKey(peer, deps)
+    // The other computer has turned the key on and settled its warning (relay verification I1). Dropping it
+    // here, with a give-back that can fail too, could leave it a live key nobody holds and nothing warning
+    // of it. So it is kept, unacknowledged (the forwarder sends nothing with it), and the next pass says it
+    // again: the other computer answers the same, and this is tried once more. Given back only when nothing
+    // of it is held here to try again with.
+    if (stillHeld(peer, keyId, deps)) return { ok: false, why: `Could not record here that ${peerName} has the key; Cookrew tries again in a few minutes, or connect again.` }
     return { ok: false, why: `Could not record that ${peerName} has heard about the key.${await giveBack(peer, peerName, deps)}` }
   }
   const added = place.ours ? await deps.setProvider(place.providerId, place.url) : await deps.addProvider(place.providerId, place.url)
   if (!added.ok) {
+    // Given back FIRST, and dropped here only once the other computer took it: a give-back that fails would
+    // otherwise leave it a live key nobody holds (relay verification I1). Not taken: kept, unacknowledged, and
+    // finished again on the next pass.
+    try {
+      await deps.returnKey(peer)
+    } catch {
+      try {
+        deps.store.markUnacked(peer, keyId)
+        return { ok: false, why: `${added.why} Cookrew tries again in a few minutes, or connect again.` }
+      } catch {
+        dropKey(peer, deps)
+        return { ok: false, why: `${added.why} The key could not be given back: ${peerName} still has it until its owner revokes it there.` }
+      }
+    }
     dropKey(peer, deps)
-    return { ok: false, why: `${added.why}${await giveBack(peer, peerName, deps)}` }
+    return { ok: false, why: `${added.why} The key was given back.` }
   }
   return { ok: true, providerId: place.providerId }
 }
@@ -268,7 +303,12 @@ async function reacknowledge(peer: string, peerName: string, place: Place, deps:
   }
   if (kept === null) return { state: 'none' }
   const acked = await acknowledge(peer, kept.key, kept.keyId, deps)
-  if (acked.ok) return { state: 'done', answer: await finish(peer, peerName, kept.keyId, place, deps) }
+  if (acked.ok) {
+    const answer = await finish(peer, peerName, kept.keyId, place, deps)
+    // Heard, but not recorded here: the same key is still held to try again with, so it waits (never a new key).
+    if (!answer.ok && stillHeld(peer, kept.keyId, deps)) return { state: 'waiting', why: answer.why }
+    return { state: 'done', answer }
+  }
   if (acked.broken) return { state: 'waiting', why: acked.why }
   dropKey(peer, deps)
   await giveBack(peer, peerName, deps)

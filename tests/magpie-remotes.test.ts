@@ -109,9 +109,11 @@ describe('connecting to another computer’s Magpie', () => {
   it('says so when the other computer would not take its key back, instead of claiming it did', async () => {
     const d = deps({ addProvider: async () => ({ ok: false, why: 'magpie said no.' }), returnKey: async () => { throw new Error('403 switched off') } })
     const answer = await connectRemote(PEER, 'Solis', d)
-    expect(answer).toMatchObject({ ok: false, why: expect.stringContaining('could not be given back') })
+    // Not taken back: kept here, unacknowledged and unused, to be finished again (relay verification I1).
+    expect(answer).toMatchObject({ ok: false, why: expect.stringContaining('tries again') })
     expect(JSON.stringify(answer)).not.toContain('was given back')
     expect(d.store.keyFor(PEER)).toBeNull()
+    expect(d.store.unacked(PEER)).not.toBeNull()
   })
 
   it('passes the other computer’s refusal through', async () => {
@@ -430,5 +432,137 @@ describe('verification review: the re-acknowledgement timer stops with the app',
       cleared.mockRestore()
       await remote.stop()
     }
+  })
+})
+
+describe('relay verification L2: a served seat starting or ending drops the cached gate answer', () => {
+  it('asks the gate afresh on the next forwarded request after seatsChanged(), and is refused once it shuts', async () => {
+    const { createMagpieRemote } = await import('../src/main/magpie-remote/setup')
+    let open = true
+    let asks = 0
+    const remote = createMagpieRemote({
+      base: dir,
+      switches: () => ({ magpie: true, magpieRemote: true }),
+      shareKeys: () => null,
+      gatewayPort: () => null,
+      openStream: async () => {
+        throw new Error('none')
+      },
+      desktops: async () => [],
+      selfId: () => null,
+      sealer: null,
+      magpieBin: () => null,
+      env: () => ({ home: dir, env: {} }),
+      log: () => undefined,
+      seatGate: async () => {
+        asks += 1
+        return open
+      },
+      callerIsMagpie: async () => true,
+      forwardPort: 0
+    })
+    await remote.start()
+    try {
+      const ask = async (): Promise<string> => {
+        const r = await fetch(`http://127.0.0.1:${remote.port()}/peer/deviceB0000000000000000000000002/v1/models`, { headers: { host: `127.0.0.1:${remote.port()}` } })
+        return r.text()
+      }
+      const shutText = /older sandbox/
+      const before = asks
+      expect(await ask()).not.toMatch(shutText)
+      expect(asks).toBe(before + 1)
+      // An old-profile seat is reattached: the gate would now say shut, but the open answer is still cached.
+      open = false
+      expect(await ask()).not.toMatch(shutText)
+      expect(asks).toBe(before + 1)
+      remote.seatsChanged()
+      expect(await ask()).toMatch(shutText)
+      expect(asks).toBe(before + 2)
+    } finally {
+      await remote.stop()
+    }
+  })
+})
+
+describe('relay verification I1: once the other computer turned the key on, a local failure never strands it', () => {
+  /** This computer's store, whose markAcked fails `times` times. */
+  const flakyAcks = (times: number) => {
+    const store = createRemotesStore(path.join(dir, 'magpie-remotes.json'), sealer)
+    let left = times
+    return Object.assign(store, {
+      markAcked: (peer: string, keyId: string, providerId: string) => {
+        if (left > 0) {
+          left -= 1
+          throw new Error('disk full')
+        }
+        return createRemotesStore(path.join(dir, 'magpie-remotes.json'), sealer).markAcked(peer, keyId, providerId)
+      }
+    })
+  }
+
+  it('keeps the key (sending nothing with it) and gives nothing back when it cannot record the acknowledgement', async () => {
+    const d = deps({ store: flakyAcks(1) })
+    const answer = await connectRemote(PEER, 'Solis', d)
+    expect(answer).toMatchObject({ ok: false, why: expect.stringContaining('tries again') })
+    expect(d.returned).toEqual([])
+    expect(d.store.keyFor(PEER)).toBeNull()
+    expect(d.store.unacked(PEER)).toMatchObject({ key: KEY, keyId: 'id1' })
+    expect(d.added).toEqual([])
+  })
+
+  it('the next pass says it again (the other computer answers the same), records it, and points the provider', async () => {
+    const d = deps({ store: flakyAcks(1) })
+    await connectRemote(PEER, 'Solis', d)
+    const acks: string[] = []
+    const again = deps({ store: d.store, ackKey: async (_p, _k, id) => (acks.push(id), { ok: true }) })
+    await resumeRemotes(again)
+    expect(acks).toEqual(['id1'])
+    expect(again.store.list()).toMatchObject([{ keyId: 'id1', acked: true }])
+    expect(again.store.keyFor(PEER)).toBe(KEY)
+    expect(again.added).toHaveLength(1)
+    expect(again.returned).toEqual([])
+  })
+
+  it('on reconnect, a key still held after another failed record is waited on, never swapped for a new one', async () => {
+    const d = deps({ store: flakyAcks(2) })
+    await connectRemote(PEER, 'Solis', d)
+    const askKey = vi.fn(async () => ({ ok: true as const, key: KEY, id: 'id2' }))
+    const again = deps({ store: d.store, askKey })
+    expect(await connectRemote(PEER, 'Solis', again)).toMatchObject({ ok: false, why: expect.stringContaining('tries again') })
+    expect(askKey).not.toHaveBeenCalled()
+    expect(again.store.unacked(PEER)).toMatchObject({ keyId: 'id1' })
+  })
+
+  it('when the provider cannot be pointed and the other computer will not take the key back, keeps it unacknowledged to try again', async () => {
+    const d = deps({ addProvider: async () => ({ ok: false, why: 'magpie said no.' }), returnKey: async () => { throw new Error('unreachable') } })
+    const answer = await connectRemote(PEER, 'Solis', d)
+    expect(answer).toMatchObject({ ok: false, why: expect.stringContaining('tries again') })
+    expect(d.store.keyFor(PEER)).toBeNull()
+    expect(d.store.unacked(PEER)).toMatchObject({ key: KEY, keyId: 'id1' })
+    // The next pass: acknowledged again, recorded, and the provider pointed this time.
+    const again = deps({ store: d.store })
+    await resumeRemotes(again)
+    expect(again.store.keyFor(PEER)).toBe(KEY)
+    expect(again.added).toHaveLength(1)
+  })
+
+  it('when the provider cannot be pointed and the key is taken back, it is dropped here', async () => {
+    const d = deps({ addProvider: async () => ({ ok: false, why: 'magpie said no.' }) })
+    expect(await connectRemote(PEER, 'Solis', d)).toMatchObject({ ok: false, why: expect.stringContaining('given back') })
+    expect(d.returned).toEqual([PEER])
+    expect(d.store.list()).toEqual([])
+  })
+
+  it('gives the key back when nothing of it is held here to try again with', async () => {
+    const store = createRemotesStore(path.join(dir, 'magpie-remotes.json'), sealer)
+    const vanishing = Object.assign(store, {
+      markAcked: (peer: string) => {
+        createRemotesStore(path.join(dir, 'magpie-remotes.json'), sealer).remove(peer)
+        throw new Error('That key is no longer kept here.')
+      }
+    })
+    const d = deps({ store: vanishing })
+    expect(await connectRemote(PEER, 'Solis', d)).toMatchObject({ ok: false })
+    expect(d.returned).toEqual([PEER])
   })
 })

@@ -6,6 +6,7 @@ import { plainHeaders, requestFields } from '../../shared/seal2/http'
 import { ABORT } from '../../shared/seal2/spec'
 import type { Seal2Stream } from '../../shared/seal2/stream'
 import { remoteSwitchedOn } from './switches'
+import { SWITCH_POLL_MS } from './serve'
 
 /**
  * THIS COMPUTER'S WAY TO ANOTHER ONE'S MAGPIE: A FORWARDER ONTO THE SEAL.
@@ -44,6 +45,8 @@ export interface ForwardDeps {
   /** Asked on every request: false or a throw refuses (the served-seat gate). */
   open(): Promise<boolean>
   log(line: string): void
+  /** Tests shorten it; defaults to SWITCH_POLL_MS (serve.ts). */
+  readonly switchPollMs?: number
 }
 
 const PEER_PATH = /^\/peer\/([A-Za-z0-9_-]{8,128})(\/.*)$/
@@ -78,8 +81,39 @@ export function createMagpieForwarder(deps: ForwardDeps): {
   listen(port: number): Promise<number>
   close(): Promise<void>
   port(): number | null
+  /** The switches may have changed: when either is off (or unreadable), every answer still streaming through here is cut. */
+  switchesChanged(): void
 } {
   let server: http.Server | null = null
+  /**
+   * Answers streaming through here now (relay verification L1): switching off on THIS computer cuts them,
+   * as it does on the other one (serve.ts), and not only the requests that come after.
+   */
+  const inFlight = new Set<{ readonly stream: Seal2Stream; readonly response: http.ServerResponse }>()
+  let poll: ReturnType<typeof setInterval> | null = null
+  const switchesChanged = (): void => {
+    if (switchedOn()) return
+    for (const live of inFlight) {
+      try {
+        live.stream.abort(ABORT.refused, 'Magpie remote switched off')
+        live.response.destroy()
+      } catch {
+        // Already gone: nothing streams on it.
+      }
+    }
+    inFlight.clear()
+  }
+  const watchSwitches = (): void => {
+    if (poll !== null) return
+    poll = setInterval(() => {
+      switchesChanged()
+      if (inFlight.size === 0 && poll !== null) {
+        clearInterval(poll)
+        poll = null
+      }
+    }, deps.switchPollMs ?? SWITCH_POLL_MS)
+    poll.unref?.()
+  }
   let bound: number | null = null
 
   const switchedOn = (): boolean => remoteSwitchedOn(() => deps.switches())
@@ -135,6 +169,9 @@ export function createMagpieForwarder(deps: ForwardDeps): {
     const open = stream
     let closed = false
     void open.closed.then(() => void (closed = true), () => void (closed = true))
+    const live = { stream: open, response }
+    inFlight.add(live)
+    watchSwitches()
     try {
       await carry(request, response, open)
       // The answer is whole; a request body the far end never read (a refusal) would hold the stream open
@@ -143,6 +180,7 @@ export function createMagpieForwarder(deps: ForwardDeps): {
       await Promise.race([open.closed.catch(() => undefined), new Promise<void>((r) => (timer = setTimeout(r, SETTLE_MS)))])
       clearTimeout(timer)
     } finally {
+      inFlight.delete(live)
       // Whatever ended this (a throw included), the stream is not left holding a slot at either end.
       if (!closed) open.abort(ABORT.cancel, 'answered')
     }
@@ -164,6 +202,7 @@ export function createMagpieForwarder(deps: ForwardDeps): {
   }
 
   return {
+    switchesChanged,
     handler: (request, response) => {
       void handle(request, response).catch(() => refuse(response, 500, 'The forwarder failed.'))
     },

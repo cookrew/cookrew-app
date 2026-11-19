@@ -4216,8 +4216,13 @@ function spawnTracked(t: {
   if (served && servedCtx && fresh && !session.reattached) {
     const seat = { terminalId: t.id, serviceId: servedCtx.serviceId, sandbox: servedCtx.sandbox, digest: served.profileDigest }
     seatLedger.record(seat)
+    // Magpie remote asks the gate afresh, never on an answer cached before this seat (magpie-remote/setup.ts).
+    magpieRemote.seatsChanged()
     // This record only: a respawn's new seat is recorded before the old exit fires.
-    session.once('exit', () => seatLedger.forget(t.id, seat))
+    session.once('exit', () => {
+      seatLedger.forget(t.id, seat)
+      magpieRemote.seatsChanged()
+    })
   }
   turns.track(session, command.trim().length > 0)
   recordSpawn(t.id, session)

@@ -55,11 +55,13 @@ async function fakeMagpie(): Promise<{ port: number; seen: Seen[]; close(): Prom
 interface World {
   magpie: Awaited<ReturnType<typeof fakeMagpie>>
   forwardPort: number
-  b: { switches: LiveValues | null; listed: KeyRow[]; keys: BoundKeys; peer: SealPeer; issued: string[]; revoked: string[]; reads: number }
+  /** `duringList` runs inside each key-list read; `duringPort` inside each gateway-port lookup, which `portAsks` counts. */
+  b: { switches: LiveValues | null; listed: KeyRow[]; keys: BoundKeys; peer: SealPeer; issued: string[]; revoked: string[]; reads: number; portAsks: number; duringList?: () => void; duringPort?: () => void }
   /** `check`, when set, replaces the caller answer; `opened` counts the streams A opened to B. */
   a: { switches: LiveValues | null; key: string | null; caller: boolean; gate: boolean; check?: () => Promise<boolean>; opened: number }
   pair: Awaited<ReturnType<typeof seal2Pair>>
   serve: ReturnType<typeof createMagpieServe>
+  forwarder: ReturnType<typeof createMagpieForwarder>
   close(): Promise<void>
 }
 
@@ -69,13 +71,18 @@ async function build(): Promise<World> {
   const magpie = await fakeMagpie()
   const keys = createBoundKeys(memoryStorage())
   keys.add({ id: 'id-of-a-key-00000001', tail: 'tail42', hash: keyHash(KEY), peer: A, device: 'laptop', at: 'x' })
-  const b: World['b'] = { switches: ON, listed: [{ id: 'id-of-a-key-00000001', name: 'device-laptop--x', limit: null, tail: 'tail42', state: 'enabled', access: 'full' }], keys, peer: { mode: 'device', deviceId: A }, issued: [], revoked: [], reads: 0 }
+  const b: World['b'] = { switches: ON, listed: [{ id: 'id-of-a-key-00000001', name: 'device-laptop--x', limit: null, tail: 'tail42', state: 'enabled', access: 'full' }], keys, peer: { mode: 'device', deviceId: A }, issued: [], revoked: [], reads: 0, portAsks: 0 }
   const serve = createMagpieServe({
     switches: () => b.switches,
-    gatewayPort: () => magpie.port,
+    gatewayPort: () => {
+      b.portAsks += 1
+      b.duringPort?.()
+      return magpie.port
+    },
     keys,
     listKeys: async () => {
       b.reads += 1
+      b.duringList?.()
       return b.listed
     },
     issue: async (device) => {
@@ -103,7 +110,8 @@ async function build(): Promise<World> {
     // Not async: a check that throws before it returns a promise is met as setup.ts would meet it.
     callerAllowed: () => (a.check ? a.check() : Promise.resolve(a.caller)),
     open: async () => a.gate,
-    log: () => undefined
+    log: () => undefined,
+    switchPollMs: 25
   })
   const forwardPort = await forwarder.listen(0)
   return {
@@ -113,6 +121,7 @@ async function build(): Promise<World> {
     a,
     pair,
     serve,
+    forwarder,
     close: async () => {
       await forwarder.close()
       pair.close()
@@ -770,5 +779,78 @@ describe('review M1: an unbind holds even when its write does not land', () => {
     const seen = world.magpie.seen.length
     expect((await call('/v1/messages')).status).toBe(401)
     expect(world.magpie.seen).toHaveLength(seen)
+  })
+})
+
+describe('relay verification G1: each binding re-check after the key-list read stands on its own', () => {
+  const send = async (): Promise<number> => {
+    const stream = world.pair.a.openStream(MAGPIE_REMOTE_KIND, requestFields('POST', '/v1/messages', { 'content-type': 'application/json', 'x-api-key': KEY }))
+    const writer = stream.writable.getWriter()
+    await writer.write(new TextEncoder().encode('{"model":"claude/claude-opus-5-5","stream":true}'))
+    await writer.close()
+    return (await stream.head).status
+  }
+
+  it('a revoke while the key list is read (body already in) is refused by the check right after the read, before Magpie’s port is asked', async () => {
+    world.b.duringList = () => world.serve.unbind('id-of-a-key-00000001')
+    expect(await send()).toBe(401)
+    // Refused at the re-check after the read: the request never got as far as finding Magpie (the dial-side check).
+    expect(world.b.portAsks).toBe(0)
+    expect(world.magpie.seen).toEqual([])
+  })
+
+  it('a revoke that lands after the read, as Magpie’s port is looked up, is refused by the check in the same turn as the dial', async () => {
+    world.b.duringPort = () => world.serve.unbind('id-of-a-key-00000001')
+    expect(await send()).toBe(401)
+    expect(world.b.portAsks).toBe(1)
+    expect(world.magpie.seen).toEqual([])
+  })
+
+  it('control: with no revoke the same request reaches Magpie', async () => {
+    expect(await send()).toBe(200)
+    expect(world.b.portAsks).toBe(1)
+  })
+})
+
+describe('relay verification L1: switching off on THIS computer cuts answers streaming through its forwarder', () => {
+  /** A request from this computer's Magpie whose answer is still streaming: resolves once the head has arrived. */
+  const streamingThroughA = async (): Promise<Response> => {
+    streamMs = 5_000
+    const response = await fetch(`http://127.0.0.1:${world.forwardPort}/peer/${B_PEER}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': SEALED_PLACEHOLDER_KEY },
+      body: '{"model":"claude/claude-opus-5-5","stream":true}'
+    })
+    expect(response.status).toBe(200)
+    return response
+  }
+
+  it.each([
+    ['Magpie remote off', { magpie: true, magpieRemote: false }],
+    ['Magpie off', { magpie: false, magpieRemote: true }],
+    ['unreadable', null]
+  ] as const)('cuts it within a poll when switched to %s here, while the other computer stays on', async (_why, value) => {
+    const response = await streamingThroughA()
+    world.a.switches = value
+    await expect(response.text()).rejects.toBeDefined()
+    expect(world.b.switches).toEqual(ON)
+  })
+
+  it('cuts at once when told the switches changed', async () => {
+    const response = await streamingThroughA()
+    world.a.switches = { magpie: true, magpieRemote: false }
+    world.forwarder.switchesChanged()
+    await expect(response.text()).rejects.toBeDefined()
+  })
+
+  it('control: leaves the answer whole while both stay on', async () => {
+    streamMs = 120
+    const response = await fetch(`http://127.0.0.1:${world.forwardPort}/peer/${B_PEER}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': SEALED_PLACEHOLDER_KEY },
+      body: '{"model":"claude/claude-opus-5-5","stream":true}'
+    })
+    world.forwarder.switchesChanged()
+    expect(await response.text()).toContain('message_stop')
   })
 })

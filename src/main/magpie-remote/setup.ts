@@ -57,8 +57,14 @@ export interface MagpieRemote {
   readonly serve: SealStreamHandler
   /** Stop honouring a key over the seal and cut its streams, before it is revoked (serve.ts). */
   unbind(id: string): void
-  /** The switches may have changed: answers still streaming are cut when either is off (serve.ts). */
+  /** The switches may have changed: answers still streaming either way are cut when either is off (serve.ts, forward.ts). */
   switchesChanged(): void
+  /**
+   * A served seat started or ended (relay verification L2): the gate's cached answer is dropped, so the
+   * next forwarded request asks it afresh. An old-profile seat reattached after an open answer never
+   * rides on that answer.
+   */
+  seatsChanged(): void
   readonly boundKeys: BoundKeys
   start(): Promise<void>
   stop(): Promise<void>
@@ -202,7 +208,14 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
   return {
     serve,
     unbind: (id) => serve.unbind(id),
-    switchesChanged: () => serve.switchesChanged(),
+    seatsChanged: () => {
+      gateSeen = null
+    },
+    // Both ends of this computer: answers it serves to others, and answers its own Magpie gets from others.
+    switchesChanged: () => {
+      serve.switchesChanged()
+      forwarder.switchesChanged()
+    },
     boundKeys,
     // One port, always the same: Magpie's providers name it, so taking another would send them elsewhere.
     start: async () => {
