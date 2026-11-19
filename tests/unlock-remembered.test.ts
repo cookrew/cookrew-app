@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { expectMode } from './support/file-mode'
-import { createRememberedUnlocks, REMEMBERED_MAX } from '../src/main/unlock-remembered'
+import { createRememberedUnlocks, REMEMBERED_MAX, REMEMBERED_PER_WHO } from '../src/main/unlock-remembered'
 
 const dirs: string[] = []
 const fileIn = (): string => {
@@ -52,6 +52,33 @@ describe('remembered unlocks on the Mac', () => {
     expect(held.live(c, 'root')).toBe(false)
   })
 
+  it('a write that fails changes nothing: what is held stays what the file says', () => {
+    const file = fileIn()
+    let failing = false
+    const held = createRememberedUnlocks(file, { currentCode: () => CODE, writeFile: (target, text) => {
+      if (failing) throw new Error('disk full')
+      writeFileSync(target, text)
+    } })
+    const id = held.issue('device:p1')
+    failing = true
+    expect(() => held.forgetWho('device:p1')).toThrow(/disk full/)
+    expect(held.live(id, 'device:p1')).toBe(true)
+    expect(createRememberedUnlocks(file, { currentCode: () => CODE }).live(id, 'device:p1')).toBe(true)
+    failing = false
+    held.forgetWho('device:p1')
+    expect(held.live(id, 'device:p1')).toBe(false)
+  })
+
+  it('one device\'s ids never push another\'s out: past its own cap, only its own oldest goes', () => {
+    let at = 1
+    const held = createRememberedUnlocks(fileIn(), { currentCode: () => CODE, now: () => at++ })
+    const others = held.issue('device:p2')
+    const mine = Array.from({ length: REMEMBERED_PER_WHO + 1 }, () => held.issue('root'))
+    expect(held.live(mine[0], 'root')).toBe(false)
+    expect(mine.slice(1).every((id) => held.live(id, 'root'))).toBe(true)
+    expect(held.live(others, 'device:p2')).toBe(true)
+  })
+
   it('a file it cannot read takes no box (fail closed), and the oldest id goes past the cap', () => {
     const file = fileIn()
     writeFileSync(file, '{ not json')
@@ -59,9 +86,9 @@ describe('remembered unlocks on the Mac', () => {
     expect(broken.live('anything', 'root')).toBe(false)
     let at = 1
     const held = createRememberedUnlocks(fileIn(), { currentCode: () => CODE, now: () => at++ })
-    const first = held.issue('root')
-    const rest = Array.from({ length: REMEMBERED_MAX }, () => held.issue('root'))
-    expect(held.live(first, 'root')).toBe(false)
-    expect(rest.every((r) => held.live(r, 'root'))).toBe(true)
+    const first = held.issue('device:0')
+    const rest = Array.from({ length: REMEMBERED_MAX }, (_, n) => [`device:${n + 1}`, held.issue(`device:${n + 1}`)] as const)
+    expect(held.live(first, 'device:0')).toBe(false)
+    expect(rest.every(([who, r]) => held.live(r, who))).toBe(true)
   })
 })

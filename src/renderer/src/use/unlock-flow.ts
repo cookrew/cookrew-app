@@ -43,9 +43,10 @@ export type UnlockResult = { readonly kind: 'done' } | { readonly kind: 'changed
 /** The console's road for a box: a v2 session, and the code it was remembered under. */
 const boxRoad = (deps: UnlockFlowDeps): string | null => (deps.api.sealedV2 === true && deps.codeId !== undefined ? deps.codeId : null)
 
-const keptBox = async (deps: UnlockFlowDeps): Promise<RememberedBox | null> => {
+/** A kept box, for a Mac whose begin says it remembers: one that no longer can is never sent a box it cannot read. */
+const keptBox = async (deps: UnlockFlowDeps, opened: { readonly remember?: 1 }): Promise<RememberedBox | null> => {
   const code = boxRoad(deps)
-  return code === null ? null : deps.vault.boxFor(deps.machine, code)
+  return code === null || opened.remember !== 1 ? null : deps.vault.boxFor(deps.machine, code)
 }
 
 const keptPassword = async (deps: UnlockFlowDeps): Promise<string | null> => (deps.plainRemember === true ? deps.vault.recall(deps.machine) : null)
@@ -58,7 +59,7 @@ export async function prepareUnlock(deps: UnlockFlowDeps): Promise<UnlockPrepare
   const opened = await deps.api.begin()
   if (!opened.ok) return opened.outcome === 'not-locked' ? { kind: 'done' } : { kind: 'error', message: opened.error }
   const trust = await deps.vault.trust(deps.machine, opened.key)
-  const saved = trust === 'same' && ((await keptBox(deps)) !== null || (await keptPassword(deps)) !== null)
+  const saved = trust === 'same' && ((await keptBox(deps, opened)) !== null || (await keptPassword(deps)) !== null)
   return { kind: 'ready', key: opened.key, trust, saved, rememberable: boxRoad(deps) !== null && opened.remember === 1 }
 }
 
@@ -66,8 +67,13 @@ export async function prepareUnlock(deps: UnlockFlowDeps): Promise<UnlockPrepare
 async function keepBox(deps: UnlockFlowDeps, key: string, password: string, id: string): Promise<void> {
   const code = boxRoad(deps)
   if (code === null) return
-  const box = await sealForMac(key, JSON.stringify({ p: password, r: id, z: pad(password) }), REMEMBER_INFO)
-  await deps.vault.keepBox(deps.machine, { box, id, code })
+  try {
+    const box = await sealForMac(key, JSON.stringify({ p: password, r: id, z: pad(password) }), REMEMBER_INFO)
+    await deps.vault.keepBox(deps.machine, { box, id, code })
+  } catch {
+    // The Mac is open: a box this browser cannot keep is only a password not remembered, and its id goes back.
+    await deps.api.forget?.(id).catch(() => undefined)
+  }
 }
 
 export async function runUnlock(deps: UnlockFlowDeps, input: { readonly shownKey: string; readonly password: string | null; readonly remember: boolean }): Promise<UnlockResult> {
@@ -78,7 +84,7 @@ export async function runUnlock(deps: UnlockFlowDeps, input: { readonly shownKey
   const trust = await vault.trust(machine, opened.key)
   if (trust === 'changed' || opened.key !== input.shownKey) return { kind: 'changed', key: opened.key }
   const saved = input.password === null
-  const box = saved ? await keptBox(deps) : null
+  const box = saved ? await keptBox(deps, opened) : null
   const password = input.password ?? (box === null ? await keptPassword(deps) : null)
   if (box === null && (password === null || password.length === 0)) return { kind: 'error', message: 'Type this Mac’s password.' }
   if (password !== null && password.length > UNLOCK_PASSWORD_MAX) return { kind: 'error', message: 'That password is too long to send.' }

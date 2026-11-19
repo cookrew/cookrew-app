@@ -134,6 +134,34 @@ describe('Unlocking with a remembered box', () => {
     expect(await withBox(phone, boxOf(PASSWORD, id))).toMatchObject({ outcome: 'forgotten' })
   })
 
+  it('a box message is good once: the same message again is refused, its challenge spent', async () => {
+    const { door, outer, mac, boxOf, typed, typedRemember } = bed()
+    const first = await typedRemember(phone)
+    const id = first.ok ? (first.remembered as string) : ''
+    mac.locked = true
+    typed.length = 0
+    const opened = await door.begin(phone, V2)
+    if (!opened.ok) throw new Error('no begin')
+    const message = outer({ c: opened.challenge, b: boxOf(PASSWORD, id) })
+    expect(await door.unlock(phone, message, V2)).toMatchObject({ ok: true })
+    mac.locked = true
+    expect(await door.unlock(phone, message, V2)).toMatchObject({ ok: false, outcome: 'refused' })
+    expect(typed).toEqual([PASSWORD])
+  })
+
+  it('a wrong box whose id cannot be dropped (a full disk) is still answered as a wrong password', async () => {
+    const t = bed()
+    const first = await t.typedRemember(phone)
+    const id = first.ok ? (first.remembered as string) : ''
+    t.mac.locked = true
+    t.mac.password = 'changed since'
+    const failing = bed({ keyPair: () => t.pair, locked: async () => t.mac.locked, type: async () => undefined, remembered: { ...t.remembered, drop: () => { throw new Error('disk full') } } })
+    const opened = await failing.door.begin(phone, V2)
+    if (!opened.ok) throw new Error('no begin')
+    // Sealed to the first Mac's key, which the failing door holds.
+    expect(await failing.door.unlock(phone, t.outer({ c: opened.challenge, b: t.boxOf(PASSWORD, id) }), V2)).toMatchObject({ ok: false, outcome: 'wrong' })
+  })
+
   it('a box whose password no longer opens the Mac is a wrong password, and its id is dropped', async () => {
     const { mac, boxOf, withBox, remembered, typedRemember } = bed()
     const first = await typedRemember(phone)

@@ -24,6 +24,8 @@ import { writeFileAtomic } from './atomic-file'
 
 /** Ids kept at most; past it the oldest goes, and its box is asked to type again. */
 export const REMEMBERED_MAX = 64
+/** Ids one viewer keeps at most (a page that lost its box leaves one behind): past it, only its own oldest goes. */
+export const REMEMBERED_PER_WHO = 8
 
 export interface RememberedUnlocks {
   /** A new id for this viewer under the code in force now. */
@@ -40,6 +42,8 @@ export interface RememberedDeps {
   /** The connect code's id in force now (connect-code.ts · currentId). */
   currentCode(): string
   now?(): number
+  /** How the file is written (atomic-file.ts by default). */
+  writeFile?(file: string, text: string): void
 }
 
 interface Held {
@@ -70,11 +74,16 @@ function readHeld(file: string): HeldFile {
 
 export function createRememberedUnlocks(file: string, deps: RememberedDeps): RememberedUnlocks {
   const now = deps.now ?? Date.now
+  const writeFile = deps.writeFile ?? ((target: string, text: string): void => {
+    writeFileAtomic(target, text)
+    chmodSync(target, 0o600)
+  })
   let held = readHeld(file)
+  // The file first: a write that fails leaves what is held as the file says, so a restart does not bring back
+  // an id this run thought was gone (and the caller hears the failure).
   const write = (next: HeldFile): void => {
+    writeFile(file, `${JSON.stringify({ ids: next }, null, 2)}\n`)
     held = next
-    writeFileAtomic(file, `${JSON.stringify({ ids: next }, null, 2)}\n`)
-    chmodSync(file, 0o600)
   }
   const keep = (keepIt: (entry: [string, Held]) => boolean): void => {
     const kept = Object.entries(held).filter(keepIt)
@@ -85,7 +94,10 @@ export function createRememberedUnlocks(file: string, deps: RememberedDeps): Rem
     issue(who) {
       const id = randomBytes(24).toString('base64url')
       const oldestFirst = Object.entries(held).sort((a, b) => a[1].at - b[1].at)
-      const room = oldestFirst.slice(Math.max(0, oldestFirst.length - (REMEMBERED_MAX - 1)))
+      const mine = oldestFirst.filter(([, row]) => row.who === who)
+      const crowded = new Set(mine.slice(0, Math.max(0, mine.length - (REMEMBERED_PER_WHO - 1))).map(([known]) => known))
+      const others = oldestFirst.filter(([known]) => !crowded.has(known))
+      const room = others.slice(Math.max(0, others.length - (REMEMBERED_MAX - 1)))
       write({ ...Object.fromEntries(room), [id]: { who, code: deps.currentCode(), at: now() } })
       return id
     },

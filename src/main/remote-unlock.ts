@@ -212,6 +212,15 @@ export function createUnlockDoor(deps: UnlockDoorDeps): UnlockDoor {
     return box
   }
 
+  /** A wrong password is the answer whatever happens here: an id that cannot be dropped is said in the record only. */
+  const dropQuietly = (id: string, who: ViewerWho): void => {
+    try {
+      deps.remembered?.drop(id, who.key)
+    } catch {
+      deps.record('a remembered password stopped working and could not be taken back', who)
+    }
+  }
+
   /** The Mac is open whatever happens here: an id that cannot be kept is an unlock with nothing remembered. */
   const issued = (held: RememberedUnlocks, who: ViewerWho): { remembered?: string } => {
     try {
@@ -248,7 +257,7 @@ export function createUnlockDoor(deps: UnlockDoorDeps): UnlockDoor {
         if (!(await deps.locked())) return { ok: false, outcome: 'not-locked', error: NOT_LOCKED }
         const answer = await typeIt(who, found.password)
         // A remembered password that stopped working is taken back: the page drops its box too.
-        if (!answer.ok && answer.outcome === 'wrong' && found.id !== null) deps.remembered?.drop(found.id, who.key)
+        if (!answer.ok && answer.outcome === 'wrong' && found.id !== null) dropQuietly(found.id, who)
         const held = remembers(road)
         // A new id only for a typed password the page asked to remember; a box keeps the id it holds.
         if (answer.ok && held !== null && !('box' in sealed) && sealed.remember) return { ...answer, ...issued(held, who) }

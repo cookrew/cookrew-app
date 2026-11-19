@@ -9197,13 +9197,16 @@ function registerIpc(handlers: RestoreHandlers): void {
         if (keptOut !== null) refusedPhones.add(deviceId, keptOut)
         const forgotten = admittedDevices.forget(deviceId)
         remoteDesk.forgetDevice(`device:${deviceId}`)
-        // A forgotten phone that joins again does not get its remembered password back.
+        // A forgotten phone that joins again does not get its remembered password back. A drop that could not be
+        // written is the one honest false, as the admission's is: the row stays on screen and Forget can be pressed again.
+        let idsDropped = true
         try {
           rememberedUnlocks.forgetWho(`device:${deviceId}`)
         } catch (error) {
+          idsDropped = false
           console.error('[cookrew] a forgotten device\'s remembered passwords could not be dropped:', error)
         }
-        return forgotten
+        return forgotten && idsDropped
       }
     },
     publishReach: (reason) => {
