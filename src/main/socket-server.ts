@@ -65,8 +65,12 @@ import type { TrustOutcome } from './claude-trust'
 import type { LaunchFailure } from '../shared/launch-failure'
 import { cmdRemote, type RemoteCliDeps } from './remote-cli'
 import { stdinPlaceholderError } from './cli-stdin'
+import { pathReports, type PathReportStore } from './path-reports'
+import { summarizePathReports } from './path-report-summary'
 
 export interface SocketServerDeps {
+  /** In-memory path reports, injected for tests; the process store otherwise. */
+  pathReportStore?: PathReportStore
   /** The OS whose CLI transport is served (cli-transport.ts); this one by default. */
   platform?: NodeJS.Platform
   /** A brief's pictures copied into the attach store, the brief naming the copies (picture-adopt.ts). */
@@ -445,6 +449,8 @@ async function dispatch(sent: CliRequest, deps: SocketServerDeps): Promise<strin
       return cmdSous(request, deps)
     case 'mobile':
       return cmdMobile(request, deps)
+    case 'path':
+      return cmdPathReports(request, deps)
     case 'workspace':
       return cmdWorkspace(request, deps)
     case 'team':
@@ -2098,6 +2104,14 @@ async function cmdGit(request: CliRequest, deps: SocketServerDeps): Promise<stri
   return `${info.branch ?? 'detached'} — ${state}  (${info.root})`
 }
 
+/** Address-free local diagnostic. Full reports are available only over an authenticated v2 session. */
+export function cmdPathReports(request: CliRequest, deps: SocketServerDeps): string {
+  if (request.args.length !== 1 || request.args[0] !== 'reports' || Object.keys(request.flags).length !== 0) {
+    throw new Error('Usage: cookrew path reports')
+  }
+  return JSON.stringify(summarizePathReports((deps.pathReportStore ?? pathReports()).list()))
+}
+
 export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
   // `flags`, not `args`: the CLI's parseArgv routes every `--token` into flags
   // and leaves args empty, so reading args[0] here meant `cookrew mobile
@@ -2335,6 +2349,7 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew voice say "text"                      Speak now
   cookrew sous "sentence" [--surface S]        What Sous would do with that sentence, and does it:
                                                 switch / ask / create / connect / rename / back (zh or en)
+  cookrew path reports                         Read address-free connection diagnostic summaries
   cookrew mobile                               Print (and QR) the phone companion URL — dictation + spoken replies
   cookrew remote status|on|off|stop             This machine's remote control switch, from a shell on it: on asks at
                                                 the terminal first and is refused in a Cookrew terminal; stop ends

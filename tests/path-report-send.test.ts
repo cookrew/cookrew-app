@@ -147,7 +147,8 @@ describe('what leaves the phone', () => {
     await postPathReport(report(over), {
       url: '/api/path/report',
       headers: { authorization: `Bearer ${TOKEN}` },
-      fetch: async (url, init) => {
+      // The one sender a report has: the sealed session (tests/path-report-addresses.test.ts).
+      sealed: async (url, init) => {
         seen = { url, init }
         return { ok: status < 400, status }
       }
@@ -173,7 +174,7 @@ describe('what leaves the phone', () => {
     expect(body.toLowerCase()).not.toContain('token')
   })
 
-  it('carries no URL, only the address form a reader can act on', async () => {
+  it('carries no URL, only the address form a reader can act on (inside the seal)', async () => {
     const { init } = await capture()
     const body = String(init.body)
     expect(body).not.toContain('://')

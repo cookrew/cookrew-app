@@ -102,21 +102,35 @@ export const createPathReporter = (
   }
 }
 
-/** The fetch this needs, narrowed so a test needs no browser. */
-export type ReportFetch = (
+/**
+ * The sealed session's fetch (path/seal-plane.ts · sealedFetchFor), narrowed
+ * so a test needs no browser: null when there is none for this URL.
+ */
+export type SealedReportFetch = (
   url: string,
   init: RequestInit
-) => Promise<{ readonly ok: boolean; readonly status: number }>
+) => Promise<{ readonly ok: boolean; readonly status: number }> | null
 
 export interface PostPathReportDeps {
-  /** Already scoped by apiPath, and NEVER carrying a query string. */
+  /** The current machine's relay-base URL, never carrying a query string. */
   readonly url: string
   readonly headers: Record<string, string>
-  readonly fetch: ReportFetch
+  /** The cookrew-seal/2 session: the ONLY sender a report has. */
+  readonly sealed: SealedReportFetch
 }
 
 /**
- * One POST, on whichever plane is carrying the session.
+ * One POST, ONLY INSIDE COOKREW-SEAL/2, and whole.
+ *
+ * A race's rows name the Mac's LAN and tailnet addresses (`link.via`, the
+ * candidates' address forms) and carry the browser's own words, which may
+ * spell one any way at all. No pattern over free text can promise an address
+ * is gone, so nothing is redacted: like the RTC offer (path/rtc-offer.ts) the
+ * report goes on the sealed session or not at all. There is no plain sender to
+ * fall back to; a page with no session (no code, an older Mac, undecided)
+ * keeps its report, and since an undelivered report is not remembered
+ * (createPathReporter), the next race offers it again. The Mac refuses one
+ * that arrives any other way (main/path-report-routes.ts).
  *
  * The credential travels in the Authorization header, exactly where every
  * other companion route puts it and nowhere else: a body that echoed a token
@@ -127,11 +141,13 @@ export const postPathReport = async (
   report: PathReport,
   deps: PostPathReportDeps
 ): Promise<void> => {
-  const response = await deps.fetch(deps.url, {
+  const sealed = deps.sealed(deps.url, {
     method: 'POST',
     // No `cache: 'no-store'`: on the console it would cost a preflight each time (data-plane.ts · CROSS_ORIGIN_NO_COOKIE).
     headers: { ...deps.headers, 'content-type': 'application/json' },
     body: JSON.stringify(report)
   })
+  if (sealed === null) throw new Error('a sealed session is required for a path report')
+  const response = await sealed
   if (!response.ok) throw new Error(`the desktop refused the path report: ${response.status}`)
 }

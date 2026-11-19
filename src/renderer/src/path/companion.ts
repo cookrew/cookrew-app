@@ -1,6 +1,6 @@
 import { heldScope, machineScope, registerScopeState, scopeBase } from '../machine-scope'
-import { onSealPinned } from './seal-plane'
-import { apiPath, clientBase } from '../api-base'
+import { onSealPinned, sealedFetchFor } from './seal-plane'
+import { clientBase } from '../api-base'
 import { cookrew, isRemoteMode } from '../api'
 import { authHeaders } from '../auth-gate'
 import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
@@ -16,7 +16,6 @@ import type { PathReport } from '../../../shared/path-report'
 import { dataPlane, fallBackToRelay, setDataPlane, subscribeDataPlane } from '../data-plane'
 import { localNetworkState } from '../local-network'
 import { localNetworkGate, setLocalNetwork } from '../local-network-gate'
-import { planeFetch } from '../plane-fetch'
 import { HOLD_REPEAT_WINDOW_MS, KEEPS_PER_WINDOW, planeHealth, setPlaneLiveProbe, type LinkHealth } from '../plane-health'
 import { followDataPlane } from '../plane-streams'
 import { onStreamDeath } from '../stream-watch'
@@ -60,21 +59,22 @@ const readLocalNetwork = async (): Promise<void> => {
 }
 
 /**
- * ONE REPORT PER RACE, TO THE MAC, OVER WHATEVER PLANE IS WORKING.
+ * ONE REPORT PER RACE, TO THE MAC, ONLY ON THE SEALED RELAY ROAD.
  *
  * Built once at start rather than per race, because the one-at-a-time guards
- * live inside it (path/report.ts) and a reporter rebuilt every minute would
- * have nothing to remember. `apiPath` scopes it to this workspace session and
- * points it at the current plane — relay or link — like every other request
- * the companion makes; there is no second transport for diagnostics.
+ * live inside it (path/report.ts). The sender is always sealedFetchFor: the
+ * direct RTC plane does not carry seal proof and the server refuses it. The
+ * URL deliberately uses the relay base even if an origin plane returns.
  */
 const pathReporter = (): ReturnType<typeof createPathReporter> =>
   createPathReporter({
     post: (report) =>
       postPathReport(report, {
-        url: apiPath(PATH_REPORT_ROUTE),
+        url: `${clientBase()}${PATH_REPORT_ROUTE}`,
         headers: authHeaders(),
-        fetch: planeFetch
+        // The report names the Mac's addresses: the sealed session or nothing,
+        // never planeFetch, which goes plain when no session is pinned (path/report.ts).
+        sealed: sealedFetchFor
       })
   })
 let tellTheDesktop = pathReporter()

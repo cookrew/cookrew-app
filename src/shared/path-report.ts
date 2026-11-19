@@ -10,8 +10,11 @@
  * closed.
  *
  * So the phone posts what it found to the Mac it was trying to reach, and the
- * Mac keeps the last few. `curl /api/path/reports` on the desktop then answers
- * the question the photograph was standing in for.
+ * Mac keeps the last few. GET /api/path/reports then answers the question the
+ * photograph was standing in for — to the owner, and only inside a
+ * cookrew-seal/2 session, like the POST (main/path-report-routes.ts): a report
+ * names the Mac's LAN and tailnet addresses, so it never crosses the relay
+ * where the relay could read it, and is never redacted by pattern instead.
  *
  * THE SHAPE IS DELIBERATELY SMALL, and every field earns its place:
  *
@@ -37,7 +40,7 @@
 /** POST — one report per race. */
 export const PATH_REPORT_ROUTE = '/api/path/report'
 
-/** GET — the last few, per device, for the owner or an agent with the token. */
+/** GET — the last few, per device, for the owner inside a cookrew-seal/2 session. */
 export const PATH_REPORTS_ROUTE = '/api/path/reports'
 
 /** How many reports the Mac keeps per admitted device. */
@@ -75,7 +78,7 @@ export interface PathReportAttempt {
    * local-network annotation; 'none' on 'blocked' means the browser refused it
    * both ways. That is the difference between "allow this in site settings" and
    * "a system proxy is hiding the address" (Chrome 152, 2026-09-08), and the
-   * owner reading `curl /api/path/reports` needs it as much as the panel does.
+   * owner reading a sealed report needs it as much as the panel does.
    */
   readonly hint?: 'local' | 'none'
 }

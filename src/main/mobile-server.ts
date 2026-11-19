@@ -1513,7 +1513,9 @@ export async function handle(
    *
    * Beside /api/reach and gated the same way — below handleMobileApi, so the
    * POST has already been challenged for the pairing (or an admitted phone's
-   * own) token and the GET for at least the read-only one. The device is the
+   * own) token and the GET for at least the read-only one. On top of that both
+   * require a cookrew-seal/2 inner request and owner pairing
+   * (path-report-routes.ts): a report names this Mac's addresses. The device is the
    * one the BRIDGE named, never one the body claims: `bridgeDevice` was taken
    * off the request above and cannot be set by the caller.
    *
@@ -1522,7 +1524,10 @@ export async function handle(
    */
   if (
     await handlePathReportRoutes(request, response, url, {
-      device: { deviceId: bridgeDevice?.deviceId ?? null, ...(bridgeDevice?.name ? { name: bridgeDevice.name } : {}) }
+      device: { deviceId: bridgeDevice?.deviceId ?? null, ...(bridgeDevice?.name ? { name: bridgeDevice.name } : {}) },
+      // The owner's credential, as the fleet feed above asks it: a GET needs
+      // it on top of a cookrew-seal/2 road; the wall token reads nothing here.
+      owner: !!authed.pairingToken && authed.companionGate(presentedToken(request, url))
     })
   ) {
     return

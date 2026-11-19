@@ -19,8 +19,21 @@ type Listener = (event: unknown) => void
 
 /** A phone with a stream: the one `/api/events` EventSource the page holds. */
 const stubPhone = () => {
+  // Preserve a race-completion sentinel without sending a report in plaintext.
+  // The separate path-report tests exercise the real sealed transport.
   const streams: Map<string, Set<Listener>>[] = []
   const asked: string[] = []
+  const reportDeps: { url: string; sealed: unknown; plane?: string }[] = []
+  vi.doMock('../src/renderer/src/path/report', async (original) => {
+    const actual = await original<typeof import('../src/renderer/src/path/report')>()
+    return {
+      ...actual,
+      postPathReport: async (report: { plane?: string }, deps: { url: string; sealed: unknown }) => {
+        reportDeps.push({ ...deps, plane: report.plane })
+        asked.push('/api/path/report')
+      }
+    }
+  })
   class FakeEventSource {
     readonly listeners = new Map<string, Set<Listener>>()
     readyState = 1
@@ -67,6 +80,7 @@ const stubPhone = () => {
   }
   return {
     asked: () => asked,
+    reportDeps: () => reportDeps,
     push: (type: string, data: unknown) => {
       live?.enqueue(new TextEncoder().encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`))
       for (const stream of streams) for (const listener of stream.get(type) ?? []) listener({ data: JSON.stringify(data) })
@@ -104,6 +118,7 @@ afterEach(() => {
   delete (globalThis as { fetch?: unknown }).fetch
   delete (globalThis as { EventSource?: unknown }).EventSource
   vi.doUnmock('../src/renderer/src/path/rtc-link')
+  vi.doUnmock('../src/renderer/src/path/report')
   vi.unstubAllGlobals()
   vi.resetModules()
 })
@@ -120,6 +135,9 @@ describe('a reach push from the Mac', () => {
     // The boot race knocked once and reported it; the gap now holds the next knock back.
     await vi.waitFor(() => expect(phone.asked().some((url) => url.includes('/api/path/report'))).toBe(true))
     expect(knocks()).toBe(1)
+    const seal = await import('../src/renderer/src/path/seal-plane')
+    expect(phone.reportDeps()[0]).toMatchObject({ url: `${RELAY_BASE}/api/path/report`, sealed: seal.sealedFetchFor })
+    expect(phone.reportDeps()[0]).not.toHaveProperty('fetch')
 
     phone.push('reach', { at: 1 })
     await vi.waitFor(() => expect(knocks()).toBe(2))
@@ -132,6 +150,54 @@ describe('a reach push from the Mac', () => {
     await settle()
     await settle()
     expect(knocks()).toBe(2)
+  })
+})
+
+describe('report routing after the plane moves', () => {
+  it('keeps the sealed relay destination even if the data plane moves before reporting', async () => {
+    const phone = stubPhone()
+    vi.resetModules()
+    await inConsole(DEVICE)
+    const planes = await import('../src/renderer/src/data-plane')
+    countKnocks(null, async () => {
+      // An origin-bearing plane makes apiPath select this origin, unlike an RTC
+      // plane whose origin is intentionally empty. This exercises the routing invariant.
+      planes.setDataPlane({ origin: 'https://192.168.2.40:8643', kind: 'lan' })
+    })
+    const companion = await import('../src/renderer/src/path/companion')
+    const stop = companion.startCompanionPathSwitch()
+    try {
+      await vi.waitFor(() => expect(phone.reportDeps().length).toBeGreaterThan(0))
+      const seal = await import('../src/renderer/src/path/seal-plane')
+      expect(phone.reportDeps()[0]).toMatchObject({ url: `${RELAY_BASE}/api/path/report`, sealed: seal.sealedFetchFor, plane: 'LAN' })
+      expect(planes.dataPlane()).toMatchObject({ kind: 'lan', origin: 'https://192.168.2.40:8643' })
+      expect(phone.reportDeps()[0]).not.toHaveProperty('fetch')
+    } finally {
+      stop()
+    }
+  })
+})
+
+describe('report routing on an RTC plane', () => {
+  it('uses the sealed sender instead of the direct link', async () => {
+    const phone = stubPhone()
+    vi.resetModules()
+    await inConsole(DEVICE)
+    const planes = await import('../src/renderer/src/data-plane')
+    countKnocks(null, async () => {
+      planes.setDataPlane({ origin: '', kind: 'lan', transport: 'rtc' })
+    })
+    const companion = await import('../src/renderer/src/path/companion')
+    const stop = companion.startCompanionPathSwitch()
+    try {
+      await vi.waitFor(() => expect(phone.reportDeps().length).toBeGreaterThan(0))
+      const seal = await import('../src/renderer/src/path/seal-plane')
+      expect(planes.dataPlane()).toMatchObject({ kind: 'lan', transport: 'rtc' })
+      expect(phone.reportDeps()[0]).toMatchObject({ url: `${RELAY_BASE}/api/path/report`, sealed: seal.sealedFetchFor, plane: 'LAN' })
+      expect(phone.reportDeps()[0]).not.toHaveProperty('fetch')
+    } finally {
+      stop()
+    }
   })
 })
 

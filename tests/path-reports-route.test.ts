@@ -28,6 +28,7 @@ import {
   type PathReportStore
 } from '../src/main/path-reports'
 import { PATH_REPORTS_KEPT, PATH_REPORT_DEVICES_KEPT } from '../src/shared/path-report'
+import { SEALED_V2_HEADER, sealProofHeaders } from '../src/main/seal-proof'
 
 const PHONE: PathReportDevice = {
   deviceId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
@@ -115,12 +116,12 @@ describe('the store', () => {
 })
 
 describe('the one line it logs', () => {
-  it('names the device, the plane and a count per outcome', () => {
+  it('logs only a bounded summary, not the device name', () => {
     const said: string[] = []
     const store = createPathReportStore({ now: () => 42, log: (line) => said.push(line) })
     store.record(PHONE, report())
     expect(said).toEqual([
-      "[cookrew] path report from Andrej's iPhone: RELAY · 2 candidates · 1 blocked, 1 timeout"
+      '[cookrew] path report: {"receivedAt":42,"plane":"RELAY","permission":"denied","context":"unknown","attempts":2,"probes":[]}'
     ])
   })
 
@@ -138,8 +139,8 @@ describe('the one line it logs', () => {
     const said: string[] = []
     const store = createPathReportStore({ log: (line) => said.push(line) })
     store.record({ deviceId: null }, report({ attempts: [] }))
-    expect(said[0]).toContain('an unnamed phone')
-    expect(said[0]).toContain('0 candidates · nothing tried')
+    expect(said[0]).not.toContain('phone')
+    expect(said[0]).toContain('"attempts":0')
   })
 
   it('summarises in the order the outcomes first appear', () => {
@@ -163,7 +164,7 @@ describe('the one line it logs', () => {
         browser: 'Safari 17',
         attempts: [{ name: 'a', outcome: 'answered', ms: 6 }]
       })
-    ).toContain('1 candidate · 1 answered')
+    ).toContain('"attempts":1')
   })
 })
 
@@ -173,10 +174,13 @@ describe('the two routes', () => {
     for (const server of servers.splice(0)) server.close()
   })
 
+  // These routes answer only a cookrew-seal/2 inner request (tests/path-report-addresses.test.ts).
+  const SEALED_V2 = { ...sealProofHeaders(), [SEALED_V2_HEADER]: '1' }
+
   const start = async (store: PathReportStore, device: PathReportDevice): Promise<number> => {
     const server = http.createServer((request, response) => {
       const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
-      void handlePathReportRoutes(request, response, url, { device, store }).then((handled) => {
+      void handlePathReportRoutes(request, response, url, { device, store, owner: true }).then((handled) => {
         if (!handled) response.writeHead(404).end()
       })
     })
@@ -190,12 +194,12 @@ describe('the two routes', () => {
     const port = await start(store, PHONE)
     const posted = await fetch(`http://127.0.0.1:${port}/api/path/report`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...SEALED_V2 },
       body: JSON.stringify(report())
     })
     expect(posted.status).toBe(204)
 
-    const read = await fetch(`http://127.0.0.1:${port}/api/path/reports`)
+    const read = await fetch(`http://127.0.0.1:${port}/api/path/reports`, { headers: SEALED_V2 })
     const body = (await read.json()) as { count: number; reports: { device: string }[] }
     expect(read.status).toBe(200)
     expect(body.count).toBe(1)
@@ -207,7 +211,7 @@ describe('the two routes', () => {
     const port = await start(store, PHONE)
     const posted = await fetch(`http://127.0.0.1:${port}/api/path/report`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...SEALED_V2 },
       body: 'not json at all'
     })
     expect(posted.status).toBe(400)
@@ -227,10 +231,10 @@ describe('the two routes', () => {
     const port = await start(store, PHONE)
     await fetch(`http://127.0.0.1:${port}/api/path/report`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...SEALED_V2 },
       body: JSON.stringify(report({ token: 'a-very-secret-pairing-token' }))
     })
-    const text = await (await fetch(`http://127.0.0.1:${port}/api/path/reports`)).text()
+    const text = await (await fetch(`http://127.0.0.1:${port}/api/path/reports`, { headers: SEALED_V2 })).text()
     expect(text).not.toContain('a-very-secret-pairing-token')
     expect(text.toLowerCase()).not.toContain('token')
   })
@@ -320,7 +324,7 @@ describe('the probes a phone reports beside its attempts', () => {
       { kind: 'image', name: '192-168-2-40.x.d.cookrew.dev:8643', outcome: 'timeout', ms: 2500 }
     ])
     expect(pathReportLine({ ...report!, receivedAt: 1_000, device: 'iPhone' })).toContain(
-      'probes socket answered 41ms, image timeout 2500ms'
+      '"probes":[{"kind":"socket","outcome":"answered","ms":50},{"kind":"image","outcome":"timeout","ms":5000}]'
     )
   })
 
@@ -340,7 +344,7 @@ describe('who ran the page', () => {
     const base = { plane: 'RELAY', permission: 'unsupported', browser: 'Safari 26', attempts: [] }
     const standalone = readPathReport({ ...base, context: 'standalone' }, 1_000)
     expect(standalone?.context).toBe('standalone')
-    expect(pathReportLine({ ...standalone!, receivedAt: 1_000, device: 'iPhone' })).toContain('· standalone')
+    expect(pathReportLine({ ...standalone!, receivedAt: 1_000, device: 'iPhone' })).toContain('"context":"standalone"')
     expect(readPathReport({ ...base, context: 'kiosk' }, 1_000)?.context).toBeUndefined()
   })
 })
