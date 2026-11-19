@@ -264,6 +264,22 @@ describe('what a carrier can do', () => {
       expect(a.replay(0).length).toBeLessThanOrEqual(1)
     })
   })
+
+  it('an ACK with nothing after it is kept for a resend: the very record the far end already took', async () => {
+    // Driven so the order is fixed, not left to timers: the far end sends one ping, this end acks it at once and
+    // sends nothing else, so its last record is that ACK and nothing after it is ever acked.
+    const { a, b, toB } = await pair({ limits: { ackDelayMs: 0 } }, {})
+    b.ping()
+    await vi.waitFor(() => expect(toB.sent).toHaveLength(1))
+    await vi.waitFor(() => expect(b.expecting()).toBe(1))
+    expect(a.stats().sent).toBe(1)
+    const kept = a.replay(0)
+    expect(kept).toHaveLength(1)
+    // A resend of it is a duplicate at the far end, never a gap.
+    const [record] = createRecordReader().push(kept[0])
+    expect(record.seq).toBe(toB.sent[0].seq)
+    expect(await b.receive([record])).toEqual(['duplicate'])
+  })
 })
 
 describe('the session', () => {
