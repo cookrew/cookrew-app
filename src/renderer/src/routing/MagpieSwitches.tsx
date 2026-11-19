@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { cookrew } from '../api'
-import { MAGPIE_SWITCH_COPY } from '../../../shared/account-guide-copy'
+import { SWITCH_COPY } from '../../../shared/account-guide-copy'
 import { LAUNCH_ENV, type LiveValues } from '../../../shared/launch-settings'
 import { openMagpieSettings } from './magpie-card'
 import '../first-run/first-run.css'
@@ -57,29 +57,29 @@ function Check({ checked, disabled, label, note, held, onChange, name, variant }
 
 export function MagpieSwitchesView({ values, pinned, installed, busy, problem, onSet, onConfigure, variant = 'guide' }: MagpieSwitchesViewProps): React.JSX.Element {
   const small = variant === 'sheet' ? 'gs-hint' : undefined
-  const held = (key: 'magpie' | 'magpieRemote'): string | null => (pinned.includes(key) ? MAGPIE_SWITCH_COPY.PINNED(LAUNCH_ENV[key]) : null)
+  const held = (key: 'magpie' | 'magpieRemote'): string | null => (pinned.includes(key) ? SWITCH_COPY.PINNED(LAUNCH_ENV[key]) : null)
   return (
     <div className="mg-switches" data-magpie={values.magpie ? 'on' : 'off'} data-remote={values.magpieRemote ? 'on' : 'off'}>
-      <Check variant={variant} name="magpie" checked={values.magpie} disabled={busy || pinned.includes('magpie')} label={MAGPIE_SWITCH_COPY.USE} note={MAGPIE_SWITCH_COPY.USE_NOTE} held={held('magpie')} onChange={(on) => onSet({ magpie: on })} />
+      <Check variant={variant} name="magpie" checked={values.magpie} disabled={busy || pinned.includes('magpie')} label={SWITCH_COPY.USE} note={SWITCH_COPY.USE_NOTE} held={held('magpie')} onChange={(on) => onSet({ magpie: on })} />
       <Check
         variant={variant}
         name="magpieRemote"
         checked={values.magpie && values.magpieRemote}
         disabled={busy || !values.magpie || pinned.includes('magpieRemote')}
-        label={MAGPIE_SWITCH_COPY.REMOTE}
-        note={values.magpie ? MAGPIE_SWITCH_COPY.REMOTE_NOTE : MAGPIE_SWITCH_COPY.REMOTE_NEEDS}
+        label={SWITCH_COPY.REMOTE}
+        note={values.magpie ? SWITCH_COPY.REMOTE_NOTE : SWITCH_COPY.REMOTE_NEEDS}
         held={held('magpieRemote')}
         onChange={(on) => onSet({ magpieRemote: on })}
       />
       {values.magpie && (
         <div className="mg-configure">
           <button type="button" className={variant === 'sheet' ? 'gs-ghost' : 'fr-fix'} disabled={busy || !installed} onClick={onConfigure}>
-            {busy ? MAGPIE_SWITCH_COPY.CONFIGURING : MAGPIE_SWITCH_COPY.CONFIGURE}
+            {busy ? SWITCH_COPY.CONFIGURING : SWITCH_COPY.CONFIGURE}
           </button>
-          <small className={small}>{installed ? MAGPIE_SWITCH_COPY.CONFIGURE_NOTE : MAGPIE_SWITCH_COPY.NOT_INSTALLED}</small>
+          <small className={small}>{installed ? SWITCH_COPY.CONFIGURE_NOTE : SWITCH_COPY.NOT_INSTALLED}</small>
         </div>
       )}
-      <small className={small ?? 'fr-why'}>{MAGPIE_SWITCH_COPY.LIVE}</small>
+      <small className={small ?? 'fr-why'}>{SWITCH_COPY.LIVE}</small>
       {problem && (
         <p className="fr-error" role="alert">
           {problem}

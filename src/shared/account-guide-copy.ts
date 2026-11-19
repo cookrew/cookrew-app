@@ -22,7 +22,7 @@ export const ACCOUNT_COPY = {
   REMOTE_OPEN: 'Open Magpie settings',
   NEEDS_MAGPIE: 'Needs Magpie on this computer.',
   INSTALL_MAGPIE: 'Install Magpie',
-  MAGPIE_STOPPED: 'Magpie is installed but not running.',
+  STOPPED_MAGPIE: 'Magpie is installed but not running.',
   START_MAGPIE: 'Start Magpie',
   OPEN: 'Set up',
   CLOSE: 'Close',
@@ -84,7 +84,7 @@ export const SHARE_COPY = {
 } as const
 
 /** The two Magpie switches: Launch settings and the first-run guide alike (routing/MagpieSwitches.tsx). */
-export const MAGPIE_SWITCH_COPY = {
+export const SWITCH_COPY = {
   HEAD: 'Magpie',
   USE: 'Use Magpie',
   USE_NOTE: 'Route agents’ models through Magpie: one place for every subscription, API key and routing group. Off: every agent runs on its own sign-in, and Cookrew shows no Magpie way in.',

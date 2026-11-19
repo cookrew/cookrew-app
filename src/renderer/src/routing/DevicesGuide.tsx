@@ -137,6 +137,8 @@ export function DevicesGuideBound({ store, modelHere, model }: { store: MagpieRe
 
 /** Absent where the bridge cannot list the account's computers: the phone and an older desktop. */
 export function DevicesGuide({ modelHere, model }: { modelHere: boolean; model?: React.ReactNode }): React.JSX.Element | null {
+  // Rendered where there is no window (a server render, a test): nothing to list from, so no guide.
+  if (typeof window === 'undefined') return null
   const bridge = cookrew()
   if (typeof bridge.magpieRemoteList !== 'function') return null
   return <DevicesGuideBound store={magpieRemoteStoreFor(bridge)} modelHere={modelHere} model={model} />

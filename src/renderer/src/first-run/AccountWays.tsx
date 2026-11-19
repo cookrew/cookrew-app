@@ -74,7 +74,7 @@ export function AccountWays({ route, endpointActive, endpoint, onRun, running, o
       <p className="fr-why">{via === null ? ACCOUNT_COPY.LEDE : ACCOUNT_COPY.READY(via)}</p>
       {showSwitches && <MagpieSwitches installed={installed} />}
       {magpie === 'offline' && route && (
-        <Way title={ACCOUNT_COPY.MAGPIE_STOPPED}>{press(route.setup.serveLine, ACCOUNT_COPY.START_MAGPIE)}</Way>
+        <Way title={ACCOUNT_COPY.STOPPED_MAGPIE}>{press(route.setup.serveLine, ACCOUNT_COPY.START_MAGPIE)}</Way>
       )}
       <Way title={ACCOUNT_COPY.SUBSCRIPTION} does={subscriptions.length > 0 ? ACCOUNT_COPY.SUBSCRIPTION_DOES : ACCOUNT_COPY.SUBSCRIPTION_NONE}>
         {subscriptions.map((s) => press(s.line, s.label))}

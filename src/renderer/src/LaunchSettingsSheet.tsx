@@ -4,7 +4,7 @@
 import { MagpieSwitches } from './routing/MagpieSwitches'
 import { DevicesGuide } from './routing/DevicesGuide'
 import { DEVICES_COPY } from '../../shared/devices-guide'
-import { MAGPIE_SWITCH_COPY } from '../../shared/account-guide-copy'
+import { SWITCH_COPY } from '../../shared/account-guide-copy'
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -142,7 +142,7 @@ export function LaunchSettingsView({ draft, status, saved, error, busy, onDraft,
         <Switch name="multiInstance" label="Run workspaces independently" note="Off: Cookrew holds one workspace at a time and drops the one you leave, though agents there keep running. Workspaces lose their own addresses, served crews stop answering, and a phone that switches workspace moves this window too." draft={draft} status={status} onDraft={onDraft} />
         <Switch name="interactiveBrowser" label="Run pages in Chrome" note="On: pages run in a background Chrome, keep going in workspaces you are not in, and a phone can watch and use them live. Off: pages live in this window, and a phone only sees pictures of them. Needs Chrome, Chromium or Edge; without one this stays off." draft={draft} status={status} onDraft={onDraft} />
         {/* Live: saved and applied the moment they change, apart from the Save below. */}
-        <h3 className="mg-head">{MAGPIE_SWITCH_COPY.HEAD}</h3>
+        <h3 className="mg-head">{SWITCH_COPY.HEAD}</h3>
         <MagpieSwitches installed variant="sheet" />
         <DevicesGuide modelHere={false} model={<small>{DEVICES_COPY.MODEL_ROUTING}</small>} />
         {error !== null && (
