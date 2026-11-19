@@ -256,11 +256,12 @@ describe('what a carrier can do', () => {
     const stream = a.openStream('echo', {})
     void write(stream, new Uint8Array(100_000))
     await readAll(stream.readable)
-    // All that stays is this end's own last ACK: acks ask for no ack, and are kept so a resend has no gap. Both
-    // waited for together: on a slow runner the last data was forgotten before that ACK went out.
+    // At most this end's own last ACK stays: acks ask for no ack, and are kept so a resend has no gap. None stays
+    // when a frame sent after that ACK was acked too (the far end's ack covers every record before it), which the
+    // sealing's own async order or a Windows runner's timers can make happen. Exactly one was a timing, not the rule.
     await vi.waitFor(() => {
       expect(a.stats().retained).toBeLessThan(64)
-      expect(a.replay(0)).toHaveLength(1)
+      expect(a.replay(0).length).toBeLessThanOrEqual(1)
     })
   })
 })
