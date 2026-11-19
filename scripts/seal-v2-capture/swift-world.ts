@@ -8,7 +8,7 @@ import { loopbackDialer } from '../../src/main/canvas-bridge'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { cameOverRelayLine, carriesSealProof, sealProofHeaders } from '../../src/main/seal-proof'
+import { cameOverRelayLine, sealedPeerOf, sealProofHeaders } from '../../src/main/seal-proof'
 import { createSealMarks } from '../../src/main/seal-marks'
 import { takeRelayDevice } from '../../src/main/relay-device'
 import { isSealPath, routeSeal, type SealTerminus } from '../../src/main/canvas-seal-terminus'
@@ -48,7 +48,8 @@ const companion = (terminus: () => SealTerminus | undefined): Server =>
       return
     }
     if (url.pathname === '/api/watch/rekey') {
-      if (!carriesSealProof(request)) {
+      // Only inside the confirmed watch's own sealed session, as handleWatchRekey asks.
+      if (!confirmed || sealedPeerOf(request) !== watchId) {
         response.writeHead(404)
         response.end()
         return

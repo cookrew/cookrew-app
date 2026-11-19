@@ -27,6 +27,21 @@ export function carriesSealProof(request: Pick<http.IncomingMessage, 'headers'>)
 }
 
 /**
+ * WHICH DEVICE A SEALED SESSION'S HANDSHAKE PROVED, for a request out of a device-mode
+ * session (a watch, another desktop): the terminus sets it from the handshake and takes
+ * any copy a caller sent off the request (canvas-seal-terminus.ts · innerHeaders). A
+ * code-mode session (a phone, the console) names no device this way: the relay's word
+ * on who it is proves nothing. Believed only beside the seal's proof, which nothing
+ * outside this process can write.
+ */
+export const SEALED_PEER_HEADER = 'x-cookrew-seal-peer'
+
+export function sealedPeerOf(request: Pick<http.IncomingMessage, 'headers'>): string | null {
+  const said = request.headers[SEALED_PEER_HEADER]
+  return typeof said === 'string' && said.length > 0 && carriesSealProof(request) ? said : null
+}
+
+/**
  * WHAT SAYS A REQUEST CAME DOWN THE RELAY LINE, in the clear: the canvas relay's
  * own dialer adds it (index.ts), and nothing else does. The direct WebRTC link
  * and the sealed session's inner requests carry the relay marker too, so the

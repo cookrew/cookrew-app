@@ -109,6 +109,8 @@ export interface WatchHost {
     offer(deviceId: string, jwk: DeviceKey): Promise<WatchSealReply | null>
     /** A watch key was confirmed: from now on the watch token is never taken in the clear on the relay line. */
     sealedOnRelay(): boolean
+    /** Is this the device id of a watch whose key the owner confirmed here? */
+    isWatch(deviceId: string): boolean
   }
 }
 
@@ -289,12 +291,14 @@ export const WATCH_REKEY_PATH = '/api/watch/rekey'
 /**
  * A NEW TOKEN, SEALED. The claim's answer carried the watch's token in the clear (over the LAN, or
  * the relay on the relay path), so once the watch's sealed session is open it trades that token for
- * one nobody has seen. Only inside a sealed session (`sealed`: the terminus's proof is on the
- * request), and only for the token now held: everything else answers 404, as if there were no route.
+ * one nobody has seen. Only inside the confirmed watch's OWN sealed session (`sealedPeer`: the device
+ * its handshake proved, seal-proof.ts · sealedPeerOf; never a phone's or the console's code-mode
+ * session, whatever token it holds, Relay round 4, D), and only for the token now held: everything
+ * else answers 404, as if there were no route.
  */
-export function handleWatchRekey(response: http.ServerResponse, method: string, path: string, sealed: boolean, presented: string | null): boolean {
+export function handleWatchRekey(response: http.ServerResponse, method: string, path: string, sealedPeer: string | null, presented: string | null): boolean {
   if (method !== 'POST' || path !== WATCH_REKEY_PATH || !host) return false
-  if (!sealed || !host.pairing.accepts(presented)) {
+  if (sealedPeer === null || host.seal?.isWatch(sealedPeer) !== true || !host.pairing.accepts(presented)) {
     respondJson(response, 404, { error: 'not found' })
     return true
   }

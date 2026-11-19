@@ -69,7 +69,7 @@ import { ownerSubmit } from "./ask";
 import { fromTheMacsOwnPage, handleUseSourceRoutes, isUseSourceRoute } from "./use-source-routes";
 import { handleUnlockGrantRoutes, isUnlockGrantRoute } from "./unlock-grant-routes";
 import type { UnlockGrantDoor } from "./unlock-grant";
-import { cameOverRelayLine, carriesSealProof } from "./seal-proof";
+import { cameOverRelayLine, carriesSealProof, sealedPeerOf } from "./seal-proof";
 import { DOOR_MARKER } from "../shared/remote-unlock";
 import { UNLOCK_GRANT_EVENT } from "../shared/unlock-grant";
 import type { ViewerWho } from "../shared/remote-access";
@@ -778,7 +778,7 @@ export async function handleMobileApi(
   // Six digits for a watch's token: open, as this route must be, and bounded.
   if (await handleWatchClaim(request, response, method, p, deps.bridgedDeviceId ?? null)) return true;
   if (handleWatchHello(response, url, method, p)) return true;
-  if (handleWatchRekey(response, method, p, carriesSealProof(request), presentedToken(request, url))) return true;
+  if (handleWatchRekey(response, method, p, sealedPeerOf(request), presentedToken(request, url))) return true;
   const watchRefusal = watchCleared ? watchWriteRefusal(p) : null;
   if (watchRefusal) {
     respondJson(response, watchRefusal.status, { error: watchRefusal.error });

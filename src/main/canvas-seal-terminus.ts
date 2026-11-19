@@ -13,7 +13,7 @@ import { ABORT } from '../shared/seal2/spec'
 import type { Seal2Stream } from '../shared/seal2/stream'
 import { openSeal2Live } from './seal2-live'
 import { proveSuccessor } from '../shared/seal2/successor'
-import { RELAY_LINE_MARKER } from './seal-proof'
+import { RELAY_LINE_MARKER, SEALED_PEER_HEADER } from './seal-proof'
 import { RELAY_SESSION_HEADER } from '../shared/machine-relay'
 import { serveHttpStream } from './seal2-serve-http'
 
@@ -161,19 +161,21 @@ export async function routeSeal(request: http.IncomingMessage, response: http.Se
 /** Hop by hop, and everything only the bridge may say. The dialer writes host and the marker itself. */
 const NOT_FROM_INSIDE = new Set([
   'host', 'connection', 'keep-alive', 'proxy-connection', 'proxy-authorization', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'content-length', 'expect',
-  'x-real-ip', RELAY_MARKER, RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER, DOOR_MARKER, RELAY_LINE_MARKER,
+  'x-real-ip', RELAY_MARKER, RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER, DOOR_MARKER, RELAY_LINE_MARKER, SEALED_PEER_HEADER,
   // The account's session is the relay's: a machine never holds it.
   RELAY_SESSION_HEADER
 ])
 
-export function innerHeaders(asked: Readonly<Record<string, string>>, outer: SealOuter): Record<string, string> {
+/** `sealedPeer`: the device a device-mode handshake proved (seal-proof.ts · SEALED_PEER_HEADER); none in code mode. */
+export function innerHeaders(asked: Readonly<Record<string, string>>, outer: SealOuter, sealedPeer?: string): Record<string, string> {
   const kept = Object.entries(asked)
     .map(([name, value]): [string, string] => [name.toLowerCase(), value])
     .filter(([name]) => !NOT_FROM_INSIDE.has(name) && !name.startsWith('x-forwarded-'))
   return {
     ...Object.fromEntries(kept),
     ...(outer.device === undefined ? {} : { [RELAY_DEVICE_HEADER]: outer.device }),
-    ...(outer.deviceName === undefined ? {} : { [RELAY_DEVICE_NAME_HEADER]: outer.deviceName })
+    ...(outer.deviceName === undefined ? {} : { [RELAY_DEVICE_NAME_HEADER]: outer.deviceName }),
+    ...(sealedPeer === undefined ? {} : { [SEALED_PEER_HEADER]: sealedPeer })
   }
 }
 
@@ -591,7 +593,8 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
         const allowed = asked !== null && plainPath && deps.deviceHttp?.(peer.deviceId, asked.method, asked.path) === true
         if (!allowed) return stream.abort(ABORT.refused, 'not a route for this device')
       }
-      return serveHttpStream(stream, { dial: deps.dial, headersFor: (asked) => innerHeaders(asked, outer), log })
+      const sealedPeer = peer.mode === 'device' ? peer.deviceId : undefined
+      return serveHttpStream(stream, { dial: deps.dial, headersFor: (asked) => innerHeaders(asked, outer, sealedPeer), log })
     }
     // Own entries only: a kind named for something every object has ("constructor") is no handler.
     const kinds = deps.kinds ?? {}

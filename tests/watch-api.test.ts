@@ -1,4 +1,4 @@
-import { relayLineHeaders, sealProofHeaders } from '../src/main/seal-proof'
+import { relayLineHeaders, SEALED_PEER_HEADER, sealProofHeaders } from '../src/main/seal-proof'
 import { DOOR_MARKER, SEALED_MARKER } from '../src/shared/remote-unlock'
 import { readFileSync, writeFileSync, existsSync, mkdtempSync } from 'node:fs'
 import http from 'node:http'
@@ -350,6 +350,7 @@ describe('through the real gate', () => {
       ...host(pairing),
       seal: {
         sealedOnRelay: () => false,
+        isWatch: () => false,
         offer: async (deviceId, jwk) => {
           offered.push({ deviceId, x: jwk.x })
           return { deviceId: 'mac-device', jwk: macKey, nonce: 'n', words: ['able', 'baby', 'cable', 'dance', 'eagle', 'fabric'] }
@@ -369,7 +370,7 @@ describe('through the real gate', () => {
 
   it('a claim with no key, or a key that is not an Ed25519 one, is the old claim', async () => {
     let asked = 0
-    setWatchHost({ ...host(pairing), seal: { sealedOnRelay: () => false, offer: async () => (asked++, null) } })
+    setWatchHost({ ...host(pairing), seal: { sealedOnRelay: () => false, isWatch: () => false, offer: async () => (asked++, null) } })
     for (const extra of [{}, { deviceId: '0f0e0d0c-0b0a-4908-8706-050403020100', jwk: { kty: 'EC', crv: 'P-256', x: 'a' } }]) {
       const { code } = (await (await post('/api/watch/code', PAIRING)).json()) as { code: string }
       const claimed = (await (await post('/api/watch/claim', null, { code, ...extra })).json()) as { ok: boolean; seal?: unknown }
@@ -379,11 +380,22 @@ describe('through the real gate', () => {
     expect(asked).toBe(0)
   })
 
-  it('the claim\'s token is traded for a new one only inside a sealed session, and the old one stops working', async () => {
+  it('the claim\'s token is traded for a new one only inside the confirmed watch\'s own sealed session, and the old one stops working', async () => {
+    const WATCH = '0f0e0d0c-0b0a-4908-8706-050403020100'
+    setWatchHost({ ...host(pairing), seal: { sealedOnRelay: () => true, isWatch: (id) => id === WATCH, offer: async () => null } })
     const old = await paired()
     // In the clear (no seal proof): no such route.
     expect((await post('/api/watch/rekey', old)).status).toBe(404)
-    const sealed = { [SEALED_MARKER]: sealProofHeaders()[SEALED_MARKER] }
+    const proof = { [SEALED_MARKER]: sealProofHeaders()[SEALED_MARKER] }
+    // Sealed, but a phone's or the console's code-mode session, which names no device: no such route,
+    // whatever token it holds (Relay round 4, D).
+    expect((await call('/api/watch/rekey', old, { method: 'POST', body: '{}', headers: proof })).status).toBe(404)
+    // Sealed by a device that is not the confirmed watch (a desktop, a watch still waiting for its words): none.
+    const other = { ...proof, [SEALED_PEER_HEADER]: '53ab5b71-1430-891d-a7ce-2e3d6f3856bc' }
+    expect((await call('/api/watch/rekey', old, { method: 'POST', body: '{}', headers: other })).status).toBe(404)
+    // The watch's id with no seal proof is anyone's to write: none.
+    expect((await call('/api/watch/rekey', old, { method: 'POST', body: '{}', headers: { [SEALED_PEER_HEADER]: WATCH } })).status).toBe(404)
+    const sealed = { ...proof, [SEALED_PEER_HEADER]: WATCH }
     expect((await call('/api/watch/rekey', 'not-the-token', { method: 'POST', body: '{}', headers: sealed })).status).toBe(404)
     const traded = await call('/api/watch/rekey', old, { method: 'POST', body: '{}', headers: sealed })
     const { token } = (await traded.json()) as { token: string }
@@ -401,7 +413,7 @@ describe('through the real gate', () => {
 
   it('once a watch key is confirmed, the watch token is refused in the clear on the relay line, whatever device the relay names', async () => {
     let confirmed = false
-    setWatchHost({ ...host(pairing), seal: { sealedOnRelay: () => confirmed, offer: async () => null } })
+    setWatchHost({ ...host(pairing), seal: { sealedOnRelay: () => confirmed, isWatch: () => false, offer: async () => null } })
     const token = await paired()
     const line = relayLineHeaders()
     expect((await call('/api/watch/cards', token, { headers: line })).status).toBe(200)

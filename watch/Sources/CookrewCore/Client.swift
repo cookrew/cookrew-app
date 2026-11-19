@@ -304,6 +304,13 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
    * clear when the watch was paired, so the first time this watch's relay road is sealed, it asks inside that
    * session for a new one and drops the old. Every call waits for the trade, so none goes out on a token that
    * is about to stop working. Not let in sealed yet: nothing is traded, and it is asked again later.
+   *
+   * SWIFT 6 NOTE (Relay round 4, E; documented, not changed): `lock.lock()` / `lock.unlock()` here and in
+   * `rekey` are called from async functions. Under this package's Swift 5 language mode that is a warning
+   * ("unavailable from asynchronous contexts"); in Swift 6 language mode it is an error. It is sound today
+   * because no critical section holds an `await`: each lock/unlock pair runs to its end on one thread. The
+   * Swift 6 move is `lock.withLock { ... }` for each section (or the state into an actor), with no `await`
+   * inside, before the package's language mode goes to 6.
    */
   private func tradeToken() async {
     // One token for the whole watch: a newer one in the vault (traded by another instance) is taken up first.

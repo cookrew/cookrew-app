@@ -187,6 +187,7 @@ import { createSealPeers } from './seal-peers'
 import { createSealPinStore } from './seal-pins'
 import { answerPeer, createBlockedLanes, forgetBlocked } from './seal-blocked'
 import { createSealWatchKeys } from './seal-watch-keys'
+import { forgetWatchSeal, offerWatchSeal, watchDeviceHttp } from './seal-watch-gate'
 import { deviceWords, keyWords, type DeviceKey } from '../shared/seal2/handshake'
 import { sealedSwitchMemory } from './remote-switch-memory'
 import { singleConfirm } from './remote-switch-confirm'
@@ -1884,7 +1885,7 @@ const sealTerminus = createSealTerminus({
     sealPins.contact(peer.deviceId)
   },
   // Owner ruling 2026-11-19: no route for a desktop peer by default. A confirmed watch reaches its own routes.
-  deviceHttp: (deviceId, method, path) => sealWatchKeys.keyOf(deviceId) !== null && watchSealedRouteAllowed(method, path),
+  deviceHttp: watchDeviceHttp(sealWatchKeys, watchSealedRouteAllowed),
   dial: loopbackDialer(MOBILE_PORT, undefined, sealProofHeaders()),
   // What the paced uplink still holds counts too: since relay-uplink.ts, an
   // answer waits there rather than in Node's socket buffer.
@@ -9984,17 +9985,9 @@ function registerIpc(handlers: RestoreHandlers): void {
     ...watchHost,
     seal: {
       sealedOnRelay: () => sealWatchKeys.anyConfirmed(),
-      async offer(deviceId: string, jwk: DeviceKey) {
-        const self = sealDevice.self()
-        if (self === null) return null
-        // A watch's id is never a desktop's: a claim naming this Mac, a desktop of the account, or an id that
-        // could not be checked keeps the old way. Unknown fails closed.
-        if (deviceId === self.deviceId || (await sealDevice.listed(deviceId)) !== false) return null
-        const nonce = sealWatchKeys.offer(deviceId, jwk)
-        if (nonce === null) return null
-        // The words go along for an older reader only: the watch computes its own from the keys and the nonce.
-        return { deviceId: self.deviceId, jwk: self.jwk, nonce: Buffer.from(nonce).toString('base64url'), words: (await keyWords(jwk, self.jwk, nonce)).words }
-      }
+      isWatch: (deviceId: string) => sealWatchKeys.keyOf(deviceId) !== null,
+      // Never to this Mac's id, a desktop of the account, or an id the listing could not be asked about.
+      offer: (deviceId: string, jwk: DeviceKey) => offerWatchSeal(deviceId, jwk, { self: () => sealDevice.self(), listed: sealDevice.listed, keys: sealWatchKeys })
     }
   })
   // A watch's key waits for the owner to see the same six words on the watch and here (seal-watch-keys.ts).
@@ -10088,9 +10081,8 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle(
     'watch:forget',
     ownerOnly(() => {
-      // A forgotten watch is let in sealed no more either: its keys go with its token.
-      // Its sealed-only marks go too: paired again, it is not refused in the clear before it seals again.
-      for (const id of sealWatchKeys.forgetAll()) sealMarks.unmark(id)
+      // A forgotten watch is let in sealed no more either: its keys and its sealed-only marks go with its token.
+      forgetWatchSeal(sealWatchKeys, sealMarks)
       return watchPairing.unpair()
     })
   )
