@@ -33,7 +33,11 @@ class StuckPeer extends EventTarget {
   }
   async setLocalDescription(): Promise<void> {}
   async setRemoteDescription(): Promise<void> {}
-  close(): void {}
+  /** Closing reads as closed everywhere: a reason read after shut() would say so, and fail the test. */
+  close(): void {
+    this.iceConnectionState = 'closed'
+    this.connectionState = 'closed'
+  }
 }
 
 const trusted = async () => ({ ok: true as const, by: 'device' as const })
@@ -73,6 +77,77 @@ describe('connectRtcLink says why it gave up', () => {
     expect(link).toBeNull()
     expect(why).toEqual(['never opened (ice checking, conn connecting, ch connecting; offer 1 host, 1 mdns, 1 srflx)'])
     expect(`webrtc: ${why[0]}`.length).toBeLessThanOrEqual(120)
+  })
+})
+
+describe('the reason in the other endings', () => {
+  it('a peer that failed before opening: its own reason, and still the offer\'s candidate kinds', async () => {
+    const why: string[] = []
+    class FailingPeer extends StuckPeer {
+      async setRemoteDescription(): Promise<void> {
+        queueMicrotask(() => {
+          this.connectionState = 'failed'
+          this.dispatchEvent(new Event('connectionstatechange'))
+        })
+      }
+    }
+    const link = await connectRtcLink({
+      offer: async () => ({ sdp: 'v=0\r\n' }),
+      trust: trusted,
+      failed: (reason) => void why.push(reason),
+      peer: () => new FailingPeer() as unknown as RTCPeerConnection,
+      gatherMs: 10,
+      openMs: 2000
+    })
+    expect(link).toBeNull()
+    expect(why).toEqual(['never opened (failed; offer 1 host, 1 mdns, 1 srflx)'])
+  })
+
+  it('a verified answer the browser would not take: "answer not applied"', async () => {
+    const why: string[] = []
+    class RefusingPeer extends StuckPeer {
+      async setRemoteDescription(): Promise<void> {
+        throw new Error('malformed')
+      }
+    }
+    expect(await connectRtcLink({
+      offer: async () => ({ sdp: 'v=0\r\n' }),
+      trust: trusted,
+      failed: (reason) => void why.push(reason),
+      peer: () => new RefusingPeer() as unknown as RTCPeerConnection,
+      gatherMs: 10
+    })).toBeNull()
+    expect(why).toEqual(['answer not applied'])
+  })
+
+  it('a refused answer is a refusal, never a failure, said once', async () => {
+    const why: string[] = []
+    const refusals: string[] = []
+    expect(await connectRtcLink({
+      offer: async () => ({ sdp: 'v=0\r\n' }),
+      trust: async () => ({ ok: false as const, why: 'no binding' }),
+      refused: (reason) => void refusals.push(reason),
+      failed: (reason) => void why.push(reason),
+      peer: () => new StuckPeer() as unknown as RTCPeerConnection,
+      gatherMs: 10
+    })).toBeNull()
+    expect(refusals).toEqual(['no binding'])
+    expect(why).toEqual([])
+  })
+
+  it('a report callback that throws is not called again', async () => {
+    let calls = 0
+    expect(await connectRtcLink({
+      offer: async () => null,
+      trust: trusted,
+      failed: () => {
+        calls += 1
+        throw new Error('the report broke')
+      },
+      peer: () => new StuckPeer() as unknown as RTCPeerConnection,
+      gatherMs: 10
+    }).catch(() => null)).toBeNull()
+    expect(calls).toBe(1)
   })
 })
 

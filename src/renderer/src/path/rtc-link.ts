@@ -185,9 +185,12 @@ export const offerCandidateKinds = (sdp: string): string => {
   return `${count('host')} host, ${count('mdns')} mdns, ${count('srflx')} srflx`
 }
 
-/** Where a link that never opened was stuck, in the browser's own words (path report rows are cut at 120). */
-const neverOpened = (pc: RTCPeerConnection, channel: RTCDataChannel, offerSdp: string): string =>
-  `never opened (ice ${pc.iceConnectionState ?? '?'}, conn ${pc.connectionState ?? '?'}, ch ${channel.readyState ?? '?'}; offer ${offerCandidateKinds(offerSdp)})`
+/** The browser's own states for a link still being opened. */
+const browserStates = (pc: RTCPeerConnection, channel: RTCDataChannel): string =>
+  `ice ${pc.iceConnectionState ?? '?'}, conn ${pc.connectionState ?? '?'}, ch ${channel.readyState ?? '?'}`
+
+/** Where a link that never opened was stuck, with the offer's candidate kinds always (rows are cut at 120). */
+const neverOpened = (stuck: string, offerSdp: string): string => `never opened (${stuck}; offer ${offerCandidateKinds(offerSdp)})`
 
 /**
  * The binding's verdict on this answer. FAILS CLOSED: a check that throws,
@@ -335,6 +338,8 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
   })
 
   let offerSdp = ''
+  /** How the exchange ended early, said once, after the try: a refusal, or a failure for the report. */
+  let early: { readonly refused: string } | { readonly failed: string } | null = null
   try {
     await pc.setLocalDescription(await pc.createOffer())
     await gathered(pc, deps.gatherMs ?? RTC_GATHER_MS)
@@ -342,21 +347,21 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
     offerSdp = pc.localDescription?.sdp ?? ''
     const got = await deps.offer(offerSdp)
     if (got === null) {
-      shut('no answer')
-      deps.failed?.('no answer')
-      return null
+      early = { failed: 'no answer' }
+    } else {
+      const answer: RtcAnswer = typeof got === 'string' ? { sdp: got } : got
+      const verdict = await checkAnswer(deps, offerSdp, answer)
+      if (!verdict.ok) early = { refused: verdict.why }
+      else await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp }).catch(() => void (early = { failed: 'answer not applied' }))
     }
-    const answer: RtcAnswer = typeof got === 'string' ? { sdp: got } : got
-    const verdict = await checkAnswer(deps, offerSdp, answer)
-    if (!verdict.ok) {
-      shut('unbound')
-      deps.refused?.(verdict.why)
-      return null
-    }
-    await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp })
   } catch {
-    shut('no answer')
-    deps.failed?.('no answer')
+    early = { failed: 'no answer' }
+  }
+  if (early !== null) {
+    const ended: { readonly refused: string } | { readonly failed: string } = early
+    shut('refused' in ended ? 'unbound' : 'no answer')
+    if ('refused' in ended) deps.refused?.(ended.refused)
+    else deps.failed?.(ended.failed)
     return null
   }
   const timer = setTimeout(() => via(null), deps.openMs ?? RTC_OPEN_MS)
@@ -365,7 +370,7 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
   if (name === null || closed) {
     // Read before shut() closes the peer, which would make every state 'closed'.
     const ended = endedAs as RtcLinkEnd | null
-    const why = ended !== null ? `never opened (${ended.reason})` : neverOpened(pc, channel, offerSdp)
+    const why = neverOpened(ended !== null ? ended.reason : browserStates(pc, channel), offerSdp)
     shut('never opened')
     deps.failed?.(why)
     return null
