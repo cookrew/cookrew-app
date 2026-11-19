@@ -23,6 +23,14 @@ const KEY = `sk-magpie-key-${'r'.repeat(30)}tail42`
 const ON: LiveValues = { magpie: true, magpieRemote: true }
 /** How long the fake Magpie streams an answer; a test that must catch one mid-stream holds it longer. */
 let streamMs = 20
+/** How often both ends look at the switches again; a test of the immediate cut sets it long, so the poll cannot do it. */
+let pollMs = 25
+/** A world whose switch poll is too slow to cut anything within a test: only switchesChanged() can. */
+const withoutPoll = async (): Promise<void> => {
+  await world.close()
+  pollMs = 60_000
+  world = await build()
+}
 
 interface Seen {
   method: string
@@ -58,7 +66,7 @@ interface World {
   /** `duringList` runs inside each key-list read; `duringPort` inside each gateway-port lookup, which `portAsks` counts. */
   b: { switches: LiveValues | null; listed: KeyRow[]; keys: BoundKeys; peer: SealPeer; issued: string[]; revoked: string[]; reads: number; portAsks: number; duringList?: () => void; duringPort?: () => void }
   /** `check`, when set, replaces the caller answer; `opened` counts the streams A opened to B. */
-  a: { switches: LiveValues | null; key: string | null; caller: boolean; gate: boolean; check?: () => Promise<boolean>; opened: number }
+  a: { switches: LiveValues | null; key: string | null; caller: boolean; gate: boolean; check?: () => Promise<boolean>; opened: number; duringOpen?: () => void }
   pair: Awaited<ReturnType<typeof seal2Pair>>
   serve: ReturnType<typeof createMagpieServe>
   forwarder: ReturnType<typeof createMagpieForwarder>
@@ -96,7 +104,7 @@ async function build(): Promise<World> {
     dial: (port) => loopbackDialer(port),
     name: () => 'Solis-Core',
     log: () => undefined,
-    switchPollMs: 25
+    switchPollMs: pollMs
   })
   const pair = await seal2Pair((stream) => serve(stream, b.peer, {} as never))
   const a: World['a'] = { switches: ON, key: KEY, caller: true, gate: true, opened: 0 }
@@ -105,13 +113,14 @@ async function build(): Promise<World> {
     keyFor: (peer) => (peer === A.replace('deviceA', 'deviceB') ? a.key : null),
     openStream: async (_peer, kind, fields) => {
       a.opened += 1
+      a.duringOpen?.()
       return pair.a.openStream(kind, fields)
     },
     // Not async: a check that throws before it returns a promise is met as setup.ts would meet it.
     callerAllowed: () => (a.check ? a.check() : Promise.resolve(a.caller)),
     open: async () => a.gate,
     log: () => undefined,
-    switchPollMs: 25
+    switchPollMs: pollMs
   })
   const forwardPort = await forwarder.listen(0)
   return {
@@ -146,6 +155,7 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   streamMs = 20
+  pollMs = 25
   await world.close()
 })
 
@@ -743,7 +753,8 @@ describe('relay review: switching Magpie remote off cuts answers already streami
     await expect(stream.closed).rejects.toBeDefined()
   })
 
-  it('cuts at once when told the switches changed', async () => {
+  it('cuts at once when told the switches changed (the poll is too slow to do it here)', async () => {
+    await withoutPoll()
     const stream = await streaming()
     world.b.switches = { magpie: true, magpieRemote: false }
     world.serve.switchesChanged()
@@ -836,7 +847,8 @@ describe('relay verification L1: switching off on THIS computer cuts answers str
     expect(world.b.switches).toEqual(ON)
   })
 
-  it('cuts at once when told the switches changed', async () => {
+  it('cuts at once when told the switches changed (the poll is too slow to do it here)', async () => {
+    await withoutPoll()
     const response = await streamingThroughA()
     world.a.switches = { magpie: true, magpieRemote: false }
     world.forwarder.switchesChanged()
@@ -852,5 +864,29 @@ describe('relay verification L1: switching off on THIS computer cuts answers str
     })
     world.forwarder.switchesChanged()
     expect(await response.text()).toContain('message_stop')
+  })
+})
+
+describe('relay acceptance 1: a request caught mid-way when this computer switches off never reaches the other', () => {
+  it('holds at the caller check, is switched off meanwhile, and on release reaches nothing', async () => {
+    let release!: (ok: boolean) => void
+    world.a.check = () => new Promise<boolean>((resolve) => (release = resolve))
+    const asked = call('/v1/messages')
+    for (let i = 0; i < 100 && release === undefined; i += 1) await new Promise((r) => setTimeout(r, 5))
+    world.a.switches = { magpie: true, magpieRemote: false }
+    release(true)
+    expect((await asked).status).toBe(403)
+    expect(world.a.opened).toBe(0)
+    expect(world.magpie.seen).toEqual([])
+  })
+
+  it('switched off while its stream opens: the prompt is never carried', async () => {
+    // Off once every check before the stream has passed: only the check after it joins the in-flight list sees it.
+    world.a.duringOpen = () => {
+      world.a.switches = { magpie: true, magpieRemote: false }
+    }
+    expect((await call('/v1/messages')).status).toBe(403)
+    expect(world.a.opened).toBe(1)
+    expect(world.magpie.seen).toEqual([])
   })
 })

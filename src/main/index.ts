@@ -331,7 +331,7 @@ import { magpieBinary, magpieRunner, ShareKeys } from './route/share-keys'
 import { fileIntentStore, INTENT_FILE } from './route/share-intents'
 import { fileAuditLog, SHARE_AUDIT_FILE } from './route/share-audit'
 import { createMagpieRemote } from './magpie-remote/setup'
-import { magpieSeatGate } from './magpie-remote/seat-gate'
+import { magpieSeatGate, trackServedSeat } from './magpie-remote/seat-gate'
 import { callerIsMagpie } from './magpie-remote/caller'
 import { createTailnetView } from './route/tailnet'
 import { MAGPIE_REMOTE_KIND } from '../shared/remote-magpie'
@@ -4213,15 +4213,16 @@ function spawnTracked(t: {
   if (timingBoot) session.once('exit', () => boots.cancel(sessionNameFor(t.id)))
   // A seat keeps the profile it started under until it is respawned: recorded
   // so the seat gate can tell when that is no longer what a spawn would write.
-  if (served && servedCtx && fresh && !session.reattached) {
-    const seat = { terminalId: t.id, serviceId: servedCtx.serviceId, sandbox: servedCtx.sandbox, digest: served.profileDigest }
-    seatLedger.record(seat)
-    // Magpie remote asks the gate afresh, never on an answer cached before this seat (magpie-remote/setup.ts).
-    magpieRemote.seatsChanged()
-    // This record only: a respawn's new seat is recorded before the old exit fires.
-    session.once('exit', () => {
-      seatLedger.forget(t.id, seat)
-      magpieRemote.seatsChanged()
+  if (served && servedCtx) {
+    const seat = fresh && !session.reattached ? { terminalId: t.id, serviceId: servedCtx.serviceId, sandbox: servedCtx.sandbox, digest: served.profileDigest } : null
+    // Recorded only when fresh; Magpie remote asks its gate afresh on every served start and end, a reattached one
+    // included (magpie-remote/seat-gate.ts · trackServedSeat).
+    trackServedSeat(seat, {
+      record: (s) => seatLedger.record(s),
+      // This record only: a respawn's new seat is recorded before the old exit fires.
+      forget: (s) => seatLedger.forget(t.id, s),
+      seatsChanged: () => magpieRemote.seatsChanged(),
+      onExit: (run) => void session.once('exit', run)
     })
   }
   turns.track(session, command.trim().length > 0)

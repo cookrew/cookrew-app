@@ -246,12 +246,15 @@ async function placeFor(peer: string, peerName: string, known: readonly RemoteMa
   return { ok: true, place: { providerId, ours, url: `http://127.0.0.1:${port}/peer/${peer}` } }
 }
 
-/** This key is still kept here, unacknowledged; an unreadable store counts as kept (it is tried again). */
+/**
+ * This key is still kept here, unacknowledged, so the next pass can finish it. A store that cannot be read
+ * is NOT held (relay acceptance 2): no pass could read it back to try again, so the key is given back.
+ */
 function stillHeld(peer: string, keyId: string, deps: Pick<ConnectDeps, 'store'>): boolean {
   try {
     return deps.store.unacked(peer)?.keyId === keyId
   } catch {
-    return true
+    return false
   }
 }
 
@@ -384,7 +387,9 @@ async function giveBack(peer: string, peerName: string, deps: Pick<ConnectDeps, 
     await deps.returnKey(peer)
     return ' The key was given back.'
   } catch {
-    return ` The key could not be given back: ${peerName} still warns of it until its owner revokes it there.`
+    // Not "it still warns": the other computer may have turned the key on already (a write here that landed
+    // and then failed to sync); only its owner can tell, so say what to do there.
+    return ` The key could not be given back: on ${peerName}, revoke it under Share with my devices if it is still listed.`
   }
 }
 

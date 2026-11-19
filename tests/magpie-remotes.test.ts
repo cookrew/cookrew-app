@@ -553,6 +553,25 @@ describe('relay verification I1: once the other computer turned the key on, a lo
     expect(d.store.list()).toEqual([])
   })
 
+  it('gives the key back when the store cannot be read to tell (relay acceptance 2): no retry could run from it', async () => {
+    const store = createRemotesStore(path.join(dir, 'magpie-remotes.json'), sealer)
+    let broken = false
+    const unreadable = Object.assign(store, {
+      markAcked: () => {
+        broken = true
+        throw new Error('garbled')
+      },
+      unacked: (peer: string) => {
+        if (broken) throw new Error('garbled')
+        return createRemotesStore(path.join(dir, 'magpie-remotes.json'), sealer).unacked(peer)
+      }
+    })
+    const d = deps({ store: unreadable })
+    const answer = await connectRemote(PEER, 'Solis', d)
+    expect(answer).toMatchObject({ ok: false, why: expect.stringContaining('given back') })
+    expect(d.returned).toEqual([PEER])
+  })
+
   it('gives the key back when nothing of it is held here to try again with', async () => {
     const store = createRemotesStore(path.join(dir, 'magpie-remotes.json'), sealer)
     const vanishing = Object.assign(store, {
@@ -564,5 +583,56 @@ describe('relay verification I1: once the other computer turned the key on, a lo
     const d = deps({ store: vanishing })
     expect(await connectRemote(PEER, 'Solis', d)).toMatchObject({ ok: false })
     expect(d.returned).toEqual([PEER])
+  })
+})
+
+describe('relay acceptance 3: the setup’s switchesChanged reaches this computer’s forwarder', () => {
+  it('cuts an answer streaming through the forwarder at once, with no poll in between', async () => {
+    const { createMagpieRemote } = await import('../src/main/magpie-remote/setup')
+    createRemotesStore(path.join(dir, 'magpie-remotes.json'), null).put({ peer: PEER, name: 'Solis', providerId: 'solis', at: 'x', keyId: 'id1', acked: true }, KEY)
+    let switches = { magpie: true, magpieRemote: true }
+    const aborted: string[] = []
+    let opened!: () => void
+    const streamOpen = new Promise<void>((resolve) => (opened = resolve))
+    const remote = createMagpieRemote({
+      base: dir,
+      switches: () => switches,
+      shareKeys: () => null,
+      gatewayPort: () => null,
+      // A stream whose answer never comes: it stays in flight until something cuts it.
+      openStream: async () => {
+        opened()
+        return {
+          head: new Promise(() => undefined),
+          readable: new ReadableStream(),
+          writable: new WritableStream(),
+          closed: new Promise(() => undefined),
+          abort: (_code?: number, reason?: string) => void aborted.push(reason ?? ''),
+          respond: () => undefined
+        } as never
+      },
+      desktops: async () => [],
+      selfId: () => null,
+      sealer: null,
+      magpieBin: () => null,
+      env: () => ({ home: dir, env: {} }),
+      log: () => undefined,
+      seatGate: async () => true,
+      callerIsMagpie: async () => true,
+      forwardPort: 0
+    })
+    await remote.start()
+    try {
+      const asked = fetch(`http://127.0.0.1:${remote.port()}/peer/${PEER}/v1/models`, { headers: { host: `127.0.0.1:${remote.port()}` } }).catch(() => null)
+      await streamOpen
+      await new Promise((r) => setTimeout(r, 20))
+      switches = { magpie: true, magpieRemote: false }
+      remote.switchesChanged()
+      // Synchronously: only switchesChanged reaching the forwarder could have cut it by now.
+      expect(aborted).toEqual(['Magpie remote switched off'])
+      await asked
+    } finally {
+      await remote.stop()
+    }
   })
 })

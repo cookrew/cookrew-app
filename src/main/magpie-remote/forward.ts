@@ -138,6 +138,8 @@ export function createMagpieForwarder(deps: ForwardDeps): {
     if (!switchedOn()) return refuse(response, 403, 'Magpie remote is switched off in Launch settings on this computer.')
     if (!(await callerOk(request))) return refuse(response, 403, 'Only this computer’s Magpie may use this.')
     if (!(await deps.open().catch(() => false))) return refuse(response, 403, 'A served session runs under an older sandbox: other computers’ Magpies are shut until it is restarted.')
+    // Asked again after the slow checks above (caller, gate): a switch turned off while they ran is honoured here.
+    if (!switchedOn()) return refuse(response, 403, 'Magpie remote is switched off in Launch settings on this computer.')
     let key: string | null
     try {
       key = deps.keyFor(peer)
@@ -172,6 +174,13 @@ export function createMagpieForwarder(deps: ForwardDeps): {
     const live = { stream: open, response }
     inFlight.add(live)
     watchSwitches()
+    // Once more now it is listed (relay acceptance 1): switched off while the stream opened, nothing is carried;
+    // switched off from here on, the registry cuts it.
+    if (!switchedOn()) {
+      inFlight.delete(live)
+      open.abort(ABORT.refused, 'Magpie remote switched off')
+      return refuse(response, 403, 'Magpie remote is switched off in Launch settings on this computer.')
+    }
     try {
       await carry(request, response, open)
       // The answer is whole; a request body the far end never read (a refusal) would hold the stream open

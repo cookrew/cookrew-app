@@ -2,7 +2,7 @@
 // seat runs today's profile, no leftovers); elsewhere there is no Seatbelt profile to vouch for a served
 // terminal, so the forwarder stays shut while any is on the canvas. Anything that throws is shut.
 import { describe, expect, it, vi } from 'vitest'
-import { magpieSeatGate } from '../src/main/magpie-remote/seat-gate'
+import { magpieSeatGate, trackServedSeat } from '../src/main/magpie-remote/seat-gate'
 
 const open = { open: true, why: null }
 const shut = { open: false, why: '1 served session(s) run under an older sandbox: restart them first.' }
@@ -30,5 +30,36 @@ describe('the served-seat gate Magpie remote asks', () => {
   it('is shut when the canvas cannot be read', async () => {
     const gate = magpieSeatGate({ platform: 'linux', servedSeatGate: async () => open, servedOnCanvas: () => { throw new Error('store') } })
     expect(await gate()).toBe(false)
+  })
+})
+
+describe('relay acceptance 3: every served start and end drops Magpie remote’s cached gate answer', () => {
+  const hooks = () => {
+    const calls: string[] = []
+    let exit: (() => void) | null = null
+    return {
+      calls,
+      exit: () => exit?.(),
+      record: (seat: string) => void calls.push(`record:${seat}`),
+      forget: (seat: string) => void calls.push(`forget:${seat}`),
+      seatsChanged: () => void calls.push('seatsChanged'),
+      onExit: (run: () => void) => void (exit = run)
+    }
+  }
+
+  it('a fresh seat: recorded, then the cache dropped; on exit forgotten, then the cache dropped', () => {
+    const h = hooks()
+    trackServedSeat('seat-1', h)
+    expect(h.calls).toEqual(['record:seat-1', 'seatsChanged'])
+    h.exit()
+    expect(h.calls).toEqual(['record:seat-1', 'seatsChanged', 'forget:seat-1', 'seatsChanged'])
+  })
+
+  it('a reattached session (no ledger record): the cache is dropped on start and on exit all the same', () => {
+    const h = hooks()
+    trackServedSeat(null, h)
+    expect(h.calls).toEqual(['seatsChanged'])
+    h.exit()
+    expect(h.calls).toEqual(['seatsChanged', 'seatsChanged'])
   })
 })

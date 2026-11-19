@@ -29,3 +29,28 @@ export function magpieSeatGate(deps: MagpieSeatGateDeps): () => Promise<boolean>
     }
   }
 }
+
+export interface ServedSeatHooks<S> {
+  /** Lane Seatbelt's ledger: a fresh seat and the profile it started under. */
+  record(seat: S): void
+  forget(seat: S): void
+  /** Magpie remote drops its cached gate answer (setup.ts · seatsChanged). */
+  seatsChanged(): void
+  /** Runs once, when the session's process exits. */
+  onExit(run: () => void): void
+}
+
+/**
+ * A served session started (relay acceptance 3). A fresh seat goes in the ledger (`seat`); a reattached
+ * one is not recorded there (`null`), but Seatbelt's gate still sees its process. Either way Magpie
+ * remote asks its gate afresh now and again when the process ends: no answer cached before the seat
+ * outlives it.
+ */
+export function trackServedSeat<S>(seat: S | null, hooks: ServedSeatHooks<S>): void {
+  if (seat !== null) hooks.record(seat)
+  hooks.seatsChanged()
+  hooks.onExit(() => {
+    if (seat !== null) hooks.forget(seat)
+    hooks.seatsChanged()
+  })
+}
