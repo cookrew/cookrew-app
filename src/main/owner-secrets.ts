@@ -230,6 +230,9 @@ export function ownerSecretPaths(
     path.join(base, 'magpie-cards.json'),
     path.join(base, 'magpie-cards.json.tmp'),
     // Names and ids only, but it is the owner's record of which keys went where (route/share-audit.ts).
-    path.join(base, 'share-audit.log')
+    path.join(base, 'share-audit.log'),
+    // Ids of blocked desktops' keys still to revoke (magpie-remote/blocked.ts).
+    path.join(base, 'magpie-blocked-revokes.json'),
+    path.join(base, 'magpie-blocked-revokes.json.tmp')
   ]
 }

@@ -12,6 +12,7 @@ import { MAGPIE_FORWARD_PORTS, type MagpieRemoteList } from '../../shared/remote
 import type { Fields } from '../../shared/seal2/frames'
 import type { Seal2Stream } from '../../shared/seal2/stream'
 import { BOUND_KEYS_FILE, createBoundKeys, fileStorage, type BoundKeys } from './bound-keys'
+import { BLOCKED_REVOKES_FILE, filePendingRevokes, forgetBlockedDesktop, type BlockedResult } from './blocked'
 import { createMagpieForwarder } from './forward'
 import { connectRemote, createRemotesStore, disconnectRemote, perComputer, REMOTES_FILE, resumeRemotes, unackedPeers, type ConnectAnswer, type ConnectDeps } from './remotes'
 import { createMagpieServe } from './serve'
@@ -51,6 +52,8 @@ export interface MagpieRemoteDeps {
   readonly forwardPort?: number
   env(): DiscoveryEnv
   log(line: string): void
+  /** The share-keys audit (route/share-audit.ts), for what a blocked desktop's keys came to; log() when absent. */
+  audit?(line: string): void
 }
 
 export interface MagpieRemote {
@@ -65,6 +68,11 @@ export interface MagpieRemote {
    * rides on that answer.
    */
   seatsChanged(): void
+  /**
+   * A desktop the owner said is NOT THE SAME (seal-blocked.ts), now or at a launch sweep: its keys here
+   * unbound then revoked, its remote here dropped (blocked.ts). Never rejects.
+   */
+  blocked(deviceId: string): Promise<BlockedResult>
   readonly boundKeys: BoundKeys
   start(): Promise<void>
   stop(): Promise<void>
@@ -190,6 +198,8 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
     resuming = pass
     return pass
   }
+  /** Keys of blocked desktops still to revoke (blocked.ts): ids only. */
+  const pendingRevokes = filePendingRevokes(path.join(deps.base, BLOCKED_REVOKES_FILE))
   const connectDeps: ConnectDeps = {
     switches: () => deps.switches(),
     store: remotes,
@@ -208,6 +218,31 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
   return {
     serve,
     unbind: (id) => serve.unbind(id),
+    blocked: (deviceId) =>
+      lane('connect', () =>
+        forgetBlockedDesktop(deviceId, {
+          pending: pendingRevokes,
+          bound: (device) => boundKeys.list().filter((k) => k.peer === device).map((k) => k.id),
+          listed: async () => {
+            const keys = deps.shareKeys()
+            return keys === null ? null : (await keys.listed()).map((row) => row.id)
+          },
+          unbind: (id) => serve.unbind(id),
+          revoke: async (id) => {
+            const keys = deps.shareKeys()
+            return keys === null ? { ok: false as const, why: 'Magpie is not installed here.' } : keys.revoke(id)
+          },
+          dropRemote: async (device) => {
+            const found = remotes.list().find((r) => r.peer === device)
+            if (found === undefined) return false
+            // Nothing given back: that desktop is refused on every lane.
+            remotes.remove(device)
+            await providers.remove(found.providerId).catch(() => undefined)
+            return true
+          },
+          audit: (line) => (deps.audit ?? deps.log)(line)
+        })
+      ).catch((): BlockedResult => ({ revoked: [], failed: [], dropped: false })),
     seatsChanged: () => {
       gateSeen = null
     },

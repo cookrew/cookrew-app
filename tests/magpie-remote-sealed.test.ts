@@ -890,3 +890,37 @@ describe('relay acceptance 1: a request caught mid-way when this computer switch
     expect(world.magpie.seen).toEqual([])
   })
 })
+
+describe('landing round: blocking a desktop cuts what its key is streaming here, then revokes the key', () => {
+  it('unbinds the blocked desktop’s key first (its live answer is cut), then revokes it by id', async () => {
+    const { forgetBlockedDesktop, memoryPendingRevokes } = await import('../src/main/magpie-remote/blocked')
+    streamMs = 5_000
+    const stream = world.pair.a.openStream(MAGPIE_REMOTE_KIND, requestFields('POST', '/v1/messages', { 'content-type': 'application/json', 'x-api-key': KEY }))
+    const writer = stream.writable.getWriter()
+    await writer.write(new TextEncoder().encode('{"model":"claude/claude-opus-5-5","stream":true}'))
+    await writer.close()
+    expect((await stream.head).status).toBe(200)
+    const order: string[] = []
+    const result = await forgetBlockedDesktop(A, {
+      pending: memoryPendingRevokes(),
+      bound: (device) => world.b.keys.list().filter((k) => k.peer === device).map((k) => k.id),
+      listed: async () => world.b.listed.map((row) => row.id),
+      unbind: (id) => {
+        order.push('unbind')
+        world.serve.unbind(id)
+      },
+      revoke: async (id) => {
+        order.push('revoke')
+        world.b.revoked.push(id)
+        return { ok: true }
+      },
+      dropRemote: async () => false,
+      audit: () => undefined
+    })
+    await expect(stream.closed).rejects.toBeDefined()
+    expect(order).toEqual(['unbind', 'revoke'])
+    expect(result).toEqual({ revoked: ['id-of-a-key-00000001'], failed: [], dropped: false })
+    // And the key is honoured no more for anything new.
+    expect((await call('/v1/messages')).status).toBe(401)
+  })
+})

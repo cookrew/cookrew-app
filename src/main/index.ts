@@ -332,6 +332,7 @@ import { fileIntentStore, INTENT_FILE } from './route/share-intents'
 import { fileAuditLog, SHARE_AUDIT_FILE } from './route/share-audit'
 import { createMagpieRemote } from './magpie-remote/setup'
 import { magpieSeatGate, trackServedSeat } from './magpie-remote/seat-gate'
+import { afterPeerAnswer, sweepBlocked } from './magpie-remote/blocked'
 import { callerIsMagpie } from './magpie-remote/caller'
 import { createTailnetView } from './route/tailnet'
 import { MAGPIE_REMOTE_KIND } from '../shared/remote-magpie'
@@ -1947,7 +1948,9 @@ const magpieRemote = createMagpieRemote({
     servedOnCanvas: () => store.terminalsAcross().some((node) => Boolean(node.servedSession) || ptys.isServed(node.id) || isServedWorkspace(store.ownerOf(node.id)))
   }),
   callerIsMagpie: (clientPort) => callerIsMagpie(clientPort, magpieBinary(defaultDiscoveryEnv())),
-  log: (line) => console.error(`[cookrew] ${line}`)
+  log: (line) => console.error(`[cookrew] ${line}`),
+  // What a blocked desktop's keys came to goes in the durable share-keys audit, as ShareKeys' own lines do.
+  audit: shareAudit
 })
 const sealTerminus = createSealTerminus({
   codeFor: (id) => connectCodes.codeFor(id),
@@ -7854,7 +7857,9 @@ let cliSocket: SocketServerHandle | null = null
 app.whenReady().then(() => {
   // A desktop blocked by an older build kept its admission and key: they go now (seal-blocked.ts). Never in the way of the start.
   try {
-    forgetBlocked(sealPins, { ...blockedDesktopHoldings, refuseMachine: (id) => refusedMachines.add(id) })
+    const blockedIds = forgetBlocked(sealPins, { ...blockedDesktopHoldings, refuseMachine: (id) => refusedMachines.add(id) })
+    // And the Magpie keys this Mac gave them, with any remote of theirs here (magpie-remote/blocked.ts).
+    void sweepBlocked(blockedIds, (id) => magpieRemote.blocked(id))
   } catch (error) {
     console.error('[cookrew] blocked desktops could not be swept:', error)
   }
@@ -10182,13 +10187,19 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle(
     'seal:peer-answer',
     ownerOnly((deviceId: unknown, answer: unknown) =>
-      answerPeer(deviceId, answer, {
-        pins: sealPins,
-        peers: sealPeers,
-        terminus: sealTerminus,
-        ...blockedDesktopHoldings,
-        refuseMachine: (id) => refusedMachines.add(id)
-      })
+      // NOT THE SAME also takes back the Magpie keys this Mac gave that desktop (magpie-remote/blocked.ts).
+      afterPeerAnswer(
+        deviceId,
+        answer,
+        answerPeer(deviceId, answer, {
+          pins: sealPins,
+          peers: sealPeers,
+          terminus: sealTerminus,
+          ...blockedDesktopHoldings,
+          refuseMachine: (id) => refusedMachines.add(id)
+        }),
+        (id) => magpieRemote.blocked(id)
+      )
     )
   )
   // Owner ruling 2026-11-19: refusing every plain request over the relay is a switch the owner flips, off by default.

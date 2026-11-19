@@ -636,3 +636,41 @@ describe('relay acceptance 3: the setup’s switchesChanged reaches this compute
     }
   })
 })
+
+describe('landing round: the setup drops the remote of a desktop this Mac blocked', () => {
+  it('removes the key and the provider here, gives nothing back, and audits it', async () => {
+    const { createMagpieRemote } = await import('../src/main/magpie-remote/setup')
+    createRemotesStore(path.join(dir, 'magpie-remotes.json'), null).put({ peer: PEER, name: 'Solis', providerId: 'solis', at: 'x', keyId: 'id1', acked: true }, KEY)
+    const audit: string[] = []
+    const streams: string[] = []
+    const remote = createMagpieRemote({
+      base: dir,
+      switches: () => ({ magpie: true, magpieRemote: true }),
+      shareKeys: () => null,
+      gatewayPort: () => null,
+      openStream: async (_peer, kind, fields) => {
+        streams.push(`${kind}`)
+        throw new Error('blocked on every lane')
+      },
+      desktops: async () => [],
+      selfId: () => null,
+      sealer: null,
+      magpieBin: () => null,
+      env: () => ({ home: dir, env: {} }),
+      log: () => undefined,
+      audit: (line) => void audit.push(line),
+      seatGate: async () => true,
+      callerIsMagpie: async () => true,
+      forwardPort: 0
+    })
+    const result = await remote.blocked(PEER)
+    expect(result).toMatchObject({ dropped: true })
+    expect(createRemotesStore(path.join(dir, 'magpie-remotes.json'), null).list()).toEqual([])
+    // No give-back was attempted: that desktop is refused on every lane.
+    expect(streams).toEqual([])
+    expect(audit.join('\n')).toMatch(/dropped/)
+    expect(audit.join('\n')).not.toContain(KEY)
+    // Run again: nothing left, nothing done.
+    expect(await remote.blocked(PEER)).toEqual({ revoked: [], failed: [], dropped: false })
+  })
+})
