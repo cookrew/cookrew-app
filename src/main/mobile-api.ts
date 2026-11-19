@@ -69,7 +69,7 @@ import { ownerSubmit } from "./ask";
 import { fromTheMacsOwnPage, handleUseSourceRoutes, isUseSourceRoute } from "./use-source-routes";
 import { handleUnlockGrantRoutes, isUnlockGrantRoute } from "./unlock-grant-routes";
 import type { UnlockGrantDoor } from "./unlock-grant";
-import { cameOverRelayLine, carriesSealProof, sealedPeerOf } from "./seal-proof";
+import { cameOverRelayLine, carriesSealProof, sealedPeerOf, sealedV2Of } from "./seal-proof";
 import { DOOR_MARKER } from "../shared/remote-unlock";
 import { UNLOCK_GRANT_EVENT } from "../shared/unlock-grant";
 import type { ViewerWho } from "../shared/remote-access";
@@ -1026,10 +1026,15 @@ export async function handleMobileApi(
   // THE SEALED SLOTS — owner token only, GET included: the read-only wall
   // token must not even learn the names. The write gate above already
   // refused a read-only PUT/DELETE; this refuses its GET too.
-  // A WEBRTC OFFER, over whatever plane the phone is already on (the relay,
-  // at home): the answer carries this Mac's LAN and tailnet candidates and
-  // the DTLS fingerprint the direct link is checked against (rtc-peer.ts).
+  // The answer contains LAN candidates. Only an authenticated v2 seal inner
+  // request may reach the RTC host, including on loopback; the pairing gate
+  // above remains required. A relay marker or caller-supplied header alone is
+  // not proof of the terminus's per-process seal proof.
   if (method === "POST" && p === "/api/rtc/offer" && deps.rtc) {
+    if (!ownerPairing || !sealedV2Of(request)) {
+      respondJson(response, 403, { error: "sealed session required" });
+      return true;
+    }
     const body = await readJson<{ sdp?: unknown }>(request);
     if (typeof body.sdp !== "string" || body.sdp.length === 0 || body.sdp.length > 64_000) {
       respondJson(response, 400, { error: "sdp is required" });

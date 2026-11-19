@@ -1,21 +1,15 @@
-// LAN STEP 2: THE DIRECT LINK'S OFFER RIDES THE SEALED SESSION WHEN THERE IS ONE
-// (path/rtc-offer.ts, ruling of Relay 2026-11-19).
+// LAN STEP 2: THE DIRECT LINK'S OFFER REQUIRES AN AUTHENTICATED V2 SESSION.
 //
-// The offer and the answer carry the phone's and the Mac's addresses (ICE
-// candidates). With a sealed session (cookrew-seal/2 on the code this page
-// holds) they must cross the relay only inside it: here against the real
-// registry and the real terminus, with canary addresses in both SDPs and
-// every byte the relay could read searched for them. A page that holds no
-// code has no session, and keeps the plain knock (the stated residual risk:
-// the relay sees the addresses and can deny the direct link). A page whose
-// Mac has not said yet whether it speaks sealed waits for the answer, and
-// skips the knock rather than send the offer plain when that takes too long.
+// Offer and answer carry ICE candidates. Against a real registry and terminus,
+// canary addresses in both SDPs must not be readable by the relay. Without a
+// code, with an old Mac, or while a handshake is undecided, no offer is sent.
 import { createServer, type Server } from 'node:http'
 import { deviceIdFor, mintDeviceKey, signWithDevice, type AccountFile } from '../src/main/account-v2'
 import { makeRtcBind } from '../src/shared/rtc-bind'
+import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SealTerminus } from '../src/main/canvas-seal-terminus'
-import { cameOverRelayLine } from '../src/main/seal-proof'
+import { cameOverRelayLine, sealProofHeaders } from '../src/main/seal-proof'
 import { connectCodeId, newConnectCode } from '../src/shared/canvas-seal'
 import { RELAY_SESSION_HEADER } from '../src/shared/machine-relay'
 import { bareWindow } from './support/memory-storage'
@@ -49,19 +43,21 @@ const companion = (terminus: () => SealTerminus | undefined): Server =>
       return void response.end('{}')
     }
     if (isSealPath(url.pathname)) return void routeSeal(request, response, terminus())
-    const plain = cameOverRelayLine(request)
-    let body = ''
-    request.on('data', (chunk: Buffer) => void (body += chunk.toString()))
-    request.on('end', () => {
-      if (url.pathname !== '/api/rtc/offer') {
-        response.writeHead(200, { 'content-type': 'application/json' })
-        return void response.end(JSON.stringify({ path: url.pathname }))
+    const deps = {
+      pairingToken: 'test-pairing-token',
+      turns: { list: () => [] },
+      rtc: {
+        answer: async (offerSdp: string) => {
+          offers.push({ plain: cameOverRelayLine(request), sdp: offerSdp })
+          return ANSWER
+        },
+        bind: (offerSdp: string) => answerBind === 'forged'
+          ? makeRtcBind({ device: world.macDevice.id, offerSdp, answerSdp: ANSWER, signer: stranger })
+          : null
       }
-      const offerSdp = (JSON.parse(body) as { sdp: string }).sdp
-      offers.push({ plain, sdp: offerSdp })
-      const bind = answerBind === 'forged' ? makeRtcBind({ device: world.macDevice.id, offerSdp, answerSdp: ANSWER, signer: stranger }) : undefined
-      response.writeHead(200, { 'content-type': 'application/json' })
-      response.end(JSON.stringify(bind ? { sdp: ANSWER, bind } : { sdp: ANSWER }))
+    } as unknown as MobileApiDeps
+    void handleMobileApi(request, response, url, deps).then((handled) => {
+      if (!handled) response.writeHead(404).end()
     })
   })
 
@@ -81,7 +77,7 @@ beforeAll(async () => {
     codeFor: (asked) => (asked === current.id ? current.code : null),
     replacedKeyFor: () => null,
     currentCodeId: async () => current.id,
-    dial: loopbackDialer(port)
+    dial: loopbackDialer(port, undefined, sealProofHeaders())
   }))
   vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
     const route = routeOf(input, init)
@@ -121,11 +117,41 @@ async function consolePage(withCode: boolean) {
   plane.configureSealPlane({ retryMs: 40, maxRetryMs: 160, refusedMs: 400, oldMacMs: 2_000 })
   const storage = (globalThis as unknown as { window: { localStorage: Storage } }).window.localStorage
   if (withCode) storage.setItem(`cr_code:${world.macDevice.id}`, Buffer.from(current.code).toString('base64url'))
+  const { authStore } = await import('../src/renderer/src/auth-gate')
+  authStore().save('test-pairing-token')
   const { postRtcOffer } = await import('../src/renderer/src/path/rtc-offer')
-  return { postRtcOffer, scope }
+  return { postRtcOffer, scope, plane, base: scope.machineBaseOf(world.macDevice.id) as string }
 }
 
 const relayRead = (lines: number, exchanges: number): string => world.relayCouldRead(lines, exchanges)
+
+describe('the actual offer endpoint through the real registry', () => {
+  it('refuses plain requests even with the owner token and forged v2 headers', async () => {
+    const page = await consolePage(false)
+    const { relayFetch } = await import('../src/renderer/src/machine-scope')
+    const send = relayFetch()
+    const attempts: Record<string, string>[] = [
+      { authorization: 'Bearer test-pairing-token' },
+      { authorization: 'Bearer test-pairing-token', 'x-cookrew-seal-v2': '1', 'x-cookrew-seal-peer': world.macDevice.id }
+    ]
+    for (const headers of attempts) {
+      const response = await send(`${page.base}/api/rtc/offer`, {
+        method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ sdp: OFFER })
+      })
+      expect(response.status).toBe(403)
+      expect(await response.text()).not.toContain(MAC_ADDRESS)
+    }
+    expect(offers).toEqual([])
+  })
+
+  it('refuses a v2 request without the owner bearer', async () => {
+    const page = await consolePage(true)
+    const { authStore } = await import('../src/renderer/src/auth-gate')
+    authStore().save('incorrect-token')
+    expect(await page.postRtcOffer(OFFER)).toBeNull()
+    expect(offers).toEqual([])
+  })
+})
 
 describe('the knock\'s offer, with a sealed session', () => {
   it('goes sealed even as the very first thing the page asks the Mac: the relay reads neither address', async () => {
@@ -170,13 +196,13 @@ describe('a try that fails is not an answer', () => {
     expect(relayRead(at.lines, at.exchanges)).not.toContain(PHONE_ADDRESS)
   })
 
-  it('a Mac that said, sealed, it has no v2 (an older Mac) gets the plain knock: no session can exist with it', async () => {
+  it('a Mac that said it has no v2 stays on the relay without a plain offer', async () => {
     carrier = 'strip'
     oldMac = true
     const page = await consolePage(true)
-    const answer = await page.postRtcOffer(OFFER, { decideMs: 3_000 })
-    expect(answer?.sdp).toBe(ANSWER)
-    expect(offers).toEqual([{ plain: true, sdp: OFFER }])
+    expect(await page.postRtcOffer(OFFER, { decideMs: 3_000 })).toBeNull()
+    expect(page.plane.sealOutcome(`${page.base}/api/rtc/offer`)).toBe('old-mac')
+    expect(offers).toEqual([])
   })
 
   it('a relay that takes v2 off the hello and then mutes the sealed version question gets no offer: an unanswered question is not "no v2"', async () => {
@@ -200,18 +226,18 @@ describe('a try that fails is not an answer', () => {
     expect(offers).toEqual([])
   })
 
-  it('a Mac once found old and since updated is asked again: while that try fails, nothing goes plain', async () => {
+  it('a Mac once found old and since updated gets a sealed offer after a fresh v2 try', async () => {
     carrier = 'strip'
     oldMac = true
     const page = await consolePage(true)
-    expect((await page.postRtcOffer(OFFER, { decideMs: 3_000 }))?.sdp).toBe(ANSWER)
-    expect(offers).toEqual([{ plain: true, sdp: OFFER }])
-    // Updated; the relay now fails every handshake. Past oldMacMs (2 s here) the old answer is no answer.
+    expect(await page.postRtcOffer(OFFER, { decideMs: 3_000 })).toBeNull()
+    expect(offers).toEqual([])
+    // Updated: after the old-Mac window, a fresh v2 try restores the sealed link.
     oldMac = false
-    carrier = 'fail'
+    carrier = 'pass'
     await new Promise((resolve) => setTimeout(resolve, 2_100))
-    expect(await page.postRtcOffer(OFFER, { decideMs: 500 })).toBeNull()
-    expect(offers).toHaveLength(1)
+    expect((await page.postRtcOffer(OFFER, { decideMs: 3_000 }))?.sdp).toBe(ANSWER)
+    expect(offers).toEqual([{ plain: false, sdp: OFFER }])
   }, 10_000)
 
   it('a Mac whose v2 offer the relay takes off the hello is still found to speak sealed: the offer never goes plain', async () => {
@@ -229,15 +255,13 @@ describe('a try that fails is not an answer', () => {
   })
 })
 
-describe('the knock\'s offer, with no sealed session (the stated residual risk)', () => {
-  it('a page holding no code keeps the plain knock: the relay can read the addresses, and the direct link is still bound', async () => {
+describe('the knock without a sealed session', () => {
+  it('a page holding no code stays on the relay and sends no offer', async () => {
     const page = await consolePage(false)
     const at = { lines: world.lines.length, exchanges: world.exchanges.length }
-    const answer = await page.postRtcOffer(OFFER)
-    expect(answer?.sdp).toBe(ANSWER)
-    expect(offers).toEqual([{ plain: true, sdp: OFFER }])
-    await until(() => relayRead(at.lines, at.exchanges).includes(MAC_ADDRESS), 'the plain answer on the line')
-    expect(relayRead(at.lines, at.exchanges)).toContain(PHONE_ADDRESS)
+    expect(await page.postRtcOffer(OFFER)).toBeNull()
+    expect(offers).toEqual([])
+    expect(relayRead(at.lines, at.exchanges)).not.toContain(PHONE_ADDRESS)
   })
 })
 

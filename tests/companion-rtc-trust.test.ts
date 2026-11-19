@@ -47,6 +47,13 @@ interface Answer {
 const stubConsole = (answer: (offerSdp: string) => Promise<Answer>) => {
   const offers: { url: string; sdp: string }[] = []
   const reports: { probes?: { kind: string; name: string; outcome: string }[] }[] = []
+  // Fixture transport only: exercise the real companion and trust checks with
+  // a simulated sealed route. rtc-offer-sealed.test.ts covers actual encryption.
+  vi.doMock('../src/renderer/src/path/seal-plane', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../src/renderer/src/path/seal-plane')>()),
+    sealOutcome: () => 'sealed',
+    sealedFetchFor: (url: string, init: RequestInit) => fetch(url, init)
+  }))
   class FakeEventSource {
     readyState = 1
     addEventListener(): void {}
@@ -151,6 +158,7 @@ afterEach(() => {
   delete (globalThis as { fetch?: unknown }).fetch
   delete (globalThis as { EventSource?: unknown }).EventSource
   vi.doUnmock('../src/renderer/src/path/rtc-link')
+  vi.doUnmock('../src/renderer/src/path/seal-plane')
   vi.unstubAllGlobals()
   vi.resetModules()
 })

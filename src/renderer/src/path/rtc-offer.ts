@@ -16,22 +16,16 @@
  *   the knock is skipped, never sent plain. The pin, when it lands, knocks
  *   again (companion.ts).
  *
- *   WITH NO SESSION (a page that holds no code, or a Mac that said, sealed,
- *   that it has no v2) the plain knock stays, so those consoles keep their
- *   direct link. The residual risk, stated: the relay reads both addresses
- *   and can deny the direct link (drop or spoil the answer); it cannot read
- *   anything sealed, and it cannot put itself in the link (the binding). A
- *   relay that fails every handshake of a page never pinned keeps that
- *   page's knocks from going out at all: no direct link, and no addresses.
- *   And an OLD-MAC answer holds until the next try (seal-plane.ts ·
- *   oldMacMs, ten minutes by default): a Mac updated inside that window
- *   still gets plain knocks until the page asks it again.
+ *   WITH NO VERIFIED V2 SESSION the offer is never sent: a page without a
+ *   code, an older Mac, or an undecided or failed handshake stays on the
+ *   relay. The relay can deny the direct link but cannot read candidates
+ *   from this endpoint. Older consoles paired with a new desktop also stay
+ *   on the relay: the desktop refuses their unsealed RTC offer.
  */
 import { apiPath } from '../api-base'
 import { authHeaders } from '../auth-gate'
-import { planeFetch } from '../plane-fetch'
 import { heldScope } from '../machine-scope'
-import { probeSettled, sealOutcome } from './seal-plane'
+import { probeSettled, sealOutcome, sealedFetchFor } from './seal-plane'
 import { readRtcAnswer } from './rtc-trust'
 import type { RtcAnswer } from './rtc-link'
 
@@ -42,8 +36,8 @@ export interface RtcOfferOptions {
   readonly decideMs?: number
 }
 
-/** Plain is allowed only where no session can exist; a sealed one goes through planeFetch sealed. */
-const mayGo = (url: string): boolean => sealOutcome(url) !== 'undecided'
+/** A v2 pin is necessary; the request itself must still obtain a sealed route. */
+const mayGo = (url: string): boolean => sealOutcome(url) === 'sealed'
 
 /**
  * Has the page an answer on whether this machine speaks sealed? At once when
@@ -69,10 +63,15 @@ export const postRtcOffer = async (sdp: string, options: RtcOfferOptions = {}): 
   if (!(await sealDecided(url, options.decideMs ?? SEAL_DECIDE_MS))) return null
   // Left while it waited: the offer was for a machine no longer in scope.
   if (!sameMachine()) return null
-  const response = await planeFetch(url, {
+  // Never hand this request to the ordinary plane: if the route disappears
+  // between the pin check and sending, there is no plaintext fallback.
+  const pending = sealedFetchFor(url, {
     method: 'POST',
     headers: { ...authHeaders(), 'content-type': 'application/json' },
     body: JSON.stringify({ sdp })
   })
+  if (pending === null) return null
+  const response = await pending
+  if (!sameMachine()) return null
   return response.ok ? readRtcAnswer(await response.json()) : null
 }

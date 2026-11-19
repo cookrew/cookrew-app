@@ -6,6 +6,8 @@ import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
 import { readPathReport } from '../src/main/path-reports'
+import { sealProofHeaders, SEALED_V2_HEADER } from '../src/main/seal-proof'
+import { SEALED_MARKER } from '../src/shared/remote-unlock'
 
 const TOKEN = 'pairing-token-123'
 
@@ -22,13 +24,45 @@ describe('POST /api/rtc/offer', () => {
     cleanup.push(() => server.close())
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
     const port = (server.address() as net.AddressInfo).port
-    return (body: unknown, token: string | null = TOKEN) =>
+    return (body: unknown, token: string | null = TOKEN, proof: Record<string, string> = { ...sealProofHeaders(), [SEALED_V2_HEADER]: '1' }) =>
       fetch(`http://127.0.0.1:${port}/api/rtc/offer`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+        headers: { 'content-type': 'application/json', ...proof, ...(token ? { authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify(body)
       })
   }
+
+  it('rejects plain, v1 and forged v2 markers before generating an answer', async () => {
+    let generated = 0
+    const post = await start(async () => { generated += 1; return 'private candidate' })
+    const realProof = sealProofHeaders()[SEALED_MARKER]
+    const forgedProof = `${realProof[0] === 'A' ? 'B' : 'A'}${realProof.slice(1)}`
+    for (const proof of [{}, sealProofHeaders(), { [SEALED_V2_HEADER]: '1' }, { ...sealProofHeaders(), [SEALED_V2_HEADER]: '0' }, { [SEALED_MARKER]: forgedProof, [SEALED_V2_HEADER]: '1' }]) {
+      const response = await post({ sdp: 'v=0' }, TOKEN, proof)
+      expect(response.status).toBe(403)
+      expect(await response.json()).toEqual({ error: 'sealed session required' })
+    }
+    expect(generated).toBe(0)
+  })
+
+  it('refuses even a v2 inner request when no pairing token is configured', async () => {
+    let generated = 0
+    const deps = { turns: { list: () => [] }, rtc: { answer: async () => { generated += 1; return 'private candidate' } } } as unknown as MobileApiDeps
+    const server = http.createServer((req, res) => {
+      void handleMobileApi(req, res, new URL(req.url ?? '/', 'http://localhost'), deps)
+    })
+    cleanup.push(() => server.close())
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as net.AddressInfo).port
+    const response = await fetch(`http://127.0.0.1:${port}/api/rtc/offer`, {
+      method: 'POST',
+      headers: { ...sealProofHeaders(), [SEALED_V2_HEADER]: '1', 'content-type': 'application/json' },
+      body: JSON.stringify({ sdp: 'v=0' })
+    })
+    expect(response.status).toBe(403)
+    expect(await response.text()).not.toContain('private candidate')
+    expect(generated).toBe(0)
+  })
 
   it('answers an offer with the Mac end\'s SDP', async () => {
     const post = await start(async (sdp) => `answer-to:${sdp}`)
