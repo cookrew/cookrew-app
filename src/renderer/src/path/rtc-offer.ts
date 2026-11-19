@@ -23,6 +23,9 @@
  *   anything sealed, and it cannot put itself in the link (the binding). A
  *   relay that fails every handshake of a page never pinned keeps that
  *   page's knocks from going out at all: no direct link, and no addresses.
+ *   And an OLD-MAC answer holds until the next try (seal-plane.ts ·
+ *   oldMacMs, ten minutes by default): a Mac updated inside that window
+ *   still gets plain knocks until the page asks it again.
  */
 import { apiPath } from '../api-base'
 import { authHeaders } from '../auth-gate'

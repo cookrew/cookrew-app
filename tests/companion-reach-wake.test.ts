@@ -199,3 +199,59 @@ describe('after a refused answer', () => {
     stopB()
   })
 })
+
+describe('the seal pinned for the machine in scope (path/seal-plane.ts · onSealPinned)', () => {
+  /** The companion's pin listener, captured; the rest of seal-plane is the real one. */
+  const capturePin = (): { readonly pin: (base: string) => void } => {
+    let listener: ((base: string) => void) | null = null
+    vi.doMock('../src/renderer/src/path/seal-plane', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../src/renderer/src/path/seal-plane')>()),
+      onSealPinned: (next: (base: string) => void) => {
+        listener = next
+        return () => void (listener = null)
+      }
+    }))
+    return { pin: (base) => listener?.(base) }
+  }
+
+  afterEach(() => vi.doUnmock('../src/renderer/src/path/seal-plane'))
+
+  const start = async (refusal: string | null) => {
+    const phone = stubPhone()
+    vi.resetModules()
+    const { knocks } = countKnocks(refusal)
+    const { pin } = capturePin()
+    await inConsole(DEVICE)
+    const scope = await import('../src/renderer/src/machine-scope')
+    const companion = await import('../src/renderer/src/path/companion')
+    const stop = companion.startCompanionPathSwitch()
+    await vi.waitFor(() => expect(phone.asked().some((url) => url.includes('/api/path/report'))).toBe(true))
+    expect(knocks()).toBe(1)
+    return { knocks, pin, base: scope.scopeBase(), stop }
+  }
+
+  it('owes a knock at once when the last one decided nothing (it was skipped or unanswered)', async () => {
+    const run = await start(null)
+    run.pin(run.base)
+    await vi.waitFor(() => expect(run.knocks()).toBe(2))
+    run.stop()
+  })
+
+  it('owes nothing for another machine\'s pin', async () => {
+    const run = await start(null)
+    run.pin(`${run.base}-other`)
+    await settle()
+    await settle()
+    expect(run.knocks()).toBe(1)
+    run.stop()
+  })
+
+  it('does not cut a refusal\'s ten-minute wait short', async () => {
+    const run = await start('no binding')
+    run.pin(run.base)
+    await settle()
+    await settle()
+    expect(run.knocks()).toBe(1)
+    run.stop()
+  })
+})
