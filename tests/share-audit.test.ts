@@ -20,7 +20,8 @@ describe('the share-keys audit file', () => {
     audit('share keys: first')
     audit('share keys: second')
     expect(readFileSync(file, 'utf8')).toBe('2026-11-19T06:00:00.000Z share keys: first\n2026-11-19T06:00:00.000Z share keys: second\n')
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    // Windows has no POSIX modes: there the file is 0666 whatever is asked (as the repo's other tests guard).
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
   })
 
   it('keeps one entry to one line: a newline in it cannot forge another entry', () => {
@@ -33,7 +34,8 @@ describe('the share-keys audit file', () => {
     const file = path.join(dir, SHARE_AUDIT_FILE)
     writeFileSync(file, 'old\n', { mode: 0o644 })
     fileAuditLog(file)('share keys: x')
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    // Windows has no POSIX modes: there the file is 0666 whatever is asked (as the repo's other tests guard).
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
     expect(readFileSync(file, 'utf8').startsWith('old\n')).toBe(true)
   })
 

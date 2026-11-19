@@ -62,7 +62,8 @@ describe('MagpieWeb', () => {
       expect(opened.url).not.toContain(starts[0].key)
       expect(opened.cookie).toEqual({ name: `magpie_web_${MAGPIE_WEB_PORTS[1]}`, value: starts[0].key })
     }
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    // Windows has no POSIX modes: there the file is 0666 whatever is asked (as the repo's other tests guard).
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
     expect(starts[0].key).toMatch(/^[A-Za-z0-9._~-]{16,128}$/)
   })
 
