@@ -4,7 +4,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ChildProcess } from 'node:child_process'
-import { MagpieWeb, MAGPIE_WEB_PORTS, bareUrlOf, parseSsListeners, readHeld } from '../src/main/route/magpie-web'
+import { MagpieWeb, MAGPIE_WEB_PORTS, bareUrlOf, parseSsListeners, readHeld, type MagpieWebDeps } from '../src/main/route/magpie-web'
+import { PrivacyCache, checkFilePrivacy, type FilePrivacyDeps, type WindowsAcl } from '../src/main/file-privacy'
+import { ACE_ALLOWED, ace, acl, descriptor } from './support/security-descriptor'
 
 /** A stand-in child: exitCode stays null until killed. */
 function fakeChild(): ChildProcess & { killed: boolean } {
@@ -62,13 +64,14 @@ describe('MagpieWeb', () => {
       expect(opened.url).not.toContain(starts[0].key)
       expect(opened.cookie).toEqual({ name: `magpie_web_${MAGPIE_WEB_PORTS[1]}`, value: starts[0].key })
     }
-    // Windows has no POSIX modes: there the file is 0666 whatever is asked (as the repo's other tests guard).
+    // Windows has no POSIX modes (stat says 0666 for everything): there the owner and access list are proven instead.
     if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
+    else expect((await checkFilePrivacy(file)).open).toBe(false)
     expect(starts[0].key).toMatch(/^[A-Za-z0-9._~-]{16,128}$/)
   })
 
   it('reuses the running page and the saved key and port: a new port would be a new sign-in', async () => {
-    writeFileSync(file, JSON.stringify({ key: 'cookrew-kept-key-1234567890', port: MAGPIE_WEB_PORTS[2] }))
+    writeFileSync(file, JSON.stringify({ key: 'cookrew-kept-key-1234567890', port: MAGPIE_WEB_PORTS[2] }), { mode: 0o600 })
     let starts = 0
     const up = new Set<number>()
     const web = new MagpieWeb({
@@ -135,6 +138,111 @@ describe('MagpieWeb', () => {
     writeFileSync(file, JSON.stringify({ key: 'cookrew-kept-key-1234567890', port: 80 }))
     expect(readHeld(file)).toBeNull()
     expect(readFileSync(file, 'utf8')).toContain('80')
+  })
+})
+
+// WINDOWS, ON ANY OS: stat says 0666 for every file there, so the key's file is
+// proven private by its owner and access list (file-privacy.ts), faked here.
+const ME = 'S-1-5-21-1111111111-2222222222-3333333333-1001'
+const EVERYONE = 'S-1-1-0'
+const PRIVATE = descriptor({
+  owner: ME,
+  dacl: acl([ace(ACE_ALLOWED, ME), ace(ACE_ALLOWED, 'S-1-5-18'), ace(ACE_ALLOWED, 'S-1-5-32-544')]),
+  protectedDacl: true
+})
+const OPEN = descriptor({ owner: ME, dacl: acl([ace(ACE_ALLOWED, ME), ace(ACE_ALLOWED, EVERYONE)]) })
+
+/** Windows' owner and access lists, each answer chosen by the test. */
+function fakeWindows(over: { read?: () => Buffer; created?: () => Buffer } = {}) {
+  const created: Array<{ file: string; data: string }> = []
+  const windows: WindowsAcl = {
+    read: async () => ({ userSid: ME, descriptor: (over.read ?? (() => PRIVATE))() }),
+    readFolder: async () => ({ userSid: ME, descriptor: PRIVATE }),
+    createPrivate: async (at, data) => {
+      writeFileSync(at, data, { flag: 'wx' })
+      created.push({ file: at, data: data.toString('utf8') })
+      return { userSid: ME, descriptor: (over.created ?? (() => PRIVATE))() }
+    }
+  }
+  return { windows, created }
+}
+
+const onWindows = (windows: WindowsAcl): FilePrivacyDeps => ({ platform: 'win32', windows, cache: new PrivacyCache() })
+
+/** A page that starts and answers at once, counting its starts. */
+function startingPage(privacy: FilePrivacyDeps): { deps: MagpieWebDeps; starts: Array<{ port: number; key: string }> } {
+  const starts: Array<{ port: number; key: string }> = []
+  const up = new Set<number>()
+  const deps: MagpieWebDeps = {
+    bin: () => '/bin/magpie',
+    file,
+    privacy,
+    portFree: async () => true,
+    answers: async (port) => up.has(port),
+    start: (_bin, port, key) => {
+      starts.push({ port, key })
+      up.add(port)
+      return fakeChild()
+    },
+    wait: async () => undefined,
+    listeners: async () => [4242]
+  }
+  return { deps, starts }
+}
+
+describe('MagpieWeb on Windows: the key is kept only in a file proven private', () => {
+  it('writes the key through the private-create path, and opens once it is proven', async () => {
+    const fake = fakeWindows()
+    const page = startingPage(onWindows(fake.windows))
+    const opened = await new MagpieWeb(page.deps).open()
+    expect(opened).toMatchObject({ ok: true })
+    expect(fake.created).toHaveLength(1)
+    expect(path.dirname(fake.created[0].file)).toBe(dir)
+    expect(JSON.parse(fake.created[0].data)).toEqual({ key: page.starts[0].key, port: page.starts[0].port })
+    expect(readHeld(file)).toEqual({ key: page.starts[0].key, port: page.starts[0].port })
+  })
+
+  it('a key whose file cannot be proven private is not kept, and no page is started', async () => {
+    for (const over of [{ created: () => OPEN }, { read: () => OPEN }]) {
+      const page = startingPage(onWindows(fakeWindows(over).windows))
+      const answer = await new MagpieWeb(page.deps).open()
+      expect(answer).toEqual({ ok: false, why: 'Could not keep the key for Magpie’s page.' })
+      expect(page.starts).toEqual([])
+      expect(readHeld(file)).toBeNull()
+    }
+  })
+
+  it('a saved key in a file not proven private is not reused: a new one is minted, the port kept', async () => {
+    const kept = 'cookrew-kept-key-1234567890'
+    writeFileSync(file, JSON.stringify({ key: kept, port: MAGPIE_WEB_PORTS[2] }))
+    // The saved file reads open; the one written in its place reads private.
+    let reads = 0
+    const fake = fakeWindows({ read: () => (reads++ === 0 ? OPEN : PRIVATE) })
+    const page = startingPage(onWindows(fake.windows))
+    const opened = await new MagpieWeb(page.deps).open()
+    expect(opened).toMatchObject({ ok: true, port: MAGPIE_WEB_PORTS[2] })
+    expect(page.starts[0].key).not.toBe(kept)
+    expect(page.starts[0].key).toMatch(/^cookrew-[0-9a-f]{48}$/)
+    expect(readHeld(file)).toEqual({ key: page.starts[0].key, port: MAGPIE_WEB_PORTS[2] })
+  })
+
+  it('a saved key in a file proven private is reused', async () => {
+    const kept = 'cookrew-kept-key-1234567890'
+    writeFileSync(file, JSON.stringify({ key: kept, port: MAGPIE_WEB_PORTS[3] }))
+    const page = startingPage(onWindows(fakeWindows().windows))
+    expect(await new MagpieWeb(page.deps).open()).toMatchObject({ ok: true, port: MAGPIE_WEB_PORTS[3], cookie: { value: kept } })
+  })
+})
+
+describe('MagpieWeb on POSIX: a saved key readable by others is not reused', () => {
+  it.skipIf(process.platform === 'win32')('mints a new key over a 0644 file, and keeps it 0600', async () => {
+    const kept = 'cookrew-kept-key-1234567890'
+    writeFileSync(file, JSON.stringify({ key: kept, port: MAGPIE_WEB_PORTS[4] }), { mode: 0o644 })
+    const page = startingPage({})
+    const opened = await new MagpieWeb(page.deps).open()
+    expect(opened).toMatchObject({ ok: true, port: MAGPIE_WEB_PORTS[4] })
+    expect(page.starts[0].key).not.toBe(kept)
+    expect(statSync(file).mode & 0o777).toBe(0o600)
   })
 })
 

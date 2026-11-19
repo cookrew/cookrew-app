@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync } from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { writeFileAtomic } from '../atomic-file'
+import { checkFilePrivacy, writePrivateFile, type FilePrivacyDeps } from '../file-privacy'
 
 /**
  * MAGPIE'S OWN SETTINGS, INSIDE COOKREW. `magpie web` serves the app's window as a
@@ -15,8 +16,11 @@ import { writeFileAtomic } from '../atomic-file'
  *
  * THE KEY. Magpie signs a browser in with an HttpOnly cookie named after the PORT
  * whose value is the key (`magpie_web_<port>=<key>`; `?k=<key>` is how a person's
- * browser gets it). So the key and the port are kept together (0600, in the served
- * sandbox's deny list) and reused. The key reaches Magpie in its environment, never
+ * browser gets it). So the key and the port are kept together (in the served
+ * sandbox's deny list) and reused. The file is PROVEN private before the key is
+ * kept or reused (file-privacy.ts): 0600 on POSIX, its owner and access list on
+ * Windows; a saved key whose file is not proven is replaced by a new one, since
+ * the old one may have been read. The key reaches Magpie in its environment, never
  * on a command line, and it never becomes a link: open() answers with the bare
  * address and the cookie, and the cookie stays in main, which sets it into the
  * card's own browser session (main/magpie-card-open.ts). A seat that could read the
@@ -61,6 +65,8 @@ export interface MagpieWebDeps {
   readonly wait?: (ms: number) => Promise<void>
   /** The PIDs listening on a loopback port, or null when that cannot be read. */
   readonly listeners?: (port: number) => Promise<number[] | null>
+  /** How the key's file is proven private; this OS by default (tests fake Windows). */
+  readonly privacy?: FilePrivacyDeps
 }
 
 export function readHeld(file: string, read: (f: string) => string = (f) => readFileSync(f, 'utf8')): Held | null {
@@ -144,6 +150,15 @@ async function loopbackListeners(port: number): Promise<number[] | null> {
   return ssListeners(port)
 }
 
+/** Is the key's file proven private now? Unproven, or unreadable, is no. */
+async function provenPrivate(file: string, privacy: FilePrivacyDeps): Promise<boolean> {
+  try {
+    return !(await checkFilePrivacy(file, privacy)).open
+  } catch {
+    return false
+  }
+}
+
 function startMagpieWeb(bin: string, port: number, key: string): ChildProcess {
   return spawn(bin, ['web', '--no-open', '--addr', `127.0.0.1:${port}`], {
     env: { ...process.env, MAGPIE_WEB_KEY: key },
@@ -176,15 +191,26 @@ export class MagpieWeb {
       if (!(await this.ours(this.child, this.held.port))) return this.squatted(this.held.port)
       return opened(this.held)
     }
+    const privacy = this.deps.privacy ?? {}
     const saved = readHeld(this.deps.file)
     const free = this.deps.portFree ?? portFreeOnLoopback
     const port = saved !== null && (await free(saved.port)) ? saved.port : await this.firstFree(free)
     if (port === null) return { ok: false, why: `No free port for Magpie's page (${MAGPIE_WEB_PORTS[0]}–${MAGPIE_WEB_PORTS.at(-1)}).` }
-    const held: Held = { key: saved?.key ?? newKey(), port }
+    // The port is no secret; the key is reused only from a file proven private.
+    const keptKey = saved !== null && (await provenPrivate(this.deps.file, privacy)) ? saved.key : null
+    const held: Held = { key: keptKey ?? newKey(), port }
     try {
       mkdirSync(path.dirname(this.deps.file), { recursive: true, mode: 0o700 })
-      // 0600, through the temp-and-rename every owner file uses.
-      writeFileAtomic(this.deps.file, `${JSON.stringify(held)}\n`)
+      const text = `${JSON.stringify(held)}\n`
+      if ((privacy.platform ?? process.platform) === 'win32') {
+        // Windows: created with a private access list and kept only once proven private by owner and list.
+        await writePrivateFile(this.deps.file, text, privacy)
+      } else {
+        // POSIX: 0600 through `magpie-web.json.tmp`, the temp name the served-seat deny list names
+        // (owner-secrets.ts). writePrivateFile's temp has a random name no deny entry covers, and a
+        // served seat runs as this user, so a mode alone would not keep the key from it.
+        writeFileAtomic(this.deps.file, text)
+      }
     } catch {
       return { ok: false, why: 'Could not keep the key for Magpie’s page.' }
     }

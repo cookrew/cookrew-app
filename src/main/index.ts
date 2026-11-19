@@ -1906,11 +1906,10 @@ let shareKeysHeld: ShareKeys | null = null
 /** Ruling (a): what ShareKeys clears or keeps on its own goes to a durable file; stderr only when that fails. */
 const shareAuditFile = fileAuditLog(path.join(homedir(), '.cookrew', SHARE_AUDIT_FILE))
 const shareAudit = (line: string): void => {
-  try {
-    shareAuditFile(line)
-  } catch (error) {
+  // Not awaited: on Windows the log is proven private first (a PowerShell run), and no caller waits for it.
+  void shareAuditFile(line).catch((error: unknown) => {
     console.error(`[cookrew] share audit not written (${error instanceof Error ? error.message : 'unknown'}): ${line}`)
-  }
+  })
 }
 const shareKeysNow = (): ShareKeys | null => {
   if (shareKeysHeld !== null) return shareKeysHeld
