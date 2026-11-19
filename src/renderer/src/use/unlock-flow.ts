@@ -19,8 +19,8 @@ export interface UnlockApi {
   send(sealed: string): Promise<UnlockAnswer>
   /** This api is a cookrew-seal/2 session (unlock-sealed.ts): the only road a remembered box is sent on. */
   readonly sealedV2?: boolean
-  /** Gives a remembered password's id back to the Mac (the page's Forget). */
-  forget?(id: string): Promise<unknown>
+  /** Gives a remembered password's id back to the Mac (the page's Forget): the route's answer, `ok` when it was heard. */
+  forget?(id: string): Promise<{ readonly ok?: unknown }>
 }
 
 export interface UnlockFlowDeps {
@@ -107,9 +107,15 @@ export async function runUnlock(deps: UnlockFlowDeps, input: { readonly shownKey
   return { kind: 'error', message: answer.error }
 }
 
-/** The sheet's Forget: whatever this device remembers for this Mac goes, and the Mac is given its id back. */
-export async function forgetRemembered(deps: UnlockFlowDeps): Promise<void> {
+/**
+ * The sheet's Forget: whatever this device remembers for this Mac goes, and the Mac is given its id back. False when the
+ * Mac could not be told: the box is gone from here all the same, and the sheet says so (the Mac drops the id when the
+ * pairing rotates, or when this device is forgotten in Devices).
+ */
+export async function forgetRemembered(deps: UnlockFlowDeps): Promise<boolean> {
   await deps.vault.forgetPassword(deps.machine)
   const id = await deps.vault.dropBox(deps.machine)
-  if (id !== null) await deps.api.forget?.(id).catch(() => undefined)
+  if (id === null || deps.api.forget === undefined) return true
+  const said = await deps.api.forget(id).catch(() => null)
+  return said?.ok === true
 }

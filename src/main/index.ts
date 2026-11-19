@@ -185,7 +185,7 @@ import { createSealMarks } from './seal-marks'
 import { createSealDevice } from './seal-device'
 import { createSealPeers } from './seal-peers'
 import { createSealPinStore } from './seal-pins'
-import { answerPeer, createBlockedLanes, forgetBlocked } from './seal-blocked'
+import { answerPeer, blockedDesktopHoldings as blockedHoldingsOf, createBlockedLanes, forgetBlocked } from './seal-blocked'
 import { createSealWatchKeys } from './seal-watch-keys'
 import { forgetWatchSeal, watchDeviceHttp, watchSealHost } from './seal-watch-gate'
 import { deviceWords, keyWords } from '../shared/seal2/handshake'
@@ -276,7 +276,7 @@ import { linuxHandFor } from './linux-input'
 import { createRemoteDesk, remoteGate } from './remote-desk'
 import { createUpdateCheck } from './update-check'
 import { createUnlockDoor, loadUnlockKey, unlockMissesFile } from './remote-unlock'
-import { createRememberedUnlocks } from './unlock-remembered'
+import { admissionEpoch, createRememberedUnlocks } from './unlock-remembered'
 import { createUnlockGrantDoor } from './unlock-grant'
 import type { SealKeyPair } from '../shared/relay-seal'
 import { fingerprintOfDigest } from '../shared/key-fingerprint'
@@ -1664,14 +1664,13 @@ function keyRefused(machineId: string): void {
 const askForMachineKey = blockedLanes.askForKey(() => void collectMachineKeys().catch(() => undefined))
 
 /** What a desktop the owner said is NOT THE SAME holds here (seal-blocked.ts): its admission, and the key held for it. */
-const blockedDesktopHoldings = {
-  forgetAdmission: (deviceId: string): boolean => {
-    const gone = admittedDevices.forget(deviceId)
-    remoteDesk.forgetDevice(`device:${deviceId}`)
-    return gone
-  },
+// Lazily: remoteDesk and rememberedUnlocks are declared further down, and this is only called long after startup.
+const blockedDesktopHoldings = blockedHoldingsOf({
+  admitted: { forget: (deviceId) => admittedDevices.forget(deviceId) },
+  desk: { forgetDevice: (key) => remoteDesk.forgetDevice(key) },
+  remembered: { forgetWho: (who) => rememberedUnlocks.forgetWho(who) },
   forgetKey: keyRefused
-}
+})
 
 async function readAccountMachine(machineId: string, route: RemoteRead): Promise<unknown | null> {
   const key = machineKeys.token(machineId)
@@ -1870,7 +1869,11 @@ const connectCodes = createConnectCodes(path.join(homedir(), '.cookrew', 'connec
  * Remembered passwords' ids (unlock-remembered.ts): issued under the connect code in force, so a rotation
  * refuses every box at once even if its clear below failed. Never a password.
  */
-const rememberedUnlocks = createRememberedUnlocks(path.join(homedir(), '.cookrew', 'unlock-remembered.json'), { currentCode: () => connectCodes.currentId() })
+const rememberedUnlocks = createRememberedUnlocks(path.join(homedir(), '.cookrew', 'unlock-remembered.json'), {
+  currentCode: () => connectCodes.currentId(),
+  // A device's ids live only as long as the admission they were issued under (Relay: a failed drop never comes back).
+  epochOf: admissionEpoch(() => admittedDevices.list())
+})
 // cookrew-seal/2 device mode: this desktop and the account's others (seal-device.ts, seal-pins.ts).
 // Watches whose words the owner confirmed here (seal-watch-keys.ts): a watch's id is not its key's.
 const sealWatchKeys = createSealWatchKeys(path.join(homedir(), '.cookrew', 'seal-watch-keys.json'))

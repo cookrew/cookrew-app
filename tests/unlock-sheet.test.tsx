@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { afterRefusal, rememberOffered, UnlockSheetView, type UnlockSheetViewProps } from '../src/renderer/src/use/UnlockSheet'
+import { afterForget, afterRefusal, FORGET_NOT_TOLD, rememberOffered, UnlockSheetView, type UnlockSheetViewProps } from '../src/renderer/src/use/UnlockSheet'
 import { SealRefusedError } from '../src/renderer/src/path/seal-client'
 import { hostOutsideTheMac } from '../src/shared/remote-unlock'
 
@@ -109,5 +109,13 @@ describe('where Remember is offered', () => {
     expect(rememberOffered(false, null)).toBe(false)
     expect(rememberOffered(false, { rememberable: false })).toBe(false)
     expect(rememberOffered(false, { rememberable: true })).toBe(true)
+  })
+})
+
+describe('after Forget', () => {
+  it('says so when the Mac could not be told, and nothing when it was', () => {
+    expect(afterForget(true)).toBeNull()
+    expect(afterForget(false)).toBe(FORGET_NOT_TOLD)
+    expect(FORGET_NOT_TOLD).toMatch(/forgot/i)
   })
 })

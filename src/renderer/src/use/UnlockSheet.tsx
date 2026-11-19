@@ -166,6 +166,13 @@ const codeIdOf = async (code: string): Promise<string | undefined> => {
   return bytes === null ? undefined : connectCodeId(new Uint8Array(bytes)).catch(() => undefined)
 }
 
+/** Said when this device forgot its remembered password but the Mac did not hear about it (unlock-flow.ts · forgetRemembered). */
+export const FORGET_NOT_TOLD =
+  'This device forgot the password, but the Mac could not be told. It drops it when you rotate the pairing at the Mac, or forget this device there.'
+
+/** What the sheet says after Forget: nothing when the Mac heard it. */
+export const afterForget = (told: boolean): string | null => (told ? null : FORGET_NOT_TOLD)
+
 /** Remember is offered on the Mac's own page, and on the console only when the Mac can remember over this v2 session. */
 export const rememberOffered = (ownPage: boolean, shown: { readonly rememberable: boolean } | null): boolean => ownPage || shown?.rememberable === true
 
@@ -330,7 +337,10 @@ function UnlockSheetBody(): React.JSX.Element {
       onUnlock={() => void unlock()}
       onForget={() => {
         // What this device keeps goes, and a console gives the Mac its id back (unlock-flow.ts · forgetRemembered).
-        if (deps) void forgetRemembered(deps).then(prepare)
+        if (deps)
+          void forgetRemembered(deps)
+            .then((told) => setError(afterForget(told)))
+            .then(prepare)
       }}
       onTrustNew={() => {
         // Exactly the key the reader judged, with no second fetch that could offer another.

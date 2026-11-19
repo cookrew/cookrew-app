@@ -101,6 +101,32 @@ export function forgetBlocked(pins: Pick<SealPinStore, 'blocked'>, deps: Pick<Pe
   return ids
 }
 
+export interface DesktopHoldingsDeps {
+  readonly admitted: { forget(deviceId: string): boolean }
+  /** The remote desk's grants, by viewer key. */
+  readonly desk: { forgetDevice(key: string): void }
+  /** Passwords remembered for it on a console (unlock-remembered.ts). */
+  readonly remembered: { forgetWho(who: string): void }
+  forgetKey(deviceId: string): void
+}
+
+/**
+ * What a desktop the owner said is NOT THE SAME holds here, as answerPeer and the launch sweep take it: its admission,
+ * the remote-desk grants on it and the passwords remembered for it (forgetAdmission), and the key held for it
+ * (forgetKey). The shape other lanes hook (magpie-remote/blocked.ts) stays these two.
+ */
+export function blockedDesktopHoldings(deps: DesktopHoldingsDeps): Pick<PeerAnswerDeps, 'forgetAdmission' | 'forgetKey'> {
+  return {
+    forgetAdmission: (deviceId) => {
+      const gone = deps.admitted.forget(deviceId)
+      deps.desk.forgetDevice(`device:${deviceId}`)
+      const idsDropped = tried(() => deps.remembered.forgetWho(`device:${deviceId}`))
+      return gone && idsDropped
+    },
+    forgetKey: (deviceId) => deps.forgetKey(deviceId)
+  }
+}
+
 /** No key held for a machine: ask cookrew.dev for a round, unless it is blocked, for which no round brings one. */
 export const askForKey =
   (pins: Blocks, collect: () => void) =>

@@ -17,6 +17,9 @@ import { writeFileAtomic } from './atomic-file'
  *   wrong        a box whose password no longer opens this Mac: its id goes.
  *   another code an id is taken only under the code it was issued under, so a
  *                rotation whose clear failed still refuses it.
+ *   admission    a device's id is taken only while the admission it was issued
+ *                under stands (admissionEpoch): forgotten, or forgotten and
+ *                admitted again, its old ids are dead even if their drop failed.
  *
  * A file that cannot be read takes no box: the page is told the password is
  * forgotten and asks for it again, which costs a retype and nothing else.
@@ -44,12 +47,30 @@ export interface RememberedDeps {
   now?(): number
   /** How the file is written (atomic-file.ts by default). */
   writeFile?(file: string, text: string): void
+  /** Which admission a viewer holds now ("" for one with none to lose, null for one not admitted): admissionEpoch. */
+  epochOf?(who: string): string | null
 }
+
+/**
+ * A viewer's admission, as an id is bound to it: a device's admission time (a new admission is a new time; an admitted
+ * device admitted again keeps its first), "" for the global pairing token (its ids go with the code), and null for
+ * anything not admitted now.
+ */
+export const admissionEpoch =
+  (admitted: () => ReadonlyArray<{ readonly deviceId: string; readonly admittedAt: number }>) =>
+  (who: string): string | null => {
+    if (who === 'root') return ''
+    if (!who.startsWith('device:')) return null
+    const row = admitted().find((device) => `device:${device.deviceId}` === who)
+    return row === undefined ? null : String(row.admittedAt)
+  }
 
 interface Held {
   readonly who: string
   readonly code: string
   readonly at: number
+  /** The admission it was issued under (admissionEpoch); absent in a file from before, read as "". */
+  readonly epoch?: string
 }
 
 type HeldFile = Readonly<Record<string, Held>>
@@ -58,7 +79,7 @@ const ID = /^[A-Za-z0-9_-]{32,64}$/
 
 const isHeld = (value: unknown): value is Held => {
   const row = value as Partial<Held> | null
-  return typeof row === 'object' && row !== null && typeof row.who === 'string' && typeof row.code === 'string' && typeof row.at === 'number'
+  return typeof row === 'object' && row !== null && typeof row.who === 'string' && typeof row.code === 'string' && typeof row.at === 'number' && (row.epoch === undefined || typeof row.epoch === 'string')
 }
 
 function readHeld(file: string): HeldFile {
@@ -78,6 +99,7 @@ export function createRememberedUnlocks(file: string, deps: RememberedDeps): Rem
     writeFileAtomic(target, text)
     chmodSync(target, 0o600)
   })
+  const epochOf = deps.epochOf ?? ((): string => '')
   let held = readHeld(file)
   // The file first: a write that fails leaves what is held as the file says, so a restart does not bring back
   // an id this run thought was gone (and the caller hears the failure).
@@ -98,10 +120,10 @@ export function createRememberedUnlocks(file: string, deps: RememberedDeps): Rem
       const crowded = new Set(mine.slice(0, Math.max(0, mine.length - (REMEMBERED_PER_WHO - 1))).map(([known]) => known))
       const others = oldestFirst.filter(([known]) => !crowded.has(known))
       const room = others.slice(Math.max(0, others.length - (REMEMBERED_MAX - 1)))
-      write({ ...Object.fromEntries(room), [id]: { who, code: deps.currentCode(), at: now() } })
+      write({ ...Object.fromEntries(room), [id]: { who, code: deps.currentCode(), at: now(), epoch: epochOf(who) ?? '' } })
       return id
     },
-    live: (id, who) => has(id) && held[id].who === who && held[id].code === deps.currentCode(),
+    live: (id, who) => has(id) && held[id].who === who && held[id].code === deps.currentCode() && (held[id].epoch ?? '') === epochOf(who),
     drop(id, who) {
       if (!has(id) || held[id].who !== who) return false
       keep(([known]) => known !== id)

@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createUnlockDoor, type UnlockDoorDeps } from '../src/main/remote-unlock'
+import { createUnlockDoor, FORGET_FAILED, type UnlockDoorDeps } from '../src/main/remote-unlock'
 import { createRememberedUnlocks } from '../src/main/unlock-remembered'
 import { generateSealKeyPair, packBody } from '../src/shared/relay-seal'
 import { REMEMBER_INFO, UNLOCK_INFO } from '../src/shared/remote-unlock'
@@ -147,6 +147,29 @@ describe('Unlocking with a remembered box', () => {
     mac.locked = true
     expect(await door.unlock(phone, message, V2)).toMatchObject({ ok: false, outcome: 'refused' })
     expect(typed).toEqual([PASSWORD])
+  })
+
+  it('a "forgotten" answer spends the challenge too: the same challenge with a password is then refused', async () => {
+    const { door, outer, mac, boxOf, typed, remembered, typedRemember } = bed()
+    const first = await typedRemember(phone)
+    const id = first.ok ? (first.remembered as string) : ''
+    mac.locked = true
+    typed.length = 0
+    remembered.clear()
+    const opened = await door.begin(phone, V2)
+    if (!opened.ok) throw new Error('no begin')
+    expect(await door.unlock(phone, outer({ c: opened.challenge, b: boxOf(PASSWORD, id) }), V2)).toMatchObject({ outcome: 'forgotten' })
+    expect(await door.unlock(phone, outer({ c: opened.challenge, p: PASSWORD }), V2)).toMatchObject({ ok: false, outcome: 'refused' })
+    expect(typed).toEqual([])
+  })
+
+  it('a Forget that cannot be written fails with a fixed sentence, never a file system error or a path', async () => {
+    const t = bed()
+    const first = await t.typedRemember(phone)
+    const id = first.ok ? (first.remembered as string) : ''
+    const failing = bed({ remembered: { ...t.remembered, drop: () => { throw new Error("EACCES: permission denied, open '/Users/someone/.cookrew/unlock-remembered.json.tmp'") } } })
+    expect(() => failing.door.forget(phone, id, V2)).toThrow(FORGET_FAILED)
+    expect(FORGET_FAILED).not.toMatch(/\/|EACCES|cookrew\b/)
   })
 
   it('a wrong box whose id cannot be dropped (a full disk) is still answered as a wrong password', async () => {

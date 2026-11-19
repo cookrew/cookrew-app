@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { answerPeer, askForKey, createBlockedLanes, desktopsWithoutBlocked, forgetBlocked, keysWithoutBlocked, marksWithBlocked, type PeerAnswerDeps } from '../src/main/seal-blocked'
+import { answerPeer, askForKey, blockedDesktopHoldings, createBlockedLanes, desktopsWithoutBlocked, forgetBlocked, keysWithoutBlocked, marksWithBlocked, type PeerAnswerDeps } from '../src/main/seal-blocked'
+import { createRememberedUnlocks } from '../src/main/unlock-remembered'
 import { createAdmittedDeviceStore } from '../src/main/admitted-devices'
 import { createMachineKeyStore, createRefusedMachines } from '../src/main/machine-keys'
 import { tempBase } from './support/idv2'
@@ -157,6 +158,45 @@ describe('the owner answers another desktop\'s six words (index.ts seal:peer-ans
     expect(pins.pinned()).toEqual([])
     expect(pins.blocks(A)).toBe(false)
     expect(ended).toEqual([])
+  })
+})
+
+describe('what a blocked desktop holds here (blockedDesktopHoldings, index.ts wires it once)', () => {
+  it('its admission, the remote-desk grants on it, and the passwords remembered for it all go; the key goes too', () => {
+    const temp = tempBase()
+    try {
+      const admitted = createAdmittedDeviceStore({ base: temp.base })
+      const remembered = createRememberedUnlocks(fileIn('ids.json'), { currentCode: () => 'code' })
+      const { token } = admitted.admit({ deviceId: A, name: 'not mine', via: 'machine' })
+      const mine = remembered.issue(`device:${A}`)
+      const kept = remembered.issue(`device:${B}`)
+      const desk: string[] = []
+      const keys: string[] = []
+      const holdings = blockedDesktopHoldings({ admitted, desk: { forgetDevice: (key) => void desk.push(key) }, remembered, forgetKey: (id) => void keys.push(id) })
+      expect(Object.keys(holdings).sort()).toEqual(['forgetAdmission', 'forgetKey'])
+      expect(holdings.forgetAdmission(A)).toBe(true)
+      expect(admitted.deviceFor(token)).toBeNull()
+      expect(desk).toEqual([`device:${A}`])
+      expect(remembered.live(mine, `device:${A}`)).toBe(false)
+      expect(remembered.live(kept, `device:${B}`)).toBe(true)
+      holdings.forgetKey(A)
+      expect(keys).toEqual([A])
+    } finally {
+      temp.clean()
+    }
+  })
+
+  it('a remembered-password drop that cannot be written answers false, and the admission still goes', () => {
+    const temp = tempBase()
+    try {
+      const admitted = createAdmittedDeviceStore({ base: temp.base })
+      const { token } = admitted.admit({ deviceId: A, name: 'not mine', via: 'machine' })
+      const holdings = blockedDesktopHoldings({ admitted, desk: { forgetDevice: () => undefined }, remembered: { forgetWho: () => { throw new Error('disk full') } }, forgetKey: () => undefined })
+      expect(holdings.forgetAdmission(A)).toBe(false)
+      expect(admitted.deviceFor(token)).toBeNull()
+    } finally {
+      temp.clean()
+    }
   })
 })
 

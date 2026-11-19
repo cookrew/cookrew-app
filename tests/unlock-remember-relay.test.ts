@@ -75,6 +75,8 @@ const companion = (terminus: () => SealTerminus | undefined): Server =>
 
 let world: RelayWorld
 const clients: SealClient[] = []
+/** The box and id the first case kept: the control sends them in the clear and must find them. */
+let canaries: { box: string; id: string } | null = null
 
 beforeAll(async () => {
   codeId = await connectCodeId(code)
@@ -117,6 +119,7 @@ describe('Remember on the console through the real relay', () => {
     expect(await runUnlock(page, { shownKey: shown.key, password: PASSWORD, remember: true })).toEqual({ kind: 'done' })
     const kept = await vault.boxFor('the-mac', codeId)
     expect(kept).not.toBeNull()
+    canaries = kept
     mac.locked = true
     expect(await runUnlock(page, { shownKey: shown.key, password: null, remember: false })).toEqual({ kind: 'done' })
     expect(mac.typed).toEqual([PASSWORD, PASSWORD])
@@ -126,9 +129,11 @@ describe('Remember on the console through the real relay', () => {
     for (const canary of [PASSWORD, kept?.box ?? 'no-box', kept?.box.split('.')[1] ?? 'no-box', kept?.id ?? 'no-id', 'canary-pairing-token']) expect(read, canary).not.toContain(canary)
   })
 
-  it('the control: the same canaries sent in the clear through the same relay are found', async () => {
+  it('the control: the same canaries sent in the clear through the same relay are found, password, box and id', async () => {
+    expect(canaries).not.toBeNull()
     const [from, fromExchange] = mark()
-    await world.capture(world.phoneSession)(`${world.prefix()}/api/plain`, { method: 'POST', headers: { authorization: BEARER }, body: JSON.stringify({ p: PASSWORD }) })
-    expect(world.relayCouldRead(from, fromExchange)).toContain(PASSWORD)
+    await world.capture(world.phoneSession)(`${world.prefix()}/api/plain`, { method: 'POST', headers: { authorization: BEARER }, body: JSON.stringify({ p: PASSWORD, b: canaries?.box, r: canaries?.id }) })
+    const read = world.relayCouldRead(from, fromExchange)
+    for (const canary of [PASSWORD, canaries?.box ?? '', canaries?.box.split('.')[1] ?? '', canaries?.id ?? '', 'canary-pairing-token']) expect(read, canary).toContain(canary)
   })
 })

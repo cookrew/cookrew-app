@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { expectMode } from './support/file-mode'
-import { createRememberedUnlocks, REMEMBERED_MAX, REMEMBERED_PER_WHO } from '../src/main/unlock-remembered'
+import { admissionEpoch, createRememberedUnlocks, REMEMBERED_MAX, REMEMBERED_PER_WHO } from '../src/main/unlock-remembered'
 
 const dirs: string[] = []
 const fileIn = (): string => {
@@ -50,6 +50,31 @@ describe('remembered unlocks on the Mac', () => {
     expect(held.live(c, 'root')).toBe(true)
     held.clear()
     expect(held.live(c, 'root')).toBe(false)
+  })
+
+  it('an id is bound to the device\'s admission: forgotten and admitted again, its old ids are dead even if their drop failed', () => {
+    let rows = [{ deviceId: 'p1', admittedAt: 100 }]
+    const held = createRememberedUnlocks(fileIn(), { currentCode: () => CODE, epochOf: admissionEpoch(() => rows) })
+    const id = held.issue('device:p1')
+    const root = held.issue('root')
+    expect(held.live(id, 'device:p1')).toBe(true)
+    // Forgotten (its drop failed, so the id is still in the file): not admitted, not live.
+    rows = []
+    expect(held.live(id, 'device:p1')).toBe(false)
+    // Admitted again: a new admission, and the old id stays dead.
+    rows = [{ deviceId: 'p1', admittedAt: 900 }]
+    expect(held.live(id, 'device:p1')).toBe(false)
+    expect(held.live(held.issue('device:p1'), 'device:p1')).toBe(true)
+    // The global token has no admission: its ids go with the code (rotation).
+    expect(held.live(root, 'root')).toBe(true)
+  })
+
+  it('admissionEpoch: a device\'s admission time, "" for the global token, null for anything not admitted', () => {
+    const epoch = admissionEpoch(() => [{ deviceId: 'p1', admittedAt: 100 }])
+    expect(epoch('device:p1')).toBe('100')
+    expect(epoch('device:p2')).toBeNull()
+    expect(epoch('root')).toBe('')
+    expect(epoch('something-else')).toBeNull()
   })
 
   it('a write that fails changes nothing: what is held stays what the file says', () => {

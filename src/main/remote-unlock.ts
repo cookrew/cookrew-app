@@ -69,6 +69,8 @@ const REFUSED = 'That request could not be read. Try again.'
 const UNTYPABLE = 'This password cannot be typed from here: it has a character no key makes. Unlock it at the Mac.'
 const CLOSED = 'Too many wrong passwords. Turn remote control off and on at the Mac to try again.'
 const FORGOTTEN = 'This Mac no longer takes the password this device remembered. Type it again.'
+/** What a Forget the Mac could not write answers: a fixed sentence, never the file system's (it names paths). */
+export const FORGET_FAILED = 'This Mac could not forget that password just now. Try again, or rotate the pairing at the Mac.'
 
 const isPassword = (p: unknown): p is string => typeof p === 'string' && p.length > 0 && p.length <= UNLOCK_PASSWORD_MAX
 
@@ -268,7 +270,13 @@ export function createUnlockDoor(deps: UnlockDoorDeps): UnlockDoor {
     },
     forget(who, id, road) {
       const held = remembers(road)
-      return held !== null && typeof id === 'string' && held.drop(id, who.key)
+      if (held === null || typeof id !== 'string') return false
+      try {
+        return held.drop(id, who.key)
+      } catch {
+        deps.record('a remembered password could not be forgotten', who)
+        throw new Error(FORGET_FAILED)
+      }
     },
     reopen() {
       misses = 0

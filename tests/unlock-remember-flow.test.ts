@@ -59,7 +59,8 @@ function bed(opts: { v2?: boolean; clientV2?: boolean; codeId?: string; plainRem
         sent.push(sealed)
         return door.unlock(who, sealed, road)
       },
-      forget: async (id) => door.forget(who, id, road)
+      // As sealedUnlockApi answers it: the route's body.
+      forget: async (id) => ({ ok: true, forgotten: door.forget(who, id, road) })
     },
     vault,
     machine: 'm',
@@ -213,6 +214,23 @@ describe('Remember on the console', () => {
     await forgetRemembered(t.deps)
     expect(await t.vault.boxFor('m', 'code-1')).toBeNull()
     expect(t.remembered.live(id, who.key)).toBe(false)
+  })
+
+  it('Forget says when the Mac could not be told; the box is gone from this device either way', async () => {
+    const t = bed()
+    await rememberOnce(t)
+    expect(await forgetRemembered(t.deps)).toBe(true)
+    t.lock()
+    await rememberOnce(t)
+    const refused: UnlockFlowDeps = { ...t.deps, api: { ...t.deps.api, forget: async () => ({ ok: false, error: 'no' }) } }
+    expect(await forgetRemembered(refused)).toBe(false)
+    expect(await t.vault.boxFor('m', 'code-1')).toBeNull()
+    t.lock()
+    await rememberOnce(t)
+    const thrown: UnlockFlowDeps = { ...t.deps, api: { ...t.deps.api, forget: async () => { throw new Error('the session ended') } } }
+    expect(await forgetRemembered(thrown)).toBe(false)
+    // Nothing remembered: nothing to tell.
+    expect(await forgetRemembered(t.deps)).toBe(true)
   })
 
   it('a page holding another code (re-paired) does not use the box, and drops it', async () => {
