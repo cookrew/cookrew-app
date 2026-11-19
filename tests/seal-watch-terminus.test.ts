@@ -23,7 +23,7 @@ async function mac(held: (id: string) => Promise<ReturnType<typeof newDevice>['j
   const terminus = createSealTerminus({
     codeFor: (asked) => (asked === id ? code : null),
     dial: () => ({ write: () => undefined, end: () => undefined, destroy: () => undefined }),
-    device: { self: () => self.signer, verify: verifyDevice, trusted: async () => false, keyOf: held }
+    device: { self: () => self.signer, verify: verifyDevice, trusted: async () => false, admits: () => false, keyOf: held }
   })
   terminuses.push(terminus)
   const server = createServer((request, response) => {

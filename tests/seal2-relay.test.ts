@@ -85,7 +85,7 @@ beforeAll(async () => {
   world = await startRelayWorld(companion, (port, mac, other) => ({
     codeFor: (asked) => (asked === id ? code : null),
     dial: loopbackDialer(port),
-    device: { self: () => mac.signer, verify: verifyDevice, trusted: async (deviceId) => deviceId === other.id },
+    device: { self: () => mac.signer, verify: verifyDevice, trusted: async (deviceId) => deviceId === other.id, admits: (deviceId) => deviceId === other.id },
     // Only what this suite lets a desktop peer reach: a lane names its routes (owner: http off by default).
     deviceHttp: (deviceId, _method, path) => deviceId === other.id && path.startsWith('/api/') && path !== '/api/refused-route',
     kinds: {

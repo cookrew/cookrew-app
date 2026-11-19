@@ -93,6 +93,7 @@ const world = await startRelayWorld(companion, (port, mac) => ({
     self: () => mac.signer,
     verify: verifyDevice,
     trusted: async (deviceId) => confirmed && deviceId === watchId,
+    admits: (deviceId) => confirmed && deviceId === watchId,
     keyOf: async (deviceId) => (confirmed && deviceId === watchId ? { kty: 'OKP', crv: 'Ed25519', x: watchX } : null)
   }
 }))

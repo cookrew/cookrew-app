@@ -193,7 +193,7 @@ async function main(): Promise<void> {
   terminus = createSealTerminus({
     codeFor: (asked) => (asked === codeId ? code : null),
     dial: loopbackDialer(macPort, undefined, sealProofHeaders()),
-    device: { self: () => mac.signer, verify: verifyDevice, trusted: async (id) => id === other.id },
+    device: { self: () => mac.signer, verify: verifyDevice, trusted: async (id) => id === other.id, admits: (id) => id === other.id },
     deviceHttp: (id, _method, path) => id === other.id && path === CANARY.deviceRoute,
     onSealed: ({ peer, outer }) => {
       if (peer.mode === 'code' && outer.device !== undefined) marks.mark(outer.device)

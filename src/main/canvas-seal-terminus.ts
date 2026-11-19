@@ -86,7 +86,7 @@ export interface SealDeviceDeps {
    * Is it still let in by what this Mac knows now, asking nobody (a desktop the owner blocked since its hello is
    * not)? Asked again as its session is confirmed: the hello's `trusted` may have waited on cookrew.dev meanwhile.
    */
-  admits?(deviceId: string): boolean
+  admits(deviceId: string): boolean
   /** The one key held for a device whose id is not made from its key (a watch whose words the owner confirmed). */
   keyOf?(deviceId: string): Promise<DeviceKey | null>
 }
@@ -647,7 +647,8 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     // Dropped while it proved itself (endPeer: the owner said NOT THE SAME): no session. Promoted by the same
     // finish asked twice: the session stands.
     if (pending.get(id) !== waiting) return sessions.has(id) ? reply(response, 200, {}) : reply(response, 403, { error: 'not let in' })
-    if (waiting.v === 2 && waiting.peer.mode === 'device' && deps.device?.admits?.(waiting.peer.deviceId) === false) {
+    // Required, and only a yes lets it in: a device seal that cannot say fails closed (Relay round 4, LOW).
+    if (waiting.v === 2 && waiting.peer.mode === 'device' && deps.device?.admits(waiting.peer.deviceId) !== true) {
       pending.delete(id)
       return reply(response, 403, { error: 'not let in' })
     }

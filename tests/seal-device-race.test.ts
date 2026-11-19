@@ -48,6 +48,8 @@ interface Hooks {
   duringFinish?: () => void
   /** Watches whose words the owner confirmed (R2). */
   watchKeys?: SealWatchKeys
+  /** In place of the seal device's own answer at a finish. */
+  admits?: (deviceId: string) => boolean
 }
 
 async function macWith(desktops: () => Promise<readonly string[] | null>, hooks: Hooks = {}): Promise<{ pins: SealPinStore; terminus: SealTerminus; origin: string; macId: string }> {
@@ -61,6 +63,7 @@ async function macWith(desktops: () => Promise<readonly string[] | null>, hooks:
     dial: () => ({ write: () => undefined, end: () => undefined, destroy: () => undefined }),
     device: {
       ...sealDevice.device,
+      ...(hooks.admits ? { admits: hooks.admits } : {}),
       verify: async (jwk, message, sig) => {
         if (message.includes('initiator')) hooks.duringFinish?.()
         return sealDevice.device.verify(jwk, message, sig)
@@ -128,6 +131,15 @@ describe('NOT THE SAME during a desktop\'s handshake', () => {
     const mac = await macWith(async () => [desk.id])
     // The waiting hello is gone: the finish finds no such session (404).
     await expect(dial(mac, desk, () => mac.terminus.endPeer(desk.id, 'the owner said not the same'))).rejects.toThrow(/did not open \(404\)/)
+    expect(mac.terminus.stats()).toMatchObject({ sessions: 0, pending: 0 })
+  })
+})
+
+describe('a device seal that cannot say whether it admits (Relay round 4, LOW)', () => {
+  it('fails closed: only a yes opens a session', async () => {
+    const desk = newDevice()
+    const mac = await macWith(async () => [desk.id], { admits: (() => undefined) as unknown as (deviceId: string) => boolean })
+    await expect(dial(mac, desk)).rejects.toBeInstanceOf(Seal2RefusedError)
     expect(mac.terminus.stats()).toMatchObject({ sessions: 0, pending: 0 })
   })
 })
