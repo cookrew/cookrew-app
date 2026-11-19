@@ -2,6 +2,7 @@
 // real seal-device and pin store, the real handshake over HTTP. The hello's `trusted` asks cookrew.dev's listing,
 // which a relay can stall; NOT THE SAME said meanwhile must still keep the desktop out, and so must one said
 // between its hello and its finish.
+import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -12,6 +13,7 @@ import { deviceIdFor, mintDeviceKey, type AccountFile } from '../src/main/accoun
 import { createSealTerminus, type SealTerminus } from '../src/main/canvas-seal-terminus'
 import { createSealDevice } from '../src/main/seal-device'
 import { createSealPinStore, type SealPinStore } from '../src/main/seal-pins'
+import { createSealWatchKeys, type SealWatchKeys } from '../src/main/seal-watch-keys'
 import { startDeviceHandshake } from '../src/shared/seal2/handshake'
 import { Seal2RefusedError, shakeHandsOverHttp } from '../src/shared/seal2/http-link'
 import { newDevice, verifyDevice } from './support/seal2-accounts'
@@ -44,6 +46,8 @@ function heldListing() {
 /** Runs inside the Mac's check of a finish's signature, once set: the moment between a finish arriving and its session opening. */
 interface Hooks {
   duringFinish?: () => void
+  /** Watches whose words the owner confirmed (R2). */
+  watchKeys?: SealWatchKeys
 }
 
 async function macWith(desktops: () => Promise<readonly string[] | null>, hooks: Hooks = {}): Promise<{ pins: SealPinStore; terminus: SealTerminus; origin: string; macId: string }> {
@@ -51,7 +55,7 @@ async function macWith(desktops: () => Promise<readonly string[] | null>, hooks:
   dirs.push(dir)
   const pins = createSealPinStore(path.join(dir, 'seal-pins.json'))
   const account = accountWith()
-  const sealDevice = createSealDevice({ account: () => account, desktops, pins })
+  const sealDevice = createSealDevice({ account: () => account, desktops, pins, ...(hooks.watchKeys ? { watchKeys: hooks.watchKeys } : {}) })
   const terminus = createSealTerminus({
     codeFor: () => null,
     dial: () => ({ write: () => undefined, end: () => undefined, destroy: () => undefined }),
@@ -124,6 +128,31 @@ describe('NOT THE SAME during a desktop\'s handshake', () => {
     const mac = await macWith(async () => [desk.id])
     // The waiting hello is gone: the finish finds no such session (404).
     await expect(dial(mac, desk, () => mac.terminus.endPeer(desk.id, 'the owner said not the same'))).rejects.toThrow(/did not open \(404\)/)
+    expect(mac.terminus.stats()).toMatchObject({ sessions: 0, pending: 0 })
+  })
+})
+
+describe('a watch forgotten during its handshake (R2)', () => {
+  /** A watch: its own key, and an id not made from it, confirmed here by its words. */
+  function confirmedWatch() {
+    const dir = mkdtempSync(path.join(tmpdir(), 'seal-device-race-watch-'))
+    dirs.push(dir)
+    const keys = createSealWatchKeys(path.join(dir, 'seal-watch-keys.json'))
+    const key = newDevice()
+    const id = randomUUID()
+    keys.offer(id, key.jwk)
+    expect(keys.confirm(id, key.jwk.x)).toBe(true)
+    return { keys, watch: { ...key, id, signer: { ...key.signer, deviceId: id } } }
+  }
+
+  it('confirmed, it opens a session; forgotten between its hello and its finish, it opens none', async () => {
+    const kept = confirmedWatch()
+    const open = await macWith(async () => [], { watchKeys: kept.keys })
+    await dial(open, kept.watch)
+    expect(open.terminus.stats().sessions).toBe(1)
+    const lost = confirmedWatch()
+    const mac = await macWith(async () => [], { watchKeys: lost.keys })
+    await expect(dial(mac, lost.watch, () => void lost.keys.forgetAll())).rejects.toBeInstanceOf(Seal2RefusedError)
     expect(mac.terminus.stats()).toMatchObject({ sessions: 0, pending: 0 })
   })
 })

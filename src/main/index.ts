@@ -187,8 +187,8 @@ import { createSealPeers } from './seal-peers'
 import { createSealPinStore } from './seal-pins'
 import { answerPeer, createBlockedLanes, forgetBlocked } from './seal-blocked'
 import { createSealWatchKeys } from './seal-watch-keys'
-import { forgetWatchSeal, offerWatchSeal, watchDeviceHttp } from './seal-watch-gate'
-import { deviceWords, keyWords, type DeviceKey } from '../shared/seal2/handshake'
+import { forgetWatchSeal, watchDeviceHttp, watchSealHost } from './seal-watch-gate'
+import { deviceWords, keyWords } from '../shared/seal2/handshake'
 import { sealedSwitchMemory } from './remote-switch-memory'
 import { singleConfirm } from './remote-switch-confirm'
 import { createConnectCodes } from './connect-code'
@@ -9983,12 +9983,8 @@ function registerIpc(handlers: RestoreHandlers): void {
     })
   setWatchHost({
     ...watchHost,
-    seal: {
-      sealedOnRelay: () => sealWatchKeys.anyConfirmed(),
-      isWatch: (deviceId: string) => sealWatchKeys.keyOf(deviceId) !== null,
-      // Never to this Mac's id, a desktop of the account, or an id the listing could not be asked about.
-      offer: (deviceId: string, jwk: DeviceKey) => offerWatchSeal(deviceId, jwk, { self: () => sealDevice.self(), listed: sealDevice.listed, keys: sealWatchKeys })
-    }
+    // The confirmed watch, its token refused in the clear, and who a claim's key is offered to (seal-watch-gate.ts).
+    seal: watchSealHost({ self: () => sealDevice.self(), listed: sealDevice.listed, keys: sealWatchKeys })
   })
   // A watch's key waits for the owner to see the same six words on the watch and here (seal-watch-keys.ts).
   ipcMain.handle(

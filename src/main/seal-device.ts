@@ -78,7 +78,10 @@ export function createSealDevice(input: SealDeviceInput): SealDevice {
       // the pins', asked again after the listing: a NOT THE SAME while cookrew.dev was being asked (a relay can stall it) counts.
       trusted: async (deviceId) =>
         self() !== null && (input.watchKeys?.keyOf(deviceId) != null || (input.pins.allows(deviceId) && (await isListed(deviceId)) && input.pins.allows(deviceId))),
-      admits: (deviceId) => self() !== null && (input.watchKeys?.keyOf(deviceId) != null || input.pins.allows(deviceId)),
+      // What `trusted` said, by what is known now, asking nobody: a watch forgotten, or a desktop blocked (or gone from
+      // the last listing), since its hello is not let in.
+      admits: (deviceId) =>
+        self() !== null && (input.watchKeys?.keyOf(deviceId) != null || (input.pins.allows(deviceId) && listed !== null && listed.ids.has(deviceId.toLowerCase()))),
       keyOf: async (deviceId) => input.watchKeys?.keyOf(deviceId) ?? null
     }
   }

@@ -334,6 +334,16 @@ describe('the owner says a desktop\'s words did not match', () => {
 })
 
 describe('the Mac keeps v1', () => {
+  it('a v1 caller cannot name a sealed peer either: its x-cookrew-seal-peer is taken off (Relay round 4, S7d)', async () => {
+    const { SealPhone } = await import('./support/seal-phone')
+    const old = new SealPhone(world.prefix(), code, world.phoneSession)
+    await old.connect()
+    await old.send({ kind: 'open', stream: 1, method: 'GET', path: '/api/v1-peer', headers: { authorization: BEARER, [SEALED_PEER_HEADER]: world.otherDesktop.id } }, { kind: 'end', stream: 1 })
+    await until(() => old.of(1).some((frame) => frame.kind === 'end'), 'the old answer')
+    expect(seen.at(-1)).toMatchObject({ path: '/api/v1-peer', peer: undefined })
+    old.hangUp()
+  })
+
   it('still answers an old phone on v1 at the same address', async () => {
     const { SealPhone } = await import('./support/seal-phone')
     const old = new SealPhone(world.prefix(), code, world.phoneSession)

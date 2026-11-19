@@ -1,7 +1,7 @@
 import { keyWords, type DeviceKey, type DeviceSigner } from '../shared/seal2/handshake'
 import type { SealMarks } from './seal-marks'
 import type { SealWatchKeys } from './seal-watch-keys'
-import type { WatchSealReply } from './watch-routes'
+import type { WatchHost, WatchSealReply } from './watch-routes'
 
 /**
  * WHERE A WATCH'S SEALED SESSION MEETS THE REST OF THIS MAC: the decisions
@@ -48,4 +48,17 @@ export async function offerWatchSeal(deviceId: string, jwk: DeviceKey, deps: Wat
   if (nonce === null) return null
   // The words go along for an older reader only: the watch computes its own from the keys and the nonce.
   return { deviceId: self.deviceId, jwk: self.jwk, nonce: Buffer.from(nonce).toString('base64url'), words: (await keyWords(jwk, self.jwk, nonce)).words }
+}
+
+/**
+ * The watch host's whole sealed side (watch-routes.ts · WatchHost.seal), built once: index.ts makes one call, so
+ * which watch is the confirmed one (the rekey's gate), whether its token is refused in the clear, and who a claim's
+ * key is offered to are decided here, where they are tested (Relay round 4, S9b).
+ */
+export function watchSealHost(deps: WatchSealOfferDeps & { readonly keys: Pick<SealWatchKeys, 'offer' | 'keyOf' | 'anyConfirmed'> }): NonNullable<WatchHost['seal']> {
+  return {
+    sealedOnRelay: () => deps.keys.anyConfirmed(),
+    isWatch: (deviceId) => deps.keys.keyOf(deviceId) !== null,
+    offer: (deviceId, jwk) => offerWatchSeal(deviceId, jwk, deps)
+  }
 }

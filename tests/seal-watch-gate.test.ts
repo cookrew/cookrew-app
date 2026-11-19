@@ -11,7 +11,7 @@ import { createSealDevice } from '../src/main/seal-device'
 import { createSealMarks } from '../src/main/seal-marks'
 import { createSealPinStore } from '../src/main/seal-pins'
 import { createSealWatchKeys } from '../src/main/seal-watch-keys'
-import { forgetWatchSeal, offerWatchSeal, watchDeviceHttp } from '../src/main/seal-watch-gate'
+import { forgetWatchSeal, offerWatchSeal, watchDeviceHttp, watchSealHost } from '../src/main/seal-watch-gate'
 import { watchSealedRouteAllowed } from '../src/main/watch-routes'
 import { keyWords } from '../src/shared/seal2/handshake'
 import { newDevice } from './support/seal2-accounts'
@@ -120,6 +120,28 @@ describe('a claim\'s key offered for the sealed session (WatchHost.seal.offer)',
     const keys = createSealWatchKeys(fileIn('seal-watch-keys.json'))
     expect(await offerWatchSeal(randomUUID(), newDevice().jwk, { self: () => null, listed: async () => false, keys })).toBeNull()
     expect(keys.pending()).toEqual([])
+  })
+})
+
+describe('the watch host\'s sealed side, as index.ts builds it (watchSealHost, Relay round 4, S9b)', () => {
+  it('names only the confirmed watch, refuses its token in the clear once one is confirmed, and offers as offerWatchSeal does', async () => {
+    const { account, sealDevice, keys } = macOffering(async () => [])
+    const seal = watchSealHost({ self: () => sealDevice.self(), listed: sealDevice.listed, keys })
+    const watch = newWatch()
+    expect(seal.isWatch(watch.id)).toBe(false)
+    expect(seal.sealedOnRelay()).toBe(false)
+    const reply = await seal.offer(watch.id, watch.jwk)
+    expect(reply?.deviceId).toBe(account.deviceId)
+    // Offered, still waiting for its words: not the watch yet.
+    expect(seal.isWatch(watch.id)).toBe(false)
+    expect(seal.sealedOnRelay()).toBe(false)
+    expect(keys.confirm(watch.id, watch.jwk.x)).toBe(true)
+    expect(seal.isWatch(watch.id)).toBe(true)
+    expect(seal.isWatch(watch.id.toUpperCase())).toBe(true)
+    expect(seal.isWatch(randomUUID())).toBe(false)
+    expect(seal.sealedOnRelay()).toBe(true)
+    // Never offered to this Mac's own id.
+    expect(await seal.offer(account.deviceId, newDevice().jwk)).toBeNull()
   })
 })
 
