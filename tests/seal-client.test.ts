@@ -2,7 +2,7 @@
 // over real HTTP.
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BridgeDialer } from '../src/main/canvas-bridge'
 import { createSealTerminus, type SealTerminus, type SealTerminusDeps } from '../src/main/canvas-seal-terminus'
 import { openSeal, SEAL_VERSION_PATH, SealDowngradedError, SealRefusedError, type SealClient } from '../src/renderer/src/path/seal-client'
@@ -231,8 +231,9 @@ describe('openSeal', () => {
     client.close()
     await expect(waiting).rejects.toThrow()
     await expect(client.request({ method: 'GET', path: '/b', headers: {} })).rejects.toThrow()
-    await new Promise((resolve) => setTimeout(resolve, 30))
-    expect(terminus.stats().listening).toBe(0)
+    // The held line lets go as soon as the server sees the client hang up: waited for, not a fixed 30 ms (a slow
+    // Windows runner took longer).
+    await vi.waitFor(() => expect(terminus.stats().listening).toBe(0), { timeout: 3000 })
   })
 })
 

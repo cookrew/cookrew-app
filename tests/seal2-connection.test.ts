@@ -256,9 +256,12 @@ describe('what a carrier can do', () => {
     const stream = a.openStream('echo', {})
     void write(stream, new Uint8Array(100_000))
     await readAll(stream.readable)
-    // All that stays is this end's own last ACK: acks ask for no ack, and are kept so a resend has no gap.
-    await vi.waitFor(() => expect(a.stats().retained).toBeLessThan(64))
-    expect(a.replay(0)).toHaveLength(1)
+    // All that stays is this end's own last ACK: acks ask for no ack, and are kept so a resend has no gap. Both
+    // waited for together: on a slow runner the last data was forgotten before that ACK went out.
+    await vi.waitFor(() => {
+      expect(a.stats().retained).toBeLessThan(64)
+      expect(a.replay(0)).toHaveLength(1)
+    })
   })
 })
 
