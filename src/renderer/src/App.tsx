@@ -1737,7 +1737,9 @@ function Canvas(): React.JSX.Element {
             stage={firstRunStage ?? 'preflight'}
             via={accountNow ?? (accountStarting(routeState.state) ? 'magpie' : null)}
             known={routeState.state !== null}
-            recheck={rereadRoute}
+            // The Keychain answer it waits for lands late on THIS desktop only: a remote canvas reads the desktop's
+            // state as it is, and asks nothing more after boot (perf gate remote-open).
+            recheck={isRemoteMode() ? undefined : rereadRoute}
             onOpen={() => setRoutingOpen(true)} />
         )}
         <FirstRunHints />

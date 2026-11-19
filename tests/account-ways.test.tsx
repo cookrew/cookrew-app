@@ -172,3 +172,19 @@ describe('a Remote magpie on plain http off a tailnet, in the Routing panel', ()
   })
 })
 
+
+describe('the launch nudge arms its timers only when it could show (perf gates: remote-open, render-count)', () => {
+  it('arms past the first run with no account, the route known and not dismissed', async () => {
+    const { nudgeArmed } = await import('../src/renderer/src/first-run/AccountNudge')
+    expect(nudgeArmed({ stage: 'closed', via: null, known: true, dismissed: false })).toBe(true)
+  })
+
+  it('never arms while the route is unknown, during the first run, with an account, or once dismissed', async () => {
+    const { nudgeArmed } = await import('../src/renderer/src/first-run/AccountNudge')
+    expect(nudgeArmed({ stage: 'closed', via: null, known: false, dismissed: false })).toBe(false)
+    expect(nudgeArmed({ stage: 'preflight', via: null, known: true, dismissed: false })).toBe(false)
+    expect(nudgeArmed({ stage: 'task', via: null, known: true, dismissed: false })).toBe(false)
+    expect(nudgeArmed({ stage: 'closed', via: 'magpie', known: true, dismissed: false })).toBe(false)
+    expect(nudgeArmed({ stage: 'closed', via: null, known: true, dismissed: true })).toBe(false)
+  })
+})

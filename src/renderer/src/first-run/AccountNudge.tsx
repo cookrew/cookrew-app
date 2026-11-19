@@ -20,6 +20,15 @@ export const ANSWER_MS = 1_500
 /** Once per launch, across remounts of the shell. */
 let dismissedThisLaunch = false
 
+/**
+ * Whether the nudge waits and asks again at all: only when it could then show (past the first run, no account,
+ * not dismissed) and the route is known. Otherwise no timer runs, so nothing is asked for and nothing renders
+ * long after boot (perf gates: remote-open's late request, render-count's scroll).
+ */
+export function nudgeArmed({ stage, via, known, dismissed }: { stage: FirstRunStage; via: AccountVia | null; known: boolean; dismissed: boolean }): boolean {
+  return known && stage !== 'preflight' && stage !== 'task' && via === null && !dismissed
+}
+
 /** Whether the person's own endpoint is on; read again whenever `again` changes. */
 export function useEndpointActive(again: unknown): boolean {
   const [active, setActive] = useState(false)
@@ -66,15 +75,16 @@ export function AccountNudge({
 }): React.JSX.Element | null {
   const [settled, setSettled] = useState(false)
   const [dismissed, setDismissed] = useState(dismissedThisLaunch)
+  const armed = nudgeArmed({ stage, via, known, dismissed })
   useEffect(() => {
-    if (!known) return
+    if (!armed) return
     const ask = setTimeout(() => recheck?.(), SETTLE_MS)
     const decide = setTimeout(() => setSettled(true), SETTLE_MS + ANSWER_MS)
     return () => {
       clearTimeout(ask)
       clearTimeout(decide)
     }
-  }, [known, recheck])
+  }, [armed, recheck])
   if (!guideVisible({ stage, via, settled, dismissed })) return null
   return (
     <AccountNudgeView
