@@ -246,7 +246,7 @@ export function buildStaticSite(input: StaticSiteInput): Map<string, string | Ui
       `/me ${console}/ 302`,
       `/me/account ${auth}/account 302`,
       `/me/* ${auth}/account 302`,
-      '/features /#features 301',
+      '/features /#flow 301',
       '/start /#start 301',
       // A static host cannot read which machine is asking, so the address that used to pick
       // a build lands where the reader picks: both are offered there.

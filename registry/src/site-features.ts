@@ -3,14 +3,13 @@ import { clipFigure } from './site-motion'
 import { esc, page, type Page } from './site-shell'
 import { compare, definition, features, GITHUB_REPO, listedFeatures, type FeatureSpec } from './site-content'
 import { local, tr } from './site-lang'
-import type { Commit } from './github-commits'
 import { breadcrumbs, faqPage, organization, webPage } from './site-seo'
 
 /**
  * FEATURE PAGES — one page per question people ask about the product.
  *
  * The homepage owns the brand and the features overview (site-home.ts renders
- * the grid, the comparison and the commits from here); these own the long
+ * the grid and the comparison from here); these own the long
  * tail: "run claude code and codex together", "ai
  * agent checkpoints", "agent team marketplace". Each page is the same shape
  * — an intent-shaped H1, the definition in one paragraph, the recorded step
@@ -45,14 +44,14 @@ export function featurePage(slug: string): Page | null {
         webPage({ path, name: f.title, description: f.definition }),
         breadcrumbs([
           { name: 'Cookrew', path: local('/') },
-          { name: tr('Features', '功能'), path: local('/#features') },
+          { name: tr('Features', '功能'), path: local('/#flow') },
           { name: f.title, path }
         ]),
         faqPage(f.faq)
       ]
     },
     `<div class="wrap" style="padding-top:36px">
-<p class="meta"><a href="${local('/')}">Cookrew</a> / <a href="${local('/#features')}">${tr('Features', '功能')}</a> / ${esc(f.slug)}</p>
+<p class="meta"><a href="${local('/')}">Cookrew</a> / <a href="${local('/#flow')}">${tr('Features', '功能')}</a> / ${esc(f.slug)}</p>
 <h1>${esc(f.title)}</h1>
 <p class="lede">${esc(f.definition)}</p>
 <ul class="pts">${f.pts.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
@@ -74,16 +73,6 @@ export function compareTable(): string {
   return `<table class="cmp"><caption>${tr('Chat tab, single agent CLI, or Cookrew — what each can do (2026-11)', '聊天标签页、单个 agent CLI 还是 Cookrew——各自能做什么（2026-11）')}</caption><thead><tr><th></th><th>${tr('A chat tab', '聊天标签页')}</th><th>${tr('One CLI agent', '单个 CLI agent')}</th><th>Cookrew</th></tr></thead><tbody>${compare().map(
     (r) => `<tr><th scope="row">${esc(r.question)}</th><td>${esc(r.chat)}</td><td>${esc(r.singleAgent)}</td><td><b>${esc(r.cookrew)}</b></td></tr>`
   ).join('')}</tbody></table>`
-}
-
-export function commitsSection(commits: readonly Commit[] | null): string {
-  if (!commits || commits.length === 0) return ''
-  return `<section id="built"><div class="wrap"><p class="kicker"><span class="no">${tr('PROOF', '证明')}</span>${tr('built in the open, by its own crew', '由它自己的团队公开构建')}</p><h2>${tr('What landed on the dev branch', 'dev 分支上的最新提交')}</h2>
-<p>${tr('Cookrew is developed on its own canvas by a crew of agents — Forge writes features, Tinker fixes bugs, Magpie runs QA, Conductor directs. These are the latest commits, straight from GitHub.', 'Cookrew 由一支 agent 团队在它自己的画布上开发——Forge 写功能，Tinker 修 bug，Magpie 做 QA，Conductor 指挥。下面是来自 GitHub 的最新提交。')}</p>
-<ol class="commits">${commits
-    .slice(0, 10)
-    .map((c) => `<li><time datetime="${esc(c.date)}">${esc(c.date)}</time> <a href="${esc(c.url)}"><code>${esc(c.sha)}</code></a> ${esc(c.title)}</li>`)
-    .join('')}</ol></div></section>`
 }
 
 /**

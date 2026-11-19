@@ -6,6 +6,8 @@ import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
 import { readPathReport } from '../src/main/path-reports'
+import { sealProofHeaders, SEALED_V2_HEADER } from '../src/main/seal-proof'
+import { SEALED_MARKER } from '../src/shared/remote-unlock'
 
 const TOKEN = 'pairing-token-123'
 
@@ -13,8 +15,8 @@ describe('POST /api/rtc/offer', () => {
   const cleanup: Array<() => void> = []
   afterEach(() => cleanup.splice(0).forEach((run) => run()))
 
-  const start = async (answer: (sdp: string) => Promise<string | null>) => {
-    const deps = { pairingToken: TOKEN, turns: { list: () => [] }, rtc: { answer } } as unknown as MobileApiDeps
+  const start = async (answer: (sdp: string) => Promise<string | null>, bind?: (offerSdp: string, answerSdp: string) => unknown) => {
+    const deps = { pairingToken: TOKEN, turns: { list: () => [] }, rtc: bind ? { answer, bind } : { answer } } as unknown as MobileApiDeps
     const server = http.createServer((req, res) => {
       const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
       void handleMobileApi(req, res, url, deps).then((handled) => { if (!handled) res.writeHead(404).end() })
@@ -22,13 +24,45 @@ describe('POST /api/rtc/offer', () => {
     cleanup.push(() => server.close())
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
     const port = (server.address() as net.AddressInfo).port
-    return (body: unknown, token: string | null = TOKEN) =>
+    return (body: unknown, token: string | null = TOKEN, proof: Record<string, string> = { ...sealProofHeaders(), [SEALED_V2_HEADER]: '1' }) =>
       fetch(`http://127.0.0.1:${port}/api/rtc/offer`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+        headers: { 'content-type': 'application/json', ...proof, ...(token ? { authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify(body)
       })
   }
+
+  it('rejects plain, v1 and forged v2 markers before generating an answer', async () => {
+    let generated = 0
+    const post = await start(async () => { generated += 1; return 'private candidate' })
+    const realProof = sealProofHeaders()[SEALED_MARKER]
+    const forgedProof = `${realProof[0] === 'A' ? 'B' : 'A'}${realProof.slice(1)}`
+    for (const proof of [{}, sealProofHeaders(), { [SEALED_V2_HEADER]: '1' }, { ...sealProofHeaders(), [SEALED_V2_HEADER]: '0' }, { [SEALED_MARKER]: forgedProof, [SEALED_V2_HEADER]: '1' }]) {
+      const response = await post({ sdp: 'v=0' }, TOKEN, proof)
+      expect(response.status).toBe(403)
+      expect(await response.json()).toEqual({ error: 'sealed session required' })
+    }
+    expect(generated).toBe(0)
+  })
+
+  it('refuses even a v2 inner request when no pairing token is configured', async () => {
+    let generated = 0
+    const deps = { turns: { list: () => [] }, rtc: { answer: async () => { generated += 1; return 'private candidate' } } } as unknown as MobileApiDeps
+    const server = http.createServer((req, res) => {
+      void handleMobileApi(req, res, new URL(req.url ?? '/', 'http://localhost'), deps)
+    })
+    cleanup.push(() => server.close())
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as net.AddressInfo).port
+    const response = await fetch(`http://127.0.0.1:${port}/api/rtc/offer`, {
+      method: 'POST',
+      headers: { ...sealProofHeaders(), [SEALED_V2_HEADER]: '1', 'content-type': 'application/json' },
+      body: JSON.stringify({ sdp: 'v=0' })
+    })
+    expect(response.status).toBe(403)
+    expect(await response.text()).not.toContain('private candidate')
+    expect(generated).toBe(0)
+  })
 
   it('answers an offer with the Mac end\'s SDP', async () => {
     const post = await start(async (sdp) => `answer-to:${sdp}`)
@@ -48,6 +82,38 @@ describe('POST /api/rtc/offer', () => {
     const post = await start(async () => { throw new Error('bad sdp') })
     expect((await post({ sdp: 'garbage' })).status).toBe(400)
   })
+
+  it('sends the binding beside the answer, made over the offer as it arrived and the answer as sent', async () => {
+    const asked: unknown[] = []
+    const post = await start(
+      async (sdp) => `answer-to:${sdp}`,
+      (offerSdp, answerSdp) => {
+        asked.push([offerSdp, answerSdp])
+        return { v: 1, device: 'mac-1', jwk: { kty: 'OKP', crv: 'Ed25519', x: 'x' }, sig: 'sig' }
+      }
+    )
+    const res = await post({ sdp: 'v=0 offer' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ sdp: 'answer-to:v=0 offer', bind: { v: 1, device: 'mac-1', jwk: { kty: 'OKP', crv: 'Ed25519', x: 'x' }, sig: 'sig' } })
+    expect(asked).toEqual([['v=0 offer', 'answer-to:v=0 offer']])
+  })
+
+  it('still answers, with no binding, when there is nothing to bind by or binding fails', async () => {
+    // The console then refuses the answer and stays on the relay; the route itself stays additive.
+    for (const bind of [() => null, () => { throw new Error('locked') }, async () => { throw new Error('locked') }]) {
+      const post = await start(async () => 'answer', bind)
+      const res = await post({ sdp: 'v=0' })
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ sdp: 'answer' })
+    }
+  })
+
+  it('binds nothing when the Mac offers no link', async () => {
+    let bound = 0
+    const post = await start(async () => null, () => ((bound += 1), null))
+    expect((await post({ sdp: 'v=0' })).status).toBe(503)
+    expect(bound).toBe(0)
+  })
 })
 
 describe('the rtc row in a path report', () => {
@@ -62,10 +128,16 @@ describe('the rtc row in a path report', () => {
   it('runs only on the relay, first in each race, and rides the race report', () => {
     const src = readFileSync('src/renderer/src/path/companion.ts', 'utf8')
     expect(src).toContain("dataPlane().kind !== 'relay'")
-    expect(src).toContain('const RTC_EVERY_MS = 2 * 60 * 1000')
-    // Before the names, unless the plane just failed or the phone is on a radio (no LAN in reach).
+    // The gap between knocks is path/rtc-trust.ts's (2 minutes, longer after a refused answer).
+    expect(src).toContain('if (at - lastRtcAt < rtcGapMs) return []')
+    // First in each race, unless the plane just failed or the phone is on a radio (no LAN in reach).
     expect(src).toContain('const knocked = health.held() || onCellular() ? [] : await rtcKnock(raceSoon, live)')
     expect(src).toContain('reportLinkRows(knocked)')
+    // The offer goes out one way only: path/rtc-offer.ts, sealed whenever the page has a session (step 2).
+    expect(src).toContain('post: (sdp) => postRtcOffer(sdp)')
+    expect(src).not.toContain("'/api/rtc/offer'")
+    // A knock skipped while the seal was undecided is owed when the pin lands, for the machine in scope.
+    expect(src).toMatch(/onSealPinned\(\(base\) => \{\s*if \(!live\(\) \|\| base !== scopeBase\(\)\) return\s*owedAKnock\(\)\s*raceNow\(\)/)
     // A link that ended, however, is knocked again at once, not after the gap.
     expect(src).toMatch(/ended: \(row\) => \{[\s\S]{0,400}lastRtcAt = 0[\s\S]{0,40}onEnd\(\)/)
     // The knocks and the navigation home are gone with the offer that drove them.

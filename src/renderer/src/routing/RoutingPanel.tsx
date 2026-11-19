@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import type { HarnessRow, RouteState } from '../../../shared/route'
 import { SETUP_LINE_COPY } from '../../../shared/first-run-copy'
 import { ROUTING_COPY } from '../../../shared/route-view'
-import { Accounts, Harnesses, LiveRoutes, Rented, SignInLink, StatusLine, type RunLine } from './RoutingSections'
+import { Accounts, Harnesses, LiveRoutes, LoopbackRemotes, PlainRemotes, Rented, SignInLink, StatusLine, type RunLine } from './RoutingSections'
 import { SetupScreen } from './SetupScreen'
 import './routing-panel.css'
 
@@ -48,6 +48,10 @@ export interface RoutingPanelProps {
   onZoom?: (terminalId: string) => void
   /** The person's own endpoint: where it is changed once the first run is over. */
   access?: React.ReactNode
+  /** Connect an AI account (first-run/AccountWays.tsx), drawn first while nothing is connected. */
+  guide?: React.ReactNode
+  /** Share this computer's Magpie with the owner's other devices (ShareDevices.tsx). */
+  share?: React.ReactNode
 }
 
 export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null {
@@ -99,8 +103,12 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
                 {error}
               </div>
             )}
+            <LoopbackRemotes rows={state.loopbackRemotes} onRun={onRun} />
+            <PlainRemotes rows={state.plainRemotes} />
+            {props.guide}
             <Harnesses rows={state.harnesses} onRun={onRun} onAddToDock={onAddToDock} running={running} />
             <Accounts state={state} onRun={onRun} onSetDefault={onSetDefault} onSetSharedMcp={onSetSharedMcp} running={running} />
+            {props.share}
             <LiveRoutes state={state} names={names} onZoom={onZoom} />
             <Rented state={state} />
           </>

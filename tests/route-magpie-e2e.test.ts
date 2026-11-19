@@ -153,6 +153,7 @@ function node(id: string, command: string): TerminalNodeData {
 /** A service with only the deps envFor() reaches, so the real decision function is under test. */
 function service(monitor: GatewayMonitor, data: TerminalNodeData): RouteService {
   return new RouteService({
+    switches: () => ({ magpie: true, magpieRemote: false }),
     monitor,
     fetch: (input, init) => fetch(input, init) as never,
     home: process.env.HOME ?? '',

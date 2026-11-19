@@ -1,7 +1,7 @@
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   HOMES_PER_ORIGIN,
   LOCK_STALE_MS,
@@ -373,12 +373,32 @@ describe('one sign-in per home, across processes, under a deadline', () => {
   it('a walk that outlives its deadline gives up and lets the lock go; waiters wait longer than a walk may take', async () => {
     expect(WALK_DEADLINE_MS).toBeLessThan(LOCK_STALE_MS)
     expect(LOCK_WAIT_MS).toBeGreaterThan(WALK_DEADLINE_MS)
-    const r = rig(() => 'ok', { assert: () => new Promise(() => undefined), lock: { deadlineMs: 50 } })
-    const d = r.make('svc')
-    await expect(signInAtHome(d)).rejects.toThrow(/took too long/)
-    expect(existsSync(`${d.home}.lock`)).toBe(false)
-    // The key it made before the stall is kept: the door may yet bind it.
-    expect(pendingKeys(d.home)).toHaveLength(1)
-    expect(retiredKeys(d.home)).toEqual([])
+    // The deadline is the walk's clock, set as the walk starts. On a slow runner the steps BEFORE the
+    // stall (minting, filing) could outlast a real 50 ms, so the walk gave up before it made the key
+    // this test keeps (Windows CI 44471620305). The clock is faked: no time passes until the walk is
+    // stuck in the door's assert, and then exactly the deadline does.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      let stalled!: () => void
+      const stuck = new Promise<void>((resolve) => void (stalled = resolve))
+      const r = rig(() => 'ok', {
+        assert: () => {
+          stalled()
+          return new Promise(() => undefined)
+        },
+        lock: { deadlineMs: 50 }
+      })
+      const d = r.make('svc')
+      const walked = expect(signInAtHome(d)).rejects.toThrow(/took too long/)
+      await stuck
+      await vi.advanceTimersByTimeAsync(50)
+      await walked
+      expect(existsSync(`${d.home}.lock`)).toBe(false)
+      // The key it made before the stall is kept: the door may yet bind it.
+      expect(pendingKeys(d.home)).toHaveLength(1)
+      expect(retiredKeys(d.home)).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

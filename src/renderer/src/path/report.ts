@@ -1,9 +1,4 @@
-import {
-  PATH_REPORT_MAX_ATTEMPTS,
-  type PathReport,
-  type PathReportAttempt
-} from '../../../shared/path-report'
-import type { PathAttempt } from '../path-attempts'
+import type { PathReport } from '../../../shared/path-report'
 
 /**
  * THE PHONE TELLS THE MAC WHAT IT FOUND, so nobody has to photograph a screen.
@@ -18,29 +13,23 @@ import type { PathAttempt } from '../path-attempts'
  * minute, so the guards here are not a rate limit in the usual sense — they
  * exist because a diagnostic must never become traffic. Four of them:
  *
- *   A RACE THAT TRIED NOTHING IS NOT A RACE. Under permission 'prompt' the
- *   timer's race may not raise a dialog, so every local candidate is filtered
- *   out and the switcher deliberately reports ZERO rows — the panel must not
- *   describe a network the phone may no longer be on. Posting that told the Mac
- *   nothing and cost the owner everything: on 2026-09-08 /api/path/reports held
- *   two reports from Chrome 152 with an empty `attempts` array while the panel
- *   on that browser was showing `192.168.2.40:8643 refused by the browser
- *   before connecting — 32 ms`. The empty ones had CLAIMED THE FLOOR below, so
- *   the ALLOW-press race that found the row landed inside the gap and was
- *   dropped. An empty report is now refused before any other guard is touched.
+ *   A RACE THAT TRIED NOTHING IS NOT A RACE. A report with no rows and no
+ *   WebRTC row tells the Mac nothing, and on 2026-09-08 empty reports CLAIMED
+ *   THE FLOOR below and the one race that had found something was dropped. An
+ *   empty report is refused before any other guard is touched. (Since the
+ *   per-machine names went, 2026-11-16, a race's rows are its WebRTC rows.)
  *
  *   NOTHING WHILE ONE IS IN FLIGHT. On a phone that has just lost the LAN, the
  *   post itself can be the request that hangs; a second race arriving on the
  *   timer must not queue a second one behind it.
  *
- *   A FLOOR UNDER THE GAP. Pressing ALLOW starts a race beside the timer's, and
- *   the two describe the same moment. The second is dropped.
+ *   A FLOOR UNDER THE GAP. Two races landing together (a timer and a network
+ *   move) describe the same moment. The second is dropped.
  *
- *   AND THE SAME RACE, AGAIN, IS NOT NEWS. A phone whose browser has been
- *   denied the local network runs an identical race every minute for as long as
- *   it is on that Wi-Fi. Reporting each one would write 1,440 identical lines a
- *   day to the desktop's console and fill a twenty-deep buffer with twenty
- *   copies of one fact. Only the moment it CHANGES is worth a post.
+ *   AND THE SAME RACE, AGAIN, IS NOT NEWS. Reporting an identical race every
+ *   minute would write 1,440 identical lines a day to the desktop's console
+ *   and fill a twenty-deep buffer with twenty copies of one fact. Only the
+ *   moment it CHANGES is worth a post.
  *
  * A FAILED REPORT IS NOT AN INCIDENT. It runs on the same plane that is
  * already in trouble; the whole point of it is to describe a path that does not
@@ -49,26 +38,6 @@ import type { PathAttempt } from '../path-attempts'
 
 /** Far below the 60 s race clock, and far above two races landing together. */
 export const PATH_REPORT_MIN_GAP_MS = 5_000
-
-/**
- * The rows, as the wire carries them: the panel's own words minus the two
- * fields that are the panel's business — `plane`, which is per row and already
- * in the settled plane, and `chosen`, which is a drawing instruction.
- */
-export const reportedAttempts = (
-  attempts: readonly PathAttempt[]
-): readonly PathReportAttempt[] =>
-  attempts.slice(0, PATH_REPORT_MAX_ATTEMPTS).map((attempt) => ({
-    name: attempt.name,
-    outcome: attempt.outcome,
-    ms: attempt.ms,
-    ...(attempt.status !== undefined ? { status: attempt.status } : {}),
-    // The variant travels because it is half the diagnosis: the same word
-    // 'blocked' means a permission to grant or a proxy in the way depending on
-    // it (Chrome 152, 2026-09-08), and the owner reads these over curl.
-    ...(attempt.hint !== undefined ? { hint: attempt.hint } : {}),
-    ...(attempt.detail !== undefined ? { detail: attempt.detail } : {})
-  }))
 
 export interface PathReporterDeps {
   /** Send it. Rejects on anything but a clean acceptance. */
@@ -133,21 +102,35 @@ export const createPathReporter = (
   }
 }
 
-/** The fetch this needs, narrowed so a test needs no browser. */
-export type ReportFetch = (
+/**
+ * The sealed session's fetch (path/seal-plane.ts · sealedFetchFor), narrowed
+ * so a test needs no browser: null when there is none for this URL.
+ */
+export type SealedReportFetch = (
   url: string,
   init: RequestInit
-) => Promise<{ readonly ok: boolean; readonly status: number }>
+) => Promise<{ readonly ok: boolean; readonly status: number }> | null
 
 export interface PostPathReportDeps {
-  /** Already scoped by apiPath, and NEVER carrying a query string. */
+  /** The current machine's relay-base URL, never carrying a query string. */
   readonly url: string
   readonly headers: Record<string, string>
-  readonly fetch: ReportFetch
+  /** The cookrew-seal/2 session: the ONLY sender a report has. */
+  readonly sealed: SealedReportFetch
 }
 
 /**
- * One POST, on whichever plane is carrying the session.
+ * One POST, ONLY INSIDE COOKREW-SEAL/2, and whole.
+ *
+ * A race's rows name the Mac's LAN and tailnet addresses (`link.via`, the
+ * candidates' address forms) and carry the browser's own words, which may
+ * spell one any way at all. No pattern over free text can promise an address
+ * is gone, so nothing is redacted: like the RTC offer (path/rtc-offer.ts) the
+ * report goes on the sealed session or not at all. There is no plain sender to
+ * fall back to; a page with no session (no code, an older Mac, undecided)
+ * keeps its report, and since an undelivered report is not remembered
+ * (createPathReporter), the next race offers it again. The Mac refuses one
+ * that arrives any other way (main/path-report-routes.ts).
  *
  * The credential travels in the Authorization header, exactly where every
  * other companion route puts it and nowhere else: a body that echoed a token
@@ -158,11 +141,13 @@ export const postPathReport = async (
   report: PathReport,
   deps: PostPathReportDeps
 ): Promise<void> => {
-  const response = await deps.fetch(deps.url, {
+  const sealed = deps.sealed(deps.url, {
     method: 'POST',
     // No `cache: 'no-store'`: on the console it would cost a preflight each time (data-plane.ts · CROSS_ORIGIN_NO_COOKIE).
     headers: { ...deps.headers, 'content-type': 'application/json' },
     body: JSON.stringify(report)
   })
+  if (sealed === null) throw new Error('a sealed session is required for a path report')
+  const response = await sealed
   if (!response.ok) throw new Error(`the desktop refused the path report: ${response.status}`)
 }

@@ -59,6 +59,7 @@ const open = async (over: Partial<RtcLinkDeps> = {}): Promise<Rig> => {
   })
   const link = await connectRtcLink({
     offer: async () => 'v=0',
+    trust: async () => ({ ok: true, by: 'device' }),
     peer: () => pc as unknown as RTCPeerConnection,
     gatherMs: 5,
     openMs: 50,

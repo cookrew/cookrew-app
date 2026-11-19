@@ -584,6 +584,16 @@ const api = {
   routeState: () => ipcRenderer.invoke('route:state'),
   routeSetDefault: (model: string | null) => ipcRenderer.invoke('route:set-default', model),
   routeSetSharedMcp: (on: boolean) => ipcRenderer.invoke('route:set-shared-mcp', on),
+  // Sharing this computer's Magpie with the owner's other devices (owner-only in main).
+  routeShareList: () => ipcRenderer.invoke('route:share-list'),
+  routeShareIssue: (input: { device: string; dailyUsd: number }) => ipcRenderer.invoke('route:share-issue', input),
+  routeShareRevoke: (id: string) => ipcRenderer.invoke('route:share-revoke', id),
+  routeShareResolve: (name: string) => ipcRenderer.invoke('route:share-resolve', name),
+  routeShareClear: (name: string) => ipcRenderer.invoke('route:share-clear', name),
+  routeShareDone: (id: string) => ipcRenderer.invoke('route:share-done', id),
+  magpieRemoteList: () => ipcRenderer.invoke('magpie-remote:list'),
+  magpieRemoteConnect: (peer: string, name: string) => ipcRenderer.invoke('magpie-remote:connect', peer, name),
+  magpieRemoteDisconnect: (peer: string) => ipcRenderer.invoke('magpie-remote:disconnect', peer),
   terminalRoute: (terminalId: string) => ipcRenderer.invoke('terminal:route', terminalId),
   terminalRouteSet: (terminalId: string, route: string) => ipcRenderer.invoke('terminal:route-set', terminalId, route),
   onRoute: (cb: (state: unknown) => void) => {
@@ -646,6 +656,14 @@ const api = {
   },
   launchSettings: () => ipcRenderer.invoke('launch-settings:status'),
   saveLaunchSettings: (choices: unknown) => ipcRenderer.invoke('launch-settings:save', choices),
+  launchLive: () => ipcRenderer.invoke('launch-settings:live'),
+  setLaunchLive: (values: unknown) => ipcRenderer.invoke('launch-settings:set-live', values),
+  onLaunchLive: (cb: (values: unknown) => void) => {
+    const listener = (_e: unknown, values: unknown): void => cb(values)
+    ipcRenderer.on('launch-live', listener)
+    return () => ipcRenderer.removeListener('launch-live', listener)
+  },
+  magpieWebOpen: (offered: string[]) => ipcRenderer.invoke('magpie-web:open', offered),
   updateStatus: () => ipcRenderer.invoke('update:status'),
   setUpdateCheck: (on: boolean) => ipcRenderer.invoke('update:set', on),
   restartToUpdate: () => ipcRenderer.invoke('update:restart'),
@@ -707,6 +725,13 @@ const api = {
   watchCode: () => ipcRenderer.invoke('watch:code'),
   watchState: () => ipcRenderer.invoke('watch:state'),
   watchInvite: (current: string) => ipcRenderer.invoke('watch:invite', current),
+  sealPeersWaiting: () => ipcRenderer.invoke('seal:peers-waiting'),
+  sealPeerAnswer: (deviceId: string, answer: 'same' | 'not-same' | 'later') => ipcRenderer.invoke('seal:peer-answer', deviceId, answer),
+  sealedOnly: () => ipcRenderer.invoke('seal:sealed-only'),
+  setSealedOnly: (on: boolean) => ipcRenderer.invoke('seal:set-sealed-only', on),
+  watchSealPending: () => ipcRenderer.invoke('watch:seal-pending'),
+  watchSealConfirm: (deviceId: string, x: string) => ipcRenderer.invoke('watch:seal-confirm', deviceId, x),
+  watchSealForget: (deviceId: string) => ipcRenderer.invoke('watch:seal-forget', deviceId),
   phoneInvite: (current: string) => ipcRenderer.invoke('phone:invite', current),
   phonePending: () => ipcRenderer.invoke('phone:pending'),
   phoneAnswer: (deviceId: string, answer: 'keep' | 'remove') => ipcRenderer.invoke('phone:answer', deviceId, answer),

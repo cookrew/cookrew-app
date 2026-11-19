@@ -117,11 +117,13 @@ describe('what a press may type', () => {
     expect(typed[0]).not.toContain(LINE)
   })
 
-  it('leaves a key line open for the paste, with no Enter and no run to watch', async () => {
+  it('types a line held open with no Enter and no run to watch, and never a key line', async () => {
     const { lines, typed } = rig()
-    const answer = await lines.start(ask({ line: 'magpie provider add openai ', enter: false }))
+    const answer = await lines.start(ask({ line: 'magpie autostart on', enter: false }))
     expect(answer).toEqual({ ok: true, runId: null })
-    expect(typed).toEqual(['\x15magpie provider add openai '])
+    expect(typed).toEqual(['\x15magpie autostart on'])
+    // A key line waiting for a paste is refused outright: keys go into Magpie's own page.
+    expect((await lines.start(ask({ line: 'magpie provider add openai ', enter: false }))).ok).toBe(false)
   })
 
   it('gives a new pane time: its rc file runs children, and the shell has no pid yet', async () => {
@@ -156,9 +158,9 @@ describe('the pane stays there for its line', () => {
     expect(held.now).toBe(0)
   })
 
-  it('lets go of a key line once it is typed: the person’s own screen holds it from there', async () => {
+  it('lets go of a line held open once it is typed: the person’s own screen holds it from there', async () => {
     const { lines, held } = rig()
-    await lines.start(ask({ line: 'magpie provider add openai ', enter: false }))
+    await lines.start(ask({ line: 'magpie autostart on', enter: false }))
     expect(held.now).toBe(0)
   })
 

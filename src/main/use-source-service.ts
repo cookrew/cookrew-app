@@ -6,7 +6,7 @@ import { cardNameOf, emptySourceList, isUseSourceId, type UseSource, type UseSou
 import { withDeadline } from './pixel-instance'
 import type { RemoteDesk, SettingsPane } from './remote-desk'
 import type { UnlockDoor } from './remote-unlock'
-import type { UnlockAnswer, UnlockBegin } from '../shared/remote-unlock'
+import type { UnlockAnswer, UnlockBegin, UnlockRoad } from '../shared/remote-unlock'
 import { servedUseRefusal } from './use-commands'
 
 /**
@@ -77,8 +77,11 @@ export interface UseSourceService {
   control(workspaceId: string, ask: unknown, who: ViewerWho): Promise<UseSourceAnswer<null>>
   restart(workspaceId: string, who: ViewerWho): Promise<UseSourceAnswer<null>>
   wake(workspaceId: string, who: ViewerWho): Promise<UseSourceAnswer<null>>
-  unlockBegin(workspaceId: string, who: ViewerWho): Promise<UseSourceAnswer<UnlockBegin>>
-  unlock(workspaceId: string, wire: unknown, who: ViewerWho): Promise<UseSourceAnswer<UnlockAnswer>>
+  /** `road`: how the request came (seal-proof.ts · sealedV2Of); a remembered password works on a v2 road only. */
+  unlockBegin(workspaceId: string, who: ViewerWho, road?: UnlockRoad): Promise<UseSourceAnswer<UnlockBegin>>
+  unlock(workspaceId: string, wire: unknown, who: ViewerWho, road?: UnlockRoad): Promise<UseSourceAnswer<UnlockAnswer>>
+  /** The page's own Forget of a remembered password: its id goes. */
+  unlockForget(workspaceId: string, id: unknown, who: ViewerWho, road?: UnlockRoad): Promise<UseSourceAnswer<{ ok: true; forgotten: boolean }>>
   whoIs(credential: string | null): ViewerWho
 }
 
@@ -265,21 +268,29 @@ export function createUseSourceService(deps: UseSourceServiceDeps): UseSourceSer
         return answer.ok ? { ok: true, value: null } : refused(409, answer.error)
       }),
 
-    unlockBegin: (workspaceId, who) =>
+    unlockBegin: (workspaceId, who, road = { sealedV2: false }) =>
       answering(async () => {
         const refusal = gate(workspaceId)
         if (refusal) return refused(403, refusal)
         if (!deps.unlock) return refused(503, NO_DESK)
-        return { ok: true, value: await deps.unlock.begin(who) }
+        return { ok: true, value: await deps.unlock.begin(who, road) }
       }),
 
-    unlock: (workspaceId, wire, who) =>
+    unlock: (workspaceId, wire, who, road = { sealedV2: false }) =>
       answering(async () => {
         const refusal = gate(workspaceId)
         if (refusal) return refused(403, refusal)
         if (!deps.unlock) return refused(503, NO_DESK)
         if (typeof wire !== 'string' || wire.length > UNLOCK_WIRE_MAX) return refused(400, 'That request could not be read.')
-        return { ok: true, value: await deps.unlock.unlock(who, wire) }
+        return { ok: true, value: await deps.unlock.unlock(who, wire, road) }
+      }),
+
+    unlockForget: (workspaceId, id, who, road = { sealedV2: false }) =>
+      answering(async () => {
+        const refusal = gate(workspaceId)
+        if (refusal) return refused(403, refusal)
+        if (!deps.unlock) return refused(503, NO_DESK)
+        return { ok: true, value: { ok: true as const, forgotten: deps.unlock.forget(who, id, road) } }
       }),
 
     whoIs: (credential) => deps.who?.(credential) ?? SOME_DEVICE

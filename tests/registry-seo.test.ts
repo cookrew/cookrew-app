@@ -101,18 +101,17 @@ describe('the feature and start pages', () => {
     })
   )
 
-  it('the homepage links every feature but the marketplace, with the questions and the commits', () => {
+  it('the homepage links every feature but the marketplace, and lists no commits', () => {
     // The marketplace keeps its page; the front page does not point at serving while sharing waits on security work.
     for (const f of FEATURES.filter((f) => f.slug !== 'marketplace')) expect(home.body).toContain(`href="/features/${f.slug}"`)
     expect(home.body).not.toContain('href="/features/marketplace"')
-    expect(home.body).toContain('"@type":"FAQPage"')
-    expect(home.body).toContain('feat: the web line')
+    expect(home.body).not.toContain('"@type":"FAQPage"')
+    expect(home.body).not.toContain('feat: the web line')
   })
 
-  it('the homepage is a HowTo with the commands the orch runs, and stays a document', () => {
+  it('the homepage is a HowTo, shows the commands the lead agent runs, and stays a document', () => {
     expect(home.headers['content-security-policy']).toContain("script-src 'none'")
     expect(home.body).toContain('"@type":"HowTo"')
-    expect(home.body).toContain('id="crew-commands"')
     expect(home.body).toContain('cookrew recruit')
     expect(home.body).toContain('href="https://github.com/cookrew/cookrew-app/releases/latest"')
   })

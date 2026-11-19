@@ -36,8 +36,13 @@ export const ROUTE_LINE_PATTERNS: readonly RegExp[] = [
   /^curl -fsSL https:\/\/usemagpie\.ai\/install\.sh \| sh$/,
   /^magpie (serve|autostart on)$/,
   new RegExp(`^magpie plugin add (${PLUGIN_PATH_QUOTED}|${PLUGIN_PATH_BARE})$`),
-  /^magpie provider add [a-z0-9-]+ ?$/,
-  /^magpie accounts add codex$/,
+  // The local provider only, which takes no key. A key line (`magpie provider add <preset> ` waiting for a
+  // paste) is never typed: magpie takes a key only as an argument, where every same-user process can read
+  // it and the shell keeps it. Keys go into Magpie's own page (routing/magpie-card.ts · openMagpieSettings).
+  /^magpie provider add ollama$/,
+  /^magpie accounts add (claude|codex)$/,
+  // Taking out a Remote magpie on this computer's loopback (route/remote-ports.ts): the owner's own press.
+  /^magpie provider rm [a-z0-9][a-z0-9-]{0,63}$/,
   /^magpie group add smart models=[A-Za-z0-9./:,_-]+ routing=smart$/,
   // The local tier, exactly as scripts/route-auto-group.mjs prints it (stays=turn is required: Magpie facts §4).
   /^magpie group add auto models=[A-Za-z0-9./:,_-]+ routing=smart stays=turn$/,
@@ -88,6 +93,16 @@ export function setupLineAllowed(line: string): boolean {
   if (FIRST_RUN_LINES.has(line)) return true
   if (line.length > 400 || /[\r\n\x00]/.test(line)) return false
   return ROUTE_LINE_PATTERNS.some((pattern) => pattern.test(line))
+}
+
+/** A line the person finishes by pasting a key: `magpie provider add <preset> ` or one ending at `key=`. */
+export function isKeyLine(line: string): boolean {
+  return /^magpie provider add [a-z0-9-]+ $/.test(line) || line.endsWith(' key=')
+}
+
+/** A key line is typed without Enter, always: run with Enter, the empty key would be saved. */
+export function setupAskAllowed(line: string, enter: boolean): boolean {
+  return setupLineAllowed(line) && !(enter && isKeyLine(line))
 }
 
 /** The bare stem the renderer appends a preset to; main's ADD_KEY_STEM. */

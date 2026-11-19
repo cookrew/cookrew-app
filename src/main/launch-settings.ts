@@ -4,6 +4,8 @@ import {
   LAUNCH_DEFAULTS,
   LAUNCH_ENV,
   LAUNCH_KEYS,
+  LIVE_KEYS,
+  type LiveValues,
   parseLaunchChoices,
   registryValue,
   type LaunchChoices,
@@ -45,6 +47,12 @@ export interface LaunchBoot {
 export interface LaunchSettings {
   status(): LaunchStatus
   save(input: unknown): LaunchSaveResult
+  /** The Magpie switches as they are now: read on every call, never only at start. */
+  readonly live: () => LiveValues
+  /** Change only the live switches, keeping every other saved choice. Pinned ones stay as their variable says. */
+  readonly setLive: (input: unknown) => LaunchSaveResult
+  /** Told after any save that may have changed a live switch. */
+  readonly onLive: (listener: (values: LiveValues) => void) => () => void
 }
 
 export const launchSettingsPath = (home: string): string => path.join(home, '.cookrew', 'launch-settings.json')
@@ -103,9 +111,10 @@ export function createLaunchSettings({ file, boot, signedIn }: LaunchSettingsDep
     const values = launchValues({ ...boot.before, ...launchEnvOf(readLaunchChoices(file), boot.before) })
     return {
       values,
-      running: boot.running,
+      // A live switch is what this run uses the moment it is saved.
+      running: { ...boot.running, magpie: values.magpie, magpieRemote: values.magpieRemote },
       pinned: LAUNCH_KEYS.filter((key) => isPinned(boot, key)),
-      restart: LAUNCH_KEYS.some((key) => values[key] !== boot.running[key]),
+      restart: LAUNCH_KEYS.some((key) => !LIVE_KEYS.includes(key) && values[key] !== boot.running[key]),
       signedIn: signedIn()
     }
   }
@@ -128,8 +137,47 @@ export function createLaunchSettings({ file, boot, signedIn }: LaunchSettingsDep
       console.error('Failed to save the launch settings:', error)
       return { ok: false, reason: 'write-failed' }
     }
+    announce()
     return { ok: true, status: status() }
   }
 
-  return { status, save }
+  const listeners = new Set<(values: LiveValues) => void>()
+  const live = (): LiveValues => {
+    const { magpie, magpieRemote } = status().values
+    return { magpie, magpieRemote }
+  }
+  const announce = (): void => {
+    const now = live()
+    for (const listener of listeners) listener(now)
+  }
+
+  const setLive = (input: unknown): LaunchSaveResult => {
+    if (typeof input !== 'object' || input === null) return { ok: false, reason: 'invalid-choice' }
+    const asked = parseLaunchChoices(Object.fromEntries(Object.entries(input).filter(([key]) => LIVE_KEYS.some((name) => name === key && !isPinned(boot, name)))))
+    if (Object.keys(input).some((key) => !LIVE_KEYS.some((name) => name === key))) return { ok: false, reason: 'invalid-choice' }
+    const kept = readLaunchChoices(file)
+    const next: Record<string, unknown> = { ...kept }
+    for (const key of LIVE_KEYS) {
+      if (asked[key] === undefined) continue
+      // A default is no choice: the file holds only what differs from it.
+      if (asked[key] === LAUNCH_DEFAULTS[key]) delete next[key]
+      else next[key] = asked[key]
+    }
+    try {
+      mkdirSync(path.dirname(file), { recursive: true })
+      writeFileAtomic(file, `${JSON.stringify(next)}\n`)
+    } catch (error) {
+      console.error('Failed to save the Magpie switches:', error)
+      return { ok: false, reason: 'write-failed' }
+    }
+    announce()
+    return { ok: true, status: status() }
+  }
+
+  const onLive = (listener: (values: LiveValues) => void): (() => void) => {
+    listeners.add(listener)
+    return () => void listeners.delete(listener)
+  }
+
+  return { status, save, live, setLive, onLive }
 }

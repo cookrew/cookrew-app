@@ -4,6 +4,7 @@ import { planeHealth } from './plane-health'
 import { linkBody, linkHeaders, linkPath, viaLink } from './rtc-plane'
 import { reviveStreams } from './plane-streams'
 import { heldScope, machineLeft, relayHeadersForUrl, relayRequestFor } from './machine-scope'
+import { machineBaseFor, probeSettled, refusedInTheClear, sealedFetchFor } from './path/seal-plane'
 
 /**
  * ONE FETCH, ON WHICHEVER PLANE IS CARRYING THE SESSION.
@@ -104,14 +105,33 @@ export async function planeFetch(url: string, init: RequestInit = {}): Promise<R
  */
 async function fetchOnRelay(url: string, init: RequestInit): Promise<Response> {
   const sameMachine = heldScope()
+  const sealed = sealedFetchFor(url, init)
   const sent = toRelay(url, init.headers)
-  const response = await fetch(sent.url, {
-    ...init,
-    ...planeRequestInit(RELAY_PLANE, clientBase()),
-    ...(sent.headers ? { headers: sent.headers } : {})
-  })
+  const response = await (sealed ??
+    fetch(sent.url, {
+      ...init,
+      ...planeRequestInit(RELAY_PLANE, clientBase()),
+      ...(sent.headers ? { headers: sent.headers } : {})
+    }))
   if (!sameMachine()) throw machineLeft()
   return response
+}
+
+/**
+ * THE RELAY, SEALED WHEN THE MACHINE IS ON v2 (path/seal-plane.ts). A plain
+ * request the Mac refused because this device now speaks sealed was never
+ * carried out, so it goes again on the session that has just opened.
+ */
+async function fetchRelayed(url: string, init: RequestInit): Promise<Response> {
+  const sealed = sealedFetchFor(url, init)
+  if (sealed !== null) return sealed
+  const sent = toRelay(url, init.headers)
+  const response = await fetch(sent.url, { ...init, ...apiRequestInit(), ...(sent.headers ? { headers: sent.headers } : {}) })
+  // Only a relayed call can be refused for going in the clear; any other 403 is the answer as it is.
+  if (machineBaseFor(url) === null || !(await refusedInTheClear(response))) return response
+  // The Mac learned this device speaks sealed before this page did: the try under way is about to say so.
+  await probeSettled(url)
+  return sealedFetchFor(url, init) ?? response
 }
 
 /** One attempt, abandoned if the direct plane it went out on is left. */
@@ -181,8 +201,7 @@ async function fetchOnPlane(url: string, init: RequestInit): Promise<Response> {
     }
   }
   try {
-    const sent = toRelay(url, init.headers)
-    const response = await fetch(sent.url, { ...init, ...apiRequestInit(), ...(sent.headers ? { headers: sent.headers } : {}) })
+    const response = await fetchRelayed(url, init)
     if (!sameMachine()) throw machineLeft()
     planeHealth().note(true)
     reviveStreams()

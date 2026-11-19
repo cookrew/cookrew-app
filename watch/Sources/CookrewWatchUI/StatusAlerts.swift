@@ -72,8 +72,18 @@ public enum StatusAlerts {
     for key in vault.shelf().keys {
       guard let session = vault.session(key) else { continue }
       let urls = session.bases.filter { account != nil || $0.kind != "relay" }.compactMap { URL(string: $0.url) }
-      let api = HTTPWatchAPI(bases: urls, token: session.token, relay: pass, guarded: session.bases.contains { $0.kind == "relay" })
-      guard case .new(let reply, _)? = try? await api.cards(tag: nil) else { continue }
+      // A machine whose relay road went sealed is asked sealed here too, never in the clear (WatchSeal.swift).
+      let sealer = pass.flatMap { relay in
+        session.seal.map { peer in WatchSealer(peer: peer, device: vault.device(), relay: relay, pinned: session.sealPinned, onPinned: { vault.markSealed(key) }) }
+      }
+      let api = HTTPWatchAPI(
+        bases: urls, token: session.token, relay: pass, guarded: session.bases.contains { $0.kind == "relay" }, sealer: sealer,
+        rekeyed: session.sealRekeyed, onToken: { vault.traded(key, token: $0) },
+      latest: { vault.session(key).map { ($0.token, $0.sealRekeyed) } }
+      )
+      let answered = try? await api.cards(tag: nil)
+      await sealer?.close()
+      guard case .new(let reply, _)? = answered else { continue }
       note(reply.cards, machine: key, name: session.desktop, inFront: false)
     }
   }

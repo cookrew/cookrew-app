@@ -9,6 +9,7 @@ import {
   type PathReportProbe,
   type StoredPathReport
 } from '../shared/path-report'
+import { summarizePathReports } from './path-report-summary'
 
 /**
  * WHAT THE PHONES SAY ABOUT REACHING THIS MAC, KEPT WHERE IT CAN BE READ.
@@ -19,9 +20,9 @@ import {
  * the owner to photograph a phone screen and send the picture — a diagnosis by
  * screenshot, for a fact the phone already knew precisely.
  *
- * So the phone posts each race here and the Mac keeps the last few. The owner,
- * or an agent with the token, reads `/api/path/reports` and gets what the panel
- * drew, per device, with no phone involved.
+ * The phone posts each race here and the Mac keeps the last few. Full reports
+ * are available only to an owner through a sealed v2 session; the local CLI
+ * exposes a fixed-vocabulary summary without sender-provided text.
  *
  * IN MEMORY AND BOUNDED ON BOTH AXES. Twenty reports per device and eight
  * devices: this is a diagnostic buffer, not a log. A file would be a retention
@@ -36,8 +37,9 @@ import {
  *
  * THE LOG LINE HAS NO ADDRESSES IN IT. One line per report — who, which plane,
  * how many candidates, and a count per outcome. The addresses are in the
- * report and the report is behind the token; a line in a console that may be
- * shared over a shoulder does not need somebody's LAN inventory in it.
+ * report, and the report is filed and served only inside a cookrew-seal/2
+ * session, to the owner (path-report-routes.ts); a line in a console that may
+ * be shared over a shoulder does not need somebody's LAN inventory in it.
  */
 
 /** Who the report came from, as far as this Mac is entitled to say. */
@@ -179,17 +181,9 @@ export const outcomeSummary = (attempts: readonly PathReportAttempt[]): string =
     : counts.map(([outcome, count]) => `${count} ${outcome}`).join(', ')
 }
 
-/** The one line a report writes to the console. No addresses, no tokens. */
+/** Log only the fixed-vocabulary projection; neither device names nor sender text are safe here. */
 export const pathReportLine = (report: StoredPathReport): string =>
-  `[cookrew] path report from ${report.device ?? UNNAMED_DEVICE}: ${report.plane} · ` +
-  `${report.attempts.length} candidate${report.attempts.length === 1 ? '' : 's'} · ` +
-  outcomeSummary(report.attempts) +
-  (report.context ? ` · ${report.context}` : '') +
-  (report.probes && report.probes.length > 0
-    ? ` · probes ${report.probes
-        .map((probe) => `${probe.kind} ${probe.outcome}${probe.ms === null ? '' : ` ${probe.ms}ms`}`)
-        .join(', ')}`
-    : '')
+  `[cookrew] path report: ${JSON.stringify(summarizePathReports([report])[0])}`
 
 export interface PathReportStoreDeps {
   readonly now?: () => number

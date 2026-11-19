@@ -16,11 +16,11 @@
  *   re-pointed by mutating a global.
  *
  *   THE PLANE IS A DECISION AND IS THEREFORE A STORE. It starts on the relay —
- *   the path that is known to work — and only ever moves to an origin that
- *   has PROVED it is this Mac
- *   (path/plane-switch.ts). A wrong value here is not a crash; it is a phone
- *   quietly talking to something that is not the Mac, which is why nothing
- *   sets it except that one verified path.
+ *   the path that is known to work — and moves only onto the WebRTC link the
+ *   Mac itself answered (path/rtc-adopt.ts). A wrong value here is not a
+ *   crash; it is a phone quietly talking to something that is not the Mac,
+ *   which is why nothing else sets it. (An origin plane, a name the page
+ *   proved, was the other way until the per-machine names went, 2026-11-16.)
  *
  * Pure on purpose: api-base.ts composes with it rather than the other way
  * round, so the composition rule below can be tested without a browser. Its
@@ -43,8 +43,8 @@ export interface DataPlane {
    * HOW THE HELLO GOT THROUGH, and therefore how everything after it must.
    *
    * Chrome 152 behind a system proxy (2026-09-08) refuses the annotated request
-   * in 32 ms and delivers the unannotated one, so the probe falls back
-   * (path/ask-hello.ts). A probe that fell back and a plane that went on
+   * in 32 ms and delivers the unannotated one, so the probe fell back (the
+   * hello probe, gone with the per-machine names on 2026-11-16). A probe that fell back and a plane that went on
    * annotating would be the worst of both worlds: a hello that proved the Mac,
    * a badge saying LAN, and every request after it failing the same way.
    *
@@ -165,11 +165,9 @@ export const planePath = (
  * authorises by the pairing token in an Authorization header and nothing
  * else), the request is explicitly `cors` so a misconfigured Mac fails loudly
  * at the browser rather than being read as an empty answer, and it carries
- * `targetAddressSpace: 'local'` WHEN the address it spells is in the local
- * address space. Chrome 142 blocks such a request outright without the
- * annotation, and a trusted name buys no exemption — a public hostname that
- * resolves to a private address is exactly the case Local Network Access was
- * written for. It is left OFF a CGNAT tailnet address, which no browser
+ * `targetAddressSpace: 'local'` WHEN its address is in the local address
+ * space. Chrome 142 blocks such a request outright without the annotation.
+ * It is left OFF a CGNAT tailnet address, which no browser
  * reckons local: the annotation is an assertion the browser then checks, so
  * claiming it falsely would fail the request rather than permit it. Safe on
  * every other browser: see local-network.ts on why an unknown `RequestInit`

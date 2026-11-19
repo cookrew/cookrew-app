@@ -7,6 +7,15 @@ import { relayedRequest } from './host-gate'
 import { bodiless } from './http-compress'
 import { RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER } from './relay-device'
 import { DOOR_MARKER } from '../shared/remote-unlock'
+import { acceptCodeHandshake, acceptDeviceHandshake, offersSeal2, type AcceptedSeal2, type DeviceKey, type DeviceSigner, type DeviceVerifier, deviceIdOf, isDeviceKey } from '../shared/seal2/handshake'
+import { HTTP_KIND, readRequest } from '../shared/seal2/http'
+import { ABORT } from '../shared/seal2/spec'
+import type { Seal2Stream } from '../shared/seal2/stream'
+import { openSeal2Live } from './seal2-live'
+import { proveSuccessor } from '../shared/seal2/successor'
+import { RELAY_LINE_MARKER, SEALED_PEER_HEADER, SEALED_V2_HEADER } from './seal-proof'
+import { RELAY_SESSION_HEADER } from '../shared/machine-relay'
+import { serveHttpStream } from './seal2-serve-http'
 
 /**
  * THE MAC'S END OF THE SEALED SESSION (shared/canvas-seal.ts).
@@ -60,13 +69,55 @@ export interface SealOuter {
   readonly deviceName?: string
 }
 
+/** Who is at the other end of a v2 session, as the handshake proved it. */
+export type SealPeer = { readonly mode: 'code' } | { readonly mode: 'device'; readonly deviceId: string }
+
+/** A stream kind another part of the app answers (lane Magpie: model traffic). "http" is the companion's. */
+export type SealStreamHandler = (stream: Seal2Stream, peer: SealPeer, outer: SealOuter) => void
+
+/** Desktop to desktop on one account (shared/seal2/handshake.ts, device mode). */
+export interface SealDeviceDeps {
+  /** This desktop's account device key; null with no account, and then no device hello is answered. */
+  self(): DeviceSigner | null
+  readonly verify: DeviceVerifier
+  /** Is this device one of this account's machines, allowed to dial this one? Unknown means no. */
+  trusted(deviceId: string): Promise<boolean>
+  /**
+   * Is it still let in by what this Mac knows now, asking nobody (a desktop the owner blocked since its hello is
+   * not)? Asked again as its session is confirmed: the hello's `trusted` may have waited on cookrew.dev meanwhile.
+   */
+  admits(deviceId: string): boolean
+  /** The one key held for a device whose id is not made from its key (a watch whose words the owner confirmed). */
+  keyOf?(deviceId: string): Promise<DeviceKey | null>
+}
+
+/** A v2 session was confirmed: from here that caller is expected to send nothing in the clear. */
+export interface SealedNotice {
+  readonly peer: SealPeer
+  readonly outer: SealOuter
+  readonly codeId?: string
+}
+
 export interface SealTerminusDeps {
   /** The connect code with this id; null when there is none. */
   codeFor(id: string): Uint8Array | null
   /** For a code this Mac replaced: the key that proves so (connect-code.ts). Absent = it only ever says no. */
   replacedKeyFor?(id: string): Uint8Array | null
+  /** This Mac's current code's id: a replaced code's refusal names its successor with it (seal2/successor.ts). */
+  currentCodeId?(): Promise<string>
   readonly dial: BridgeDialer
   readonly handshakesPerMinute?: number
+  /** Stream kinds besides "http", each a lane's own (lane Magpie: "magpie"). */
+  readonly kinds?: Readonly<Record<string, SealStreamHandler>>
+  /**
+   * Which of this Mac's routes a DEVICE-mode peer may reach as kind "http" (owner 2026-11-19: off by default).
+   * Absent, or false for a route: refused. A phone or the console on the connect code is not this: its
+   * "http" streams go to the companion as before, where the pairing token is what is asked for.
+   */
+  deviceHttp?(deviceId: string, method: string, path: string): boolean
+  /** Absent: device hellos are refused. */
+  readonly device?: SealDeviceDeps
+  onSealed?(notice: SealedNotice): void
   /**
    * Bytes on their way to the phone and not gone yet. Must include the relay line's
    * own socket: the bridge reads the down stream eagerly, so loopback alone sees nothing.
@@ -81,6 +132,8 @@ export interface SealTerminus {
   tick(): void
   /** Everyone on an old code is out, and the terminus stays up for the new one. */
   endSessions(why: string): void
+  /** Only that desktop's sessions end (the owner said its words did not match). */
+  endPeer(deviceId: string, why: string): void
   close(): void
   stats(): { sessions: number; pending: number; listening: number; retained: number; held: number }
 }
@@ -108,17 +161,25 @@ export async function routeSeal(request: http.IncomingMessage, response: http.Se
 /** Hop by hop, and everything only the bridge may say. The dialer writes host and the marker itself. */
 const NOT_FROM_INSIDE = new Set([
   'host', 'connection', 'keep-alive', 'proxy-connection', 'proxy-authorization', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'content-length', 'expect',
-  'x-real-ip', RELAY_MARKER, RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER, DOOR_MARKER
+  'x-real-ip', RELAY_MARKER, RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER, DOOR_MARKER, RELAY_LINE_MARKER, SEALED_PEER_HEADER, SEALED_V2_HEADER,
+  // The account's session is the relay's: a machine never holds it.
+  RELAY_SESSION_HEADER
 ])
 
-export function innerHeaders(asked: Readonly<Record<string, string>>, outer: SealOuter): Record<string, string> {
+/**
+ * `sealedPeer`: the device a device-mode handshake proved (seal-proof.ts · SEALED_PEER_HEADER); none in code mode.
+ * `v2`: the request came out of a cookrew-seal/2 session (seal-proof.ts · SEALED_V2_HEADER); never on v1.
+ */
+export function innerHeaders(asked: Readonly<Record<string, string>>, outer: SealOuter, sealedPeer?: string, v2 = false): Record<string, string> {
   const kept = Object.entries(asked)
     .map(([name, value]): [string, string] => [name.toLowerCase(), value])
     .filter(([name]) => !NOT_FROM_INSIDE.has(name) && !name.startsWith('x-forwarded-'))
   return {
     ...Object.fromEntries(kept),
     ...(outer.device === undefined ? {} : { [RELAY_DEVICE_HEADER]: outer.device }),
-    ...(outer.deviceName === undefined ? {} : { [RELAY_DEVICE_NAME_HEADER]: outer.deviceName })
+    ...(outer.deviceName === undefined ? {} : { [RELAY_DEVICE_NAME_HEADER]: outer.deviceName }),
+    ...(sealedPeer === undefined ? {} : { [SEALED_PEER_HEADER]: sealedPeer }),
+    ...(v2 ? { [SEALED_V2_HEADER]: '1' } : {})
   }
 }
 
@@ -132,7 +193,7 @@ interface Stream {
 }
 
 interface LiveSession {
-  readonly confirm: AcceptedHandshake['confirm']
+  readonly confirm: (finish: { proof: string }) => Promise<boolean>
   /** The status the POST answers with. */
   up(body: Uint8Array): Promise<number>
   listen(response: http.ServerResponse, from: number): void
@@ -447,11 +508,9 @@ async function readSmallJson(request: http.IncomingMessage): Promise<Record<stri
   }
 }
 
-interface Pending {
-  readonly accepted: AcceptedHandshake
-  readonly outer: SealOuter
-  readonly until: number
-}
+type Pending =
+  | { readonly v: 1; readonly accepted: AcceptedHandshake; readonly outer: SealOuter; readonly until: number }
+  | { readonly v: 2; readonly accepted: AcceptedSeal2; readonly peer: SealPeer; readonly codeId?: string; readonly outer: SealOuter; readonly until: number }
 
 export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
   const now = deps.now ?? Date.now
@@ -461,12 +520,16 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
   const ceiling = new FixedWindowLimiter(SEAL_HANDSHAKES_ALL_PER_MINUTE, 60_000, now)
   const pending = new Map<string, Pending>()
   const sessions = new Map<string, LiveSession>()
+  /** Which device each device-mode session is with. */
+  const sessionPeers = new Map<string, string>()
 
   const hello = async (request: http.IncomingMessage, response: http.ServerResponse, outer: SealOuter): Promise<void> => {
     const body = await readSmallJson(request)
     if (body === null) return reply(response, 400, { error: 'not a hello' })
-    const allowed = [ceiling.take('all'), limiter.take(outer.device ?? 'no-device')].every(Boolean)
+    // Per device first: a device over its own limit spends nothing of everyone's.
+    const allowed = limiter.take(outer.device ?? 'no-device') && ceiling.take('all')
     if (!allowed) return reply(response, 429, { error: 'too many handshakes' })
+    if (body.mode === 'device') return deviceHello(body, response, outer)
     const code = typeof body.id === 'string' ? deps.codeFor(body.id) : null
     if (code === null) {
       // A code this Mac replaced is told so, with a proof its holder can check: "the code was changed, pair
@@ -475,15 +538,73 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
       const asked = typeof body.id === 'string' && typeof body.e === 'string' && /^[A-Za-z0-9_-]{43}$/.test(body.e)
       const was = asked ? (deps.replacedKeyFor?.(body.id as string) ?? null) : null
       if (was === null) return reply(response, 403, { error: 'no such code' })
-      return reply(response, 403, { error: 'code replaced', replaced: await proveReplaced(was, { id: body.id as string, e: body.e as string }) })
+      const replaced = await proveReplaced(was, { id: body.id as string, e: body.e as string })
+      const current = (await deps.currentCodeId?.().catch(() => null)) ?? null
+      const successor = current === null ? {} : { successor: await proveSuccessor(was, body.id as string, current, body.e as string) }
+      return reply(response, 403, { error: 'code replaced', replaced, ...successor })
     }
-    const accepted = await acceptHandshake(code, body as unknown as SealHello)
+    const v2 = offersSeal2(body)
+    const accepted = v2 ? await acceptCodeHandshake(code, body) : await acceptHandshake(code, body as unknown as SealHello)
     if (accepted === null) return reply(response, 400, { error: 'not a hello' })
     // A rotation during that await has already cleared `pending`, so this hello would outlive it.
     if (deps.codeFor(body.id as string) === null) return reply(response, 403, { error: 'no such code' })
-    if (pending.size >= SEAL_PENDING_MAX) pending.delete(pending.keys().next().value as string)
-    pending.set(accepted.session.id, { accepted, outer, until: now() + SEAL_PENDING_MS })
+    const until = now() + SEAL_PENDING_MS
+    const entry: Pending = v2
+      ? { v: 2, accepted: accepted as AcceptedSeal2, peer: { mode: 'code' }, codeId: body.id as string, outer, until }
+      : { v: 1, accepted: accepted as AcceptedHandshake, outer, until }
+    hold(accepted.session.id, entry)
     reply(response, 200, { session: accepted.session.id, accept: accepted.accept })
+  }
+
+  const hold = (id: string, entry: Pending): void => {
+    if (pending.size >= SEAL_PENDING_MAX) pending.delete(pending.keys().next().value as string)
+    pending.set(id, entry)
+  }
+
+  /** Another desktop of this account. Its key is its id's own; whether that id may come in is the account's word. */
+  const deviceHello = async (body: Record<string, unknown>, response: http.ServerResponse, outer: SealOuter): Promise<void> => {
+    const self = deps.device?.self() ?? null
+    if (deps.device === undefined || self === null) return reply(response, 403, { error: 'no device seal here' })
+    const accepted = await acceptDeviceHandshake(body, { self, verify: deps.device.verify, ...(deps.device.keyOf ? { keyOf: deps.device.keyOf } : {}) })
+    if (accepted === null) {
+      // A well-formed hello to this Mac whose key it does not hold for that id (a watch whose words the owner has
+      // not confirmed yet) is a refusal the watch can read: it keeps its old way and asks again later.
+      const toHere = body.to === self.deviceId
+      // Only for an id that is not its key's own (a watch's): a desktop's malformed hello stays a malformed one.
+      const watchLike = typeof body.from === 'string' && isDeviceKey(body.jwk) && (await deviceIdOf(body.jwk)) !== body.from.toLowerCase()
+      const held = toHere && watchLike ? ((await deps.device.keyOf?.(body.from as string).catch(() => null)) ?? null) : null
+      // No key held for that id, or another one than this hello's (a watch paired again with a new key): not let in.
+      const unheld = toHere && watchLike && (held === null || held.x !== (body.jwk as DeviceKey).x)
+      if (!toHere) return reply(response, 403, { error: 'not this machine' })
+      return unheld ? reply(response, 403, { error: 'not let in' }) : reply(response, 400, { error: 'not a hello' })
+    }
+    const { deviceId } = accepted.peer
+    // The relay names who sent this; a hello in another device's name is not believed.
+    if (outer.device !== undefined && outer.device !== deviceId) return reply(response, 403, { error: 'not that device' })
+    if (!(await deps.device.trusted(deviceId).catch(() => false))) return reply(response, 403, { error: 'not a machine of this account' })
+    hold(accepted.session.id, { v: 2, accepted, peer: { mode: 'device', deviceId }, outer, until: now() + SEAL_PENDING_MS })
+    reply(response, 200, { session: accepted.session.id, accept: accepted.accept })
+  }
+
+  const streamHandler = (peer: SealPeer, said: SealOuter) => (stream: Seal2Stream): void => {
+    // In device mode the handshake proved who dialled: that, not the relay's word, names the device inside.
+    const outer: SealOuter = peer.mode === 'device' ? { ...said, device: peer.deviceId } : said
+    if (stream.kind === HTTP_KIND) {
+      if (peer.mode === 'device') {
+        const asked = readRequest(stream.fields)
+        // Judged on the path as the companion will read it: no dot segment, nothing encoded that could become one.
+        const plainPath = asked !== null && !/(^|\/)\.{1,2}(\/|\?|$)|%2e|%2f|%5c/i.test(asked.path.split('?')[0])
+        const allowed = asked !== null && plainPath && deps.deviceHttp?.(peer.deviceId, asked.method, asked.path) === true
+        if (!allowed) return stream.abort(ABORT.refused, 'not a route for this device')
+      }
+      const sealedPeer = peer.mode === 'device' ? peer.deviceId : undefined
+      return serveHttpStream(stream, { dial: deps.dial, headersFor: (asked) => innerHeaders(asked, outer, sealedPeer, true), log })
+    }
+    // Own entries only: a kind named for something every object has ("constructor") is no handler.
+    const kinds = deps.kinds ?? {}
+    const handler = Object.prototype.hasOwnProperty.call(kinds, stream.kind) ? kinds[stream.kind] : undefined
+    if (typeof handler !== 'function') return stream.abort(ABORT.unknownKind, 'no such kind')
+    handler(stream, peer, outer)
   }
 
   const dropQuietest = (): void => {
@@ -495,24 +616,47 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     sessions.get(quietest)?.close('too many sessions')
   }
 
-  const promote = (id: string, { accepted, outer }: Pending): void => {
+  const promote = (id: string, entry: Pending): void => {
     pending.delete(id)
     if (sessions.size >= SEAL_MAX_SESSIONS) dropQuietest()
-    const live = openSession({ sealed: accepted.session, confirm: accepted.confirm, outer, dial: deps.dial, now, log, socketBacklog, onClosed: () => sessions.delete(id) })
-    sessions.set(id, live)
+    const onClosed = (): void => {
+      sessions.delete(id)
+      sessionPeers.delete(id)
+    }
+    if (entry.v === 1) {
+      const { accepted, outer } = entry
+      sessions.set(id, openSession({ sealed: accepted.session, confirm: accepted.confirm, outer, dial: deps.dial, now, log, socketBacklog, onClosed }))
+      return
+    }
+    const live = openSeal2Live({ session: entry.accepted.session, serve: streamHandler(entry.peer, entry.outer), now, log, onClosed, socketBacklog })
+    sessions.set(id, { ...live, confirm: entry.accepted.confirm })
+    if (entry.peer.mode === 'device') sessionPeers.set(id, entry.peer.deviceId)
+    try {
+      deps.onSealed?.({ peer: entry.peer, outer: entry.outer, ...(entry.codeId === undefined ? {} : { codeId: entry.codeId }) })
+    } catch (error) {
+      log(`canvas seal: marking a sealed caller failed: ${String(error)}`)
+    }
   }
 
   const finish = async (request: http.IncomingMessage, response: http.ServerResponse): Promise<void> => {
     const body = await readSmallJson(request)
     const id = typeof body?.session === 'string' ? body.session : ''
-    const proof = { proof: String(body?.proof) }
+    const proof = { proof: String(body?.proof), ...(typeof body?.sig === 'string' ? { sig: body.sig } : {}) }
     // Asked twice is fine: a phone whose answer was lost asks again, and may only continue.
     const live = sessions.get(id)
     if (live) return reply(response, (await live.confirm(proof)) ? 200 : 403, {})
     const waiting = pending.get(id)
     if (!waiting) return reply(response, 404, { error: 'no such session' })
     if (!(await waiting.accepted.confirm(proof))) return reply(response, 403, { error: 'that proves nothing' })
-    if (pending.get(id) === waiting) promote(id, waiting)
+    // Dropped while it proved itself (endPeer: the owner said NOT THE SAME): no session. Promoted by the same
+    // finish asked twice: the session stands.
+    if (pending.get(id) !== waiting) return sessions.has(id) ? reply(response, 200, {}) : reply(response, 403, { error: 'not let in' })
+    // Required, and only a yes lets it in: a device seal that cannot say fails closed (Relay round 4, LOW).
+    if (waiting.v === 2 && waiting.peer.mode === 'device' && deps.device?.admits(waiting.peer.deviceId) !== true) {
+      pending.delete(id)
+      return reply(response, 403, { error: 'not let in' })
+    }
+    promote(id, waiting)
     reply(response, 200, {})
   }
 
@@ -526,8 +670,11 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     const url = new URL(request.url ?? '/', 'http://seal')
     const verb = url.pathname.slice(SEAL_PREFIX.length)
     const method = request.method ?? 'GET'
-    if (!['hello', 'finish', 'up', 'down'].includes(verb)) return reply(response, 404, { error: 'not found' })
-    if (method !== (verb === 'down' ? 'GET' : 'POST')) return reply(response, 405, { error: 'wrong method' })
+    if (!['hello', 'finish', 'up', 'down', 'version'].includes(verb)) return reply(response, 404, { error: 'not found' })
+    if (method !== (verb === 'down' || verb === 'version' ? 'GET' : 'POST')) return reply(response, 405, { error: 'wrong method' })
+    // What this Mac speaks. Believed only when asked inside a sealed session (seal-client.ts · openSealSession):
+    // there a carrier that took v2's offer off the hello cannot also hide that this Mac has it.
+    if (verb === 'version') return reply(response, 200, { versions: [2, 1] })
     if (verb === 'hello') return hello(request, response, outer)
     if (verb === 'finish') return finish(request, response)
     const live = sessions.get(url.searchParams.get('s') ?? '')
@@ -541,6 +688,15 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     const at = now()
     for (const [id, waiting] of pending) if (at > waiting.until) pending.delete(id)
     for (const live of [...sessions.values()]) live.tick(at)
+  }
+
+  const endPeer = (deviceId: string, why: string): void => {
+    for (const [id, peer] of [...sessionPeers]) {
+      if (peer !== deviceId) continue
+      sessionPeers.delete(id)
+      sessions.get(id)?.close(why)
+    }
+    for (const [id, waiting] of [...pending]) if (waiting.v === 2 && waiting.peer.mode === 'device' && waiting.peer.deviceId === deviceId) pending.delete(id)
   }
 
   const endSessions = (why: string): void => {
@@ -562,6 +718,7 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     },
     tick,
     endSessions,
+    endPeer,
     close() {
       clearInterval(timer)
       endSessions('the app is closing')

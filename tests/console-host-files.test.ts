@@ -45,9 +45,16 @@ describe('the policy the console runs under', () => {
     expect(directive('script-src')).not.toContain('unsafe-inline')
   })
 
-  it('talks to itself, the API host, and a machine’s own name on its own port, and to nobody else', () => {
+  it('talks to itself and the API host, and to nobody else', () => {
     // 'self': the worker's install and the version check are fetches of this origin.
-    expect(directive('connect-src')).toBe(`connect-src 'self' ${API} https://*.d.cookrew.dev:8643 wss://*.d.cookrew.dev:8643`)
+    // A machine is reached over the relay (the API host) or the WebRTC link, which connect-src does not govern.
+    expect(directive('connect-src')).toBe(`connect-src 'self' ${API}`)
+  })
+
+  it('names no machine: the per-machine names under d.cookrew.dev are gone (2026-11-16)', () => {
+    expect(policy).not.toContain('d.cookrew.dev')
+    expect(policy).not.toContain(':8643')
+    expect(consoleHeaders({ api: API })).not.toContain('d.cookrew.dev')
   })
 
   it('cannot be framed, rebased or made to post a form', () => {

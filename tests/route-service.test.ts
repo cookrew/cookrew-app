@@ -68,6 +68,7 @@ function world(): World {
 function service(w: World, env: Record<string, string | undefined>, fastAnnounce = true, hasTurns: (id: string) => boolean = () => false, sessionOnDisk: (node: TerminalNodeData) => boolean = () => false) {
   const monitor = new GatewayMonitor({ discovery: { home: w.home, env }, hasBinary: () => true, watchDir: null, helloTimeoutMs: 500, schedule: () => () => {} })
   const svc = new RouteService({
+    switches: () => ({ magpie: true, magpieRemote: false }),
     monitor,
     fetch: (i, init) => fetch(i, init),
     home: w.home,

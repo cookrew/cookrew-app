@@ -160,9 +160,23 @@ export function relayRequestFor(url: string, headers: HeadersInit | undefined, c
   return { url: folded.url, headers: { ...own, ...session, ...folded.headers } }
 }
 
-/** `fetch`, with every relayed call sent the way relayRequestFor says. */
+/**
+ * THE SEALED WAY, when a machine is on cookrew-seal/2 for this page
+ * (path/seal-plane.ts sets it; it lives there so this file imports no cipher).
+ * Null from it means the ordinary way.
+ */
+type SealedRoute = (url: string, init?: RequestInit) => Promise<Response> | null
+let sealedRoute: SealedRoute = () => null
+export const setSealedRoute = (route: SealedRoute): void => {
+  sealedRoute = route
+}
+export const sealedRouteFor = (url: string, init?: RequestInit): Promise<Response> | null => sealedRoute(url, init)
+
+/** `fetch`, with every relayed call sent the way relayRequestFor says, or sealed when its machine is on v2. */
 export function relayFetch(fetchImpl: (input: string, init: RequestInit) => Promise<Response> = (input, init) => fetch(input, init), current: () => MachineScope = () => scope) {
   return (input: string, init: RequestInit = {}): Promise<Response> => {
+    const sealed = sealedRoute(input, init)
+    if (sealed !== null) return sealed
     const sent = relayRequestFor(input, init.headers, current())
     return fetchImpl(sent.url, { ...init, headers: sent.headers })
   }

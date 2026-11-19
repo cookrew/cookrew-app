@@ -41,7 +41,8 @@ describe('the built console', () => {
   it('tells the host its policy, with the API host it was built for', () => {
     const headers = file('_headers')
     expect(headers).toContain("script-src 'self'")
-    expect(headers).toContain("connect-src 'self' https://api.cookrew.dev https://*.d.cookrew.dev:8643 wss://*.d.cookrew.dev:8643")
+    expect(headers).toContain("connect-src 'self' https://api.cookrew.dev;")
+    expect(headers).not.toContain('d.cookrew.dev')
     expect(headers).toMatch(/\/assets\/\*\n\s+Cache-Control: public, max-age=31536000, immutable/)
   })
 

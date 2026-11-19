@@ -1,4 +1,4 @@
-import type { LaunchSaveResult, LaunchStatus, LaunchValues } from '../../shared/launch-settings'
+import type { LaunchSaveResult, LaunchStatus, LaunchValues, LiveValues } from '../../shared/launch-settings'
 import type { MenuAct } from '../../shared/wait-choice'
 import type { FirstRunStage, FirstTask } from '../../shared/first-run'
 import type { AccessSimpleAnswer, AccessState, EndpointField, EndpointInput } from '../../shared/agent-access'
@@ -16,6 +16,8 @@ import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
 import type { CardRoute, CardRouteState, RouteState } from '../../shared/route';
+import type { ShareIssueAnswer, ShareListAnswer, ShareResolveAnswer, ShareRevokeAnswer } from '../../shared/share-devices';
+import type { MagpieRemoteList } from '../../shared/remote-magpie';
 import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
 import type { LaunchOffer, LaunchTune } from '../../shared/launch-tune'
 import type { TranslateResult } from '../../shared/translate'
@@ -570,6 +572,21 @@ export interface CookrewApi {
   routeState?: () => Promise<RouteState>;
   routeSetDefault?: (model: string | null) => Promise<RouteState>;
   routeSetSharedMcp?: (on: boolean) => Promise<RouteState>;
+  /** Owner-only: this computer's Magpie shared with the owner's other devices (main/route/share-keys.ts). */
+  routeShareList?: () => Promise<ShareListAnswer | { ok: false; reason: string }>;
+  routeShareIssue?: (input: { device: string; dailyUsd: number }) => Promise<ShareIssueAnswer | { ok: false; reason: string }>;
+  routeShareRevoke?: (id: string) => Promise<ShareRevokeAnswer | { ok: false; reason: string }>;
+  /** Revoke every key of a name a failed issue left behind, then check no add of it still runs (share-keys.ts). */
+  routeShareResolve?: (name: string) => Promise<ShareResolveAnswer | { ok: false; reason: string }>;
+  /** Clear a left-behind name once main allows it. */
+  routeShareClear?: (name: string) => Promise<ShareRevokeAnswer | { ok: false; reason: string }>;
+  /** The owner copied the key: main forgets its copy. */
+  routeShareDone?: (id: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** The account's other desktops and which of their Magpies this computer uses (main/magpie-remote/setup.ts). */
+  magpieRemoteList?: () => Promise<MagpieRemoteList | { ok: false; reason: string }>;
+  /** Ask that desktop for a key over the seal and add its Magpie here. */
+  magpieRemoteConnect?: (peer: string, name: string) => Promise<{ ok: true; providerId: string } | { ok: false; why: string } | { ok: false; reason: string }>;
+  magpieRemoteDisconnect?: (peer: string) => Promise<{ ok: true } | { ok: false; why: string } | { ok: false; reason: string }>;
   terminalRoute?: (terminalId: string) => Promise<CardRouteState>;
   terminalRouteSet?: (terminalId: string, route: CardRoute) => Promise<CardRouteState | { error: string }>;
   onRoute?: (cb: (state: RouteState) => void) => () => void;
@@ -644,6 +661,16 @@ export interface CookrewApi {
   /** Launch settings (LaunchSettingsSheet.tsx). Optional: they belong to this machine. */
   launchSettings?: () => Promise<LaunchStatus | null>;
   saveLaunchSettings?: (choices: Partial<LaunchValues>) => Promise<LaunchSaveResult>;
+  /** The Magpie switches, live: read and set without a restart (main/launch-settings.ts · live). */
+  launchLive?: () => Promise<LiveValues | null>;
+  setLaunchLive?: (values: Partial<LiveValues>) => Promise<LaunchSaveResult>;
+  onLaunchLive?: (cb: (values: LiveValues) => void) => () => void;
+  /** Owner-only: start Magpie's own settings page on loopback; the sign-in link to open in a card. */
+  /**
+   * Signs a card in to Magpie's page in main and answers with the bare address only. Offered: the ids of
+   * the cards named "Magpie"; main reuses one it signed before (`fresh: false`) or names a new one.
+   */
+  magpieWebOpen?: (offered: string[]) => Promise<{ ok: true; url: string; port: number; cardId: string; fresh: boolean } | { ok: false; why: string }>;
   updateStatus?: () => Promise<unknown>;
   setUpdateCheck?: (on: boolean) => Promise<unknown>;
   restartToUpdate?: () => Promise<unknown>;
@@ -905,6 +932,17 @@ export interface CookrewApi {
   /** One code for a watch anywhere: the account's join code, armed on this Mac as the claim too. */
   watchInvite?: (current: string) => Promise<WatchInvite>;
   watchForget?: () => Promise<unknown>;
+  /** Desktops of the account met for the first time, with the six words both screens show (main/seal-pins.ts). */
+  sealPeersWaiting?: () => Promise<Array<{ deviceId: string; mine: string[]; theirs: string[] }>>;
+  sealPeerAnswer?: (deviceId: string, answer: 'same' | 'not-same' | 'later') => Promise<boolean>;
+  /** Refuse every plain request over the relay (main/seal-marks.ts): the owner's switch, off by default. */
+  sealedOnly?: () => Promise<boolean>;
+  setSealedOnly?: (on: boolean) => Promise<boolean>;
+  /** Watches whose sealed key waits for the owner to compare six words (main/seal-watch-keys.ts). Owner's Mac only. */
+  watchSealPending?: () => Promise<Array<{ deviceId: string; x: string; words: string[] }>>;
+  /** The watch shows the same words: let this key in. False when it is not the key that waits. */
+  watchSealConfirm?: (deviceId: string, x: string) => Promise<boolean>;
+  watchSealForget?: (deviceId: string) => Promise<boolean>;
   /** A phone's join code and the link its QR holds, under the account's step-up. No menu offers it until the phone app ships. Absent in the demo. */
   phoneInvite?: (current: string) => Promise<PhoneInvite>;
   /** Phones that joined with a code this Mac showed, waiting for its Keep (owner 2026-11-17). */

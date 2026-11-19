@@ -230,6 +230,19 @@ describe('the account pair door', () => {
       expect(admitted.prune([mine.id]).map((x) => x.deviceId)).toEqual([mine.id])
     })
 
+    it('a desktop the owner said is not the same is turned away with ANY pass, an account pass included (Relay round 4, A)', async () => {
+      const blocked = new Set([mine.id])
+      const d = door({ refusedDevice: (id) => blocked.has(id) })
+      for (const grant of [grantFor(mine), machineGrant(mine)]) {
+        const out = await d.begin({ body: asking(mine, grant), bridged: null })
+        expect(out.status).toBe(403)
+      }
+      expect(admitted.list()).toEqual([])
+      // Another device is not touched.
+      const other = phone()
+      expect((await d.begin({ body: asking(other, grantFor(other)), bridged: null })).status).toBe(200)
+    })
+
     it('a machine forgotten here is turned away at the door, however good its pass', async () => {
       const refused = new Set([mine.id])
       const d = door({ refusedMachine: (id) => refused.has(id) })

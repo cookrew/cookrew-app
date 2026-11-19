@@ -132,6 +132,12 @@ import { ItemPets } from './pets/ItemPets'
 import { thumbWants } from './pets/thumb-wants'
 import { ZoomView } from './zoom/ZoomView'
 import { AccessRows } from './first-run/AccessRows'
+import { AccountNudge, useEndpointActive } from './first-run/AccountNudge'
+import { AccountWays } from './first-run/AccountWays'
+import { useFirstRunStage } from './first-run/first-run-state'
+import { ShareDevices } from './routing/ShareDevices'
+import { useMagpieSwitches } from './routing/MagpieSwitches'
+import { accountStarting, accountVia } from '../../shared/ai-account'
 import { FirstRunHints } from './first-run/FirstRunHints'
 import { FirstRunScreens } from './first-run/FirstRunScreens'
 import { useZoomFull } from './zoom/zoom-store'
@@ -349,6 +355,20 @@ function Canvas(): React.JSX.Element {
   useEffect(() => {
     if (routingOpen) rereadRoute()
   }, [routingOpen, rereadRoute])
+  // A Setup line that ended may have signed an account in or added a provider:
+  // the route state is asked again rather than waiting for the gateway's next probe.
+  const setupBusy = setupTerminal.running !== null
+  useEffect(() => {
+    if (!setupBusy) rereadRoute()
+  }, [setupBusy, rereadRoute])
+  // Is there any AI account to run on (shared/ai-account.ts)? Read again as the panel closes or a line ends.
+  const firstRunStage = useFirstRunStage()
+  // The Magpie switches (launch settings, live): remote decides whether this Mac offers sharing.
+  const magpieSwitches = useMagpieSwitches()
+  // Bumped when the guide's endpoint rows save or remove one.
+  const [endpointTick, setEndpointTick] = useState(0)
+  const endpointActive = useEndpointActive(`${routingOpen}:${setupBusy}:${firstRunStage}:${endpointTick}`)
+  const accountNow = accountVia({ route: routeState.state, endpoint: endpointActive })
   const cardNames = useMemo(() => new Map((workspace?.nodes ?? []).map((n) => [n.id, n.name])), [workspace?.nodes])
   /**
    * A workspace switch replaces every node while the viewport still frames the
@@ -1536,7 +1556,7 @@ function Canvas(): React.JSX.Element {
               <TerminalAttachmentsContext.Provider value={attachIndex}>
                 <WithCrew>
                   {(crew) => (
-                    <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} crew={crew} onDelete={requestClose} onNewWorkspace={wall.openCreate} firstRun={<FirstRunScreens nodes={workspace?.nodes ?? NO_NODES} setup={setupTerminal} />}>
+                    <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} crew={crew} onDelete={requestClose} onNewWorkspace={wall.openCreate} firstRun={<FirstRunScreens nodes={workspace?.nodes ?? NO_NODES} setup={setupTerminal} route={routeState.state} onSetDefault={routeState.setDefault} />}>
                       {zoomFull !== null && <StageView workspace={workspace} workspaceId={activeWsId} terminals={terminals} attachIndex={attachIndex} crew={crew} onShowing={setStageShowing} />}
                     </ZoomView>
                   )}
@@ -1671,7 +1691,20 @@ function Canvas(): React.JSX.Element {
             after the canvas and measures that stage rather than guessing. */}
         {wall.element}
         <RoutingPanel
-          access={typeof cookrew().accessState === 'function' ? <AccessRows whenActive /> : null}
+          access={typeof cookrew().accessState === 'function' && accountNow !== null ? <AccessRows whenActive /> : null}
+          guide={
+            accountNow === null ? (
+              <AccountWays
+                route={routeState.state}
+                endpointActive={endpointActive}
+                endpoint={typeof cookrew().accessState === 'function' ? <AccessRows bare onChange={() => setEndpointTick((n) => n + 1)} /> : undefined}
+                onRun={(line, options) => void setupTerminal.run(line, options)}
+                running={setupTerminal.running}
+                onSetDefault={routeState.setDefault}
+              />
+            ) : null
+          }
+          share={typeof cookrew().routeShareList === 'function' ? <ShareDevices sharingEnabled={magpieSwitches.values?.magpie === true && magpieSwitches.values.magpieRemote === true} /> : null}
           open={routingOpen}
           onClose={() => setRoutingOpen(false)}
           state={routeState.state}
@@ -1699,6 +1732,16 @@ function Canvas(): React.JSX.Element {
           }}
         />
         <EventToastLayer />
+        {routeState.available && !routingOpen && (
+          <AccountNudge
+            stage={firstRunStage ?? 'preflight'}
+            via={accountNow ?? (accountStarting(routeState.state) ? 'magpie' : null)}
+            known={routeState.state !== null}
+            // The Keychain answer it waits for lands late on THIS desktop only: a remote canvas reads the desktop's
+            // state as it is, and asks nothing more after boot (perf gate remote-open).
+            recheck={isRemoteMode() ? undefined : rereadRoute}
+            onOpen={() => setRoutingOpen(true)} />
+        )}
         <FirstRunHints />
         <RemoteHostBanner />
         <UnlockSheet />

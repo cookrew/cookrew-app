@@ -153,3 +153,20 @@ describe('the wiring', () => {
   })
 })
 
+
+describe('the current code\'s id', () => {
+  it('is the id a phone derives from the code, and moves with a rotation', async () => {
+    const { connectCodeId } = await import('../src/shared/canvas-seal')
+    const dir = mkdtempSync(path.join(tmpdir(), 'connect-code-id-'))
+    try {
+      const codes = createConnectCodes(path.join(dir, 'connect-code'))
+      expect(codes.currentId()).toBe(await connectCodeId(Buffer.from(codes.encoded(), 'base64url')))
+      const before = codes.currentId()
+      codes.rotate()
+      expect(codes.currentId()).not.toBe(before)
+      expect(codes.currentId()).toBe(await connectCodeId(Buffer.from(codes.encoded(), 'base64url')))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

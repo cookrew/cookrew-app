@@ -6,7 +6,7 @@ import type { IpcMain } from 'electron'
 import { PRIVATE_DIR_MODE, writeFileAtomic } from './atomic-file'
 import { shellQuote } from './shell-quote'
 import { SETUP_LINE_COPY } from '../shared/first-run-copy'
-import { setupLineAllowed } from '../shared/route-lines'
+import { setupAskAllowed } from '../shared/route-lines'
 import { askingPassword, type SetupAsking, type SetupLineAsk, type SetupLineNow, type SetupLineRun, type SetupStart } from '../shared/setup-line'
 
 /**
@@ -147,7 +147,7 @@ export function paneLastLine(text: string | null, line: string, base: string): s
 
 function askOf(input: unknown): SetupLineAsk | null {
   const { terminalId, line, enter, fresh } = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
-  if (typeof terminalId !== 'string' || terminalId === '' || typeof line !== 'string' || !setupLineAllowed(line)) return null
+  if (typeof terminalId !== 'string' || terminalId === '' || typeof line !== 'string' || !setupAskAllowed(line, enter !== false)) return null
   return { terminalId, line, enter: enter !== false, fresh: fresh === true }
 }
 

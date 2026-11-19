@@ -37,7 +37,7 @@ private enum Found {
 }
 
 /** Ask each Mac in turn; what they all said decides the words. */
-private func findMac(code: String, account: WatchAccount, api: RegistryAPI) async -> Found {
+private func findMac(code: String, account: WatchAccount, api: RegistryAPI, device: WatchDevice) async -> Found {
   let desktops: [WatchDesktop]
   do {
     desktops = try await api.desktops(token: account.token)
@@ -50,7 +50,10 @@ private func findMac(code: String, account: WatchAccount, api: RegistryAPI) asyn
   for desktop in desktops {
     guard let relay = relayBase(registry: account.registry, desktop: desktop.deviceId) else { continue }
     do {
-      return .mac(relay, try await api.claim(relay: relay, code: code, token: account.token))
+      let reply = try await api.claim(relay: relay, code: code, token: account.token, device: device)
+      // An offer of any other machine's key than the one this claim went to is no offer.
+      let offer = reply.sealOffer.flatMap { $0.deviceId == desktop.deviceId.lowercased() ? $0 : nil }
+      return .mac(relay, ClaimReply(token: reply.token, desktop: reply.desktop, bases: reply.bases, sealOffer: offer))
     } catch RegistryError.signedOut {
       return .failed(.signedOut)
     } catch {
@@ -112,7 +115,7 @@ public func pairWatch(
     }
   }
   step(.finding)
-  var found = await findMac(code: code, account: account, api: api)
+  var found = await findMac(code: code, account: account, api: api, device: device)
   // Under a session the watch already held, a refusal may only mean the wrong
   // door: the session ended, or this code is another account's. If the code has
   // not been spent it still gets the watch in, so it has one go at that.
@@ -121,7 +124,7 @@ public func pairWatch(
     case .success(let joined):
       account = joined
       step(.finding)
-      found = await findMac(code: code, account: account, api: api)
+      found = await findMac(code: code, account: account, api: api, device: device)
     case .failure(let entry):
       return .failed(why == .signedOut || entry == .newDevice ? entry : why)
     }
@@ -131,7 +134,7 @@ public func pairWatch(
     return .failed(why)
   case .mac(let relay, let reply):
     let bases = basesAfterJoin(relay: relay, named: reply.bases)
-    return .paired(WatchSession(desktop: reply.desktop, bases: bases, token: reply.token), account)
+    return .paired(WatchSession(desktop: reply.desktop, bases: bases, token: reply.token, offer: reply.sealOffer), account)
   }
 }
 

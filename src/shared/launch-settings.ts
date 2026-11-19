@@ -36,25 +36,40 @@ export interface LaunchValues {
   readonly interactiveBrowser: boolean
   readonly multiInstance: boolean
   readonly multiplexer: string
+  /** Route models through Magpie: off, every card runs direct and Cookrew draws no Magpie way in (route/service.ts). */
+  readonly magpie: boolean
+  /** Offer another computer's Magpie and sharing this one with the owner's devices (shared/remote-magpie.ts). */
+  readonly magpieRemote: boolean
 }
 
 export type LaunchKey = keyof LaunchValues
 export type LaunchChoices = Partial<LaunchValues>
 
-export const LAUNCH_KEYS: readonly LaunchKey[] = ['registry', 'interactiveBrowser', 'multiInstance', 'multiplexer']
+export const LAUNCH_KEYS: readonly LaunchKey[] = ['registry', 'interactiveBrowser', 'multiInstance', 'multiplexer', 'magpie', 'magpieRemote']
+/**
+ * READ AS THEY ARE, NOT AT START. The Magpie switches decide what the next card and the
+ * next screen do, and nothing that is already running depends on them, so a change takes
+ * effect at once and never asks for a restart (main/launch-settings.ts · live).
+ */
+export const LIVE_KEYS: readonly LaunchKey[] = ['magpie', 'magpieRemote']
+export type LiveValues = Pick<LaunchValues, 'magpie' | 'magpieRemote'>
 
 export const LAUNCH_DEFAULTS: LaunchValues = {
   registry: DEFAULT_REGISTRY,
   interactiveBrowser: true,
   multiInstance: true,
-  multiplexer: DEFAULT_MULTIPLEXER
+  multiplexer: DEFAULT_MULTIPLEXER,
+  magpie: true,
+  magpieRemote: false
 }
 
 export const LAUNCH_ENV: Readonly<Record<LaunchKey, string>> = {
   registry: 'COOKREW_REGISTRY',
   interactiveBrowser: 'COOKREW_INTERACTIVE_BROWSER',
   multiInstance: 'COOKREW_MULTI_INSTANCE',
-  multiplexer: 'COOKREW_MULTIPLEXER'
+  multiplexer: 'COOKREW_MULTIPLEXER',
+  magpie: 'COOKREW_MAGPIE',
+  magpieRemote: 'COOKREW_MAGPIE_REMOTE'
 }
 
 export interface LaunchStatus {
@@ -88,12 +103,14 @@ const isHost = (raw: unknown): raw is string => LAUNCH_MULTIPLEXERS.some((host) 
 /** What can be used out of anything at all: a hand-edited file loses a line, not the rest. */
 export function parseLaunchChoices(raw: unknown): LaunchChoices {
   if (typeof raw !== 'object' || raw === null) return {}
-  const { registry, interactiveBrowser, multiInstance, multiplexer } = raw as Record<string, unknown>
+  const { registry, interactiveBrowser, multiInstance, multiplexer, magpie, magpieRemote } = raw as Record<string, unknown>
   const origin = registryValue(registry)
   return {
     ...(origin === null ? {} : { registry: origin }),
     ...(typeof interactiveBrowser === 'boolean' ? { interactiveBrowser } : {}),
     ...(typeof multiInstance === 'boolean' ? { multiInstance } : {}),
-    ...(isHost(multiplexer) ? { multiplexer } : {})
+    ...(isHost(multiplexer) ? { multiplexer } : {}),
+    ...(typeof magpie === 'boolean' ? { magpie } : {}),
+    ...(typeof magpieRemote === 'boolean' ? { magpieRemote } : {})
   }
 }

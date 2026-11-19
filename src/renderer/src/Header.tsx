@@ -3,7 +3,6 @@ import { isDemoMode, isRemoteMode } from './api'
 import { HeaderMore } from './HeaderMore'
 import { setZoomBarSlot } from './zoom-bar'
 import { HeaderRoute } from './HeaderRoute'
-import { LocalNetworkRow } from './LocalNetworkRow'
 import { CompanionAvatar, PathSheet, usePathBadge } from './PathBadge'
 import type { RouteStatus } from '../../shared/route'
 import './header.css'
@@ -147,11 +146,6 @@ export function Header({
         {avatar}
         {remote && <CompanionAvatar />}
       </div>
-      {/* UNDER the bar, not inside the menu: the local-network ask has to be
-          visible without a tap, because a permission nobody knows to look for
-          is a permission nobody grants. It renders nothing in three of the
-          four states, so on most phones the bar is exactly as it is. */}
-      {remote && <LocalNetworkRow />}
       {pathOpen && <PathSheet view={path} onClose={() => setPathOpen(false)} />}
     </header>
   )

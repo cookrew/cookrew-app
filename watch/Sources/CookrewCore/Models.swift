@@ -350,6 +350,45 @@ public struct ClaimReply: Decodable, Sendable {
   public let token: String
   public let desktop: String
   public let bases: [Base]
+  /**
+   * A Mac that can seal with this watch: its device, its key, and this claim's nonce. Not believed yet:
+   * the watch computes the words itself and keeps it only when the owner says they match (WatchRoot).
+   */
+  public let sealOffer: SealOffer?
+
+  private struct SealWire: Decodable {
+    struct Key: Decodable {
+      let x: String
+    }
+
+    let deviceId: String
+    let jwk: Key
+    let nonce: String
+  }
+
+  private enum Keys: String, CodingKey { case token, desktop, bases, seal }
+
+  public init(token: String, desktop: String, bases: [Base], sealOffer: SealOffer? = nil) {
+    self.token = token
+    self.desktop = desktop
+    self.bases = bases
+    self.sealOffer = sealOffer
+  }
+
+  public init(from decoder: Decoder) throws {
+    let held = try decoder.container(keyedBy: Keys.self)
+    token = try held.decode(String.self, forKey: .token)
+    desktop = try held.decode(String.self, forKey: .desktop)
+    bases = try held.decode([Base].self, forKey: .bases)
+    // A seal this watch cannot read is no seal: the claim still stands, the old way. A Mac's id is made from
+    // its key, so an offer whose id is not its key's own is not a Mac's.
+    let wire = try? held.decodeIfPresent(SealWire.self, forKey: .seal)
+    sealOffer = wire.flatMap { wire in
+      let id = wire.deviceId.lowercased()
+      let nonce = base64urlDecoded(wire.nonce)
+      return nonce.count == 16 && base64urlDecoded(wire.jwk.x).count == 32 && Seal2.deviceId(x: wire.jwk.x) == id ? SealOffer(deviceId: id, x: wire.jwk.x, nonce: nonce) : nil
+    }
+  }
 }
 
 public struct NoteBody: Decodable, Equatable, Sendable {

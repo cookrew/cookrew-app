@@ -1,9 +1,11 @@
+import { SHARE_COPY } from '../../../shared/account-guide-copy'
 import { useState } from 'react'
 import type { HarnessRow, RouteDecision, RouteModel, RouteState } from '../../../shared/route'
-import { KEY_PRESETS, ROUTING_COPY, autoGroupItem, decisionFacts, harnessTicks, routeChoices, statusLine, routeHead, ruleTitle } from '../../../shared/route-view'
+import { ROUTING_COPY, autoGroupItem, decisionFacts, harnessTicks, routeChoices, statusLine, routeHead, ruleTitle } from '../../../shared/route-view'
 import { mcpLibraryLine } from '../../../shared/quota-view'
 import { AccountCard } from './AccountCard'
-import { keyLineFor } from '../../../shared/route-lines'
+import { openMagpieSettings } from './magpie-card'
+import { useMagpieSwitches } from './MagpieSwitches'
 import { runningLabel, type SetupRunning } from './setup-line-state'
 import { cookrew } from '../api'
 
@@ -145,35 +147,30 @@ export function Harnesses({
 export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: { setup: RouteState['setup']; onRun: RunLine; defaultOpen?: boolean; running?: SetupRunning | null }): React.JSX.Element {
   const busyFor = (line: string | null): string | null => (line === null ? null : runningLabel(running, line))
   const [open, setOpen] = useState(defaultOpen)
-  const [keys, setKeys] = useState(false)
+  // Keys are typed into Magpie's own page, never a terminal (routing/magpie-card.ts): what went wrong opening it.
+  const [settingsProblem, setSettingsProblem] = useState<string | null>(null)
+  // Unknown or unavailable is not consent: offer remote only after both switches are read as on.
+  const switches = useMagpieSwitches().values
+  const remoteOn = switches?.magpie === true && switches.magpieRemote === true
   const [unexpected, setUnexpected] = useState(false)
   const toggle = (): void => {
     setOpen((o) => !o)
-    setKeys(false)
+    setSettingsProblem(null)
     // The notice is about the last click on the open menu; a new opening starts clean.
     setUnexpected(false)
   }
   const run = (line: string, enter = true): void => {
     setOpen(false)
-    setKeys(false)
     onRun(line, { enter })
   }
-  // Only `magpie provider add ` + preset is ever typed; a stem of another
-  // shape means main changed the line and the renderer refuses to guess.
-  const runKey = (preset: string): void => {
-    const line = keyLineFor(setup.addKeyLine, preset)
-    if (line === null) {
-      setUnexpected(true)
-      setOpen(false)
-      setKeys(false)
-      return
-    }
-    setUnexpected(false)
-    run(line, false)
+  const openSettings = (): void => {
+    setOpen(false)
+    void openMagpieSettings().then(setSettingsProblem)
   }
   return (
     <span className="cr-routing-add">
       {unexpected && <span className="cr-routing-bad">setup line unexpected — nothing typed</span>}{' '}
+      {settingsProblem && <span className="cr-routing-bad">{settingsProblem}</span>}{' '}
 
       <button type="button" className="cr-routing-btn primary" aria-expanded={open} onClick={toggle}>
         {ROUTING_COPY.add} ▾
@@ -184,20 +181,20 @@ export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: {
             <b>{ROUTING_COPY.addSubscription}</b>
             <span className="c">{busyFor(setup.addSubscriptionLine) ?? `${setup.addSubscriptionLine} · claude login · gemini auth`}</span>
           </button>
-          <button type="button" role="menuitem" aria-expanded={keys} onClick={() => setKeys((k) => !k)}>
+          <button type="button" role="menuitem" data-item="api-key" onClick={openSettings}>
             <b>{ROUTING_COPY.addKey}</b>
-            <span className="c">
-              {setup.addKeyLine}‹key› — {ROUTING_COPY.keyHint}
-            </span>
+            <span className="c">{ROUTING_COPY.keyHint}</span>
           </button>
-          {keys && (
-            <div className="cr-routing-presets">
-              {KEY_PRESETS.map((preset) => (
-                <button key={preset} type="button" className="cr-routing-pick" data-preset={preset} onClick={() => runKey(preset)}>
-                  {preset}
-                </button>
-              ))}
-            </div>
+          {remoteOn && (
+          <button
+            type="button"
+            role="menuitem"
+            data-item="remote-magpie"
+            onClick={openSettings}
+          >
+            <b>{ROUTING_COPY.addRemote}</b>
+            <span className="c">{ROUTING_COPY.addRemoteHint}</span>
+          </button>
           )}
           <button type="button" role="menuitem" disabled={busyFor(setup.addLocalLine) !== null} onClick={() => run(setup.addLocalLine)}>
             <b>{ROUTING_COPY.addLocal}</b>
@@ -401,3 +398,43 @@ export function Rented({ state }: { state: RouteState }): React.JSX.Element | nu
     </>
   )
 }
+
+/**
+ * A Remote magpie on this computer's loopback is a tunnel, and while it is down any
+ * program that takes its port is handed the key and every request (route/remote-ports.ts).
+ * Each one is named, with the press that takes it out: an allowlisted line the owner runs.
+ */
+export function LoopbackRemotes({ rows, onRun }: { rows: readonly { id: string; port: number }[] | undefined; onRun: RunLine }): React.JSX.Element | null {
+  if (!rows || rows.length === 0) return null
+  const ids = [...new Set(rows.map((row) => row.id))]
+  return (
+    <div className="cr-routing-bad" role="alert" data-section="loopback-remotes">
+      <b>{SHARE_COPY.LOOPBACK_HEAD}</b>
+      {ids.map((id) => {
+        const port = rows.find((row) => row.id === id)?.port ?? 0
+        return (
+          <p key={id}>
+            {SHARE_COPY.LOOPBACK(id, port)}{' '}
+            <button type="button" className="cr-routing-btn" onClick={() => onRun(`magpie provider rm ${id}`, { enter: true })}>
+              {SHARE_COPY.LOOPBACK_REMOVE(id)}
+            </button>
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Remote magpie providers reached by plain http off a tailnet (owner ruling 2026-11-17): named, with the fix. */
+export function PlainRemotes({ rows }: { rows: readonly { id: string; host: string }[] | undefined }): React.JSX.Element | null {
+  if (!rows || rows.length === 0) return null
+  return (
+    <div className="cr-routing-bad" role="alert" data-section="plain-remotes">
+      <b>{SHARE_COPY.PLAIN_HEAD}</b>
+      {rows.map((row) => (
+        <p key={row.id}>{SHARE_COPY.PLAIN_REMOTE(row.id, row.host)}</p>
+      ))}
+    </div>
+  )
+}
+

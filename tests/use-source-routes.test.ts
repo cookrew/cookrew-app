@@ -7,7 +7,7 @@ import type http from 'node:http'
 import { describe, expect, it, vi } from 'vitest'
 import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
 import { scopedRouteSupported } from '../src/main/mobile-slug-route'
-import { sealProofHeaders } from '../src/main/seal-proof'
+import { SEALED_V2_HEADER, sealProofHeaders } from '../src/main/seal-proof'
 import { SERVED_USE_REFUSED } from '../src/main/use-commands'
 import { createUseSourceService, type UseSourceProvider, type UseSourceServiceDeps } from '../src/main/use-source-service'
 import type { BrowserNodeData } from '../src/shared/model'
@@ -157,7 +157,8 @@ describe('the unlock routes', () => {
   const door = () => ({
     begin: vi.fn(async () => ({ ok: true as const, key: 'k', challenge: 'c' })),
     reopen: vi.fn(),
-    unlock: vi.fn(async () => ({ ok: true as const, outcome: 'unlocked' as const }))
+    unlock: vi.fn(async () => ({ ok: true as const, outcome: 'unlocked' as const })),
+    forget: vi.fn(() => true)
   })
 
   it('a paired device gets the key and sends what it sealed', async () => {
@@ -165,7 +166,7 @@ describe('the unlock routes', () => {
     const { deps } = bed({ unlock })
     expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers: direct })).body).toEqual({ ok: true, key: 'k', challenge: 'c' })
     expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 'e.box' }, headers: direct })).body).toEqual({ ok: true, outcome: 'unlocked' })
-    expect(unlock.unlock).toHaveBeenCalledWith(expect.anything(), 'e.box')
+    expect(unlock.unlock).toHaveBeenCalledWith(expect.anything(), 'e.box', { sealedV2: false })
   })
 
   it('the wall token reaches neither', async () => {
@@ -191,7 +192,34 @@ describe('the unlock routes', () => {
     const headers = { host: '127.0.0.1:8643', 'x-cookrew-relay': '1', ...sealProofHeaders() }
     expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers })).status).toBe(200)
     expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 'e.box' }, headers })).status).toBe(200)
-    expect(unlock.unlock).toHaveBeenCalledWith(expect.anything(), 'e.box')
+    expect(unlock.unlock).toHaveBeenCalledWith(expect.anything(), 'e.box', { sealedV2: false })
+  })
+
+  it('the road is v2 only when the terminus marked it so beside its proof (Remember on the console)', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    const v2 = { host: '127.0.0.1:8643', 'x-cookrew-relay': '1', ...sealProofHeaders(), [SEALED_V2_HEADER]: '1' }
+    await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers: v2 })
+    expect(unlock.begin).toHaveBeenLastCalledWith(expect.anything(), { sealedV2: true })
+    await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 'e.box' }, headers: v2 })
+    expect(unlock.unlock).toHaveBeenLastCalledWith(expect.anything(), 'e.box', { sealedV2: true })
+    // The Mac's own page, and a v1 session: not v2.
+    await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers: { ...direct, [SEALED_V2_HEADER]: '1' } })
+    expect(unlock.begin).toHaveBeenLastCalledWith(expect.anything(), { sealedV2: false })
+    await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers: { host: '127.0.0.1:8643', 'x-cookrew-relay': '1', ...sealProofHeaders() } })
+    expect(unlock.begin).toHaveBeenLastCalledWith(expect.anything(), { sealedV2: false })
+  })
+
+  it('the page\'s Forget reaches the door with its id and road, sealed only', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    const v2 = { host: '127.0.0.1:8643', 'x-cookrew-relay': '1', ...sealProofHeaders(), [SEALED_V2_HEADER]: '1' }
+    const forgot = await call(deps(), 'POST', '/api/use/sources/unlock/forget', { token: TOKEN, body: { id: 'the-id' }, headers: v2 })
+    expect(forgot.body).toEqual({ ok: true, forgotten: true })
+    expect(unlock.forget).toHaveBeenLastCalledWith(expect.anything(), 'the-id', { sealedV2: true })
+    const plain = await call(deps(), 'POST', '/api/use/sources/unlock/forget', { token: TOKEN, body: { id: 'the-id' }, headers: { host: '127.0.0.1:8643', 'x-cookrew-relay': '1' } })
+    expect(plain.status).toBe(403)
+    expect(unlock.forget).toHaveBeenCalledTimes(1)
   })
 
   it('the proof does not stand in for the pairing token', async () => {

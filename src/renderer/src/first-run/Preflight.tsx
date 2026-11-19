@@ -6,8 +6,13 @@ import { runningLabel, type SetupRunning } from '../routing/setup-line-state'
 import type { RunOptions, RunOutcome, SetupEnded, SetupError } from '../routing/use-setup-terminal'
 import { PREFLIGHT_COPY, SETUP_LINE_COPY } from '../../../shared/first-run-copy'
 import { mayContinue, preflightRows, UNKNOWN_FACTS, type PreflightRow, type ToolState } from '../../../shared/preflight'
+import type { RouteState } from '../../../shared/route'
 import { AccessRows } from './AccessRows'
+import { useEndpointActive } from './AccountNudge'
+import { AccountWays } from './AccountWays'
 import { RemoteRows } from './RemoteRows'
+import { DevicesGuide } from '../routing/DevicesGuide'
+import { DEVICES_COPY } from '../../../shared/devices-guide'
 import { firstAgentHarness, stillMissing } from './first-run-rules'
 import { firstRun } from './first-run-state'
 
@@ -153,7 +158,18 @@ export interface PreflightSetup {
   stop: () => void
 }
 
-export function Preflight({ setup, onDone }: { setup: PreflightSetup; onDone: () => void }): React.JSX.Element {
+export function Preflight({
+  setup,
+  onDone,
+  route = null,
+  onSetDefault
+}: {
+  setup: PreflightSetup
+  onDone: () => void
+  /** The gateway and sign-ins, for the account section; null before the first read or on a bridge without it. */
+  route?: RouteState | null
+  onSetDefault?: (model: string) => void
+}): React.JSX.Element {
   const [rows, setRows] = useState<readonly PreflightRow[] | null>(null)
   /** Set by the first press: until then there is no terminal to look at. */
   const [pressed, setPressed] = useState(false)
@@ -199,6 +215,12 @@ export function Preflight({ setup, onDone }: { setup: PreflightSetup; onDone: ()
     }
     wasRunning.current = setup.running !== null
   }, [setup.running, setup.ended, check])
+  const endpointActive = useEndpointActive(rows)
+  const runLine = (line: string, options?: RunOptions): void => {
+    setPressed(true)
+    setNotFound(null)
+    void setup.run(line, options)
+  }
   const onward = async (): Promise<void> => {
     const access = await cookrew()
       .accessState?.()
@@ -214,11 +236,7 @@ export function Preflight({ setup, onDone }: { setup: PreflightSetup; onDone: ()
       running={setup.running}
       stuck={setup.stuck}
       error={setup.error?.text ?? (notFound === null ? null : SETUP_LINE_COPY.STILL_MISSING(notFound))}
-      onRun={(line) => {
-        setPressed(true)
-        setNotFound(null)
-        void setup.run(line)
-      }}
+      onRun={(line) => runLine(line)}
       onStop={setup.stop}
       onCheck={check}
       onContinue={() => void onward()}
@@ -233,7 +251,8 @@ export function Preflight({ setup, onDone }: { setup: PreflightSetup; onDone: ()
         ) : null
       }
     >
-      <AccessRows onChange={check} />
+      <AccountWays route={route} endpointActive={endpointActive} endpoint={<AccessRows bare onChange={check} />} onRun={runLine} running={setup.running} onSetDefault={onSetDefault} />
+      <DevicesGuide modelHere={route !== null && route.status === 'online' && route.models.length > 0} model={<small>{DEVICES_COPY.MODEL_ABOVE}</small>} />
       <RemoteRows />
     </PreflightView>
   )

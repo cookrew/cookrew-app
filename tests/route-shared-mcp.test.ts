@@ -39,6 +39,7 @@ const nodes = new Map<string, TerminalNodeData>()
 function service(env: Record<string, string | undefined>): RouteService {
   const monitor = new GatewayMonitor({ discovery: { home, env }, hasBinary: () => true, watchDir: null, helloTimeoutMs: 500, schedule: () => () => {} })
   return new RouteService({
+    switches: () => ({ magpie: true, magpieRemote: false }),
     monitor,
     fetch: (i, init) => fetch(i, init),
     home,

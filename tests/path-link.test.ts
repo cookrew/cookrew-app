@@ -7,6 +7,7 @@ import {
   recordLatency,
   resetPathLink,
   setDesktopName,
+  setDirectHeld,
   setPathLink,
   setProbing,
   setRegistryOrigin,
@@ -214,5 +215,35 @@ describe('the path sheet knows which Mac it is talking about', () => {
     expect(currentPathBadge().desktopName).toBeNull()
     setDesktopName('MacBook Pro')
     expect(currentPathBadge().desktopName).toBe('MacBook Pro')
+  })
+})
+
+describe('why the plane stays on the relay after a direct link answered (path/companion.ts)', () => {
+  it('rides the badge while on the relay, and is put down with null', () => {
+    stubWindow('https://reg.example.test')
+    setRegistryOrigin('https://reg.example.test')
+    const plain = currentPathBadge().sentence
+    setDirectHeld('old-mac')
+    expect(pathLinkState().held).toBe('old-mac')
+    expect(currentPathBadge().state).toBe('RELAY')
+    expect(currentPathBadge().sentence).toMatch(/update Cookrew on your Mac/i)
+    setDirectHeld(null)
+    expect(currentPathBadge().sentence).toBe(plain)
+  })
+
+  it('wakes subscribers only when it changes', () => {
+    let calls = 0
+    subscribePathLink(() => calls++)
+    setDirectHeld('unproved')
+    setDirectHeld('unproved')
+    expect(calls).toBe(1)
+  })
+
+  it('is one machine\'s: entering another lets go of it', async () => {
+    const scope = await import('../src/renderer/src/machine-scope')
+    setDirectHeld('browser')
+    scope.configureMachineScope({ relay: { origin: 'https://reg.example.test', session: () => null } })
+    expect(pathLinkState().held).toBeNull()
+    scope.resetMachineScopeForTests()
   })
 })

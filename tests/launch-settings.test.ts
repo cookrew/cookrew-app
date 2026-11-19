@@ -22,7 +22,7 @@ const at = (values = LAUNCH_DEFAULTS, over: object = {}) => ({ values, running: 
 
 describe('the defaults', () => {
   it('are the launch line the owner runs', () => {
-    expect(LAUNCH_DEFAULTS).toEqual({ registry: 'https://api.cookrew.dev', interactiveBrowser: true, multiInstance: true, multiplexer: 'herdr' })
+    expect(LAUNCH_DEFAULTS).toEqual({ registry: 'https://api.cookrew.dev', interactiveBrowser: true, multiInstance: true, multiplexer: 'herdr', magpie: true, magpieRemote: false })
   })
 
   it('apply with no file and no variables, and nothing is pinned', () => {

@@ -1,40 +1,20 @@
 /**
- * LOCAL NETWORK ACCESS — asking a browser for permission to talk to the house.
+ * LOCAL NETWORK ACCESS — what a browser says about a page talking to the house.
  *
- * Reach v2.1's whole fast path is a page served from a public origin opening a
- * connection to an address on the reader's own Wi-Fi. Chrome 142 gates exactly
- * that behind a permission, and the Local Network Access specification is
- * explicit about two things that between them decide whether the feature
- * exists at all on a phone:
+ * Chrome 142 gates a public page's requests to an address on the reader's own
+ * network behind a permission. The companion no longer makes such requests by
+ * name (the per-machine names under d.cookrew.dev are gone, 2026-11-16): its
+ * direct path is the WebRTC link (path/rtc-adopt.ts). Two things remain here:
  *
- *   THE REQUEST MUST SAY WHERE IT IS GOING. A fetch is annotated
- *   `targetAddressSpace: "local"`; without it the request is not "asked and
- *   refused", it is simply blocked, and the failure arrives as an ordinary
- *   TypeError indistinguishable from a Mac that is asleep.
+ *   THE ANNOTATION, for a plane whose origin is itself a local address. A fetch
+ *   to one is annotated `targetAddressSpace: "local"`; without it the request
+ *   is not "asked and refused", it is simply blocked. `targetAddressSpace` is an
+ *   ordinary `RequestInit` member and WebIDL drops members a browser does not
+ *   know, so Safari, Firefox and older Chrome are unaffected.
  *
- *   A PUBLIC NAME THAT RESOLVES PRIVATELY GETS NO EXEMPTION. That is precisely
- *   the shape of `192-168-2-40.<id>.d.cookrew.dev`, so the certificate work
- *   that made the switch possible buys nothing here. The check is per
- *   connection — the spec requires it "for each new connection made", because
- *   a name can be re-resolved to a different address between two requests — so
- *   the annotation belongs on every request, not on a handshake.
- *
- * WHY IT IS SAFE TO SEND UNCONDITIONALLY. `targetAddressSpace` is an ordinary
- * member of the `RequestInit` dictionary. WebIDL dictionary conversion reads
- * the members it knows and DROPS everything else; an unrecognised member is
- * not an error and never has been, which is the same reason `priority` and
- * `keepalive` could ship without a feature test. So Safari, Firefox and every
- * Chrome before 142 receive an object with one extra key and behave exactly as
- * they do today. No branch, no user agent sniffing, nothing to get stale.
- *
- * WHY THE PERMISSION IS READ AND NOT ASSUMED. A prompt that appears while the
- * phone is in a pocket is a prompt that gets dismissed, and a dismissed prompt
- * is a permission that stays refused. So the state is read first and the ask
- * is a deliberate, single, user-visible moment (see LocalNetworkRow.tsx).
- * There is no retry loop in this file and there must never be one.
+ *   THE PERMISSION, read and never asked for: the companion reports it to the
+ *   Mac with each race. Nothing draws it (the WebRTC link does not need it).
  */
-
-import { addressFromTrustedName } from '../../shared/reach-names'
 
 /** The address space a direct plane lives in, in the spec's own vocabulary. */
 export type AddressSpace = 'local' | 'private' | 'public'
@@ -131,11 +111,9 @@ export const isLocalAddress = (host: string): boolean => {
 /**
  * The annotation for one origin, or nothing at all when it is not local.
  *
- * A trusted name spells its address in the leftmost label
- * (`192-168-2-40.<id>.d.cookrew.dev`), so the address is read back out of the
- * name rather than guessed from the zone — every one of these ends in
- * cookrew.dev, which is as public as a name gets. A bare origin, which is what
- * the navigating switch races, is its own address.
+ * The origin's host is its address: a name is never read for the address it
+ * might spell (the per-machine names under d.cookrew.dev are gone, 2026-11-16),
+ * so a name is judged by what it is, a name.
  *
  * OMITTING IT IS THE RIGHT NON-LOCAL ANSWER. An unannotated request is exactly
  * what the companion sent before Chrome 142 and is what a public target needs;
@@ -163,8 +141,7 @@ export const isLocalOrigin = (origin: string): boolean => {
   } catch {
     return false
   }
-  const address = addressFromTrustedName(host) ?? host
-  return isLocalAddress(address)
+  return isLocalAddress(host)
 }
 
 /**
@@ -219,50 +196,4 @@ export const localNetworkState = async (
   } catch {
     return 'unsupported'
   }
-}
-
-export interface LocalNetworkAsk {
-  /** A trusted origin off the desktop's reach card. Never a bare IP. */
-  readonly url: string
-  readonly fetch?: typeof fetch
-  readonly permissions?: PermissionsLike | null
-  readonly timeoutMs?: number
-}
-
-/** Long enough for a prompt to be answered by a person who is looking at it. */
-export const ASK_TIMEOUT_MS = 30_000
-
-/**
- * THE ASK: one annotated request, and then read the permission again.
- *
- * The prompt is raised by the request, not by an API — there is no
- * `permissions.request()` for this — so the ask IS a probe. Exactly one, with
- * a deadline long enough for somebody to read a dialog and short enough that a
- * phone put back in a pocket does not hold a socket forever.
- *
- * The probe's own result is thrown away on purpose. A refusal, a timeout and a
- * Mac that is genuinely asleep are the same TypeError here; the permission
- * store is the only thing that can tell them apart, so it is what is returned.
- */
-export const requestLocalNetwork = async (ask: LocalNetworkAsk): Promise<LocalNetworkState> => {
-  const call = ask.fetch ?? (globalThis as { fetch?: typeof fetch }).fetch
-  const permissions = ask.permissions === undefined ? ambientPermissions() : ask.permissions
-  if (!call) return localNetworkState(permissions)
-  const abort = new AbortController()
-  const timer = setTimeout(() => abort.abort(), ask.timeoutMs ?? ASK_TIMEOUT_MS)
-  try {
-    await call(`${ask.url}/api/hello`, {
-      ...addressSpaceInitFor(ask.url),
-      signal: abort.signal,
-      mode: 'cors',
-      credentials: 'omit',
-      cache: 'no-store'
-    } as AddressSpaceInit)
-  } catch {
-    // Refused, blocked, asleep or not there. All four are the same event to a
-    // caller of fetch, and none of them is the answer this function returns.
-  } finally {
-    clearTimeout(timer)
-  }
-  return localNetworkState(permissions)
 }

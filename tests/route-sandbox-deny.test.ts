@@ -22,12 +22,11 @@ const PROFILE = {
 
 describe('the deny clauses', () => {
   it('name the discovered port and the default, once each, in order', () => {
-    expect(gatewayDenyClauses([4100, 3425, 4100])).toEqual([
-      '(deny network-outbound (remote ip "*:3425"))',
-      '(deny network-outbound (remote ip "*:4100"))'
-    ])
-    expect(gatewayDenyClauses([])).toEqual(['(deny network-outbound (remote ip "*:3425"))'])
-    expect(gatewayDenyClauses([0, 70000, 8080])).toEqual(['(deny network-outbound (remote ip "*:3425"))', '(deny network-outbound (remote ip "*:8080"))'])
+    // Each port: not dialed, and not taken (network-bind), in port order.
+    const both = (port: number): string[] => [`(deny network-outbound (remote ip "*:${port}"))`, `(deny network-bind (local ip "*:${port}"))`]
+    expect(gatewayDenyClauses([4100, 3425, 4100])).toEqual([...both(3425), ...both(4100)])
+    expect(gatewayDenyClauses([])).toEqual(both(3425))
+    expect(gatewayDenyClauses([0, 70000, 8080])).toEqual([...both(3425), ...both(8080)])
   })
 
   it('sit in the profile AFTER the network allow — last rule wins', () => {
@@ -80,3 +79,14 @@ describe.skipIf(process.platform !== 'darwin')('under sandbox-exec, on this Mac'
     expect(hits.filter((h) => h === '/api/hello')).toHaveLength(1)
   }, 30_000)
 })
+
+describe('a guarded port cannot be taken either', () => {
+  it('denies binding every port it denies dialing, so no seat can stand in for the gateway, the page or a tunnel', () => {
+    const clauses = gatewayDenyClauses([3431, 13425])
+    for (const port of [3425, 3431, 13425]) {
+      expect(clauses).toContain(`(deny network-outbound (remote ip "*:${port}"))`)
+      expect(clauses).toContain(`(deny network-bind (local ip "*:${port}"))`)
+    }
+  })
+})
+

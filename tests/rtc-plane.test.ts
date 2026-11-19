@@ -118,6 +118,13 @@ describe('adopting the link', () => {
     now: () => 0
   })
 
+  it('adopts nothing from an answer that did not prove it came from the Mac, and reports why', async () => {
+    const row = await adoptRtcLink({ ...deps(null), connect: async () => ({ unbound: 'binding did not verify' }) })
+    expect(dataPlane()).toEqual({ origin: '', kind: 'relay' })
+    expect(rtcLink()).toBeNull()
+    expect(row).toEqual({ kind: 'rtc', name: 'webrtc: binding did not verify', outcome: 'unbound', ms: 0 })
+  })
+
   it('moves the plane to LAN by the address the Mac named', async () => {
     const row = await adoptRtcLink(deps(fakeLink('192.168.2.40')))
     expect(dataPlane()).toEqual({ origin: '', kind: 'lan', transport: 'rtc' })

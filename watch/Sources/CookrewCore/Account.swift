@@ -30,6 +30,12 @@ public struct WatchDevice: Codable, Equatable, Sendable {
     seed = Curve25519.Signing.PrivateKey().rawRepresentation
   }
 
+  /** A watch made from a known key: for probes against a real Mac end, never the app. */
+  public init(id: String, seed: Data) {
+    self.id = id
+    self.seed = seed
+  }
+
   private func key() throws -> Curve25519.Signing.PrivateKey {
     try Curve25519.Signing.PrivateKey(rawRepresentation: seed)
   }
@@ -42,6 +48,22 @@ public struct WatchDevice: Codable, Equatable, Sendable {
 
   public func sign(_ message: String) throws -> String {
     base64urlEncoded(try key().signature(for: Data(message.utf8)))
+  }
+
+  /** The account key, for the sealed session's handshake (Seal2.DeviceHandshake). */
+  public func signingKey() throws -> Curve25519.Signing.PrivateKey {
+    try key()
+  }
+
+  /** This watch's account public key, base64url: half of the words it shows. */
+  public var publicX: String {
+    base64urlEncoded((try? key().publicKey.rawRepresentation) ?? Data())
+  }
+
+  /** What a claim carries so the Mac can seal with this watch: its account id and public key. */
+  public var sealFields: [String: Any] {
+    let publicKey = (try? key().publicKey.rawRepresentation) ?? Data()
+    return ["deviceId": id, "jwk": ["kty": "OKP", "crv": "Ed25519", "x": base64urlEncoded(publicKey)]]
   }
 }
 

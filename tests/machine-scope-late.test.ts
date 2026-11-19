@@ -190,33 +190,6 @@ describe('the account session, on a request whose address was built for a direct
   })
 })
 
-describe('a race for a nearer path that was running when the machine changed', () => {
-  it('remembers nothing of the last machine: its card, answered late, names nobody', async () => {
-    const { scope } = await consoleAt(A)
-    vi.stubGlobal('window', { ...(globalThis as unknown as { window: object }).window, addEventListener: () => undefined, removeEventListener: () => undefined, crypto: { getRandomValues: (bytes: Uint8Array) => bytes } })
-    const session = await import('../src/renderer/src/machine-session')
-    const companion = await import('../src/renderer/src/path/companion')
-    const plane = await import('../src/renderer/src/data-plane')
-    session.startMachineSession()
-    await tick()
-    const cardOfA = to(BASE_A, '/api/reach')
-    expect(cardOfA.length).toBeGreaterThan(0)
-
-    scope.enterMachine(B)
-    await tick()
-    for (const asked of cardOfA) {
-      asked.answer(json({ deviceId: A, lan: [], tailnet: null, trusted: [`https://192-168-1-7.${A}.d.cookrew.dev:8643`] }))
-    }
-    await tick()
-    await tick()
-    expect(companion.cardDeviceId()).toBeNull()
-    expect(plane.dataPlane()).toEqual({ origin: '', kind: 'relay' })
-    // Nothing was tried at the last machine's own address on the next machine's behalf.
-    expect(sent.some((one) => one.url.includes('.d.cookrew.dev'))).toBe(false)
-    scope.enterMachine(null)
-  })
-})
-
 describe('a token being verified for one machine when another is entered', () => {
   it('is kept under neither key: the next machine’s own token is not overwritten', async () => {
     const { scope } = await consoleAt(A)

@@ -1,13 +1,12 @@
-// THE PHONE RACES THE MOMENT THE MAC SAYS ITS ADDRESSES MOVED.
+// THE PHONE KNOCKS THE MOMENT THE MAC SAYS ITS ADDRESSES MOVED.
 //
-// A companion on the relay plane re-races the Mac's names on its own sixty
-// second clock, on `online`, and on a tab coming back. None of those is the
-// moment a Mac woke on a different Wi-Fi: the phone sat still, the badge said
-// RELAY, and the sheet said "your Mac is not on this network" about a Mac on
-// the same desk — until a restart of the desktop published a card and the
-// phone happened to look. The Mac now pushes `reach` on the event stream once
-// the registry has taken a card that differs, and the companion treats that
-// push like a press of TRY AGAIN: the same race, now, with no prompt.
+// A companion on the relay plane races on its own sixty second clock, on
+// `online`, and on a tab coming back, and a race knocks the WebRTC link open
+// at most once every two minutes. None of those is the moment a Mac woke on a
+// different Wi-Fi: the phone sat still on RELAY. The Mac pushes `reach` on
+// the event stream when its addresses change, and the companion treats that
+// push like a new network: the knock is owed now, not after the gap. (It used
+// to re-race the Mac's names; those are gone, 2026-11-16.)
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { inConsole, relayBaseFor, unfoldRelay } from './support/console-scope'
@@ -20,8 +19,21 @@ type Listener = (event: unknown) => void
 
 /** A phone with a stream: the one `/api/events` EventSource the page holds. */
 const stubPhone = () => {
+  // Preserve a race-completion sentinel without sending a report in plaintext.
+  // The separate path-report tests exercise the real sealed transport.
   const streams: Map<string, Set<Listener>>[] = []
-  let fetched = 0
+  const asked: string[] = []
+  const reportDeps: { url: string; sealed: unknown; plane?: string }[] = []
+  vi.doMock('../src/renderer/src/path/report', async (original) => {
+    const actual = await original<typeof import('../src/renderer/src/path/report')>()
+    return {
+      ...actual,
+      postPathReport: async (report: { plane?: string }, deps: { url: string; sealed: unknown }) => {
+        reportDeps.push({ ...deps, plane: report.plane })
+        asked.push('/api/path/report')
+      }
+    }
+  })
   class FakeEventSource {
     readonly listeners = new Map<string, Set<Listener>>()
     readyState = 1
@@ -63,11 +75,12 @@ const stubPhone = () => {
         headers: { 'content-type': 'text/event-stream' }
       })
     }
-    fetched += 1
+    asked.push(unfoldRelay(String(url), init))
     throw new Error('unreachable')
   }
   return {
-    fetched: () => fetched,
+    asked: () => asked,
+    reportDeps: () => reportDeps,
     push: (type: string, data: unknown) => {
       live?.enqueue(new TextEncoder().encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`))
       for (const stream of streams) for (const listener of stream.get(type) ?? []) listener({ data: JSON.stringify(data) })
@@ -78,34 +91,233 @@ const stubPhone = () => {
 
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
+/** Every knock the companion makes, counted where the link would be dialled. */
+const countKnocks = (
+  refusals: string | null | readonly (string | null)[] = null,
+  during?: (knock: number) => Promise<void>
+): { readonly knocks: () => number } => {
+  let knocks = 0
+  vi.doMock('../src/renderer/src/path/rtc-link', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../src/renderer/src/path/rtc-link')>()),
+    // With a refusal, the Mac answered and its answer did not prove it (rtc-trust.ts · boundKnock);
+    // a list says it knock by knock (null: no answer at all).
+    connectRtcLink: async (deps: { refused?: (why: string) => void }) => {
+      knocks += 1
+      await during?.(knocks)
+      const refusal = Array.isArray(refusals) ? (refusals[knocks - 1] ?? null) : refusals
+      if (refusal !== null) deps.refused?.(refusal)
+      return null
+    }
+  }))
+  // A browser that has WebRTC at all; the dial itself is the mock above.
+  vi.stubGlobal('RTCPeerConnection', function RTCPeerConnection() {})
+  return { knocks: () => knocks }
+}
+
 afterEach(() => {
   delete (globalThis as { fetch?: unknown }).fetch
   delete (globalThis as { EventSource?: unknown }).EventSource
+  vi.doUnmock('../src/renderer/src/path/rtc-link')
+  vi.doUnmock('../src/renderer/src/path/report')
+  vi.unstubAllGlobals()
   vi.resetModules()
 })
 
 describe('a reach push from the Mac', () => {
-  it('starts a race at once, and the race is the switcher’s own (one at a time, no prompt)', async () => {
+  it('knocks at once, past the two-minute gap, and asks the Mac for no card', async () => {
     const phone = stubPhone()
     vi.resetModules()
+    const { knocks } = countKnocks()
     await inConsole(DEVICE)
     const companion = await import('../src/renderer/src/path/companion')
     const stop = companion.startCompanionPathSwitch()
+    await vi.waitFor(() => expect(phone.listening()).toBe(true))
+    // The boot race knocked once and reported it; the gap now holds the next knock back.
+    await vi.waitFor(() => expect(phone.asked().some((url) => url.includes('/api/path/report'))).toBe(true))
+    expect(knocks()).toBe(1)
+    const seal = await import('../src/renderer/src/path/seal-plane')
+    expect(phone.reportDeps()[0]).toMatchObject({ url: `${RELAY_BASE}/api/path/report`, sealed: seal.sealedFetchFor })
+    expect(phone.reportDeps()[0]).not.toHaveProperty('fetch')
+
+    phone.push('reach', { at: 1 })
+    await vi.waitFor(() => expect(knocks()).toBe(2))
+    // Nothing asked where else the Mac lives: the card fed only the names.
+    expect(phone.asked().filter((url) => url.includes('/api/reach'))).toEqual([])
+
+    stop()
+    // Stopped means stopped: a later push knocks nothing.
+    phone.push('reach', { at: 2 })
     await settle()
-    expect(phone.listening()).toBe(true)
-    const before = phone.fetched()
-    expect(before).toBeGreaterThan(0)
+    await settle()
+    expect(knocks()).toBe(2)
+  })
+})
+
+describe('report routing after the plane moves', () => {
+  it('keeps the sealed relay destination even if the data plane moves before reporting', async () => {
+    const phone = stubPhone()
+    vi.resetModules()
+    await inConsole(DEVICE)
+    const planes = await import('../src/renderer/src/data-plane')
+    countKnocks(null, async () => {
+      // An origin-bearing plane makes apiPath select this origin, unlike an RTC
+      // plane whose origin is intentionally empty. This exercises the routing invariant.
+      planes.setDataPlane({ origin: 'https://192.168.2.40:8643', kind: 'lan' })
+    })
+    const companion = await import('../src/renderer/src/path/companion')
+    const stop = companion.startCompanionPathSwitch()
+    try {
+      await vi.waitFor(() => expect(phone.reportDeps().length).toBeGreaterThan(0))
+      const seal = await import('../src/renderer/src/path/seal-plane')
+      expect(phone.reportDeps()[0]).toMatchObject({ url: `${RELAY_BASE}/api/path/report`, sealed: seal.sealedFetchFor, plane: 'LAN' })
+      expect(planes.dataPlane()).toMatchObject({ kind: 'lan', origin: 'https://192.168.2.40:8643' })
+      expect(phone.reportDeps()[0]).not.toHaveProperty('fetch')
+    } finally {
+      stop()
+    }
+  })
+})
+
+describe('report routing on an RTC plane', () => {
+  it('uses the sealed sender instead of the direct link', async () => {
+    const phone = stubPhone()
+    vi.resetModules()
+    await inConsole(DEVICE)
+    const planes = await import('../src/renderer/src/data-plane')
+    countKnocks(null, async () => {
+      planes.setDataPlane({ origin: '', kind: 'lan', transport: 'rtc' })
+    })
+    const companion = await import('../src/renderer/src/path/companion')
+    const stop = companion.startCompanionPathSwitch()
+    try {
+      await vi.waitFor(() => expect(phone.reportDeps().length).toBeGreaterThan(0))
+      const seal = await import('../src/renderer/src/path/seal-plane')
+      expect(planes.dataPlane()).toMatchObject({ kind: 'lan', transport: 'rtc' })
+      expect(phone.reportDeps()[0]).toMatchObject({ url: `${RELAY_BASE}/api/path/report`, sealed: seal.sealedFetchFor, plane: 'LAN' })
+      expect(phone.reportDeps()[0]).not.toHaveProperty('fetch')
+    } finally {
+      stop()
+    }
+  })
+})
+
+describe('after a refused answer', () => {
+  const OTHER = '66666666-7777-8888-9999-000000000000'
+
+  it('a reach push does not cut the ten-minute wait short: the relay can send one whenever it likes', async () => {
+    const phone = stubPhone()
+    vi.resetModules()
+    const { knocks } = countKnocks('no binding')
+    await inConsole(DEVICE)
+    const companion = await import('../src/renderer/src/path/companion')
+    const stop = companion.startCompanionPathSwitch()
+    await vi.waitFor(() => expect(phone.listening()).toBe(true))
+    await vi.waitFor(() => expect(phone.asked().some((url) => url.includes('/api/path/report'))).toBe(true))
+    expect(knocks()).toBe(1)
 
     phone.push('reach', { at: 1 })
     await settle()
-    // The push looked for the Mac again: a fresh /api/reach, which is the
-    // first request a race makes. The stub refuses it, so nothing moved.
-    expect(phone.fetched()).toBeGreaterThan(before)
+    await settle()
+    expect(knocks()).toBe(1)
     stop()
-    // Stopped means stopped: a later push races nothing.
-    const after = phone.fetched()
+  })
+
+  it('a reach push that lands while the refused knock is out does not cut the wait short either', async () => {
+    const phone = stubPhone()
+    vi.resetModules()
+    let pushMidKnock = (): void => undefined
+    const { knocks } = countKnocks('no binding', async (knock) => {
+      if (knock === 1) pushMidKnock()
+    })
+    await inConsole(DEVICE)
+    const companion = await import('../src/renderer/src/path/companion')
+    pushMidKnock = () => phone.push('reach', { at: 1 })
+    const stop = companion.startCompanionPathSwitch()
+    await vi.waitFor(() => expect(phone.asked().some((url) => url.includes('/api/path/report'))).toBe(true))
+    expect(knocks()).toBe(1)
+    // Any later race (here another push) still finds the wait in force.
     phone.push('reach', { at: 2 })
     await settle()
-    expect(phone.fetched()).toBe(after)
+    await settle()
+    expect(knocks()).toBe(1)
+    stop()
+  })
+
+  it('entering another machine owes it a knock at once, and lets go of the last machine\'s wait', async () => {
+    const phone = stubPhone()
+    vi.resetModules()
+    // A refuses; B does not answer at all, which leaves B's gap as it found it.
+    const { knocks } = countKnocks(['no binding', null, null])
+    const scope = await inConsole(DEVICE)
+    const companion = await import('../src/renderer/src/path/companion')
+    const stopA = companion.startCompanionPathSwitch()
+    await vi.waitFor(() => expect(phone.asked().some((url) => url.includes('/api/path/report'))).toBe(true))
+    expect(knocks()).toBe(1)
+    stopA()
+
+    scope.enterMachine(OTHER)
+    const stopB = companion.startCompanionPathSwitch()
+    await vi.waitFor(() => expect(knocks()).toBe(2))
+    // B carries none of A's ten minutes: its reach push knocks at once.
+    await vi.waitFor(() => expect(phone.listening()).toBe(true))
+    phone.push('reach', { at: 3 })
+    await vi.waitFor(() => expect(knocks()).toBe(3))
+    stopB()
+  })
+})
+
+describe('the seal pinned for the machine in scope (path/seal-plane.ts · onSealPinned)', () => {
+  /** The companion's pin listener, captured; the rest of seal-plane is the real one. */
+  const capturePin = (): { readonly pin: (base: string) => void } => {
+    let listener: ((base: string) => void) | null = null
+    vi.doMock('../src/renderer/src/path/seal-plane', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../src/renderer/src/path/seal-plane')>()),
+      onSealPinned: (next: (base: string) => void) => {
+        listener = next
+        return () => void (listener = null)
+      }
+    }))
+    return { pin: (base) => listener?.(base) }
+  }
+
+  afterEach(() => vi.doUnmock('../src/renderer/src/path/seal-plane'))
+
+  const start = async (refusal: string | null) => {
+    const phone = stubPhone()
+    vi.resetModules()
+    const { knocks } = countKnocks(refusal)
+    const { pin } = capturePin()
+    await inConsole(DEVICE)
+    const scope = await import('../src/renderer/src/machine-scope')
+    const companion = await import('../src/renderer/src/path/companion')
+    const stop = companion.startCompanionPathSwitch()
+    await vi.waitFor(() => expect(phone.asked().some((url) => url.includes('/api/path/report'))).toBe(true))
+    expect(knocks()).toBe(1)
+    return { knocks, pin, base: scope.scopeBase(), stop }
+  }
+
+  it('owes a knock at once when the last one decided nothing (it was skipped or unanswered)', async () => {
+    const run = await start(null)
+    run.pin(run.base)
+    await vi.waitFor(() => expect(run.knocks()).toBe(2))
+    run.stop()
+  })
+
+  it('owes nothing for another machine\'s pin', async () => {
+    const run = await start(null)
+    run.pin(`${run.base}-other`)
+    await settle()
+    await settle()
+    expect(run.knocks()).toBe(1)
+    run.stop()
+  })
+
+  it('does not cut a refusal\'s ten-minute wait short', async () => {
+    const run = await start('no binding')
+    run.pin(run.base)
+    await settle()
+    await settle()
+    expect(run.knocks()).toBe(1)
+    run.stop()
   })
 })

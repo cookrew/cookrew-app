@@ -23,9 +23,11 @@
 // navigating" is exactly the kind of thing a later refactor re-enables by
 // accident.
 //
-// The switcher's own rules (only better, never sideways; prove it is the Mac)
-// are untouched and still covered by path-switch.test.ts — this is only about
-// whether the browser wiring is allowed to fire.
+// NO NAMES, as of 2026-11-16. The per-machine names under d.cookrew.dev are
+// dropped: the page reaches a Mac over the relay or over the WebRTC link and
+// nothing else, so neither the live plane move onto a name nor the navigating
+// switch at the root exists any more. A page a Mac serves itself stays where
+// it is.
 //
 // NO EXCEPTIONS, as of 2026-10-18. The press (OPEN ON WI-FI) and the
 // automatic jump home both existed because a page on cookrew.dev could not
@@ -34,7 +36,7 @@
 // `replace`, so neither comes back by accident.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { inConsole, relayBaseFor } from './support/console-scope'
+import { inConsole, relayBaseFor, unfoldRelay } from './support/console-scope'
 
 const DEVICE = '11111111-2222-3333-4444-555555555555'
 /** The machine's address on the relay, as the console reaches it. */
@@ -45,7 +47,12 @@ interface Phone {
   readonly replaced: () => readonly string[]
   readonly listened: () => readonly string[]
   readonly fetched: () => number
+  /** Every URL the page asked for, in order. */
+  readonly urls: () => readonly string[]
 }
+
+/** What a Mac would answer if it were asked where else it lives, and to prove it is itself. */
+type Answer = (url: string) => Response | null
 
 /**
  * A phone, as the renderer detects one: no Electron bridge and the marker the
@@ -53,9 +60,10 @@ interface Phone {
  * — a page served under a relay prefix must be judged by the prefix, not by
  * whatever host happens to be in front of the relay.
  */
-const stubPhone = (origin: string): Phone => {
+const stubPhone = (origin: string, answer: Answer = () => null): Phone => {
   const replaced: string[] = []
   const listened: string[] = []
+  const urls: string[] = []
   let fetched = 0
   ;(globalThis as unknown as { window: Record<string, unknown> }).window = {
     COOKREW_MOBILE: 1,
@@ -67,7 +75,8 @@ const stubPhone = (origin: string): Phone => {
       assign: (url: string) => replaced.push(url)
     },
     localStorage: {
-      getItem: () => null,
+      // A held credential, so a switch that wanted to navigate would have had everything it needed.
+      getItem: (key: string) => (key.startsWith('cr_token') ? 'the-pairing-token' : null),
       setItem: () => undefined,
       removeItem: () => undefined
     },
@@ -83,9 +92,14 @@ const stubPhone = (origin: string): Phone => {
     setTimeout: () => 0,
     clearTimeout: () => undefined
   }
-  ;(globalThis as unknown as { fetch: unknown }).fetch = async (): Promise<never> => {
+  ;(globalThis as unknown as { fetch: unknown }).fetch = async (raw: string, init: RequestInit = {}): Promise<Response> => {
     fetched += 1
-    throw new Error('a companion under a relay prefix must not probe')
+    // Read as the path it names: a relayed call leaves at the relay's one address.
+    const url = unfoldRelay(String(raw), init)
+    urls.push(url)
+    const answered = answer(url)
+    if (answered) return answered
+    throw new Error('nothing answers here')
   }
   // The page's one /api/events stream: the switcher listens on it for the
   // Mac's "addresses moved" push. Listening is not probing.
@@ -97,7 +111,7 @@ const stubPhone = (origin: string): Phone => {
       close(): void {}
     }
   })
-  return { replaced: () => replaced, listened: () => listened, fetched: () => fetched }
+  return { replaced: () => replaced, listened: () => listened, fetched: () => fetched, urls: () => urls }
 }
 
 /**
@@ -134,9 +148,8 @@ describe('startCompanionPathSwitch under a relay prefix', () => {
     const stop = companion.startCompanionPathSwitch()
     await settle()
 
-    // It looks — that is the feature. The stub fetch throws, which is the Mac
-    // being unreachable, and an unreachable Mac leaves the plane alone.
-    expect(phone.fetched()).toBeGreaterThan(0)
+    // The only nearer path is the WebRTC link; a name is never asked about.
+    expect(phone.urls().filter((url) => /\/api\/reach|\/api\/hello|\/v2\/names|verify-hello|d\.cookrew\.dev/.test(url))).toEqual([])
     // And it wakes on the two moments a phone changes network.
     expect(phone.listened()).toContain('online')
     expect(phone.listened()).toContain('visibilitychange')
@@ -180,6 +193,29 @@ describe('the path badge under a relay prefix', () => {
     link.setPathLink('failed')
     expect(link.currentPathBadge().word).toBe('OFFLINE')
     link.resetPathLink()
+  })
+})
+
+/** A Mac that would have answered every question the navigating switch used to ask. */
+const answeringMac = (url: string): Response | null => {
+  const json = (body: unknown): Response => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+  if (url.includes('/api/reach')) return json({ deviceId: DEVICE, lan: [{ url: 'https://192.168.2.40:8643' }], tailnet: null, trusted: [] })
+  if (url.includes('/api/hello')) return json({ deviceId: DEVICE, nonce: new URL(url).searchParams.get('nonce') })
+  return null
+}
+
+describe('a page a Mac serves itself, on a path that is not the LAN', () => {
+  it('stays where it is: it asks for no card, probes no address and never navigates', async () => {
+    // Served at the root over the tailnet, with a Mac that would answer on the LAN.
+    const phone = stubPhone('https://100.100.7.9:8643', answeringMac)
+    const { link, companion } = await servedAt('')
+    expect(link.currentOriginState()).toBe('TAILNET')
+    const stop = companion.startCompanionPathSwitch()
+    await settle()
+    await settle()
+    expect(phone.urls().filter((url) => /\/api\/reach|\/api\/hello/.test(url))).toEqual([])
+    expect(phone.replaced()).toEqual([])
+    expect(() => stop()).not.toThrow()
   })
 })
 

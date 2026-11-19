@@ -45,6 +45,9 @@ describe('path badge host classes', () => {
     expect(classifyOrigin('https://100.75.1.2:8643')).toBe('TAILNET')
     expect(classifyOrigin('https://cookrew.dev')).toBe('RELAY')
     expect(classifyOrigin('https://cookrew.dev/m/abc')).toBe('RELAY')
+    // A Mac's own name is the address it spells, until the desktop stops handing names out (step D).
+    expect(classifyOrigin('https://192-168-1-24.11111111-2222-3333-4444-555555555555.d.cookrew.dev:8643')).toBe('LAN')
+    expect(classifyOrigin('https://100-75-1-2.11111111-2222-3333-4444-555555555555.d.cookrew.dev:8643')).toBe('TAILNET')
   })
 
   it('honours a registry origin given for a local registry', () => {
@@ -118,5 +121,32 @@ describe('path badge view model', () => {
     expect(pathBadgeView(live).latencyMs).toBeNull()
     expect(pathBadgeView({ ...live, latencyMs: null }).latencyMs).toBeNull()
     expect(pathBadgeView({ ...live, latencyMs: 0 }).latencyMs).toBe(0)
+  })
+})
+
+describe('the relay, when a direct link answered and was not taken (shared/rtc-bind.ts)', () => {
+  const relay = { origin: 'https://cookrew.dev', link: 'live' as const, relayed: true, plane: 'RELAY' as const }
+
+  it('still reads RELAY, and says why it stays there instead of promising to go direct', () => {
+    const plain = pathBadgeView(relay)
+    for (const held of ['old-mac', 'browser', 'unproved'] as const) {
+      const view = pathBadgeView({ ...relay, held })
+      expect(view.word, held).toBe('RELAY')
+      expect(view.sentence, held).not.toBe(plain.sentence)
+      expect(view.sentence, held).toMatch(/^Via cookrew\.dev relay\./)
+      expect(view.sentence, held).not.toMatch(/goes direct by itself/)
+    }
+  })
+
+  it('tells an older Mac to update, a browser it cannot check, and anything else that the link was not proved', () => {
+    expect(pathBadgeView({ ...relay, held: 'old-mac' }).sentence).toMatch(/update Cookrew on your Mac/i)
+    expect(pathBadgeView({ ...relay, held: 'browser' }).sentence).toMatch(/this browser cannot check/i)
+    expect(pathBadgeView({ ...relay, held: 'unproved' }).sentence).toMatch(/could not prove/i)
+  })
+
+  it('says nothing of it once the plane is direct, or while the link is down', () => {
+    expect(pathBadgeView({ ...relay, plane: 'LAN', held: 'unproved' }).sentence).toBe(pathBadgeView({ ...relay, plane: 'LAN' }).sentence)
+    expect(pathBadgeView({ ...relay, link: 'failed', held: 'unproved' }).state).toBe('OFFLINE')
+    expect(pathBadgeView({ ...relay, link: 'failed', held: 'unproved' }).sentence).toBe(pathBadgeView({ ...relay, link: 'failed' }).sentence)
   })
 })
