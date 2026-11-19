@@ -16,7 +16,8 @@ function bed(answer: UnlockAnswer = { ok: true, outcome: 'unlocked' }) {
   const begin = vi.fn(async (): Promise<UnlockBegin> => ({ ok: true, key: offered.key, challenge: 'c1' }))
   const send = vi.fn(async (_sealed: string) => answer)
   const vault = createUnlockVault(memory())
-  const deps: UnlockFlowDeps = { api: { begin, send }, vault, machine: 'm' }
+  // The Mac's own page: its plain Remember (the console keeps a box instead: unlock-remember-flow.test.ts).
+  const deps: UnlockFlowDeps = { api: { begin, send }, vault, machine: 'm', plainRemember: true }
   return { mac, offered, begin, send, vault, deps }
 }
 
@@ -97,7 +98,7 @@ describe('runUnlock', () => {
 describe('prepareUnlock', () => {
   it('says what the device knows of this Mac', async () => {
     const t = bed()
-    expect(await prepareUnlock(t.deps)).toEqual({ kind: 'ready', key: t.mac.publicKey, trust: 'new', saved: false })
+    expect(await prepareUnlock(t.deps)).toEqual({ kind: 'ready', key: t.mac.publicKey, trust: 'new', saved: false, rememberable: false })
     await t.vault.pin('m', t.mac.publicKey)
     await t.vault.remember('m', 'pw')
     expect(await prepareUnlock(t.deps)).toMatchObject({ trust: 'same', saved: true })

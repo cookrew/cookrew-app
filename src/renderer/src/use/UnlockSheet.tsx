@@ -17,7 +17,9 @@ import { sealPinFor } from '../path/seal-pin'
 import { vouchedNextCode } from '../path/seal-next-code'
 import { closeUnlockSheet, subscribeUnlockSheet, unlockSheetOpen } from './unlock-sheet-store'
 import { openUnlockGrantSheet } from './unlock-grant-store'
-import { prepareUnlock, runUnlock, type UnlockFlowDeps } from './unlock-flow'
+import { forgetRemembered, prepareUnlock, runUnlock, type UnlockFlowDeps } from './unlock-flow'
+import { connectCodeId } from '../../../shared/canvas-seal'
+import { decodeBase64Url } from '../../../shared/key-fingerprint'
 import { wordsOfKey } from './unlock-seal'
 import { sealedUnlockApi } from './unlock-sealed'
 import { browserVaultStore, createUnlockVault, type KeyTrust } from './unlock-vault'
@@ -145,12 +147,27 @@ export function UnlockSheetView(props: UnlockSheetViewProps): React.JSX.Element 
   )
 }
 
-const flowFor = (api: UnlockFlowDeps['api']): UnlockFlowDeps => ({ api, vault: createUnlockVault(browserVaultStore()), machine: clientBase() })
+const flowFor = (api: UnlockFlowDeps['api'], extra: Partial<Pick<UnlockFlowDeps, 'codeId' | 'plainRemember'>> = {}): UnlockFlowDeps => ({
+  api,
+  vault: createUnlockVault(browserVaultStore()),
+  machine: clientBase(),
+  ...extra
+})
 
+/** The Mac's own page: its plain Remember stays until lane D retires the page (unlock-flow.ts). */
 const directFlow = (): UnlockFlowDeps | null => {
   const { remoteUnlockBegin: begin, remoteUnlock: send } = cookrew()
-  return begin && send ? flowFor({ begin, send }) : null
+  return begin && send ? flowFor({ begin, send }, { plainRemember: true }) : null
 }
+
+/** The id of the connect code this page holds: a remembered box is kept and used under it only. */
+const codeIdOf = async (code: string): Promise<string | undefined> => {
+  const bytes = decodeBase64Url(code)
+  return bytes === null ? undefined : connectCodeId(new Uint8Array(bytes)).catch(() => undefined)
+}
+
+/** Remember is offered on the Mac's own page, and on the console only when the Mac can remember over this v2 session. */
+export const rememberOffered = (ownPage: boolean, shown: { readonly rememberable: boolean } | null): boolean => ownPage || shown?.rememberable === true
 
 type Way =
   | { readonly kind: 'opening' }
@@ -178,10 +195,12 @@ function useUnlockWay(attempt: number): Way {
     // and stays there if another is entered before the sheet is gone.
     const base = clientBase()
     openSeal({ url: (path) => `${base}${path}`, code, fetchFn: sealFetchFor(base), pin: sealPinFor(codeKeyForBase(base)) })
-      .then((opened) => {
+      .then(async (opened) => {
         client = opened
         if (!alive) return opened.close()
-        setWay({ kind: 'ready', deps: flowFor(sealedUnlockApi(opened, authHeaders, seated)) })
+        const codeId = await codeIdOf(code)
+        if (!alive) return
+        setWay({ kind: 'ready', deps: flowFor(sealedUnlockApi(opened, authHeaders, seated), codeId === undefined ? {} : { codeId }) })
       })
       .catch(async (failure: unknown) => {
         if (!alive) return
@@ -231,7 +250,7 @@ function UnlockSheetBody(): React.JSX.Element {
   const [attempt, setAttempt] = useState(0)
   const way = useUnlockWay(attempt)
   const deps = way.kind === 'ready' ? way.deps : null
-  const [shown, setShown] = useState<{ key: string; trust: KeyTrust; saved: boolean; words: readonly string[] } | null>(null)
+  const [shown, setShown] = useState<{ key: string; trust: KeyTrust; saved: boolean; rememberable: boolean; words: readonly string[] } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [password, setPassword] = useState('')
@@ -242,7 +261,7 @@ function UnlockSheetBody(): React.JSX.Element {
     const prepared = await prepareUnlock(deps)
     if (prepared.kind === 'done') return closeUnlockSheet(true)
     if (prepared.kind === 'error') return setError(prepared.message)
-    setShown({ key: prepared.key, trust: prepared.trust, saved: prepared.saved, words: await wordsOfKey(prepared.key) })
+    setShown({ key: prepared.key, trust: prepared.trust, saved: prepared.saved, rememberable: prepared.rememberable, words: await wordsOfKey(prepared.key) })
   }, [deps])
 
   useEffect(() => {
@@ -269,7 +288,7 @@ function UnlockSheetBody(): React.JSX.Element {
       const result = await runUnlock(deps, { shownKey: shown.key, password: shown.saved ? null : password, remember })
       if (result.kind === 'done') return closeUnlockSheet(true)
       // The words of the key now on offer: the reader must judge that one, not the one they saw.
-      if (result.kind === 'changed') return setShown({ key: result.key, trust: 'changed', saved: false, words: await wordsOfKey(result.key) })
+      if (result.kind === 'changed') return setShown({ key: result.key, trust: 'changed', saved: false, rememberable: false, words: await wordsOfKey(result.key) })
       setError(result.message)
       await prepare()
     } catch (failure) {
@@ -283,12 +302,13 @@ function UnlockSheetBody(): React.JSX.Element {
     }
   }
 
+  const canRemember = rememberOffered(onTheMacsOwnPage(), shown)
   return (
     <UnlockSheetView
       needsCode={way.kind === 'needs-code'}
       stale={way.kind === 'needs-code' && way.stale}
       changed={way.kind === 'needs-code' && way.changed === true}
-      canRemember={onTheMacsOwnPage()}
+      canRemember={canRemember}
       onCode={useCode}
       onSetUp={
         cookrew().unlockGrantAsk
@@ -304,12 +324,13 @@ function UnlockSheetBody(): React.JSX.Element {
       busy={busy || (way.kind !== 'needs-code' && shown === null && error === null && way.kind !== 'failed')}
       error={error ?? (way.kind === 'failed' ? way.message : null)}
       password={password}
-      remember={remember && onTheMacsOwnPage()}
+      remember={remember && canRemember}
       onPassword={setPassword}
       onRemember={setRemember}
       onUnlock={() => void unlock()}
       onForget={() => {
-        if (deps) void deps.vault.forgetPassword(deps.machine).then(prepare)
+        // What this device keeps goes, and a console gives the Mac its id back (unlock-flow.ts · forgetRemembered).
+        if (deps) void forgetRemembered(deps).then(prepare)
       }}
       onTrustNew={() => {
         // Exactly the key the reader judged, with no second fetch that could offer another.

@@ -256,6 +256,8 @@ describe('openSeal across versions', () => {
     const client = await openSeal({ url, code: encoded(code), retryMs: 5, pin })
     clients.push(client)
     expect(pin.held()).toBe(true)
+    // Says which session it is: a remembered password is sent on a v2 one only (unlock-sealed.ts).
+    expect(client.version).toBe(2)
     expect(JSON.parse(text((await client.request({ method: 'GET', path: '/v2', headers: {} })).body))).toMatchObject({ path: '/v2' })
   })
 
@@ -265,6 +267,7 @@ describe('openSeal across versions', () => {
     const client = await openSeal({ url, code: encoded(code), retryMs: 5, fetchFn: asOldMac, pin })
     clients.push(client)
     expect(pin.held()).toBe(false)
+    expect(client.version).toBe(1)
     const answer = await client.request({ method: 'POST', path: '/v1', headers: { authorization: 'Bearer t' }, body: 'b' })
     expect(JSON.parse(text(answer.body))).toEqual({ method: 'POST', path: '/v1', auth: 'Bearer t', body: 'b' })
   })

@@ -88,6 +88,8 @@ export interface SealAnswer {
 export interface SealClient {
   request(input: SealRequest): Promise<SealAnswer>
   close(): void
+  /** Which session this is. Absent (a stand-in) is never v2: a remembered password needs a v2 one (unlock-sealed.ts). */
+  readonly version?: 1 | 2
 }
 
 export interface SealClientDeps {
@@ -137,6 +139,7 @@ async function shakeHands(deps: SealClientDeps, fetchFn: typeof fetch) {
 /** The same client, on a v2 session: each request one stream. */
 function seal2Client(deps: SealClientDeps, link: Seal2Link): SealClient {
   return {
+    version: 2,
     async request(input) {
       if (link.connection.closed) throw new Error('The sealed session has ended.')
       const stop = new AbortController()
@@ -298,6 +301,7 @@ function seal1Client(deps: SealClientDeps, fetchFn: typeof fetch, session: SealS
   void listen(() => undefined)
 
   return {
+    version: 1,
     request(input) {
       if (closed) return Promise.reject(new Error('The sealed session has ended.'))
       const stream = nextStream
