@@ -199,8 +199,8 @@ export interface ConnectDeps {
   providers(): Promise<ProviderEntry[] | null>
   forwarderPort(): number | null
   /**
-   * The Seatbelt lane's served-seat gate (servedSeatGate): every served seat runs today's profile.
-   * Absent: no gate to ask. Asked before a provider is pointed at the forwarder; false or a throw refuses.
+   * The served-seat gate (seat-gate.ts: lane Seatbelt's servedSeatGate on macOS, no served terminal on
+   * the canvas elsewhere). Asked before a provider is pointed at the forwarder; false or a throw refuses.
    */
   seatGate(): Promise<boolean>
   myName(): string

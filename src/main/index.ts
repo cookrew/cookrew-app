@@ -331,6 +331,7 @@ import { magpieBinary, magpieRunner, ShareKeys } from './route/share-keys'
 import { fileIntentStore, INTENT_FILE } from './route/share-intents'
 import { fileAuditLog, SHARE_AUDIT_FILE } from './route/share-audit'
 import { createMagpieRemote } from './magpie-remote/setup'
+import { magpieSeatGate } from './magpie-remote/seat-gate'
 import { callerIsMagpie } from './magpie-remote/caller'
 import { createTailnetView } from './route/tailnet'
 import { MAGPIE_REMOTE_KIND } from '../shared/remote-magpie'
@@ -1938,9 +1939,13 @@ const magpieRemote = createMagpieRemote({
   sealer: electronSealer(safeStorage),
   magpieBin: () => magpieBinary(defaultDiscoveryEnv()),
   env: () => defaultDiscoveryEnv(),
-  // INTERIM, stricter than lane Seatbelt's servedSeatGate, which replaces it when that lane lands:
-  // while any served terminal is on the canvas (one may predate this build's sandbox), it is shut.
-  seatGate: async () => !store.terminalsAcross().some((node) => Boolean(node.servedSession) || ptys.isServed(node.id) || isServedWorkspace(store.ownerOf(node.id))),
+  // Lane Seatbelt's servedSeatGate on macOS; elsewhere no Seatbelt profile vouches for a served
+  // terminal, so the forwarder stays shut while any is on the canvas (magpie-remote/seat-gate.ts).
+  seatGate: magpieSeatGate({
+    platform: process.platform,
+    servedSeatGate,
+    servedOnCanvas: () => store.terminalsAcross().some((node) => Boolean(node.servedSession) || ptys.isServed(node.id) || isServedWorkspace(store.ownerOf(node.id)))
+  }),
   callerIsMagpie: (clientPort) => callerIsMagpie(clientPort, magpieBinary(defaultDiscoveryEnv())),
   log: (line) => console.error(`[cookrew] ${line}`)
 })

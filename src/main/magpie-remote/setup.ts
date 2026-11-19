@@ -39,9 +39,10 @@ export interface MagpieRemoteDeps {
   readonly sealer: SecretSealer | null
   magpieBin(): string | null
   /**
-   * The served-seat gate (lane Seatbelt's servedSeatGate once it lands): every served seat runs
-   * today's profile. Asked before the forwarder opens, before every connect, and (cached briefly)
-   * on every forwarded request. False or a throw refuses. Required: there is no default.
+   * The served-seat gate (seat-gate.ts: lane Seatbelt's servedSeatGate on macOS, no served terminal on
+   * the canvas elsewhere). Asked before every connect and before every re-acknowledgement points a
+   * provider, and (cached: an open answer 30 s, a shut one 5 s) on every forwarded request. False or a
+   * throw refuses. Required: there is no default.
    */
   seatGate(): Promise<boolean>
   /** Is this loopback connection's far end this user's magpie (caller.ts)? */
@@ -75,7 +76,10 @@ const ASK_KEY_MS = 300_000
 const SMALL_TALK_MS = 60_000
 /** How often a key still waiting for its acknowledgement is said again. */
 const RESUME_MS = 5 * 60_000
-const GATE_MS = 5_000
+/** How long the gate's answer is kept for forwarded requests: Seatbelt's check scans every process (lsof). */
+const GATE_OPEN_MS = 30_000
+/** A shut answer is asked again sooner: the owner restarting a served session should not wait long. */
+const GATE_SHUT_MS = 5_000
 
 const myName = (): string => os.hostname().replace(/\.local$/i, '') || 'this computer'
 
@@ -119,11 +123,20 @@ export function createMagpieRemote(deps: MagpieRemoteDeps): MagpieRemote {
     log: (line) => deps.log(line)
   })
 
-  /** The gate's answer for forwarded requests, kept a few seconds: a check per request could be slow. */
-  let gateSeen: { at: number; ok: Promise<boolean> } | null = null
+  /** The gate's answer for forwarded requests, kept a while (one ask in flight is shared): a check per request is slow. */
+  let gateSeen: { at: number; ok: Promise<boolean>; answer: boolean | null } | null = null
   const gateNow = (): Promise<boolean> => {
-    if (gateSeen === null || Date.now() - gateSeen.at > GATE_MS || Date.now() < gateSeen.at) gateSeen = { at: Date.now(), ok: deps.seatGate().catch(() => false) }
-    return gateSeen.ok
+    const now = Date.now()
+    const keep = gateSeen?.answer === true ? GATE_OPEN_MS : GATE_SHUT_MS
+    // Still asking (answer null), or asked recently enough: the same answer. A clock moved back asks again.
+    if (gateSeen !== null && now >= gateSeen.at && (gateSeen.answer === null || now - gateSeen.at <= keep)) return gateSeen.ok
+    const asked: { at: number; ok: Promise<boolean>; answer: boolean | null } = { at: now, ok: Promise.resolve(false), answer: null }
+    asked.ok = deps.seatGate().then((ok) => ok === true, () => false).then((ok) => {
+      asked.answer = ok
+      return ok
+    })
+    gateSeen = asked
+    return asked.ok
   }
   const forwarder = createMagpieForwarder({
     switches: () => deps.switches(),
