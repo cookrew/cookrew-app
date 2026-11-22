@@ -1464,6 +1464,9 @@ export async function handle(
     // this server already holds — tail-read, no PTY.
     latestCheckpoint: (terminalId: string) => deps.traces.latestCheckpoint(terminalId),
     pairingToken: activePairingToken ?? deps.pairingToken,
+    // Read at each check, not once per request: an open stream must lose owner
+    // detail when rotation revokes the token it was opened with.
+    pairingTokenNow: () => activePairingTokenValue() ?? deps.pairingToken ?? null,
     // The second door: each admitted phone's own companion token. Checked by
     // the same gate as the global one, so a per-device credential is not a
     // phone that half works.

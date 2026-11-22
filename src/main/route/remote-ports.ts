@@ -24,6 +24,62 @@ export function providersFile(d: DiscoveryEnv): string {
   return path.join(base, 'magpie', 'providers.json')
 }
 
+/** Private HTTP-projection input, not a warning list and never part of RouteState. */
+export function configuredEndpointInventory(d: DiscoveryEnv, read: (file: string) => string = (file) => readFileSync(file, 'utf8')): string[] | null {
+  let data: unknown
+  try {
+    data = JSON.parse(read(providersFile(d)))
+  } catch {
+    // Cached route data can outlive a removed file: absence is not proof that
+    // no configured endpoint contributed to the current snapshot.
+    return null
+  }
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
+  const providers = (data as { providers?: unknown }).providers
+  if (providers === undefined) return []
+  if (!Array.isArray(providers)) return null
+  const endpoints: string[] = []
+  for (const entry of providers) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return null
+    const row = entry as Record<string, unknown>
+    for (const field of ENDPOINT_FIELDS) {
+      const value = row[field]
+      if (value == null || value === '') continue
+      if (typeof value !== 'string' || !URL.canParse(value)) return null
+      const url = new URL(value)
+      if (!url.hostname || (url.protocol !== 'http:' && url.protocol !== 'https:')) return null
+      // Strip credentials, path and query: only origin is used for host/port filtering.
+      endpoints.push(url.origin)
+    }
+  }
+  return endpoints
+}
+
+/**
+ * Retain origins for the lifetime of a RouteService cache. A failed read is
+ * immediately unknown; it becomes permanently unknown once catalog fetching
+ * or decision caching has begun, since retained rows can outlive the gap.
+ * Before then, a successful setup can recover from a missing startup file.
+ */
+export function retainEndpointInventory(read: () => string[] | null): (cacheStarted?: boolean) => string[] | null {
+  let gap = false
+  let retained: readonly string[] = []
+  return (cacheStarted = true) => {
+    let current: string[] | null = null
+    try {
+      current = read()
+    } catch {
+      // An unreadable file is the same as an unknown inventory.
+    }
+    if (current === null) {
+      gap = gap || cacheStarted
+      return null
+    }
+    retained = [...new Set([...retained, ...current])]
+    return gap ? null : [...retained]
+  }
+}
+
 const portOf = (raw: unknown): number | null => {
   if (typeof raw !== 'string') return null
   try {

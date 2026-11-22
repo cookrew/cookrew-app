@@ -41,6 +41,7 @@ function fakeRoute() {
   const card = (id: string): CardRouteState => ({ route: cards.get(id) ?? 'direct', effective: 'direct', appliesOn: 'restart', live: null, turn: null, offline: false, note: null, gateway: 'online', routable: true })
   const route: NonNullable<MobileApiDeps['route']> = {
     state: () => state,
+    endpointInventory: () => [],
     setDefault: (model) => {
       state = { ...state, defaultModel: model }
       return state
@@ -84,8 +85,12 @@ async function startApi(extra: Partial<MobileApiDeps>): Promise<number> {
   return (server.address() as net.AddressInfo).port
 }
 
+// A client that names the route schema it can read (shared/route.ts). The
+// old-client cases build their own URLs to stay unflattering.
+const aware = (p: string) => (p.startsWith('/api/route') || p === '/api/health' ? `${p}${p.includes('?') ? '&' : '?'}route=2` : p)
+
 const call = async (port: number, p: string, init: RequestInit = {}) =>
-  fetch(`http://127.0.0.1:${port}${p}`, { ...init, headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', ...(init.headers ?? {}) } })
+  fetch(`http://127.0.0.1:${port}${aware(p)}`, { ...init, headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', ...(init.headers ?? {}) } })
 
 describe('the route over HTTP', () => {
   it('GET /api/route, PUT the default, GET and PUT a card', async () => {
@@ -95,7 +100,10 @@ describe('the route over HTTP', () => {
     expect(state.status).toBe('online')
     const set = await call(port, '/api/route/default', { method: 'PUT', body: JSON.stringify({ model: 'group/smart' }) })
     expect(set.status).toBe(200)
-    expect(((await set.json()) as RouteState).defaultModel).toBe('group/smart')
+    const restricted = (await set.json()) as RouteState
+    expect(restricted.defaultModel).toBeNull()
+    expect(restricted.withheld?.defaultModel).toBe(true)
+    expect(fake.route.state().defaultModel).toBe('group/smart')
     const bad = await call(port, '/api/route/default', { method: 'PUT', body: JSON.stringify({ model: 3 }) })
     expect(bad.status).toBe(400)
     const cleared = await call(port, '/api/route/default', { method: 'PUT', body: JSON.stringify({ model: null }) })
@@ -118,7 +126,7 @@ describe('the route over HTTP', () => {
     expect(((await off.json()) as RouteState).sharedMcp).toBe(false)
     expect((await call(port, '/api/route/shared-mcp', { method: 'PUT', body: JSON.stringify({ on: 'yes' }) })).status).toBe(400)
     expect((await call(port, '/api/route/shared-mcp', { method: 'PUT', body: JSON.stringify({}) })).status).toBe(400)
-    const wall = await fetch(`http://127.0.0.1:${port}/api/route/shared-mcp`, { method: 'PUT', headers: { authorization: 'Bearer wall-token', 'content-type': 'application/json' }, body: '{"on":true}' })
+    const wall = await fetch(`http://127.0.0.1:${port}/api/route/shared-mcp?route=2`, { method: 'PUT', headers: { authorization: 'Bearer wall-token', 'content-type': 'application/json' }, body: '{"on":true}' })
     expect(wall.status).not.toBe(200)
     expect(fake.route.state().sharedMcp).toBe(false)
   })
@@ -126,7 +134,7 @@ describe('the route over HTTP', () => {
   it('a PUT without the pairing token is refused; a server without the service answers 404', async () => {
     const fake = fakeRoute()
     const port = await startApi({ route: fake.route })
-    const res = await fetch(`http://127.0.0.1:${port}/api/route/default`, { method: 'PUT', body: '{"model":null}' })
+    const res = await fetch(`http://127.0.0.1:${port}/api/route/default?route=2`, { method: 'PUT', body: '{"model":null}' })
     expect(res.status).toBe(401)
     const bare = await startApi({})
     expect((await call(bare, '/api/route')).status).toBe(404)
@@ -135,7 +143,7 @@ describe('the route over HTTP', () => {
   it('the read-only wall token reads /api/route and never a key', async () => {
     const fake = fakeRoute()
     const port = await startApi({ route: fake.route, wallToken: 'wall-token' })
-    const res = await fetch(`http://127.0.0.1:${port}/api/route`, { headers: { authorization: 'Bearer wall-token' } })
+    const res = await fetch(`http://127.0.0.1:${port}/api/route?route=2`, { headers: { authorization: 'Bearer wall-token' } })
     expect(res.status).toBe(200)
     const text = await res.text()
     expect(text).toContain('"status":"online"')
@@ -151,6 +159,8 @@ describe('the route over HTTP', () => {
     const bare = await startApi({})
     const none = (await (await call(bare, '/api/health')).json()) as { route?: unknown }
     expect(none.route).toBeUndefined()
+    const old = (await (await fetch(`http://127.0.0.1:${port}/api/health`)).json()) as { route?: unknown }
+    expect(old.route).toBeUndefined()
   })
 
   it('the stream carries route and card-route frames and holds the gateway clock while open', async () => {
@@ -160,6 +170,7 @@ describe('the route over HTTP', () => {
     const request = new EventEmitter() as unknown as http.IncomingMessage
     request.method = 'GET'
     request.headers = {}
+    request.url = '/api/events?route=2'
     let written = ''
     const response = Object.assign(new EventEmitter(), {
       req: request,
@@ -186,7 +197,7 @@ describe('the route over HTTP', () => {
       route: fake.route,
       routeBus: fake.bus
     } as unknown as MobileApiDeps
-    const handled = await handleMobileApi(request, response, new URL('/api/events', 'http://lan.local'), deps)
+    const handled = await handleMobileApi(request, response, new URL('/api/events?route=2', 'http://lan.local'), deps)
     expect(handled).toBe(true)
     expect(fake.holds()).toBe(1)
     fake.bus.emit('route', routeState('offline'))
@@ -205,5 +216,58 @@ describe('the route over HTTP', () => {
     request.emit('close')
     response.emit('close')
     expect(fake.holds()).toBe(0)
+  })
+
+  // Client-first (owner 2026-11-22): a client too old to read the projection is
+  // refused the route outright, and its stream carries no route frames — the
+  // old renderer would ignore `withheld`/`remoteRisks` and show a plain panel.
+  it('refuses the route to a client that does not name the schema, read and write', async () => {
+    const fake = fakeRoute()
+    const port = await startApi({ route: fake.route, routeBus: fake.bus })
+    const read = await fetch(`http://127.0.0.1:${port}/api/route`, { headers: { authorization: `Bearer ${TOKEN}` } })
+    expect(read.status).toBe(426)
+    expect(await read.text()).toContain('Update Cookrew')
+    expect((await fetch(`http://127.0.0.1:${port}/api/route?route=1`, { headers: { authorization: `Bearer ${TOKEN}` } })).status).toBe(426)
+    const put = await fetch(`http://127.0.0.1:${port}/api/route/default`, {
+      method: 'PUT', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' }, body: '{"model":"group/smart"}'
+    })
+    expect(put.status).toBe(426)
+    expect(fake.route.state().defaultModel).toBeNull()
+    const shared = await fetch(`http://127.0.0.1:${port}/api/route/shared-mcp`, {
+      method: 'PUT', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' }, body: '{"on":false}'
+    })
+    expect(shared.status).toBe(426)
+    expect(fake.route.state().sharedMcp).toBe(true)
+    expect(put.headers.get('upgrade')).toBe('cookrew-route-schema/2')
+  })
+
+  it('a stream that does not name the schema carries no route frame and holds no clock', async () => {
+    const fake = fakeRoute()
+    const request = new EventEmitter() as unknown as http.IncomingMessage
+    request.method = 'GET'
+    request.headers = {}
+    let written = ''
+    const response = Object.assign(new EventEmitter(), {
+      req: request, writableEnded: false, destroyed: false,
+      writeHead() { return response },
+      write(chunk: string) { written += chunk; return true },
+      end() { return response }
+    }) as unknown as http.ServerResponse
+    const store = Object.assign(new EventEmitter(), {
+      focusedState: { name: 'ws', dir: '/tmp', nodes: [], connections: [] }
+    })
+    const deps = {
+      store,
+      turns: Object.assign(new EventEmitter(), { list: () => [] }),
+      ops: { listWorkspaces: () => ({ workspaces: [], activeId: 'ws' }) },
+      route: fake.route,
+      routeBus: fake.bus
+    } as unknown as MobileApiDeps
+    await handleMobileApi(request, response, new URL('/api/events', 'http://lan.local'), deps)
+    expect(fake.holds()).toBe(0)
+    fake.bus.emit('route', routeState('offline'))
+    expect(written).not.toContain('event: route')
+    request.emit('close')
+    response.emit('close')
   })
 })

@@ -27,6 +27,7 @@ import { ADD_KEY_STEM, HarnessScan, groupLineFor, setupLines } from './setup'
 import { keyFor, readRouteKeys, type RouteKeys } from './route-keys'
 import { sharedMcpArgs } from './shared-mcp'
 import { readLibraryServers } from './library'
+import { retainEndpointInventory } from './remote-ports'
 import { GATE_UNREAD, gateRoute, readMagpieRouting, type GateAnswer, type MagpieRouting } from './remote-gate'
 import type { LiveValues } from '../../shared/launch-settings'
 
@@ -117,6 +118,8 @@ export interface RouteServiceDeps {
   remoteLoopback?: () => { id: string; port: number }[]
   /** Remote magpie providers on plain http off a tailnet (route/remote-ports.ts). */
   plainRemotes?: () => { id: string; host: string }[]
+  /** Private configured endpoints, sampled whenever cached route data can change. */
+  endpointInventory?: () => string[] | null
   schedule?: (fn: () => void, ms: number) => () => void
   writeFile?: (file: string, content: string) => void
 }
@@ -155,6 +158,8 @@ export class RouteService extends EventEmitter {
   private readonly routed = new Set<string>()
   private readonly decisions: RouteDecisions
   private readonly scan: HarnessScan
+  private readonly inventory: (cacheStarted?: boolean) => string[] | null
+  private inventoryCacheStarted = false
   private holds = 0
   private releaseMonitor: (() => void) | null = null
   private announceTimer: (() => void) | null = null
@@ -163,6 +168,7 @@ export class RouteService extends EventEmitter {
 
   constructor(private readonly deps: RouteServiceDeps) {
     super()
+    this.inventory = retainEndpointInventory(deps.endpointInventory ?? (() => null))
     const settings = this.readSettings()
     this.ownerDefault = settings.defaultModel
     this.sharedMcp = settings.sharedMcp
@@ -177,6 +183,8 @@ export class RouteService extends EventEmitter {
       now: deps.now,
       schedule: deps.schedule,
       onDecision: (decision) => {
+        this.inventoryCacheStarted = true
+        this.inventory()
         this.live = pushLive(this.live, decision)
         this.emitCard(decision.terminalId)
         this.announce()
@@ -187,6 +195,11 @@ export class RouteService extends EventEmitter {
   }
 
   // ---- the whole state
+
+  /** Private origins accumulated for the lifetime of this service's cached route data. */
+  endpointInventory(): string[] | null {
+    return this.inventory(this.inventoryCacheStarted)
+  }
 
   /** The gateway's bearer, main-only (never on RouteState): for the scrub. */
   gatewayKey(): string | null {
@@ -564,6 +577,10 @@ export class RouteService extends EventEmitter {
   }
 
   private async onProbe(probe: GatewayProbe): Promise<void> {
+    // An online probe can fetch provider data. Once one starts, a config gap
+    // stays unknown for this process even if the file becomes readable again.
+    if (probe.status === 'online' && probe.gateway) this.inventoryCacheStarted = true
+    this.inventory(this.inventoryCacheStarted)
     // The library changes in Magpie's own window; each probe (the panel opening, the held clock) reads it again.
     this.mcpServers = this.readLibrary()
     try {
@@ -584,6 +601,7 @@ export class RouteService extends EventEmitter {
       // A later probe (including an offline transition) owns the catalog now.
       // Never let an older HTTP answer put a disconnected provider back.
       if (this.catalogFor !== key) return
+      this.inventory()
       this.models = models
       this.quotas = withLocalRows(quotas, models)
       this.announce()

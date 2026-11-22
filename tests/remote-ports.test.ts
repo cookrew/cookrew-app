@@ -2,10 +2,57 @@
 // own provider list and denied to a served sandbox. Only addresses are read.
 import { describe, expect, it } from 'vitest'
 import path from 'node:path'
-import { plainRemoteProviders, providersFile, remoteLoopbackPorts, remoteLoopbackProviders } from '../src/main/route/remote-ports'
+import { configuredEndpointInventory, plainRemoteProviders, providersFile, remoteLoopbackPorts, remoteLoopbackProviders, retainEndpointInventory } from '../src/main/route/remote-ports'
 
 const env = { home: '/Users/x', env: {} }
 const list = (providers: unknown[]): string => JSON.stringify({ providers, groups: [], order: [] })
+
+describe('private configured endpoint inventory', () => {
+  it('reads all five fields, across providers, without retaining keys', () => {
+    const urls = ['https://alpha.example:51001/a', 'http://100.111.112.113:51002/b', 'https://charlie.example:51003/c', 'http://delta.example:51004/d', 'https://echo.example:51005/e']
+    const json = list([
+      { id: 'remote', preset: 'remote-magpie', anthropic: urls[0], chat: urls[1], responses: urls[2], decide: urls[3], url: urls[4], key: 'not-an-endpoint' },
+      { id: 'other', preset: 'custom', chat: 'https://other.example:51006/v1' }
+    ])
+    expect(configuredEndpointInventory(env, () => json)).toEqual([...urls, 'https://other.example:51006/v1'].map((url) => new URL(url).origin))
+  })
+
+  it('retains every observed origin across rewrites, and latches unknown after a gap', () => {
+    let current: string[] | null = ['https://a.example:51001']
+    const read = retainEndpointInventory(() => current)
+    expect(read()).toEqual(['https://a.example:51001'])
+    current = []
+    expect(read()).toEqual(['https://a.example:51001'])
+    current = ['https://b.example:51002']
+    expect(read()).toEqual(['https://a.example:51001', 'https://b.example:51002'])
+    current = null
+    expect(read()).toBeNull()
+    current = ['https://b.example:51002']
+    expect(read()).toBeNull()
+  })
+
+  it('recovers from a missing startup configuration before any provider data can be cached', () => {
+    let current: string[] | null = null
+    const read = retainEndpointInventory(() => current)
+    expect(read(false)).toBeNull()
+    current = ['https://setup.example:51003']
+    expect(read(false)).toEqual(current)
+    current = null
+    expect(read(true)).toBeNull()
+    current = ['https://setup.example:51003']
+    expect(read(false)).toBeNull()
+  })
+
+  it('treats a missing file, unreadable or malformed configuration as unknown', () => {
+    const missing = Object.assign(new Error('missing'), { code: 'ENOENT' })
+    expect(configuredEndpointInventory(env, () => { throw missing })).toBeNull()
+    expect(configuredEndpointInventory(env, () => { throw new Error('denied') })).toBeNull()
+    expect(configuredEndpointInventory(env, () => '{broken')).toBeNull()
+    expect(configuredEndpointInventory(env, () => list([{ id: 'x', chat: 'not-a-url' }]))).toBeNull()
+    expect(configuredEndpointInventory(env, () => list([{ id: 'x', chat: 4 }]))).toBeNull()
+    expect(configuredEndpointInventory(env, () => JSON.stringify({ providers: null }))).toBeNull()
+  })
+})
 
 describe('remoteLoopbackPorts', () => {
   it('reads every endpoint of a Remote magpie on this computer’s loopback', () => {
