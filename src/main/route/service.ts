@@ -581,6 +581,9 @@ export class RouteService extends EventEmitter {
         fetchCatalog(this.deps.fetch, probe.gateway.v1, probe.key),
         fetchQuotas(this.deps.fetch, probe.gateway.url, probe.key)
       ])
+      // A later probe (including an offline transition) owns the catalog now.
+      // Never let an older HTTP answer put a disconnected provider back.
+      if (this.catalogFor !== key) return
       this.models = models
       this.quotas = withLocalRows(quotas, models)
       this.announce()

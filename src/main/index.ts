@@ -332,6 +332,7 @@ import { magpieBinary, magpieRunner, ShareKeys } from './route/share-keys'
 import { fileIntentStore, INTENT_FILE } from './route/share-intents'
 import { fileAuditLog, SHARE_AUDIT_FILE } from './route/share-audit'
 import { createMagpieRemote } from './magpie-remote/setup'
+import { createCatalogRefresh } from './magpie-remote/catalog-refresh'
 import { magpieSeatGate, trackServedSeat } from './magpie-remote/seat-gate'
 import { afterPeerAnswer, sweepBlocked } from './magpie-remote/blocked'
 import { callerIsMagpie } from './magpie-remote/caller'
@@ -1073,6 +1074,7 @@ const routeService = new RouteService({
   },
   terminalsAcross: () => store.terminalsAcross()
 })
+const remoteCatalogRefresh = createCatalogRefresh(() => routeService.refresh())
 // The roster a page holds learns each change as it happens (agent-registry onChange).
 agents.onChange((entry) => {
   if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('agents:changed', entry)
@@ -8988,6 +8990,7 @@ let appShutdownStarted = false
 let appShutdownComplete = false
 
 app.on('will-quit', () => {
+  remoteCatalogRefresh.dispose()
   magpieWeb.stop()
   void magpieRemote.stop()
 })
@@ -9170,8 +9173,8 @@ function registerIpc(handlers: RestoreHandlers): void {
   })
   // Another computer's Magpie over the seal (magpie-remote/setup.ts): owner's window only.
   ipcMain.handle('magpie-remote:list', ownerOnly(() => magpieRemote.list()))
-  ipcMain.handle('magpie-remote:connect', ownerOnly((peer: unknown, name: unknown) => magpieRemote.connect(peer, name)))
-  ipcMain.handle('magpie-remote:disconnect', ownerOnly((peer: unknown) => magpieRemote.disconnect(peer)))
+  ipcMain.handle('magpie-remote:connect', ownerOnly((peer: unknown, name: unknown) => remoteCatalogRefresh.after(() => magpieRemote.connect(peer, name))))
+  ipcMain.handle('magpie-remote:disconnect', ownerOnly((peer: unknown) => remoteCatalogRefresh.after(() => magpieRemote.disconnect(peer))))
 
   // ---- the owner's account (identity v2) ----
   //

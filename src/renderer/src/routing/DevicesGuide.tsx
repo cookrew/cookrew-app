@@ -130,7 +130,7 @@ export function DevicesGuideBound({ store, modelHere, model }: { store: MagpieRe
       model={model}
       onUse={(d) => void store.connect(d.id, d.name)}
       onStop={(d) => void store.disconnect(d.id)}
-      onAccount={() => void requestAccountSheet()}
+      onAccount={() => void requestAccountSheet('devices')}
     />
   )
 }

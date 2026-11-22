@@ -302,7 +302,7 @@ describe('the wiring, as source', () => {
   })
 
   it('the account surface listens for the request', () => {
-    expect(src('account/AccountSurface.tsx')).toContain('onAccountSheetRequest(open)')
+    expect(src('account/AccountSurface.tsx')).toContain('onAccountSheetRequest(openTarget)')
   })
 
   it('no call door remains in the renderer (G5)', () => {

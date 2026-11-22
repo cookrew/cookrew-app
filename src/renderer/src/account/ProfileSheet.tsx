@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { registryMismatchSentence, signInAgainSentence } from '../../../shared/account-v2'
 import type { AccountProfile, AccountStatus, AdmittedPhone } from '../../../shared/account-v2'
 import type { WorkspaceMeta } from '../../../shared/model'
@@ -98,6 +98,11 @@ export function ProfileSheet({
   onStatus: (next: AccountStatus) => void
 }): React.JSX.Element {
   const [tab, setTab] = useState<ProfileTab>(initialTab)
+  /** The sheet takes focus as it opens, so keys never act on the control it covered. */
+  const sheetRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    sheetRef.current?.focus({ preventScroll: true })
+  }, [])
   /** THIS MAC'S workspaces, read from the store the canvas already uses —
    *  names and ids, which is all that ever leaves the desktop (P1). */
   const [workspaces, setWorkspaces] = useState<readonly WorkspaceMeta[]>([])
@@ -328,14 +333,19 @@ export function ProfileSheet({
   const now = Date.now()
   return (
     <div
-      className="gs-scrim cr-sheet"
+      className="gs-scrim cr-sheet cr-acct-layer"
       role="dialog"
       aria-modal="true"
       aria-label={`Profile @${username}`}
     >
       <div
+        ref={sheetRef}
+        tabIndex={-1}
         className="gs-sheet cr-sheet cr-acct-sheet"
         onKeyDown={(e) => {
+          // Stop here: a sheet underneath (Launch settings) closes on any
+          // Escape that reaches the window.
+          e.stopPropagation()
           if (e.key === 'Escape') onClose()
         }}
       >

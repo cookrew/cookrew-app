@@ -119,6 +119,10 @@
   background: rgba(0, 0, 0, 0.55);
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
+/* Account sheets open from inside other sheets (Launch settings' "Add a
+   computer"), so they stand one layer above an ordinary sheet by their own
+   z-index, never by DOM order. Still well under the lock (200). */
+.gs-scrim.cr-acct-layer { z-index: 65; }
 .gs-sheet {
   background: var(--cr-panel, #1c1a16); border: 1px solid var(--cr-line-hard, #4c463a);
   border-radius: 8px; padding: 22px 24px; width: min(560px, 100%);
