@@ -65,6 +65,8 @@ import { handleStreamRoutes } from "./stream-routes";
 import { handleStreamAdapters } from "./stream-adapters";
 import type { LoopHealthSnapshot } from "./loop-health";
 import { ROUTE_ID_RE, type CardRouteState, type RouteState } from "../shared/route";
+import { handleRouteHttp, mayReadRouteDiagnostics, routeCapable } from "./route/http";
+import { routeHttpView } from "./route/http-view";
 import { ownerSubmit } from "./ask";
 import { fromTheMacsOwnPage, handleUseSourceRoutes, isUseSourceRoute } from "./use-source-routes";
 import { handleUnlockGrantRoutes, isUnlockGrantRoute } from "./unlock-grant-routes";
@@ -399,6 +401,8 @@ export interface MobileApiDeps {
    */
   route?: {
     state: () => RouteState;
+    /** Private configured origins, read at each restricted route projection; null = unreadable. */
+    endpointInventory?: () => string[] | null;
     setDefault: (model: string | null) => RouteState;
     setSharedMcp: (on: boolean) => RouteState;
     cardState: (terminalId: string) => CardRouteState;
@@ -489,6 +493,12 @@ export interface MobileApiDeps {
    * unauthenticated (loopback-only embedders, tests).
    */
   pairingToken?: string;
+  /**
+   * The RUNNING root token, read at each check. A server rotates it in place;
+   * an already-open SSE stream must lose owner detail at that moment rather
+   * than keep the snapshot it was opened with.
+   */
+  pairingTokenNow?: () => string | null;
   /** Does this bearer belong to a phone this Mac still admits? */
   companionToken?: (candidate: string) => boolean;
   /**
@@ -735,11 +745,16 @@ export async function handleMobileApi(
   // "pairing" scope: an admitted phone is a paired phone, and the per-device
   // credential exists so forgetting one device ends that device's access
   // rather than nobody's.
-  const ownerPairing =
-    !!deps.pairingToken &&
-    (deps.companionGate
-      ? deps.companionGate(presentedToken(request, url))
-      : pairingAuthorized(request, url, deps.pairingToken, deps.companionToken));
+  const rootNow = (): string | null =>
+    deps.pairingTokenNow ? deps.pairingTokenNow() : deps.pairingToken ?? null;
+  const ownerPairingNow = (): boolean => {
+    const root = rootNow();
+    return !!root &&
+      (deps.companionGate
+        ? deps.companionGate(presentedToken(request, url))
+        : pairingAuthorized(request, url, root, deps.companionToken));
+  };
+  const ownerPairing = ownerPairingNow();
   // A watch's token clears this gate for its own short list of routes and no
   // other (watch-routes.ts): past here it is what a pairing is for those routes.
   const watchCleared =
@@ -901,7 +916,10 @@ export async function handleMobileApi(
     respondJson(response, 200, {
       ...deps.health(),
       compression: dynamicCompressionStats(),
-      ...(deps.route ? { route: deps.route.health() } : {})
+      // The summary (status, source, providers, live) follows the same client
+      // rule as the panel: an old client gets no route data at all, so it is
+      // not left showing a gateway it cannot reason about.
+      ...(deps.route && routeCapable(url.search) ? { route: deps.route.health() } : {})
     });
     return true;
   }
@@ -922,26 +940,12 @@ export async function handleMobileApi(
   // THE ROUTE. One fleet-wide read for the panel, one write for the owner's
   // default, one read and one write per card. The blanket gates above cover
   // them: GETs need `canRead`, the PUTs need pairing.
-  if (p === "/api/route" && method === "GET" && deps.route) {
-    respondJson(response, 200, deps.route.state());
-    return true;
-  }
-  if (p === "/api/route/default" && method === "PUT" && deps.route) {
-    const body = await readJson<{ model?: unknown }>(request);
-    if (body.model !== null && typeof body.model !== "string") {
-      respondJson(response, 400, { ok: false, reason: "model must be a string or null" });
-      return true;
-    }
-    respondJson(response, 200, deps.route.setDefault(body.model === "" ? null : body.model));
-    return true;
-  }
-  if (p === "/api/route/shared-mcp" && method === "PUT" && deps.route) {
-    const body = await readJson<{ on?: unknown }>(request);
-    if (typeof body.on !== "boolean") {
-      respondJson(response, 400, { ok: false, reason: "on must be a boolean" });
-      return true;
-    }
-    respondJson(response, 200, deps.route.setSharedMcp(body.on));
+  const routeAction =
+    method === "GET" && p === "/api/route" ? "read" :
+    method === "PUT" && p === "/api/route/default" ? "default" :
+    method === "PUT" && p === "/api/route/shared-mcp" ? "shared-mcp" : null;
+  if (routeAction && deps.route) {
+    await handleRouteHttp(request, response, deps.route, routeAction, ownerPairingNow, !!deps.pairingToken, url.search);
     return true;
   }
   const routeMatch = p.match(/^\/api\/terminal\/([^/]+)\/route$/);
@@ -2313,13 +2317,25 @@ export async function handleMobileApi(
     // The route: the whole state on change (debounced by the service), one
     // card's state when its decision or turn facts land. The stream holds the
     // gateway's clock open while it is, so a phone watching sees a probe.
-    const onRoute = (state: RouteState): void => send("route", state);
+    const onRoute = (state: RouteState): void => {
+      try {
+        send("route", routeHttpView(state, mayReadRouteDiagnostics(request, ownerPairingNow), deps.route?.endpointInventory));
+      } catch {
+        // One malformed producer snapshot must not take the stream, its
+        // listeners, or the route bus down. The next state is sent normally.
+        console.warn("[route] Dropped an SSE frame.");
+      }
+    };
     const onCardRoute = (row: { terminalId: string }): void => {
       if (inScopedCanvas(row.terminalId)) send("card-route", row);
     };
-    deps.routeBus?.on("route", onRoute);
+    // Client-first: a stream from a client that does not name the route schema
+    // gets no route frames at all (see shared/route.ts · ROUTE_SCHEMA_PARAM).
+    // It keeps the card-routes it already knows how to read.
+    const routeCapableHere = routeCapable(url.search);
+    if (routeCapableHere) deps.routeBus?.on("route", onRoute);
     deps.routeBus?.on("card-route", onCardRoute);
-    const releaseRoute = deps.route?.hold() ?? null;
+    const releaseRoute = routeCapableHere ? deps.route?.hold() ?? null : null;
     onClose(() => {
       deps.routeBus?.removeListener("route", onRoute);
       deps.routeBus?.removeListener("card-route", onCardRoute);

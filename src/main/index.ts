@@ -326,7 +326,7 @@ import { registerAccessIpc } from './access-ipc'
 import { registerShareIpc } from './share-ipc'
 import { MagpieWeb, MAGPIE_WEB_FILE } from './route/magpie-web'
 import { cookieAllowedFor, fileSignedCards, MAGPIE_CARDS_FILE, openMagpieCardSession, stripMagpieCookies } from './magpie-card-open'
-import { plainRemoteProviders, remoteLoopbackPorts, remoteLoopbackProviders } from './route/remote-ports'
+import { configuredEndpointInventory, plainRemoteProviders, remoteLoopbackPorts, remoteLoopbackProviders } from './route/remote-ports'
 import type { LiveValues } from '../shared/launch-settings'
 import { magpieBinary, magpieRunner, ShareKeys } from './route/share-keys'
 import { fileIntentStore, INTENT_FILE } from './route/share-intents'
@@ -1040,6 +1040,7 @@ const routeService = new RouteService({
   remotePorts: () => remoteLoopbackPorts(defaultDiscoveryEnv()),
   remoteLoopback: () => remoteLoopbackProviders(defaultDiscoveryEnv()),
   plainRemotes: () => plainRemoteProviders(defaultDiscoveryEnv(), undefined, tailnetView.known()),
+  endpointInventory: () => configuredEndpointInventory(defaultDiscoveryEnv()),
   // PATH, ~/.local/bin (the installer's symlink, off a GUI app's PATH) and the app bundle.
   monitor: new GatewayMonitor({ hasBinary: () => magpieInstalled({ home: homedir(), env: process.env }, existsSync) }),
   fetch: (input, init) => fetch(input, init),
@@ -8688,6 +8689,7 @@ app.whenReady().then(() => {
     // `route` field on /api/health (mobile-api.ts).
     route: {
       state: () => routeService.state(),
+      endpointInventory: () => routeService.endpointInventory(),
       setDefault: (model) => routeService.setDefault(model),
       setSharedMcp: (on) => routeService.setSharedMcp(on),
       cardState: (id) => routeService.cardState(id),

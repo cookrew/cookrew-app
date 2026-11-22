@@ -18,6 +18,9 @@ function fakeStream(): { request: http.IncomingMessage; response: http.ServerRes
   const request = new EventEmitter() as unknown as http.IncomingMessage
   request.method = 'GET'
   request.headers = {}
+  // A client that names the route schema it can read: this stream is meant to
+  // exercise every bus and hold, and an old client is deliberately given none.
+  request.url = '/api/events?route=2'
   const response = Object.assign(new EventEmitter(), {
     req: request,
     writableEnded: false,
@@ -98,7 +101,7 @@ describe('GET /api/events tears down through one close listener', () => {
   it('adds one close listener to the request and leaves every bus clean when the phone leaves', async () => {
     const { deps, listeners, held } = everyBus()
     const stream = fakeStream()
-    const handled = await handleMobileApi(stream.request, stream.response, new URL('http://lan.local/api/events'), deps)
+    const handled = await handleMobileApi(stream.request, stream.response, new URL('http://lan.local/api/events?route=2'), deps)
     expect(handled).toBe(true)
     expect(stream.request.listenerCount('close')).toBe(1)
     expect(listeners()).toBeGreaterThan(10)
