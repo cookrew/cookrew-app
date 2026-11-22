@@ -139,7 +139,7 @@ function restricted(raw: string) {
     status: 'online', gateway: null, gatewaySource: 'plugin', providers: 3, mcpServers: [],
     models: [], quotas: [], live: [], defaultModel: null,
     withheld: { providerData: true, mcpServers: true, addGroupLine: true },
-    remoteRisks: { plain: expect.stringContaining('unencrypted'), loopback: expect.stringContaining('tunnel') },
+    remoteRisks: { plain: expect.stringContaining('unencrypted'), loopback: expect.stringContaining('loopback') },
     harnesses: expect.arrayContaining([expect.objectContaining({ id: 'opencode', installed: false, loginLine: 'opencode auth login' })]),
     setup: { installLine: expect.stringContaining('usemagpie.ai/install.sh'), serveLine: 'magpie autostart on',
       pluginLine: '', addSubscriptionLine: 'magpie accounts add codex', addLocalLine: 'magpie provider add ollama', addGroupLine: null }

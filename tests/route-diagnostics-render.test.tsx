@@ -137,6 +137,17 @@ describe('routing panel with a restricted route snapshot', () => {
     expect(html).toContain('remote.example')
   })
 
+  it('describes Cookrew’s own sealed link as a link, with no button that would cut it', () => {
+    const html = paint(routeFixture('online', {
+      loopbackRemotes: [{ id: 'solis-core', port: 3428, managed: true }, { id: 'my-tunnel', port: 54322 }]
+    }))
+    expect(html).toContain('sealed link')
+    expect(html).toContain('127.0.0.1:3428')
+    expect(html).not.toContain('Take out solis-core')
+    // The hand-made tunnel beside it keeps its warning and its button.
+    expect(html).toContain('Take out my-tunnel')
+  })
+
   it('keeps install and start actions on restricted snapshots without a remote risk', () => {
     const absent = paint(routeFixture('absent', { gateway: null }))
     const offline = paint(routeFixture('offline', { gateway: null }))

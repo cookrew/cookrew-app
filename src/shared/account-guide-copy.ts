@@ -56,9 +56,17 @@ export const SHARE_COPY = {
   PLAIN: 'Plain http only on this computer’s own tailnet address, as Tailscale reports it, which is encrypted underneath. Every other address is given as https: turn on https in Magpie first (Settings › Gateway, or `magpie https on`) and give the other computer Magpie’s CA. Your other computers need neither: Your computers connects them over an encrypted link.',
   PLAIN_REMOTE: (id: string, host: string): string => `“${id}” is reached by plain http at ${host}, off a tailnet: its key and every request cross that network unencrypted. Give it its tailnet address, or https, in Magpie’s settings.`,
   PLAIN_HEAD: 'A Remote magpie on plain http',
-  LOOPBACK_HEAD: 'A Remote magpie on this computer’s loopback',
-  LOOPBACK: (id: string, port: number): string => `“${id}” is reached at 127.0.0.1:${port}, a tunnel. While the tunnel is down, any program that takes that port is handed its key and every request. Take it out, and connect that computer by its own address in Magpie’s settings.`,
+  LOOPBACK_HEAD: 'A tunnel to another computer’s Magpie',
+  LOOPBACK: (id: string, port: number): string => `“${id}” is reached at 127.0.0.1:${port}, a tunnel made by hand. While the tunnel is down, a program that takes that port receives every request Magpie sends there. Take it out, and connect that computer by its own address in Magpie’s settings.`,
   LOOPBACK_REMOVE: (id: string): string => `Take out ${id}`,
+  /**
+   * Cookrew's own sealed link is not a hand-made tunnel. The key never sits on
+   * the port — main keeps it and puts it on each request — so this is a calmer
+   * sentence, and there is no "take out" button: removing the provider would cut
+   * the connection itself. The way to end it is Stop using, in Your computers.
+   */
+  MANAGED_HEAD: 'A sealed link to another computer’s Magpie',
+  MANAGED: (id: string, port: number): string => `“${id}” goes through Cookrew’s own sealed link at 127.0.0.1:${port}. The key stays in Cookrew and is never written to that port; if the link is not running, a program that takes the port receives the requests, not the key. End it with Stop using in Your computers.`,
   DEVICE: 'Device name',
   DEVICE_HINT: 'laptop',
   DAILY: 'Daily cap (USD)',

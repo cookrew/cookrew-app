@@ -201,8 +201,13 @@ export interface RouteState {
   why: string | null
   /** The owner switched Magpie off (launch settings): installed or not, nothing routes and no Magpie way is offered. */
   switchedOff?: boolean
-  /** Remote magpie providers on this computer's loopback (tunnels): whoever takes the port gets their key. */
-  loopbackRemotes?: { id: string; port: number }[]
+  /**
+   * Remote magpie providers on this computer's loopback. `managed` marks
+   * Cookrew's own sealed link through its forwarder; the rest are tunnels made
+   * by hand. Either way a program that takes the port receives the requests
+   * (never the key: that stays in main and is put on per request).
+   */
+  loopbackRemotes?: { id: string; port: number; managed?: boolean }[]
   /** Remote magpie providers on plain http off a tailnet: the key crosses that network unencrypted. */
   plainRemotes?: { id: string; host: string }[]
   /** null = new cards stay direct even when online: the owner picks once, never inferred. */

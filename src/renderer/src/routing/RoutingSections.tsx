@@ -428,13 +428,17 @@ export function Rented({ state }: { state: RouteState }): React.JSX.Element | nu
  * program that takes its port is handed the key and every request (route/remote-ports.ts).
  * Each one is named, with the press that takes it out: an allowlisted line the owner runs.
  */
-export function LoopbackRemotes({ rows, onRun }: { rows: readonly { id: string; port: number }[] | undefined; onRun: RunLine }): React.JSX.Element | null {
+export function LoopbackRemotes({ rows, onRun }: { rows: readonly { id: string; port: number; managed?: boolean }[] | undefined; onRun: RunLine }): React.JSX.Element | null {
   if (!rows || rows.length === 0) return null
-  const ids = [...new Set(rows.map((row) => row.id))]
+  // A tunnel someone made by hand is theirs to take out. Cookrew's own sealed
+  // link is not: the button would delete the connection, and Stop using (Your
+  // computers) is where it ends.
+  const tunnels = [...new Set(rows.filter((row) => row.managed !== true).map((row) => row.id))]
+  const managed = [...new Set(rows.filter((row) => row.managed === true).map((row) => row.id))]
   return (
     <div className="cr-routing-bad" role="alert" data-section="loopback-remotes">
-      <b>{SHARE_COPY.LOOPBACK_HEAD}</b>
-      {ids.map((id) => {
+      {tunnels.length > 0 && <b>{SHARE_COPY.LOOPBACK_HEAD}</b>}
+      {tunnels.map((id) => {
         const port = rows.find((row) => row.id === id)?.port ?? 0
         return (
           <p key={id}>
@@ -445,6 +449,12 @@ export function LoopbackRemotes({ rows, onRun }: { rows: readonly { id: string; 
           </p>
         )
       })}
+      {managed.length > 0 && <b>{SHARE_COPY.MANAGED_HEAD}</b>}
+      {managed.map((id) => (
+        <p key={id} data-managed={id}>
+          {SHARE_COPY.MANAGED(id, rows.find((row) => row.id === id)?.port ?? 0)}
+        </p>
+      ))}
     </div>
   )
 }
