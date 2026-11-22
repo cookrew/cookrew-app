@@ -33,6 +33,8 @@ export interface ConnectCodes {
   codeFor(id: string): Uint8Array | null
   /** The old code is dead for this run either way; throws if the new one could not be saved. */
   rotate(): void
+  /** The current code's id (one-way from it): what a replaced code's refusal names as its successor. */
+  currentId(): string
   /**
    * For a code this Mac REPLACED: the key that proves so to a phone still
    * holding it (shared/canvas-seal.ts · replacedKeyOf). Null for the code in
@@ -113,6 +115,7 @@ export function createConnectCodes(file: string): ConnectCodes {
   let replaced: readonly Replaced[] = loadReplaced(wasFile)
   return {
     encoded: () => code.toString('base64url'),
+    currentId: () => id,
     codeFor: (asked) => (asked === id ? new Uint8Array(code) : null),
     replacedKeyFor(asked) {
       const found = asked === id ? undefined : replaced.find((entry) => entry.id === asked)

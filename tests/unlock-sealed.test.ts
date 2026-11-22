@@ -31,6 +31,19 @@ describe('sealedUnlockApi', () => {
     expect(line.asked[0].path).toBe('/api/use/sources/unlock/begin?seat=w2')
   })
 
+  it('is a v2 road only when its client is a cookrew-seal/2 session (Remember on the console)', async () => {
+    expect(sealedUnlockApi(client(200, {}), auth).sealedV2).toBe(false)
+    expect(sealedUnlockApi({ ...client(200, {}), version: 1 }, auth).sealedV2).toBe(false)
+    expect(sealedUnlockApi({ ...client(200, {}), version: 2 }, auth).sealedV2).toBe(true)
+  })
+
+  it('gives a remembered id back on the Mac\'s own forget route, inside the session', async () => {
+    const line = client(200, { ok: true, forgotten: true })
+    await sealedUnlockApi({ ...line, version: 2 }, auth, (path) => `${path}?seat=w2`).forget?.('the-id')
+    expect(line.asked[0]).toMatchObject({ method: 'POST', path: '/api/use/sources/unlock/forget?seat=w2', headers: { authorization: 'Bearer t' } })
+    expect(JSON.parse(line.asked[0].body ?? '')).toEqual({ id: 'the-id' })
+  })
+
   it('sends what was sealed and nothing else', async () => {
     const line = client(200, { ok: true, outcome: 'unlocked' })
     await sealedUnlockApi(line, auth).send('e.box')

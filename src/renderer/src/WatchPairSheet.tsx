@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { hostPlatform, machineCopy } from '../../shared/machine-words'
 import { cookrew } from './api'
+import { WatchSealWords } from './WatchSealWords'
 import { inviteRefusal, spacedCode, timeLeft, typedAddress, watchClaimed, type WatchCode, type WatchState } from './watch-code'
 import './grant-surface.css'
 // Where a .cr-sheet takes its colours: without it the code is dark on dark.
@@ -272,6 +273,7 @@ export function WatchPairSheet({ onClose }: { onClose: () => void }): React.JSX.
         {stage.name === 'digits' && <DigitsPane code={stage.code} seen={stage.code.claims} onDone={done} onAgain={again} />}
         {stage.name === 'done' && (
           <>
+            <WatchSealWords />
             <p className="gs-consequence">{machineCopy('You can forget it from ⋯ on this Mac or on the watch.', platform)}</p>
             <div className="gs-sheet-foot">
               <button type="button" className="gs-primary" onClick={onClose}>

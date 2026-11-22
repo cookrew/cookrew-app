@@ -17,11 +17,46 @@
 
 export type RouteStatus = 'absent' | 'offline' | 'online'
 
+/** Neutral words for a provider diagnostic the HTTP projection withheld. */
+export const ROUTE_HIDDEN = 'hidden on this device'
+
 /**
- * The gateway as every surface may see it. The KEY IS NOT HERE: it never
- * leaves main (route-env.ts hands it to a harness process; the read-only
- * wall token can read RouteState and must not learn it).
+ * THE ROUTE HTTP SCHEMA, named so mixed versions are a release decision, not
+ * a guess. Owner and restricted responses carry the same number. A client
+ * older than this ignores unknown fields but cannot render `withheld` or
+ * `remoteRisks`; ship server and client together and require the client to
+ * upgrade first. A newer schema makes the current routing panel require a
+ * client update. A payload without the field is the legacy shipped shape and
+ * stays readable by the current renderer.
  */
+export const ROUTE_HTTP_SCHEMA_VERSION = 2
+
+/**
+ * THE CLIENT SAYS WHICH ROUTE SCHEMA IT CAN READ, in the URL: `?route=2`.
+ *
+ * A client that predates the schema cannot render `withheld` or `remoteRisks`,
+ * so it must not be handed a projection it would show as if nothing were
+ * hidden. It also cannot set a header on an EventSource, which is why this is
+ * a query parameter and not `x-cookrew-route-schema`.
+ *
+ * CLIENT FIRST (owner 2026-11-22): clients send it before any host acts on
+ * it. A host that predates the schema ignores the parameter and answers the
+ * legacy shape, which these clients still read. Only a later host refuses a
+ * request without it (426, no route frames on the stream), and that switch
+ * waits until updated clients are shown to have reached people. The
+ * parameter is a capability claim, never authorisation. The desktop's own
+ * renderer (IPC) is not affected.
+ */
+export const ROUTE_SCHEMA_PARAM = 'route'
+
+/** The schema number a request's URL claims, or null when it claims none. */
+export function routeSchemaQuery(search: string): number | null {
+  const raw = new URLSearchParams(search).get(ROUTE_SCHEMA_PARAM)
+  // Decimal digits only: '', ' 2 ' or '0x2' claim no schema.
+  return raw !== null && /^\d{1,3}$/.test(raw) ? Number(raw) : null
+}
+
+/** Gateway details for desktop IPC and sealed owner responses. The key stays in main. */
 export interface RouteGateway {
   url: string
   v1: string
@@ -152,10 +187,24 @@ export interface RouteSetupLines {
 }
 
 export interface RouteState {
+  /** HTTP projection version (ROUTE_HTTP_SCHEMA_VERSION); absent on IPC and the legacy shipped shape. */
+  schemaVersion?: number
   status: RouteStatus
   gateway: RouteGateway | null
+  /** Discovery source when the HTTP response omits gateway coordinates. */
+  gatewaySource?: RouteGateway['source']
+  /** Address-free warnings when HTTP omits the detailed provider rows. */
+  remoteRisks?: { plain?: string; loopback?: string }
+  /** Fields the HTTP projection withheld because their only value carried host topology. */
+  withheld?: { mcpServers?: true; addGroupLine?: true; addAutoGroupLine?: true; defaultModel?: true; endpointInventory?: true; providerData?: true }
   /** Why the status is what it is when that needs saying — a rejected plugin file, a refused host. */
   why: string | null
+  /** The owner switched Magpie off (launch settings): installed or not, nothing routes and no Magpie way is offered. */
+  switchedOff?: boolean
+  /** Remote magpie providers on this computer's loopback (tunnels): whoever takes the port gets their key. */
+  loopbackRemotes?: { id: string; port: number }[]
+  /** Remote magpie providers on plain http off a tailnet: the key crosses that network unencrypted. */
+  plainRemotes?: { id: string; host: string }[]
   /** null = new cards stay direct even when online: the owner picks once, never inferred. */
   defaultModel: string | null
   providers: number

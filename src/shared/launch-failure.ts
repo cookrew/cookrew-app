@@ -7,7 +7,8 @@
  */
 export interface LaunchFailure {
   /** folder-untrusted: Claude would sit on its trust question, which Cookrew does not answer for a broad folder. */
-  kind: 'folder-missing' | 'folder-not-directory' | 'folder-untrusted' | 'command-missing' | 'exited'
+  /** served-context-lost: a served workspace's sandbox context is gone (a restart); it never spawns as the owner. */
+  kind: 'folder-missing' | 'folder-not-directory' | 'folder-untrusted' | 'command-missing' | 'exited' | 'served-context-lost'
   /** One line: what is wrong, naming the folder or the command. */
   why: string
   /** One line: what to do about it. */

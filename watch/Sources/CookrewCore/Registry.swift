@@ -40,11 +40,20 @@ public struct Renewed: Decodable, Equatable, Sendable {
   }
 }
 
+public extension RegistryAPI {
+  /** A registry that does not carry the key gives the old claim: no seal, the old way. */
+  func claim(relay: URL, code: String, token: String, device: WatchDevice?) async throws -> ClaimReply {
+    try await claim(relay: relay, code: code, token: token)
+  }
+}
+
 /** Everything the app asks of cookrew.dev. */
 public protocol RegistryAPI: Sendable {
   func join(code: String, device: WatchDevice, name: String) async throws -> JoinReply
   func desktops(token: String) async throws -> [WatchDesktop]
   func claim(relay: URL, code: String, token: String) async throws -> ClaimReply
+  /** The same, carrying this watch's account key so the Mac can seal with it. */
+  func claim(relay: URL, code: String, token: String, device: WatchDevice?) async throws -> ClaimReply
   func renew(account: WatchAccount, device: WatchDevice) async throws -> Renewed
   func signOut(token: String) async
   /** Every Mac on the account, for the devices stop. */
@@ -186,7 +195,11 @@ public final class HTTPRegistryAPI: RegistryAPI, @unchecked Sendable {
   }
 
   public func claim(relay: URL, code: String, token: String) async throws -> ClaimReply {
-    var request = try post(relay.appending(path: "api/watch/claim"), ["code": code])
+    try await claim(relay: relay, code: code, token: token, device: nil)
+  }
+
+  public func claim(relay: URL, code: String, token: String, device: WatchDevice?) async throws -> ClaimReply {
+    var request = try post(relay.appending(path: "api/watch/claim"), ["code": code].merging(device?.sealFields ?? [:]) { first, _ in first })
     request.setValue(token, forHTTPHeaderField: relaySessionHeader)
     let (data, status) = try await fetch(request)
     let reason = try? JSONDecoder().decode(Reason.self, from: data)

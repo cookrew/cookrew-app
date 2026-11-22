@@ -6,8 +6,6 @@ import { describe, expect, it } from 'vitest'
 import { bridgeablePath, createSocketBridge } from '../src/main/socket-bridge'
 import type { LoopbackSocket, LoopbackSocketDeps } from '../src/main/ws-client'
 import { BridgeWebSocket, type BridgeStream } from '../src/renderer/src/path/bridge-socket'
-import { tailnetWorthIt, TAILNET_WARM_MAX_MS, warmRoundTrip } from '../src/renderer/src/path/plane-quality'
-import { switchPlaneIfBetter, type PlaneSwitchDeps } from '../src/renderer/src/path/plane-switch'
 
 describe('the credential a bridged socket dials with', () => {
   const dialled = (path: string, credential: string | null): string => {
@@ -43,15 +41,29 @@ describe('which sockets may be bridged', () => {
   })
 })
 
+/** A moment the test waits for by name, not by a sleep a slow runner can lose (Windows CI, 2026-11-19). */
+const moment = (): { readonly fire: () => void; readonly happened: Promise<void> } => {
+  let fire!: () => void
+  const happened = new Promise<void>((resolve) => void (fire = resolve))
+  return { fire, happened }
+}
+
 describe('the Mac end of the bridge', () => {
   it('dials the socket, streams its messages down, and takes messages up', async () => {
     const sent: string[] = []
     let deps!: LoopbackSocketDeps
     let closed = false
+    const dialed = moment()
+    const shut = moment()
     const bridge = createSocketBridge({
       dial: (d) => {
         deps = d
-        return { send: (t) => void sent.push(t), close: () => void (closed = true), pause: () => undefined, resume: () => undefined } satisfies LoopbackSocket
+        dialed.fire()
+        const close = (): void => {
+          closed = true
+          shut.fire()
+        }
+        return { send: (t) => void sent.push(t), close, pause: () => undefined, resume: () => undefined } satisfies LoopbackSocket
       }
     })
     const server = http.createServer((req, res) => {
@@ -69,7 +81,7 @@ describe('the Mac end of the bridge', () => {
         })
       })
     })
-    await new Promise((r) => setTimeout(r, 50))
+    await dialed.happened
     expect(deps.path).toBe('/api/browser/b1/stream?token=t')
     deps.onOpen()
     deps.onMessage('{"t":"ready"}')
@@ -83,7 +95,7 @@ describe('the Mac end of the bridge', () => {
     expect(bridge.post('00000000-0000-0000-0000-000000000000', { m: ['x'] })).toBe(false)
     server.closeAllConnections()
     server.close()
-    await new Promise((r) => setTimeout(r, 50))
+    await shut.happened
     expect(closed).toBe(true)
     expect(bridge.size()).toBe(0)
   })
@@ -150,54 +162,15 @@ describe('the phone end of the bridge', () => {
   })
 })
 
-describe('a tailnet worth moving onto', () => {
-  it('beats the relay on a warm connection, under a ceiling', () => {
-    expect(tailnetWorthIt(150, 900)).toBe(true)
-    expect(tailnetWorthIt(150, 100)).toBe(true) // plainly fast
-    expect(tailnetWorthIt(400, 500)).toBe(true)
-    expect(tailnetWorthIt(600, 300)).toBe(false) // slower than the relay
-    expect(tailnetWorthIt(TAILNET_WARM_MAX_MS + 1, 5000)).toBe(false)
-    expect(tailnetWorthIt(null, 300)).toBe(false) // the warm hellos did not come back
-    expect(tailnetWorthIt(500, null)).toBe(true) // nothing to compare against yet
-  })
-
-  it('times the faster of two answered round trips', async () => {
-    let t = 0
-    const times = [300, 120]
-    const ms = await warmRoundTrip(async () => {
-      t += times.shift() ?? 0
-      return true
-    }, 2, () => t)
-    expect(ms).toBe(120)
-    expect(await warmRoundTrip(async () => false)).toBeNull()
-  })
-
-  it('keeps the phone where it is when the winner is slower — outcome "slower", nothing adopted', async () => {
-    const DEVICE = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
-    const TAIL = `https://100-68-81-64.${DEVICE}.d.cookrew.dev:8643`
-    let adopted = 0
-    const deps: PlaneSwitchDeps = {
-      plane: () => ({ origin: '', kind: 'relay' }),
-      card: async () => ({ deviceId: DEVICE, lan: [], tailnet: null, trusted: [TAIL] }),
-      hello: async (origin, nonce) => ({ ok: true, reply: { v: 2, deviceId: DEVICE, origin, issuedAtMs: 1, nonce, sig: 's' } }),
-      verify: async () => true,
-      adopt: () => void (adopted += 1),
-      nonce: () => 'n',
-      worthIt: async () => false
-    }
-    expect(await switchPlaneIfBetter(deps)).toBe('slower')
-    expect(adopted).toBe(0)
-    expect(await switchPlaneIfBetter({ ...deps, worthIt: async () => true })).toBe('switched')
-  })
-})
-
 describe('the browser card on the relay is paced', () => {
   it('sends at most one frame per interval, always the newest, and every other message at once', async () => {
     const { SOCKET_BRIDGE_FRAME_MS } = await import('../src/main/socket-bridge')
     let deps!: LoopbackSocketDeps
+    const dialed = moment()
     const bridge = createSocketBridge({
       dial: (d) => {
         deps = d
+        dialed.fire()
         return { send: () => undefined, close: () => undefined, pause: () => undefined, resume: () => undefined }
       }
     })
@@ -209,7 +182,7 @@ describe('the browser card on the relay is paced', () => {
       res.setEncoding('utf8')
       res.on('data', (chunk: string) => void (text += chunk))
     })
-    await new Promise((r) => setTimeout(r, 50))
+    await dialed.happened
     deps.onOpen()
     // A burst of frames from an animated page, and a control message among them.
     for (let i = 1; i <= 30; i += 1) {

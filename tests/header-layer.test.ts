@@ -27,11 +27,9 @@ import { describe, expect, it } from 'vitest'
  *   The sheet's own ✕ is off in the hidden part, and the scrim has no
  *   click-outside, so there is no way back: the freeze.
  *
- *   THE LOCAL-NETWORK ASK (`.cr-path-ask`) is absolute, `top: 100%`,
- *   z-index 60 — it hangs off the bottom edge of the bar, into the stage, and
- *   is painted under it. "A permission nobody knows to look for is a
- *   permission nobody grants" was written about this row; nobody could look
- *   for it.
+ *   THE LOCAL-NETWORK ROW (`.cr-path-ask`) hung off the bottom edge of the
+ *   bar the same way. It is gone (2026-11-19): with no names, the permission
+ *   it spoke of no longer decides the path (tests/local-network-row.test.tsx).
  *
  * So this is one number, and it is asserted as a COMPARISON rather than a
  * literal: what matters is that the bar outranks the canvas it overhangs, not
@@ -111,17 +109,5 @@ describe('the header outranks the canvas it overhangs', () => {
         )
       }
     }
-  })
-})
-
-describe('what hangs off the header', () => {
-  it('the local-network ask hangs off the bottom edge, above the canvas', () => {
-    const [ask] = rulesFor('.cr-path-ask')
-    expect(ask, 'no .cr-path-ask rule').toBeDefined()
-    expect(ask).toMatch(/position:\s*absolute/)
-    expect(ask).toMatch(/top:\s*100%/)
-    // Above the header's own children, and carried above the canvas by the
-    // header's layer — which is what the comparison above protects.
-    expect(layerOf('.cr-path-ask') as number).toBeGreaterThan(0)
   })
 })

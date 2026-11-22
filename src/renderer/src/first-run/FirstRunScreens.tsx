@@ -4,6 +4,7 @@ import { cookrew } from '../api'
 import { zoomStore } from '../zoom/zoom-store'
 import { draftKey, getDraft, setDraft } from '../prompt/prompt-draft'
 import type { CanvasNode } from '../../../shared/model'
+import type { RouteState } from '../../../shared/route'
 import { FIRST_SCREEN_COPY } from '../../../shared/first-run-copy'
 import { FirstScreen } from './FirstScreen'
 import { FirstWait } from './FirstWait'
@@ -25,7 +26,17 @@ import './first-run.css'
  * NOTHING HERE IS A DEAD END. The tool check stays one press from the first
  * screen, and "Look around first" steps out for this launch with a way back.
  */
-export function FirstRunScreens({ nodes, setup }: { nodes: readonly CanvasNode[]; setup: PreflightSetup }): React.JSX.Element | null {
+export function FirstRunScreens({
+  nodes,
+  setup,
+  route = null,
+  onSetDefault
+}: {
+  nodes: readonly CanvasNode[]
+  setup: PreflightSetup
+  route?: RouteState | null
+  onSetDefault?: (model: string) => void
+}): React.JSX.Element | null {
   const stage = useFirstRunStage()
   const task = useFirstTask()
   const [checking, setChecking] = useState(false)
@@ -75,7 +86,7 @@ export function FirstRunScreens({ nodes, setup }: { nodes: readonly CanvasNode[]
       </button>
     ) : null
   }
-  if (toolCheck) return <Preflight setup={setup} onDone={() => setChecking(false)} />
+  if (toolCheck) return <Preflight setup={setup} route={route} onSetDefault={onSetDefault} onDone={() => setChecking(false)} />
   if (away) {
     return (
       <button type="button" className="fr-back" onClick={() => setAway(false)}>

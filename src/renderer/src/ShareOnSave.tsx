@@ -223,6 +223,7 @@ export function ShareOnSave({
         MKT_SERVE['mkt.serve.who.free.sub']
       )}
       {option('paid', MKT_SERVE['mkt.serve.who.paid'], MKT_SERVE['mkt.serve.who.paid.sub'])}
+      {access !== 'just-me' && <p className="gs-foot-note">{MKT_SERVE['mkt.serve.seat-limits']}</p>}
 
       {access === 'paid' && (
         <div className="sos-price">

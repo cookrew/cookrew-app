@@ -398,7 +398,9 @@ suite.each([
     const asked = (what: RegExp): number => stage.studio.requests.filter((request) => what.test(`${request.method} ${request.path}`)).length
     await other.until(`document.querySelector('.cr-route-path')`, 'the path badge')
     const deadline = Date.now() + 20_000
-    while (asked(/^POST \/api\/rtc\/offer/) === 0 || asked(/^GET \/api\/reach/) === 0) {
+    // The search for a nearer way is the WebRTC knock alone: the d.cookrew.dev names, and the reach card
+    // that listed them, are gone (owner ruling 2026-11-16, LAN the Alma way).
+    while (asked(/^POST \/api\/rtc\/offer/) === 0) {
       if (Date.now() > deadline) throw new Error(`the machine never saw the search for a nearer way: ${stage.studio.requests.slice(-12).map((request) => `${request.method} ${request.path}`).join(', ')}`)
       await sleep(200)
     }
@@ -412,7 +414,7 @@ suite.each([
     expect(badge.title).toMatch(/direct by itself/)
     // Twenty seconds on the relay with nowhere nearer to go: the search waits its turn, and nothing spins.
     expect(asked(/^POST \/api\/rtc\/offer/) - from.offer, 'WebRTC knocks in twenty seconds').toBeLessThanOrEqual(1)
-    expect(asked(/^GET \/api\/reach/) - from.reach, 'reach cards read in twenty seconds').toBeLessThanOrEqual(2)
+    expect(asked(/^GET \/api\/reach/), 'reach cards read at all: the page has no names to look up').toBe(0)
     expect(window.length, `requests in twenty seconds: ${window.map((request) => `${request.method} ${request.path.split('?')[0]}`).join(', ')}`).toBeLessThanOrEqual(40)
     await shot(other, '5-on-the-relay')
     // And on the Devices level the tile of the machine it reaches says how.

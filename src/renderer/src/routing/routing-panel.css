@@ -359,3 +359,34 @@
   .cr-routing-source { display: none }
   .cr-routing-status { flex-wrap: wrap }
 }
+
+/* Share with my devices (ShareDevices.tsx) */
+.cr-routing-share { margin-top: 6px }
+.cr-routing-share .small { display: block; margin: 2px 0 6px }
+.cr-routing-share code { font-family: var(--font-mono); font-size: 11px }
+.cr-share-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin: 6px 0 }
+.cr-share-form label { display: grid; gap: 2px }
+.cr-share-form input { min-width: 0; width: 140px; font-family: var(--font-mono); font-size: 12px; padding: 4px 6px; border: 1.5px solid var(--line); background: var(--cream-hi) }
+.cr-share-key { display: grid; gap: 6px; padding: 8px 10px; margin: 6px 0; border: 2px solid var(--line); background: var(--cream-hi) }
+.cr-share-secret { user-select: all; word-break: break-all; padding: 4px 6px; background: var(--cream-md) }
+.cr-share-keys { list-style: none; margin: 4px 0; padding: 0 }
+.cr-share-keys li { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px dashed var(--line) }
+.cr-routing-menu .cr-remote-magpie { padding: 6px 10px 10px }
+.cr-routing-share { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink) }
+.cr-routing-share .small { font-size: 11px; color: var(--ink-soft) }
+.cr-routing-share b { font-size: 12px }
+/* The form inside the Add menu keeps button shapes, not menu rows. */
+.cr-routing-menu .cr-remote-magpie .fr-foot button {
+  display: inline-block;
+  width: auto;
+  margin-right: 6px;
+  padding: 5px 12px;
+  border: 2px solid var(--line);
+  background: var(--cream-hi);
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.cr-routing-menu .cr-remote-magpie .fr-foot button.fr-go { background: var(--amber) }
+.cr-routing-menu .cr-remote-magpie .fr-foot button:last-child { border-bottom: 2px solid var(--line) }

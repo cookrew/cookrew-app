@@ -1,9 +1,11 @@
+import { SHARE_COPY } from '../../../shared/account-guide-copy'
 import { useState } from 'react'
 import type { HarnessRow, RouteDecision, RouteModel, RouteState } from '../../../shared/route'
-import { KEY_PRESETS, ROUTING_COPY, autoGroupItem, decisionFacts, harnessTicks, routeChoices, statusLine, routeHead, ruleTitle } from '../../../shared/route-view'
+import { ROUTING_COPY, autoGroupItem, decisionFacts, harnessTicks, routeChoices, statusLine, routeHead, ruleTitle } from '../../../shared/route-view'
 import { mcpLibraryLine } from '../../../shared/quota-view'
 import { AccountCard } from './AccountCard'
-import { keyLineFor } from '../../../shared/route-lines'
+import { openMagpieSettings } from './magpie-card'
+import { useMagpieSwitches } from './MagpieSwitches'
 import { runningLabel, type SetupRunning } from './setup-line-state'
 import { cookrew } from '../api'
 
@@ -142,38 +144,45 @@ export function Harnesses({
   )
 }
 
-export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: { setup: RouteState['setup']; onRun: RunLine; defaultOpen?: boolean; running?: SetupRunning | null }): React.JSX.Element {
+export function AddMenu({
+  setup,
+  onRun,
+  defaultOpen = false,
+  running = null,
+  withheld
+}: {
+  setup: RouteState['setup']
+  onRun: RunLine
+  defaultOpen?: boolean
+  running?: SetupRunning | null
+  withheld?: RouteState['withheld']
+}): React.JSX.Element {
   const busyFor = (line: string | null): string | null => (line === null ? null : runningLabel(running, line))
   const [open, setOpen] = useState(defaultOpen)
-  const [keys, setKeys] = useState(false)
+  // Keys are typed into Magpie's own page, never a terminal (routing/magpie-card.ts): what went wrong opening it.
+  const [settingsProblem, setSettingsProblem] = useState<string | null>(null)
+  // Unknown or unavailable is not consent: offer remote only after both switches are read as on.
+  const switches = useMagpieSwitches().values
+  const remoteOn = switches?.magpie === true && switches.magpieRemote === true
   const [unexpected, setUnexpected] = useState(false)
   const toggle = (): void => {
     setOpen((o) => !o)
-    setKeys(false)
+    setSettingsProblem(null)
     // The notice is about the last click on the open menu; a new opening starts clean.
     setUnexpected(false)
   }
   const run = (line: string, enter = true): void => {
     setOpen(false)
-    setKeys(false)
     onRun(line, { enter })
   }
-  // Only `magpie provider add ` + preset is ever typed; a stem of another
-  // shape means main changed the line and the renderer refuses to guess.
-  const runKey = (preset: string): void => {
-    const line = keyLineFor(setup.addKeyLine, preset)
-    if (line === null) {
-      setUnexpected(true)
-      setOpen(false)
-      setKeys(false)
-      return
-    }
-    setUnexpected(false)
-    run(line, false)
+  const openSettings = (): void => {
+    setOpen(false)
+    void openMagpieSettings().then(setSettingsProblem)
   }
   return (
     <span className="cr-routing-add">
       {unexpected && <span className="cr-routing-bad">setup line unexpected — nothing typed</span>}{' '}
+      {settingsProblem && <span className="cr-routing-bad">{settingsProblem}</span>}{' '}
 
       <button type="button" className="cr-routing-btn primary" aria-expanded={open} onClick={toggle}>
         {ROUTING_COPY.add} ▾
@@ -184,20 +193,20 @@ export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: {
             <b>{ROUTING_COPY.addSubscription}</b>
             <span className="c">{busyFor(setup.addSubscriptionLine) ?? `${setup.addSubscriptionLine} · claude login · gemini auth`}</span>
           </button>
-          <button type="button" role="menuitem" aria-expanded={keys} onClick={() => setKeys((k) => !k)}>
+          <button type="button" role="menuitem" data-item="api-key" onClick={openSettings}>
             <b>{ROUTING_COPY.addKey}</b>
-            <span className="c">
-              {setup.addKeyLine}‹key› — {ROUTING_COPY.keyHint}
-            </span>
+            <span className="c">{ROUTING_COPY.keyHint}</span>
           </button>
-          {keys && (
-            <div className="cr-routing-presets">
-              {KEY_PRESETS.map((preset) => (
-                <button key={preset} type="button" className="cr-routing-pick" data-preset={preset} onClick={() => runKey(preset)}>
-                  {preset}
-                </button>
-              ))}
-            </div>
+          {remoteOn && (
+          <button
+            type="button"
+            role="menuitem"
+            data-item="remote-magpie"
+            onClick={openSettings}
+          >
+            <b>{ROUTING_COPY.addRemote}</b>
+            <span className="c">{ROUTING_COPY.addRemoteHint}</span>
+          </button>
           )}
           <button type="button" role="menuitem" disabled={busyFor(setup.addLocalLine) !== null} onClick={() => run(setup.addLocalLine)}>
             <b>{ROUTING_COPY.addLocal}</b>
@@ -206,11 +215,11 @@ export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: {
           {/* Main sends the group line only with two catalogue models filled in — never a placeholder; below two there is nothing to type. */}
           <button type="button" role="menuitem" disabled={setup.addGroupLine === null || busyFor(setup.addGroupLine) !== null} onClick={() => setup.addGroupLine !== null && run(setup.addGroupLine)}>
             <b>{ROUTING_COPY.addGroup}</b>
-            <span className="c">{busyFor(setup.addGroupLine) ?? setup.addGroupLine ?? ROUTING_COPY.groupNeedsTwo}</span>
+            <span className="c">{busyFor(setup.addGroupLine) ?? setup.addGroupLine ?? (withheld?.addGroupLine ? ROUTING_COPY.hiddenOnDevice : ROUTING_COPY.groupNeedsTwo)}</span>
           </button>
           {/* The local tier (design §5): main sends the script's printed command when the gateway lists ollama models to build it from; until then the item says to run the script. */}
           {(() => {
-            const auto = autoGroupItem(setup)
+            const auto = withheld?.addAutoGroupLine ? { line: null, why: ROUTING_COPY.hiddenOnDevice } : autoGroupItem(setup)
             return (
               <button type="button" role="menuitem" data-item="auto-group" disabled={auto.line === null || busyFor(auto.line) !== null} title={auto.why ?? auto.line ?? undefined} onClick={() => auto.line !== null && run(auto.line)}>
                 <b>{ROUTING_COPY.addAutoGroup}</b>
@@ -254,7 +263,7 @@ export function Accounts({
     <>
       <div className="cr-routing-seg">
         Models &amp; accounts <span className="sp" />
-        <AddMenu setup={state.setup} onRun={onRun} running={running} />
+        <AddMenu setup={state.setup} onRun={onRun} running={running} withheld={state.withheld} />
       </div>
       {state.quotas.map((q) => (
         <AccountCard key={`${q.provider}:${q.account ?? ''}`} q={q} now={now} />
@@ -264,9 +273,9 @@ export function Accounts({
         <span className="cr-routing-seg" style={{ margin: 0 }}>
           {ROUTING_COPY.defaultLabel}
         </span>
-        {state.defaultModel === null && <span className="small">{ROUTING_COPY.defaultNone}</span>}
-        {choices.map((id) => {
-          const on = id === 'direct' ? state.defaultModel === null : state.defaultModel === id
+        {state.defaultModel === null && <span className="small">{state.withheld?.defaultModel ? ROUTING_COPY.hiddenOnDevice : state.withheld?.providerData ? 'direct · model choices hidden on this device' : ROUTING_COPY.defaultNone}</span>}
+        {!state.withheld?.providerData && choices.map((id) => {
+          const on = !state.withheld?.defaultModel && (id === 'direct' ? state.defaultModel === null : state.defaultModel === id)
           return (
             <button
               key={id}
@@ -281,9 +290,9 @@ export function Accounts({
           )
         })}
       </div>
-      {onSetSharedMcp && <SharedMcp on={state.sharedMcp} servers={state.mcpServers} onSet={onSetSharedMcp} />}
+      {onSetSharedMcp && <SharedMcp on={state.sharedMcp} servers={state.mcpServers} withheld={state.withheld} onSet={onSetSharedMcp} />}
       <details className="cr-routing-fold">
-        <summary>▸ Model catalogue · {state.models.length} · /v1/models</summary>
+        <summary>▸ Model catalogue · {state.withheld?.endpointInventory || state.withheld?.providerData ? ROUTING_COPY.hiddenOnDevice : state.models.length} · /v1/models</summary>
         <div>
           {state.models.map((m) => (
             <ModelLine key={m.id} m={m} />
@@ -295,7 +304,12 @@ export function Accounts({
 }
 
 /** One MCP hub for every agent (shared) or each agent its own (own); read at each agent's next spawn. */
-function SharedMcp({ on, servers, onSet }: { on: boolean; servers: readonly string[] | null | undefined; onSet: (on: boolean) => void }): React.JSX.Element {
+function SharedMcp({ on, servers, withheld, onSet }: {
+  on: boolean
+  servers: readonly string[] | null | undefined
+  withheld?: RouteState['withheld']
+  onSet: (on: boolean) => void
+}): React.JSX.Element {
   const picks: { value: boolean; label: string }[] = [
     { value: true, label: ROUTING_COPY.mcpShared },
     { value: false, label: ROUTING_COPY.mcpOwn }
@@ -318,7 +332,11 @@ function SharedMcp({ on, servers, onSet }: { on: boolean; servers: readonly stri
         </button>
       ))}
       <span className="small">{on ? ROUTING_COPY.mcpSharedNote : ROUTING_COPY.mcpOwnNote}</span>
-      {on && <span className="small cr-routing-mcplib">{mcpLibraryLine(servers)}</span>}
+      {on && <span className="small cr-routing-mcplib">
+        {withheld?.mcpServers
+          ? `${servers?.length ? `${mcpLibraryLine(servers)} · ` : ''}${ROUTING_COPY.hiddenOnDevice}`
+          : mcpLibraryLine(servers)}
+      </span>}
     </div>
   )
 }
@@ -344,6 +362,9 @@ export function LiveRoutes({
   onZoom?: (terminalId: string) => void
 }): React.JSX.Element | null {
   if (state.status === 'absent') return null
+  if (state.withheld?.endpointInventory || state.withheld?.providerData) {
+    return <><div className="cr-routing-seg">Live routes</div><div className="small" style={{ padding: '4px 8px' }}>Live routes are hidden on this device.</div></>
+  }
   if (state.status === 'offline' || state.live.length === 0) {
     return (
       <>
@@ -401,3 +422,53 @@ export function Rented({ state }: { state: RouteState }): React.JSX.Element | nu
     </>
   )
 }
+
+/**
+ * A Remote magpie on this computer's loopback is a tunnel, and while it is down any
+ * program that takes its port is handed the key and every request (route/remote-ports.ts).
+ * Each one is named, with the press that takes it out: an allowlisted line the owner runs.
+ */
+export function LoopbackRemotes({ rows, onRun }: { rows: readonly { id: string; port: number }[] | undefined; onRun: RunLine }): React.JSX.Element | null {
+  if (!rows || rows.length === 0) return null
+  const ids = [...new Set(rows.map((row) => row.id))]
+  return (
+    <div className="cr-routing-bad" role="alert" data-section="loopback-remotes">
+      <b>{SHARE_COPY.LOOPBACK_HEAD}</b>
+      {ids.map((id) => {
+        const port = rows.find((row) => row.id === id)?.port ?? 0
+        return (
+          <p key={id}>
+            {SHARE_COPY.LOOPBACK(id, port)}{' '}
+            <button type="button" className="cr-routing-btn" onClick={() => onRun(`magpie provider rm ${id}`, { enter: true })}>
+              {SHARE_COPY.LOOPBACK_REMOVE(id)}
+            </button>
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
+export function RemoteRisks({ risks }: { risks: RouteState['remoteRisks'] }): React.JSX.Element | null {
+  if (!risks?.plain && !risks?.loopback) return null
+  return (
+    <div className="cr-routing-bad" role="alert" data-section="remote-risks">
+      {risks.plain && <p>{risks.plain}</p>}
+      {risks.loopback && <p>{risks.loopback}</p>}
+    </div>
+  )
+}
+
+/** Remote magpie providers reached by plain http off a tailnet (owner ruling 2026-11-17): named, with the fix. */
+export function PlainRemotes({ rows }: { rows: readonly { id: string; host: string }[] | undefined }): React.JSX.Element | null {
+  if (!rows || rows.length === 0) return null
+  return (
+    <div className="cr-routing-bad" role="alert" data-section="plain-remotes">
+      <b>{SHARE_COPY.PLAIN_HEAD}</b>
+      {rows.map((row) => (
+        <p key={row.id}>{SHARE_COPY.PLAIN_REMOTE(row.id, row.host)}</p>
+      ))}
+    </div>
+  )
+}
+

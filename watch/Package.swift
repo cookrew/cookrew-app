@@ -13,6 +13,7 @@ let package = Package(
     .target(name: "CookrewCore"),
     .target(name: "CookrewWatchUI", dependencies: ["CookrewCore"]),
     .executableTarget(name: "watch-shots", dependencies: ["CookrewWatchUI", "CookrewCore"]),
+    .executableTarget(name: "seal2-probe", dependencies: ["CookrewCore"]),
     .testTarget(name: "CookrewCoreTests", dependencies: ["CookrewCore"])
   ]
 )

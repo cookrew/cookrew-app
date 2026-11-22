@@ -51,6 +51,7 @@ function serviceFor(fake: { port: number }, nodes: Map<string, TerminalNodeData>
   const lookups: string[] = []
   const monitor = new GatewayMonitor({ discovery: { home, env: { MAGPIE_ADDR: `:${fake.port}`, ...env } }, hasBinary: () => true, watchDir: null, helloTimeoutMs: 500, schedule: () => () => {} })
   const svc = new RouteService({
+    switches: () => ({ magpie: true, magpieRemote: false }),
     monitor,
     fetch: (i, init) => fetch(i, init),
     home,

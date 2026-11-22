@@ -55,7 +55,7 @@ import { lightenCanvas } from "../shared/wire-canvas";
 import { machineCopy } from "../shared/machine-words";
 import { SEAT_GONE, type WorkspaceCheck, type WorkspaceRemovePlan } from "../shared/workspace-door";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
-import { cardCheckpoint, handleWatchClaim, handleWatchHello, handleWatchRoutes, watchRouteAllowed, watchTokenAccepted, watchWriteRefusal } from "./watch-routes";
+import { cardCheckpoint, handleWatchClaim, handleWatchHello, handleWatchRekey, handleWatchRoutes, watchRouteAllowed, watchTokenAccepted, watchTokenAcceptedOn, watchWriteRefusal } from "./watch-routes";
 import { handlePhoneInviteRoute } from "./phone-invite";
 import { bridgeablePath, SOCKET_BRIDGE_MESSAGE_MAX, SOCKET_BRIDGE_PATH, SOCKET_BRIDGE_POST_MESSAGES, type SocketBridge } from "./socket-bridge";
 import { dynamicCompressionStats } from "./http-compress";
@@ -69,7 +69,8 @@ import { ownerSubmit } from "./ask";
 import { fromTheMacsOwnPage, handleUseSourceRoutes, isUseSourceRoute } from "./use-source-routes";
 import { handleUnlockGrantRoutes, isUnlockGrantRoute } from "./unlock-grant-routes";
 import type { UnlockGrantDoor } from "./unlock-grant";
-import { carriesSealProof } from "./seal-proof";
+import { cameOverRelayLine, carriesSealProof, sealedPeerOf, sealedV2Of } from "./seal-proof";
+import { DOOR_MARKER } from "../shared/remote-unlock";
 import { UNLOCK_GRANT_EVENT } from "../shared/unlock-grant";
 import type { ViewerWho } from "../shared/remote-access";
 import type { SkinStore } from "./skin-store";
@@ -84,6 +85,7 @@ import { wallProjection, type InboxRow } from "../shared/inbox-rank";
 import type { Surface as SousSurface } from "../shared/sous-intent";
 import type { UiCommandEvent } from "../shared/sous-ui";
 import { HEAR_MAX_BYTES, type Heard } from "./hear-file";
+import type { RtcBind } from "../shared/rtc-bind";
 import { SpeakError, type LocalVoice } from "./local-voice";
 import type { EventEmitter } from "node:events";
 import type { SecretsStore } from "./secrets-store";
@@ -302,7 +304,11 @@ export interface MobileApiDeps {
    * candidates on this Mac's published addresses. Owner token only — the
    * write gate above refuses a POST without pairing.
    */
-  rtc?: { answer: (offerSdp: string) => Promise<string | null> };
+  rtc?: {
+    answer: (offerSdp: string) => Promise<string | null>;
+    /** What binds the answer to this Mac against the relay (shared/rtc-bind.ts). */
+    bind?: (offerSdp: string, answerSdp: string) => RtcBind | null;
+  };
   /** The browser card's socket over plain HTTP, for the relay (socket-bridge.ts). */
   socketBridge?: SocketBridge;
   /** The build this Mac serves (build-id.ts): sent on every stream, and again when it changes. */
@@ -405,8 +411,9 @@ export interface MobileApiDeps {
   /**
    * 'changed' once the registry has taken a reach card that differs from the
    * last one it took (reach.ts · onChanged). The stream relays it as `reach`
-   * so a phone on the relay plane races the Mac's new names at once instead
-   * of on its own minute clock.
+   * so a phone on the relay plane knocks the WebRTC link open at once (this
+   * Mac's link candidates moved) instead of after its knock gap; an older
+   * console races the Mac's new names on it.
    */
   reachBus?: EventEmitter;
   /** Recover an inactive teammate as it was (agent-recover feature). */
@@ -679,6 +686,15 @@ function deviceSeat(url: URL, store: MobileApiDeps["store"]): string | null {
   return store.list().workspaces.some((w) => w.id === seat) ? seat : null;
 }
 
+/** The binding beside an answer (shared/rtc-bind.ts), or null: none to make, or making it failed. */
+async function bindRtcAnswer(rtc: MobileApiDeps["rtc"], offerSdp: string, answerSdp: string): Promise<RtcBind | null> {
+  try {
+    return (await rtc?.bind?.(offerSdp, answerSdp)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function handleMobileApi(
   request: http.IncomingMessage,
   response: http.ServerResponse,
@@ -727,7 +743,13 @@ export async function handleMobileApi(
   // A watch's token clears this gate for its own short list of routes and no
   // other (watch-routes.ts): past here it is what a pairing is for those routes.
   const watchCleared =
-    !ownerPairing && watchRouteAllowed(method, p) && watchTokenAccepted(presentedToken(request, url));
+    !ownerPairing && watchRouteAllowed(method, p) && watchTokenAcceptedOn(presentedToken(request, url), cameOverRelayLine(request), request.headers[DOOR_MARKER] !== undefined);
+  // The watch's own token, refused for the road it came on: said as "sealed only" (403), never as an unknown
+  // token (401), which a watch takes for being forgotten and lets go of its pairing.
+  if (!ownerPairing && !watchCleared && watchRouteAllowed(method, p) && watchTokenAccepted(presentedToken(request, url))) {
+    respondJson(response, 403, { error: "sealed-only" });
+    return true;
+  }
   const hasPairing = ownerPairing || watchCleared;
   const hasReadOnly =
     !!deps.wallToken && pairingAuthorized(request, url, deps.wallToken);
@@ -756,6 +778,7 @@ export async function handleMobileApi(
   // Six digits for a watch's token: open, as this route must be, and bounded.
   if (await handleWatchClaim(request, response, method, p, deps.bridgedDeviceId ?? null)) return true;
   if (handleWatchHello(response, url, method, p)) return true;
+  if (handleWatchRekey(response, method, p, sealedPeerOf(request), presentedToken(request, url))) return true;
   const watchRefusal = watchCleared ? watchWriteRefusal(p) : null;
   if (watchRefusal) {
     respondJson(response, watchRefusal.status, { error: watchRefusal.error });
@@ -1003,10 +1026,15 @@ export async function handleMobileApi(
   // THE SEALED SLOTS — owner token only, GET included: the read-only wall
   // token must not even learn the names. The write gate above already
   // refused a read-only PUT/DELETE; this refuses its GET too.
-  // A WEBRTC OFFER, over whatever plane the phone is already on (the relay,
-  // at home): the answer carries this Mac's LAN and tailnet candidates and
-  // the DTLS fingerprint the direct link is checked against (rtc-peer.ts).
+  // The answer contains LAN candidates. Only an authenticated v2 seal inner
+  // request may reach the RTC host, including on loopback; the pairing gate
+  // above remains required. A relay marker or caller-supplied header alone is
+  // not proof of the terminus's per-process seal proof.
   if (method === "POST" && p === "/api/rtc/offer" && deps.rtc) {
+    if (!ownerPairing || !sealedV2Of(request)) {
+      respondJson(response, 403, { error: "sealed session required" });
+      return true;
+    }
     const body = await readJson<{ sdp?: unknown }>(request);
     if (typeof body.sdp !== "string" || body.sdp.length === 0 || body.sdp.length > 64_000) {
       respondJson(response, 400, { error: "sdp is required" });
@@ -1014,7 +1042,15 @@ export async function handleMobileApi(
     }
     try {
       const sdp = await deps.rtc.answer(body.sdp);
-      respondJson(response, sdp === null ? 503 : 200, sdp === null ? { error: "no direct link offered" } : { sdp });
+      if (sdp === null) {
+        respondJson(response, 503, { error: "no direct link offered" });
+        return true;
+      }
+      // `bind` ties the answer's fingerprint and the offer's, as received, to
+      // this Mac's device key. Additive: a console that does not read it still
+      // finds `sdp`, and one that does refuses an answer that has none.
+      const bind = await bindRtcAnswer(deps.rtc, body.sdp, sdp);
+      respondJson(response, 200, bind === null ? { sdp } : { sdp, bind });
     } catch {
       respondJson(response, 400, { error: "offer not accepted" });
     }

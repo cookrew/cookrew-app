@@ -1,5 +1,5 @@
 import { launchBoot } from './launch-settings-boot'
-import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, net, Notification, powerMonitor, powerSaveBlocker, safeStorage, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, net, Notification, powerMonitor, powerSaveBlocker, safeStorage, session, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -153,7 +153,7 @@ import { launchCommand, withoutRoutedPick } from '../shared/launch-tune'
 import { launchOfferFor, withLaunchOffers } from './launch-offers'
 import { GatewayMonitor } from './route/gateway'
 import { RouteService } from './route/service'
-import { magpieInstalled } from './route/discovery'
+import { magpieInstalled, defaultDiscoveryEnv } from './route/discovery'
 import { FIRST_TASK_WAIT_MS, claudeComposerDrawn, forkContextReady, forkTerminal as forkTerminalOp, harnessReadyForInput, injectWhenReady } from './fork'
 import { AgentRegistry, type AgentRegistryUpsert } from './agent-registry'
 import { HARNESS_FACTS } from './route/setup'
@@ -180,7 +180,15 @@ import { createNetworkWatch } from './network-watch'
 import { createCanvasRelay } from './canvas-relay'
 import { loopbackDialer } from './canvas-bridge'
 import { createSealTerminus } from './canvas-seal-terminus'
-import { sealProofHeaders } from './seal-proof'
+import { relayLineHeaders, sealProofHeaders } from './seal-proof'
+import { createSealMarks } from './seal-marks'
+import { createSealDevice } from './seal-device'
+import { createSealPeers } from './seal-peers'
+import { createSealPinStore } from './seal-pins'
+import { answerPeer, blockedDesktopHoldings as blockedHoldingsOf, createBlockedLanes, forgetBlocked } from './seal-blocked'
+import { createSealWatchKeys } from './seal-watch-keys'
+import { forgetWatchSeal, watchDeviceHttp, watchSealHost } from './seal-watch-gate'
+import { deviceWords, keyWords } from '../shared/seal2/handshake'
 import { sealedSwitchMemory } from './remote-switch-memory'
 import { singleConfirm } from './remote-switch-confirm'
 import { createConnectCodes } from './connect-code'
@@ -268,6 +276,7 @@ import { linuxHandFor } from './linux-input'
 import { createRemoteDesk, remoteGate } from './remote-desk'
 import { createUpdateCheck } from './update-check'
 import { createUnlockDoor, loadUnlockKey, unlockMissesFile } from './remote-unlock'
+import { admissionEpoch, createRememberedUnlocks } from './unlock-remembered'
 import { createUnlockGrantDoor } from './unlock-grant'
 import type { SealKeyPair } from '../shared/relay-seal'
 import { fingerprintOfDigest } from '../shared/key-fingerprint'
@@ -298,7 +307,7 @@ import { createBrowserCast } from './browser-cast'
 import { createBrowserCastIpc } from './browser-cast-ipc'
 import { WatchPairing } from './watch-pairing'
 import { createWatchHost } from './watch-host'
-import { inviteWatch, setWatchHost } from './watch-routes'
+import { inviteWatch, setWatchHost, watchSealedRouteAllowed } from './watch-routes'
 import { BrowserThumbCache } from './browser-thumb-cache'
 import { createTileWake } from './browser-tile-wake'
 import { browserThumbKeep } from './browser-thumb-keep'
@@ -314,6 +323,21 @@ import { forgetCardWindow } from './use-window-memory'
 import { addPaneDirs, installerDirs, panePath } from './pane-path'
 import { bootStep, paintFailure } from './boot-failure'
 import { registerAccessIpc } from './access-ipc'
+import { registerShareIpc } from './share-ipc'
+import { MagpieWeb, MAGPIE_WEB_FILE } from './route/magpie-web'
+import { cookieAllowedFor, fileSignedCards, MAGPIE_CARDS_FILE, openMagpieCardSession, stripMagpieCookies } from './magpie-card-open'
+import { plainRemoteProviders, remoteLoopbackPorts, remoteLoopbackProviders } from './route/remote-ports'
+import type { LiveValues } from '../shared/launch-settings'
+import { magpieBinary, magpieRunner, ShareKeys } from './route/share-keys'
+import { fileIntentStore, INTENT_FILE } from './route/share-intents'
+import { fileAuditLog, SHARE_AUDIT_FILE } from './route/share-audit'
+import { createMagpieRemote } from './magpie-remote/setup'
+import { createCatalogRefresh } from './magpie-remote/catalog-refresh'
+import { magpieSeatGate, trackServedSeat } from './magpie-remote/seat-gate'
+import { afterPeerAnswer, sweepBlocked } from './magpie-remote/blocked'
+import { callerIsMagpie } from './magpie-remote/caller'
+import { createTailnetView } from './route/tailnet'
+import { MAGPIE_REMOTE_KIND } from '../shared/remote-magpie'
 import { AccessStore, probeEndpoint } from './agent-access'
 import { macKeychain } from './pane-keychain'
 import { createSetupLines, registerSetupLineIpc, shellHoldsTerminal } from './setup-line'
@@ -385,7 +409,9 @@ import { openWorkspace, workspaceCheck } from './workspace-door'
 import { seedConductor } from './seed-conductor'
 import { inspectForks, planWorkspaceRemove, removeFork, type ForkScope } from './workspace-fork-check'
 import type { WorkspaceRemovePlan } from '../shared/workspace-door'
-import { servedConfinement } from './session-spawn'
+import { inSessionsRoot, profileDigest, servedConfinement, servedProfile, spawnMode, type ServedSpawnContext } from './session-spawn'
+import { SeatLedger, lsofCwds, seatGate, type SeatGate } from './seat-ledger'
+import { sessionsRootOf } from './owner-secrets'
 import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
 import { ACCOUNT_SUB_PREFIX, ServedCallers } from './served-callers'
 import { serviceGrants } from './service-grants-store'
@@ -652,7 +678,8 @@ const tuningBus = new EventEmitter()
  * 'changed' when the registry has taken a reach card that differs from the
  * last one it took: this Mac's addresses moved and the zone answers the new
  * names. Phone streams relay it as `reach` (mobile-api) and the renderer gets
- * `reach:changed`; both mean "race the Mac's names now, not in a minute".
+ * `reach:changed`; both mean "try the direct path now, not after the gap" (a
+ * WebRTC knock on a current console, a name race on an older one).
  */
 const reachBus = new EventEmitter()
 /**
@@ -743,6 +770,13 @@ const rtcHost = createRtcHost({
     return [...new Set([...v4('lan'), ...v4('tailscale')])]
   },
   deviceId: () => accounts.account()?.deviceId ?? null,
+  // THE BINDING (shared/rtc-bind.ts): the offer's and the answer's DTLS
+  // fingerprints under this Mac's device key, so the relay that carries the
+  // SDPs cannot put itself in the middle of the link. No connect code.
+  signer: () => {
+    const account = accounts.account()
+    return account ? { jwk: account.publicKeyJwk, sign: (message: string) => signWithDevice(account, message) } : null
+  },
   log: (message) => console.error(`[cookrew] ${message}`)
 })
 /**
@@ -900,6 +934,68 @@ const servedSpawnContexts = new Map<
   { serviceId: string; sessionId: string; sandbox: string }
 >()
 
+/** Every live seat and the profile it started under (seat-ledger.ts). */
+const seatLedger = new SeatLedger()
+
+/**
+ * What a served terminal's confinement is built from, read NOW. The spawn and
+ * the seat gate both use this, so "what would a spawn write now" is the spawn's
+ * own answer and never a second spelling of it.
+ */
+function servedSpawnContextFor(servedCtx: { serviceId: string; sessionId: string; sandbox: string }): ServedSpawnContext {
+  return {
+    base: sessionsBase,
+    serviceId: servedCtx.serviceId,
+    sessionId: servedCtx.sessionId,
+    sandbox: servedCtx.sandbox,
+    // The owner's own environment PLUS whatever this service was lent by
+    // name; `sessionEnv` still allowlists on top, so a value here reaches
+    // nothing that grantedKeys does not name.
+    ownerEnv: grants.ownerEnvFor(servedCtx.serviceId),
+    grantedKeys: grants.envKeysFor(servedCtx.serviceId),
+    // The canvas control plane is the owner's alone: pty.ts withholds the
+    // env keys that name this socket, and the profile denies the connect.
+    controlSocketPath: ptys.socketPath,
+    // The owner's gateway is denied to a seat outright (sandbox-deny.ts).
+    gatewayPorts: routeService.gatewayPorts(),
+    // Every other loopback port is denied to a seat; only what this service was lent passes.
+    loopbackPorts: grants.loopbackPortsFor(servedCtx.serviceId)
+  }
+}
+
+/** The resolved path, or the path as given when it does not exist yet. */
+function resolvedOr(dir: string): string {
+  try {
+    return realpathSync(dir)
+  } catch {
+    return dir
+  }
+}
+
+/**
+ * ASK BEFORE OPENING ANYTHING NEW ON THIS MACHINE (a remote provider, a tunnel):
+ * closed while a live seat runs an older profile or a served session left a
+ * process behind (seat-ledger.ts). Only seats whose pane still exists count.
+ * NOT YET ASKED by anything but the boot check: origin/dev has no tunnel or
+ * remote provider to gate. The Magpie lane's opener must await this and refuse
+ * when it is closed; until then a lent port taken back reaches a running seat
+ * only when it is respawned.
+ */
+function servedSeatGate(): Promise<SeatGate> {
+  const seats = seatLedger.list().filter((seat) => ptys.get(seat.terminalId) !== undefined)
+  return seatGate({
+    seats,
+    currentDigest: (seat) => {
+      const ctx = [...servedSpawnContexts.values()].find((c) => c.sandbox === seat.sandbox)
+      return ctx ? profileDigest(servedProfile(servedSpawnContextFor(ctx))) : null
+    },
+    // Resolved: lsof reports resolved working directories, so a symlinked
+    // ~/.cookrew would otherwise hide every leftover.
+    sessionsRoot: resolvedOr(sessionsRootOf(sessionsBase)),
+    listCwds: lsofCwds
+  })
+}
+
 /**
  * IS THIS A CUSTOMER'S WORKSPACE: its served context, or the mark it keeps on
  * disk (store.ts · markServed). The context lives in memory and a restart
@@ -928,7 +1024,22 @@ const grants = serviceGrants(sessionsBase)
 // phone and every spawn read it. Its emitter fans out to the renderer and
 // the phone stream (routeBus) exactly like the dials' tuningBus.
 const routeBus = new EventEmitter()
+/** The owner's live Magpie switches (launch settings), set once the store exists; until then nothing routes. */
+let launchLive: (() => LiveValues) | null = null
+/** Magpie's own settings page, opened in a browser card (route/magpie-web.ts). */
+/** What this computer's Tailscale names, read in the background (route/tailnet.ts): plain http is let be only there. */
+const tailnetView = createTailnetView()
+void tailnetView.refresh()
+setInterval(() => void tailnetView.refresh(), 60_000).unref()
+const magpieWeb = new MagpieWeb({ bin: () => magpieBinary(defaultDiscoveryEnv()), file: path.join(homedir(), '.cookrew', MAGPIE_WEB_FILE) })
+/** The cards signed in to Magpie's page: only these are reused (magpie-card-open.ts). */
+const magpieCards = fileSignedCards(path.join(homedir(), '.cookrew', MAGPIE_CARDS_FILE))
 const routeService = new RouteService({
+  // Read on every route choice and dispatch; before the store exists, or if it throws, nothing routes (remote-gate.ts).
+  switches: () => launchLive?.() ?? null,
+  remotePorts: () => remoteLoopbackPorts(defaultDiscoveryEnv()),
+  remoteLoopback: () => remoteLoopbackProviders(defaultDiscoveryEnv()),
+  plainRemotes: () => plainRemoteProviders(defaultDiscoveryEnv(), undefined, tailnetView.known()),
   // PATH, ~/.local/bin (the installer's symlink, off a GUI app's PATH) and the app bundle.
   monitor: new GatewayMonitor({ hasBinary: () => magpieInstalled({ home: homedir(), env: process.env }, existsSync) }),
   fetch: (input, init) => fetch(input, init),
@@ -963,6 +1074,7 @@ const routeService = new RouteService({
   },
   terminalsAcross: () => store.terminalsAcross()
 })
+const remoteCatalogRefresh = createCatalogRefresh(() => routeService.refresh())
 // The roster a page holds learns each change as it happens (agent-registry onChange).
 agents.onChange((entry) => {
   if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('agents:changed', entry)
@@ -1418,10 +1530,23 @@ const admittedDevices = createAdmittedDeviceStore()
  * this machine collects a key for every other one (machine-keys.ts), shortly
  * after start and every ten minutes, and reads them with it.
  */
-const machineKeys = createMachineKeyStore(path.join(homedir(), '.cookrew', 'machine-keys.json'))
-const MACHINE_KEYS_EVERY_MS = 10 * 60_000
+/**
+ * cookrew-seal/2 device mode: which of the account's other desktops the owner compared six words with
+ * (seal-pins.ts). Here, before the machine keys: a desktop the owner said is NOT THE SAME is refused on
+ * every lane, the plain machine-key one as well as the sealed one (seal-blocked.ts).
+ */
+const sealPins = createSealPinStore(path.join(homedir(), '.cookrew', 'seal-pins.json'))
 /** Machines of the account the owner forgot here: their passes are turned away at the door. */
 const refusedMachines = createRefusedMachines(path.join(homedir(), '.cookrew', 'machine-refused.json'))
+/** The machine keys, the relay line's marks and the door's refusals, each with a blocked desktop kept off (seal-blocked.ts). */
+const blockedLanes = createBlockedLanes({
+  pins: sealPins,
+  keys: createMachineKeyStore(path.join(homedir(), '.cookrew', 'machine-keys.json')),
+  marks: createSealMarks(path.join(homedir(), '.cookrew', 'seal-marks.json')),
+  forgotten: refusedMachines
+})
+const machineKeys = blockedLanes.keys
+const MACHINE_KEYS_EVERY_MS = 10 * 60_000
 /** Trusted phones forgotten here: out until they join the account again with a new phone's code. */
 const refusedPhones = createRefusedPhones(path.join(homedir(), '.cookrew', 'phone-refused.json'))
 /** Present once cookrew.dev has taken this machine's one proof (registry issueMachineGrant). */
@@ -1484,7 +1609,9 @@ async function collectMachineKeys(): Promise<void> {
     desktops: async () => {
       const answer = await accounts.authed<unknown>('/v2/me/desktops')
       if (!answer.ok) return null
-      return (parseAccountMachines(answer.value, accounts.account()?.deviceId ?? null) ?? []).map((m) => ({ id: m.id, name: m.name, online: m.online }))
+      const rows = (parseAccountMachines(answer.value, accounts.account()?.deviceId ?? null) ?? []).map((m) => ({ id: m.id, name: m.name, online: m.online }))
+      // A blocked desktop is never sent this machine's pass.
+      return blockedLanes.desktops(rows)
     },
     grant: async () => {
       // Asked every round there is a machine to enter: a desktop signed in with a proof on it is trusted from that
@@ -1535,11 +1662,22 @@ function keyRefused(machineId: string): void {
   forgetRemoteAnswers([machineId])
 }
 
+/** No key yet for a machine (one added since the last round): ask for a round, not for a blocked one (seal-blocked.ts). */
+const askForMachineKey = blockedLanes.askForKey(() => void collectMachineKeys().catch(() => undefined))
+
+/** What a desktop the owner said is NOT THE SAME holds here (seal-blocked.ts): its admission, and the key held for it. */
+// Lazily: remoteDesk and rememberedUnlocks are declared further down, and this is only called long after startup.
+const blockedDesktopHoldings = blockedHoldingsOf({
+  admitted: { forget: (deviceId) => admittedDevices.forget(deviceId) },
+  desk: { forgetDevice: (key) => remoteDesk.forgetDevice(key) },
+  remembered: { forgetWho: (who) => rememberedUnlocks.forgetWho(who) },
+  forgetKey: keyRefused
+})
+
 async function readAccountMachine(machineId: string, route: RemoteRead): Promise<unknown | null> {
   const key = machineKeys.token(machineId)
   if (key === null) {
-    // No key yet (a machine added since the last round): ask for one, not on every read.
-    void collectMachineKeys().catch(() => undefined)
+    askForMachineKey(machineId)
     return null
   }
   const read = await remoteReads.get(
@@ -1567,7 +1705,7 @@ async function readAccountMachine(machineId: string, route: RemoteRead): Promise
 async function callAccountMachine(machineId: string, call: RemoteMachineCall, body: string | undefined): Promise<RemoteAnswer> {
   const key = machineKeys.token(machineId)
   if (key === null) {
-    void collectMachineKeys().catch(() => undefined)
+    askForMachineKey(machineId)
     return NO_ANSWER
   }
   const send = async (headers: Record<string, string>): Promise<Response | null> => {
@@ -1622,7 +1760,8 @@ const accountPairDoor = createAccountPairDoor({
   platform: process.platform,
   // Read when a watch arrives, long after startup: watchPairing is declared further down.
   watch: { enter: (deviceId) => watchPairing.enter(deviceId) },
-  refusedMachine: (deviceId) => refusedMachines.has(deviceId),
+  // A forgotten machine's machine pass, and every pass a desktop the owner said is not the same brings.
+  ...blockedLanes.door,
   refusedPhone: (deviceId, since) => refusedPhones.refuses(deviceId, since),
   log: (message: string) => console.error(`[cookrew] ${message}`)
 })
@@ -1718,7 +1857,8 @@ const canvasRelay = createCanvasRelay({
     if (!session || session.exp <= Date.now()) return null
     return { token: session.token, deviceId: account.deviceId }
   },
-  dial: loopbackDialer(MOBILE_PORT),
+  // Its requests carry the line's own proof: what seal-marks.ts refuses in the clear is this line's, not the direct link's.
+  dial: loopbackDialer(MOBILE_PORT, undefined, relayLineHeaders()),
   log: (message) => console.error(`[cookrew] ${message}`)
 })
 const canvasLink = canvasRelay.link
@@ -1727,9 +1867,122 @@ const canvasLink = canvasRelay.link
 // unconfirmed bytes, what the paced uplink still holds, and (once the bridge has
 // paused this stream) the loopback response's own buffer.
 const connectCodes = createConnectCodes(path.join(homedir(), '.cookrew', 'connect-code'))
+/**
+ * Remembered passwords' ids (unlock-remembered.ts): issued under the connect code in force, so a rotation
+ * refuses every box at once even if its clear below failed. Never a password.
+ */
+const rememberedUnlocks = createRememberedUnlocks(path.join(homedir(), '.cookrew', 'unlock-remembered.json'), {
+  currentCode: () => connectCodes.currentId(),
+  // A device's ids live only as long as the admission they were issued under (Relay: a failed drop never comes back).
+  epochOf: admissionEpoch(() => admittedDevices.list())
+})
+// cookrew-seal/2 device mode: this desktop and the account's others (seal-device.ts, seal-pins.ts).
+// Watches whose words the owner confirmed here (seal-watch-keys.ts): a watch's id is not its key's.
+const sealWatchKeys = createSealWatchKeys(path.join(homedir(), '.cookrew', 'seal-watch-keys.json'))
+const sealDevice = createSealDevice({
+  watchKeys: sealWatchKeys,
+  account: () => accounts.account(),
+  desktops: async () => {
+    const answer = await accounts.authed<unknown>('/v2/me/desktops')
+    if (!answer.ok) return null
+    return (parseAccountMachines(answer.value, null) ?? []).map((machine) => machine.id)
+  },
+  pins: sealPins
+})
+/**
+ * openStream(peer, kind) and fetch(peer, request): sealed streams to another desktop of
+ * this account (seal-peers.ts). The interface cross-device work and lane Magpie build on:
+ * hand `sealPeers` to whatever needs another machine, here at the composition root.
+ */
+const sealPeers = createSealPeers({
+  self: () => sealDevice.self(),
+  verify: sealDevice.device.verify,
+  relayed: async (deviceId, route, init) => {
+    const sent = await accounts.relayed(deviceId, route, init)
+    if (!sent.ok) throw new Error(`No way to that machine: ${sent.reason}`)
+    return sent.response
+  },
+  pins: sealPins,
+  onContact: (peer) => void sealPins.contact(peer),
+  log: (line) => console.error(`[cookrew] ${line}`)
+})
+// A blocked desktop is refused in the clear on the relay line too, whatever its marks (seal-blocked.ts).
+const sealMarks = blockedLanes.marks
+/**
+ * The owner's gateway keys for their devices (route/share-keys.ts): ONE instance, so the
+ * Routing panel's Make a key and another desktop's sealed ask share one queue. Made once
+ * Magpie is found; asked again while it is not.
+ */
+let shareKeysHeld: ShareKeys | null = null
+/** Ruling (a): what ShareKeys clears or keeps on its own goes to a durable file; stderr only when that fails. */
+const shareAuditFile = fileAuditLog(path.join(homedir(), '.cookrew', SHARE_AUDIT_FILE))
+/**
+ * Every caller AWAITS this before it clears the record the line is about: the line is on disk first.
+ * A write that fails says so on stderr and resolves, so the caller goes on as it always did.
+ */
+const shareAudit = (line: string): Promise<void> =>
+  shareAuditFile(line).catch((error: unknown) => {
+    console.error(`[cookrew] share audit not written (${error instanceof Error ? error.message : 'unknown'}): ${line}`)
+  })
+const shareKeysNow = (): ShareKeys | null => {
+  if (shareKeysHeld !== null) return shareKeysHeld
+  const bin = magpieBinary(defaultDiscoveryEnv())
+  // Every revoke, from any path, unbinds the key from the sealed path first (a key Magpie forgets has no limit on loopback).
+  if (bin !== null) shareKeysHeld = new ShareKeys({ run: magpieRunner(bin), intents: fileIntentStore(path.join(homedir(), '.cookrew', INTENT_FILE)), beforeRevoke: (id) => magpieRemote.unbind(id), audit: shareAudit })
+  return shareKeysHeld
+}
+/**
+ * Magpie across the owner's computers (magpie-remote/setup.ts): this computer's Magpie
+ * served to the account's other desktops as the `magpie` stream kind, and theirs used
+ * here through a loopback forwarder onto openStream. Both switches are read on every
+ * stream and every request, at both ends.
+ */
+const magpieRemote = createMagpieRemote({
+  base: path.join(homedir(), '.cookrew'),
+  switches: () => launchLive?.() ?? null,
+  shareKeys: shareKeysNow,
+  gatewayPort: () => routeService.gatewayPort(),
+  openStream: (peer, kind, fields) => sealPeers.openStream(peer, kind, fields),
+  desktops: async () => {
+    const answer = await accounts.authed<unknown>('/v2/me/desktops')
+    if (!answer.ok) return null
+    return (parseAccountMachines(answer.value, accounts.account()?.deviceId ?? null) ?? []).map((m) => ({ id: m.id, name: m.name, online: m.online, os: m.profile?.os ?? null, arch: m.profile?.arch ?? null }))
+  },
+  selfId: () => accounts.account()?.deviceId ?? null,
+  sealer: electronSealer(safeStorage),
+  magpieBin: () => magpieBinary(defaultDiscoveryEnv()),
+  env: () => defaultDiscoveryEnv(),
+  // Lane Seatbelt's servedSeatGate on macOS; elsewhere no Seatbelt profile vouches for a served
+  // terminal, so the forwarder stays shut while any is on the canvas (magpie-remote/seat-gate.ts).
+  seatGate: magpieSeatGate({
+    platform: process.platform,
+    servedSeatGate,
+    servedOnCanvas: () => store.terminalsAcross().some((node) => Boolean(node.servedSession) || ptys.isServed(node.id) || isServedWorkspace(store.ownerOf(node.id)))
+  }),
+  callerIsMagpie: (clientPort) => callerIsMagpie(clientPort, magpieBinary(defaultDiscoveryEnv())),
+  log: (line) => console.error(`[cookrew] ${line}`),
+  // What a blocked desktop's keys came to goes in the durable share-keys audit, as ShareKeys' own lines do.
+  audit: shareAudit
+})
 const sealTerminus = createSealTerminus({
   codeFor: (id) => connectCodes.codeFor(id),
   replacedKeyFor: (id) => connectCodes.replacedKeyFor(id),
+  currentCodeId: async () => connectCodes.currentId(),
+  device: sealDevice.device,
+  // A phone or console on v2 sends everything sealed from now on; its plain requests on the relay line are refused.
+  // Desktops are not marked: their own machine calls still go in the clear until they move onto sealPeers.
+  onSealed: ({ peer, outer }) => {
+    if (peer.mode === 'code' && outer.device !== undefined) sealMarks.mark(outer.device)
+    if (peer.mode !== 'device') return
+    // A watch the owner confirmed by its words speaks sealed from now on: its plain relay requests are refused,
+    // as a v2 phone's are (seal-marks.ts). Its words were its own; it is not a desktop met for the first time.
+    if (sealWatchKeys.keyOf(peer.deviceId) !== null) return sealMarks.mark(peer.deviceId)
+    // Another desktop met for the first time: its words wait for the owner on both screens (seal-pins.ts).
+    sealPins.contact(peer.deviceId)
+  },
+  // Owner ruling 2026-11-19: no route for a desktop peer by default. A confirmed watch reaches its own routes.
+  deviceHttp: watchDeviceHttp(sealWatchKeys, watchSealedRouteAllowed),
+  kinds: { [MAGPIE_REMOTE_KIND]: magpieRemote.serve },
   dial: loopbackDialer(MOBILE_PORT, undefined, sealProofHeaders()),
   // What the paced uplink still holds counts too: since relay-uplink.ts, an
   // answer waits there rather than in Node's socket buffer.
@@ -1983,6 +2236,11 @@ const v2CallTokens = RELAY_ORIGIN
         forgetRemoteAnswers(revoked)
         for (const device of admittedDevices.prune(revoked)) {
           remoteDesk.forgetDevice(`device:${device.deviceId}`)
+          try {
+            rememberedUnlocks.forgetWho(`device:${device.deviceId}`)
+          } catch {
+            // Its token is gone with the admission: no box of its reaches the door now.
+          }
           // One line per phone, named. "Withdrew 1 admission" would leave the
           // owner with no idea which phone in their hand just stopped working.
           console.error(
@@ -3747,10 +4005,13 @@ function spawnTracked(t: {
   // finds the transcript (2026-11-04: eight GOAT Team cards, every --no-wait
   // ask to them interrupted at 60 s). Once moved, the file is found at the
   // cwd and this never fires again.
-  // A served card is never moved: its sandbox is its boundary.
+  // A served card is never moved: its sandbox is its boundary. Its folder says
+  // so too, for a workspace served before the mark existed: judged here, on the
+  // folder it STARTED in, so a move cannot carry it out of the refusal below.
   const home = store.ownerOf(t.id)
+  const servedPlace = inSessionsRoot(t.cwd, sessionsRootOf(sessionsBase)) || inSessionsRoot(t.cwd, resolvedOr(sessionsRootOf(sessionsBase)))
   const repairedCwd =
-    isClaudeCommand(t.command) && t.claudeSessionId && !(home !== undefined && isServedWorkspace(home))
+    isClaudeCommand(t.command) && t.claudeSessionId && !servedPlace && !(home !== undefined && isServedWorkspace(home))
       ? claudeCwdRepair({ cwd: t.cwd, sessionId: t.claudeSessionId })
       : null
   if (repairedCwd !== null) {
@@ -3771,6 +4032,22 @@ function spawnTracked(t: {
   }
   const owner = store.ownerOf(t.id) ?? store.focusedId
   const servedCtx = servedSpawnContexts.get(owner)
+  // A served workspace keeps its mark across a restart; its context does not.
+  // Without the context this would be the OWNER's spawn: unconfined, the owner's
+  // env, a stranger's conversation. Refused instead (session-spawn.ts spawnMode).
+  // The folder counts too (servedPlace, above): a workspace served before the mark existed has none.
+  if (!ptys.get(t.id) && spawnMode(isServedWorkspace(owner) || servedPlace, servedCtx !== undefined) === 'refuse') {
+    noteLaunchFailure(t.id, {
+      kind: 'served-context-lost',
+      why: "This served session's sandbox was lost when Cookrew restarted, so it will not start outside it.",
+      fix: 'End this served session; a new caller gets a fresh seat.',
+      blocked: true,
+      exitCode: null,
+      lastLines: [],
+      at: Date.now()
+    }, true)
+    return false
+  }
   const upgraded = LEGACY_COMMANDS[t.command.trim()]
   const command = upgraded ?? t.command
   if (upgraded) store.updateNodeUnsafe(t.id, { command })
@@ -3895,24 +4172,7 @@ function spawnTracked(t: {
   // workspace; focus is only the fallback for a terminal no canvas claims yet.
   // A served session's terminal spawns confined and scrubbed; the owner's own
   // spawns exactly as before (servedCtx is undefined).
-  const served = servedCtx
-    ? servedConfinement({
-        base: sessionsBase,
-        serviceId: servedCtx.serviceId,
-        sessionId: servedCtx.sessionId,
-        sandbox: servedCtx.sandbox,
-        // The owner's own environment PLUS whatever this service was lent by
-        // name; `sessionEnv` still allowlists on top, so a value here reaches
-        // nothing that grantedKeys does not name.
-        ownerEnv: grants.ownerEnvFor(servedCtx.serviceId),
-        grantedKeys: grants.envKeysFor(servedCtx.serviceId),
-        // The canvas control plane is the owner's alone: pty.ts withholds the
-        // env keys that name this socket, and the profile denies the connect.
-        controlSocketPath: ptys.socketPath,
-        // The owner's gateway is denied to a seat outright (sandbox-deny.ts).
-        gatewayPorts: routeService.gatewayPorts()
-      })
-    : undefined
+  const served = servedCtx ? servedConfinement(servedSpawnContextFor(servedCtx)) : undefined
   // The card's route, as env and args the harness is spawned with. Decided
   // here, at the spawn, so what the process got is what the node records as
   // `routeEffective`; a served session gets none (the service refuses it).
@@ -3971,6 +4231,20 @@ function spawnTracked(t: {
   // actually open — spawnTracked is called repeatedly for a REUSED session
   // (workspace switches), and an unconditional listener would pile up on it.
   if (timingBoot) session.once('exit', () => boots.cancel(sessionNameFor(t.id)))
+  // A seat keeps the profile it started under until it is respawned: recorded
+  // so the seat gate can tell when that is no longer what a spawn would write.
+  if (served && servedCtx) {
+    const seat = fresh && !session.reattached ? { terminalId: t.id, serviceId: servedCtx.serviceId, sandbox: servedCtx.sandbox, digest: served.profileDigest } : null
+    // Recorded only when fresh; Magpie remote asks its gate afresh on every served start and end, a reattached one
+    // included (magpie-remote/seat-gate.ts · trackServedSeat).
+    trackServedSeat(seat, {
+      record: (s) => seatLedger.record(s),
+      // This record only: a respawn's new seat is recorded before the old exit fires.
+      forget: (s) => seatLedger.forget(t.id, s),
+      seatsChanged: () => magpieRemote.seatsChanged(),
+      onExit: (run) => void session.once('exit', run)
+    })
+  }
   turns.track(session, command.trim().length > 0)
   recordSpawn(t.id, session)
   // Codex rollout bind (trace-sourced-context-final): the rollout file
@@ -7188,7 +7462,9 @@ const unlockDoor = createUnlockDoor({
   },
   typable: (password) => macKeystrokes(password).every((key) => key.code >= 0),
   type: (password) => useInstances.typeAtLock(password),
-  record: (outcome, who) => store.recordEvent('remote.unlock', 'machine', 'this Mac', `${who.name}: ${outcome}`)
+  record: (outcome, who) => store.recordEvent('remote.unlock', 'machine', 'this Mac', `${who.name}: ${outcome}`),
+  // Remember on the console, inside cookrew-seal/2 only (remote-unlock.ts).
+  remembered: rememberedUnlocks
 })
 const remoteTray = createRemoteTray(() => remoteDesk.stopAll(), process.platform)
 /** Who a paired credential is: an admitted phone by its own name, the global token by what it can only be. */
@@ -7598,6 +7874,25 @@ if (selfHosted) {
 let cliSocket: SocketServerHandle | null = null
 
 app.whenReady().then(() => {
+  // A desktop blocked by an older build kept its admission and key: they go now (seal-blocked.ts). Never in the way of the start.
+  try {
+    const blockedIds = forgetBlocked(sealPins, { ...blockedDesktopHoldings, refuseMachine: (id) => refusedMachines.add(id) })
+    // And the Magpie keys this Mac gave them, with any remote of theirs here (magpie-remote/blocked.ts).
+    void sweepBlocked(blockedIds, (id) => magpieRemote.blocked(id))
+  } catch (error) {
+    console.error('[cookrew] blocked desktops could not be swept:', error)
+  }
+  // A served session's detached process outlives the app under the sandbox it
+  // started with, older builds' included (seat-ledger.ts). Said at boot, where
+  // the owner's log can show it. Whatever later opens something new on this
+  // machine must ask the same gate (servedSeatGate).
+  if (process.platform === 'darwin') {
+    void servedSeatGate()
+      .then((gate) => {
+        if (!gate.open) console.error(`[cookrew] served seats: ${gate.why}`)
+      })
+      .catch((error: unknown) => console.error('[cookrew] served seat check failed', error))
+  }
   // Before anything reads a secret: a value still in the clear goes under the key.
   try {
     const moved = secrets.migrate()
@@ -7610,6 +7905,9 @@ app.whenReady().then(() => {
   // on Windows that proof is async (file-privacy.ts), and until it lands every
   // call is refused rather than any request waiting on it.
   callCredentials.prepare().catch((error: unknown) => console.error('[cookrew] call signing key not ready:', error))
+  // Hold the forwarder's port from the start (magpie-remote/forward.ts): while Cookrew runs,
+  // nothing else can take the address this computer's Magpie sends other computers' requests to.
+  void magpieRemote.start()
   // Dock icon must be set at runtime in dev; packaged builds also bundle
   // resources/icon.icns via the packager config when one is added.
   if (process.platform === 'darwin' && app.dock) {
@@ -8196,6 +8494,13 @@ app.whenReady().then(() => {
         connectCodes.rotate()
       } finally {
         sealTerminus.endSessions('the pairing was rotated')
+        sealMarks.clearDevices()
+        // Every remembered password goes with the code it was remembered under (already refused by its code id).
+        try {
+          rememberedUnlocks.clear()
+        } catch (error) {
+          console.error('[cookrew] remembered passwords could not be cleared:', error)
+        }
       }
       return rotated
     },
@@ -8500,6 +8805,7 @@ app.whenReady().then(() => {
     // 159 dependent requests and a relayed link never finishes them.
     rendererDir: path.join(dirname, '../renderer'),
     sealTerminus: () => sealTerminus,
+    sealMarks: () => sealMarks,
     rendererDevUrl: process.env.ELECTRON_RENDERER_URL,
     rendererSrcDir: path.join(app.getAppPath(), 'src/renderer/src')
   })
@@ -8610,9 +8916,11 @@ app.whenReady().then(() => {
     trusted: () => trustedOrigins(),
     register: (workspaces, reach, trusted) =>
       accounts.registerDesktop(workspaces, reach, trusted),
-    // ONLY ONCE THE ZONE ANSWERS. A phone told before the registry took the
-    // card would resolve the new name to NXDOMAIN and cache that answer for
-    // minutes (path/name-oracle.ts, 2026-10-04); told after, it finds a Mac.
+    // ONLY ONCE THE ZONE ANSWERS, for an older console that still races names:
+    // told before the registry took the card it would resolve the new name to
+    // NXDOMAIN and cache that answer for minutes (2026-10-04). A current
+    // console only knocks the WebRTC link on it. When the names go (lane LAN
+    // step D) this push must come from the address change itself.
     onChanged: () => {
       reachBus.emit('changed')
       if (mainWindow && !mainWindow.webContents.isDestroyed()) {
@@ -8681,6 +8989,11 @@ app.on('window-all-closed', () => {
 let appShutdownStarted = false
 let appShutdownComplete = false
 
+app.on('will-quit', () => {
+  remoteCatalogRefresh.dispose()
+  magpieWeb.stop()
+  void magpieRemote.stop()
+})
 app.on('before-quit', (event) => {
   // The sizes panes last had, so their mirrors start at them next launch (pane-sizes.ts).
   paneSizes().flush()
@@ -8714,6 +9027,7 @@ app.on('before-quit', (event) => {
   // silently is a relay that claims this desktop for as long as it takes the
   // pulse to notice.
   sealTerminus.close()
+  sealPeers.close()
   canvasLink.stop()
   store.flush()
   events.flush()
@@ -8850,6 +9164,18 @@ function registerIpc(handlers: RestoreHandlers): void {
       return op(...args)
     }
 
+  // Sharing this computer's Magpie with the owner's other devices (route/share-keys.ts):
+  // a key is minted on the owner's gateway, so only the owner's top frame may ask.
+  registerShareIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
+    enabled: () => launchLive?.() ?? null,
+    makeKeys: shareKeysNow,
+    tailnet: () => tailnetView.known()
+  })
+  // Another computer's Magpie over the seal (magpie-remote/setup.ts): owner's window only.
+  ipcMain.handle('magpie-remote:list', ownerOnly(() => magpieRemote.list()))
+  ipcMain.handle('magpie-remote:connect', ownerOnly((peer: unknown, name: unknown) => remoteCatalogRefresh.after(() => magpieRemote.connect(peer, name))))
+  ipcMain.handle('magpie-remote:disconnect', ownerOnly((peer: unknown) => remoteCatalogRefresh.after(() => magpieRemote.disconnect(peer))))
+
   // ---- the owner's account (identity v2) ----
   //
   // Registered through the SAME ownerOnly wrapper, by construction: the module
@@ -8877,7 +9203,16 @@ function registerIpc(handlers: RestoreHandlers): void {
         if (keptOut !== null) refusedPhones.add(deviceId, keptOut)
         const forgotten = admittedDevices.forget(deviceId)
         remoteDesk.forgetDevice(`device:${deviceId}`)
-        return forgotten
+        // A forgotten phone that joins again does not get its remembered password back. A drop that could not be
+        // written is the one honest false, as the admission's is: the row stays on screen and Forget can be pressed again.
+        let idsDropped = true
+        try {
+          rememberedUnlocks.forgetWho(`device:${deviceId}`)
+        } catch (error) {
+          idsDropped = false
+          console.error('[cookrew] a forgotten device\'s remembered passwords could not be dropped:', error)
+        }
+        return forgotten && idsDropped
       }
     },
     publishReach: (reason) => {
@@ -9563,6 +9898,46 @@ function registerIpc(handlers: RestoreHandlers): void {
       })
     : null
   const launchSettings = createLaunchSettings({ file: launchSettingsPath(homedir()), boot: launchBoot, signedIn: () => accounts.account() !== null })
+  launchLive = launchSettings.live
+  // Turning Magpie or Magpie remote off cuts other computers' answers still streaming here, at once.
+  launchSettings.onLive(() => magpieRemote.switchesChanged())
+  // A Magpie switch moved: the route state says so at once, and the screens that draw Magpie follow.
+  launchSettings.onLive((values) => {
+    routeService.emit('route', routeService.state())
+    if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('launch-live', values)
+    if (!values.magpie) magpieWeb.stop()
+  })
+  ipcMain.handle('launch-settings:live', (event) => (ownerFrame(event) ? launchSettings.live() : null))
+  ipcMain.handle('launch-settings:set-live', (event, input: unknown) => (ownerFrame(event) ? launchSettings.setLive(input) : { ok: false, reason: 'not-owner' }))
+  // Magpie's settings page in a card: main signs that card's own browser session in, and the
+  // renderer gets the bare address only (magpie-card-open.ts). Only the owner's window may ask.
+  ipcMain.handle('magpie-web:open', (event, offered: unknown) => {
+    if (!ownerFrame(event)) return { ok: false, why: 'not_owner' }
+    return openMagpieCardSession(offered, {
+      switchedOn: () => launchSettings.live().magpie,
+      open: () => magpieWeb.open(),
+      setPartitionCookie: async (partition, cookie) => {
+        await session.fromPartition(partition).cookies.set(cookie)
+      },
+      // Cookies are scoped by host, not port: in this card's session the page's cookie goes to its own port only.
+      guardPartition: (partition, port) => {
+        session.fromPartition(partition).webRequest.onBeforeSendHeaders({ urls: ['http://127.0.0.1/*', 'https://127.0.0.1/*', 'ws://127.0.0.1/*', 'wss://127.0.0.1/*'] }, (details, done) => {
+          const headers = { ...details.requestHeaders }
+          for (const name of Object.keys(headers)) {
+            const site = Object.entries(details.requestHeaders).find(([n]) => n.toLowerCase() === 'sec-fetch-site')?.[1]
+            if (name.toLowerCase() !== 'cookie' || cookieAllowedFor(details.url, port, site, details.resourceType === 'mainFrame' && details.method === 'GET')) continue
+            const kept = stripMagpieCookies(headers[name])
+            if (kept === '') delete headers[name]
+            else headers[name] = kept
+          }
+          done({ requestHeaders: headers })
+        })
+      },
+      primeHeadless: (id, cookies) => browserManager.primeCookies(id, cookies),
+      signed: magpieCards,
+      newId: () => randomUUID()
+    })
+  })
   ipcMain.handle('launch-settings:status', (event) => (ownerFrame(event) ? launchSettings.status() : null))
   ipcMain.handle('launch-settings:save', (event, input: unknown) => (ownerFrame(event) ? launchSettings.save(input) : { ok: false, reason: 'not-owner' }))
   // The account's skin: any window reads it, the app's own page picks it.
@@ -9793,7 +10168,32 @@ function registerIpc(handlers: RestoreHandlers): void {
       accountKind: () => (accounts.account() === null ? 'none' : accounts.isPasswordless() ? 'passwordless' : 'password'),
       invite: (current, here) => mintWatchInvite({ accounts, lock: ownerLock }, current, here)
     })
-  setWatchHost(watchHost)
+  setWatchHost({
+    ...watchHost,
+    // The confirmed watch, its token refused in the clear, and who a claim's key is offered to (seal-watch-gate.ts).
+    seal: watchSealHost({ self: () => sealDevice.self(), listed: sealDevice.listed, keys: sealWatchKeys })
+  })
+  // A watch's key waits for the owner to see the same six words on the watch and here (seal-watch-keys.ts).
+  ipcMain.handle(
+    'watch:seal-pending',
+    ownerOnly(async () => {
+      const self = sealDevice.self()
+      if (self === null) return []
+      return Promise.all(sealWatchKeys.pending().map(async (row) => ({ deviceId: row.deviceId, x: row.jwk.x, words: (await keyWords(row.jwk, self.jwk, row.nonce)).words })))
+    })
+  )
+  ipcMain.handle(
+    'watch:seal-confirm',
+    ownerOnly((deviceId: unknown, x: unknown) => typeof deviceId === 'string' && typeof x === 'string' && sealWatchKeys.confirm(deviceId, x))
+  )
+  ipcMain.handle(
+    'watch:seal-forget',
+    ownerOnly((deviceId: unknown) => {
+      // "Not the same": only the key that waited; a watch already let in stays in.
+      if (typeof deviceId === 'string') sealWatchKeys.dropPending(deviceId)
+      return true
+    })
+  )
   ipcMain.handle(
     'watch:code',
     ownerOnly(() => ({ ...watchPairing.mintCode(), bases: watchHost.bases(), claims: watchPairing.claims }))
@@ -9807,6 +10207,44 @@ function registerIpc(handlers: RestoreHandlers): void {
       sealed: true,
       claims: watchPairing.claims
     }))
+  )
+  // Another desktop of the account, met for the first time: the six words both screens show (seal-pins.ts).
+  ipcMain.handle(
+    'seal:peers-waiting',
+    ownerOnly(async () => {
+      const self = sealDevice.self()
+      if (self === null) return []
+      const mine = (await deviceWords(self.deviceId)).words
+      return Promise.all(sealPins.waiting().map(async (deviceId) => ({ deviceId, mine, theirs: (await deviceWords(deviceId)).words })))
+    })
+  )
+  // Same pins, Later asks again next launch, Not the same refuses it on every lane and ends every way it is in.
+  ipcMain.handle(
+    'seal:peer-answer',
+    ownerOnly((deviceId: unknown, answer: unknown) =>
+      // NOT THE SAME also takes back the Magpie keys this Mac gave that desktop (magpie-remote/blocked.ts).
+      afterPeerAnswer(
+        deviceId,
+        answer,
+        answerPeer(deviceId, answer, {
+          pins: sealPins,
+          peers: sealPeers,
+          terminus: sealTerminus,
+          ...blockedDesktopHoldings,
+          refuseMachine: (id) => refusedMachines.add(id)
+        }),
+        (id) => magpieRemote.blocked(id)
+      )
+    )
+  )
+  // Owner ruling 2026-11-19: refusing every plain request over the relay is a switch the owner flips, off by default.
+  ipcMain.handle('seal:sealed-only', ownerOnly(() => sealMarks.sealedOnly()))
+  ipcMain.handle(
+    'seal:set-sealed-only',
+    ownerOnly((on: unknown) => {
+      if (typeof on === 'boolean') sealMarks.setSealedOnly(on)
+      return sealMarks.sealedOnly()
+    })
   )
   ipcMain.handle(
     'watch:invite',
@@ -9831,7 +10269,11 @@ function registerIpc(handlers: RestoreHandlers): void {
   )
   ipcMain.handle(
     'watch:forget',
-    ownerOnly(() => watchPairing.unpair())
+    ownerOnly(() => {
+      // A forgotten watch is let in sealed no more either: its keys and its sealed-only marks go with its token.
+      forgetWatchSeal(sealWatchKeys, sealMarks)
+      return watchPairing.unpair()
+    })
   )
   ipcMain.handle('menu:answer', (_e, terminalId: string, body: unknown) => {
     const request = parseMenuRequest(body)

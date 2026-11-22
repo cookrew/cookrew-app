@@ -17,7 +17,8 @@ import type { AccountAsk } from './account-store'
  * the lock screen.
  */
 
-type Listener = () => void
+export type AccountSheetTarget = 'profile' | 'devices'
+type Listener = (target: AccountSheetTarget) => void
 
 const listeners = new Set<Listener>()
 
@@ -35,8 +36,8 @@ export function onAccountSheetRequest(listener: Listener): () => void {
  * that gets false should say so rather than wait for a sheet that will not
  * appear.
  */
-export function requestAccountSheet(): boolean {
-  for (const listener of listeners) listener()
+export function requestAccountSheet(target: AccountSheetTarget = 'profile'): boolean {
+  for (const listener of listeners) listener(target)
   return listeners.size > 0
 }
 

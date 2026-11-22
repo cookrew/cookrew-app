@@ -9,17 +9,18 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { native } from './support/native-path'
 import { GatewayMonitor } from '../src/main/route/gateway'
 import { RouteService } from '../src/main/route/service'
+import { createCatalogRefresh } from '../src/main/magpie-remote/catalog-refresh'
 import type { TerminalNodeData } from '../src/shared/model'
 import type { TurnPhase } from '../src/shared/turn'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function fakeGateway() {
-  const fake = { url: '', port: 0, answer: true, close: async () => {} }
+  const fake = { url: '', port: 0, answer: true, remoteModel: false, close: async () => {} }
   const server = http.createServer((req, res) => {
     if (!fake.answer) {
       res.writeHead(503)
@@ -30,7 +31,8 @@ async function fakeGateway() {
       return res.end(JSON.stringify({ data: [
         { id: 'group/smart', display_name: 'smart', owned_by: 'ollama', magpie_label: 'smart · routing group' },
         { id: 'claude/claude-sonnet-5-5', owned_by: 'claude', reasoning: true, supported_reasoning_levels: [{ effort: 'high' }] },
-        { id: 'deepseek/deepseek-chat', owned_by: 'deepseek' }
+        { id: 'deepseek/deepseek-chat', owned_by: 'deepseek' },
+        ...(fake.remoteModel ? [{ id: 'fixture-remote/claude/haiku', owned_by: 'fixture-remote' }] : [])
       ] }))
     if (req.url === '/v1/magpie/quotas') return res.end(JSON.stringify({ data: [{ provider: 'claude', kind: 'subscription', plan: 'max', user: 'o@x', windows: [] }] }))
     // No route yet for any session: the follow waits out its floor rather than stopping.
@@ -68,6 +70,7 @@ function world(): World {
 function service(w: World, env: Record<string, string | undefined>, fastAnnounce = true, hasTurns: (id: string) => boolean = () => false, sessionOnDisk: (node: TerminalNodeData) => boolean = () => false) {
   const monitor = new GatewayMonitor({ discovery: { home: w.home, env }, hasBinary: () => true, watchDir: null, helloTimeoutMs: 500, schedule: () => () => {} })
   const svc = new RouteService({
+    switches: () => ({ magpie: true, magpieRemote: false }),
     monitor,
     fetch: (i, init) => fetch(i, init),
     home: w.home,
@@ -103,6 +106,67 @@ beforeEach(() => { w = world() })
 afterEach(() => rmSync(w.home, { recursive: true, force: true }))
 
 describe('state', () => {
+  it('does not let an older delayed catalog overwrite a newer refresh', async () => {
+    const fake = await fakeGateway()
+    const svc = service(w, { MAGPIE_ADDR: `:${fake.port}` })
+    const initial = await svc.refresh()
+    expect(initial.models.some((model) => model.id === 'fixture-remote/claude/haiku')).toBe(false)
+    const olderProbe = { status: 'online' as const, gateway: initial.gateway, key: null, defaultModel: null, why: null, checkedAt: 100 }
+    const newerProbe = { ...olderProbe, checkedAt: 101 }
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const originalFetch = (svc as unknown as { deps: { fetch: typeof fetch } }).deps.fetch
+    let reads = 0
+    ;(svc as unknown as { deps: { fetch: typeof fetch } }).deps.fetch = async (input, init) => {
+      const response = await originalFetch(input, init)
+      if (String(input).endsWith('/v1/models') && ++reads === 1) {
+        const body = await response.text()
+        await blocked
+        return new Response(body)
+      }
+      return response
+    }
+    try {
+      const internals = svc as unknown as { onProbe: (probe: typeof olderProbe) => Promise<void> }
+      const older = internals.onProbe(olderProbe)
+      await vi.waitFor(() => expect(reads).toBe(1))
+      fake.remoteModel = true
+      await internals.onProbe(newerProbe)
+      expect(svc.state().models.map((model) => model.id)).toContain('fixture-remote/claude/haiku')
+      release()
+      await older
+      expect(svc.state().models.map((model) => model.id)).toContain('fixture-remote/claude/haiku')
+    } finally {
+      release()
+      svc.dispose()
+      await fake.close()
+    }
+  })
+
+  it('publishes a remote model that appears after a successful connect without opening Routing', async () => {
+    const fake = await fakeGateway()
+    const svc = service(w, { MAGPIE_ADDR: `:${fake.port}` })
+    const jobs: Array<() => void> = []
+    const catalog = createCatalogRefresh(() => svc.refresh(), (job) => { jobs.push(job); return () => {} })
+    try {
+      await svc.refresh()
+      const before = svc.state().models.map((model) => model.id)
+      expect(before).not.toContain('fixture-remote/claude/haiku')
+      const updates: string[][] = []
+      svc.on('route', (state) => updates.push(state.models.map((model: { id: string }) => model.id)))
+      await catalog.after(async () => ({ ok: true as const, providerId: 'fixture-remote' }))
+      await sleep(30)
+      expect(svc.state().models.map((model) => model.id)).not.toContain('fixture-remote/claude/haiku')
+      fake.remoteModel = true
+      jobs[0]()
+      await vi.waitFor(() => expect(updates.some((ids) => ids.includes('fixture-remote/claude/haiku'))).toBe(true))
+    } finally {
+      catalog.dispose()
+      svc.dispose()
+      await fake.close()
+    }
+  })
+
   it('absent with nothing known; online with the catalog once probed; offline keeps the gateway but drops the catalog', async () => {
     const fake = await fakeGateway()
     try {

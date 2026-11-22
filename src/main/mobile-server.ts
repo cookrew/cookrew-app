@@ -1,3 +1,5 @@
+import { cameOverRelayLine, sealedV2Of } from './seal-proof'
+import { SEALED_ONLY_ERROR, type SealMarks } from './seal-marks'
 import http from 'node:http'
 import https from 'node:https'
 import type net from 'node:net'
@@ -335,6 +337,8 @@ export interface MobileServerDeps {
   rendererDir: string
   /** The sealed session's end (canvas-seal-terminus.ts). */
   sealTerminus?: () => SealTerminus | undefined
+  /** Who is refused in the clear on the relay line (seal-marks.ts). */
+  sealMarks?: () => SealMarks | undefined
   /** electron-vite renderer URL; proxied to phones in development. */
   rendererDevUrl?: string
   /**
@@ -1269,6 +1273,13 @@ export async function handle(
   // only the bridge can name a phone here. See relay-device.ts.
   const bridgeDevice = takeRelayDevice(request)
 
+  // A device that speaks cookrew-seal/2, or every device once the owner said so,
+  // is answered nothing in the clear on the relay line (seal-marks.ts says what
+  // that does and does not stop). Sealed requests and the direct link are not this.
+  if (cameOverRelayLine(request) && deps.sealMarks?.()?.refuses(bridgeDevice?.deviceId ?? null)) {
+    return respondJson(response, 403, { error: SEALED_ONLY_ERROR })
+  }
+
   // Step 3: /<slug>/... addresses ONE workspace session. The path is rewritten
   // to what the existing handlers expect, and `scope` carries which session
   // they are answering for. Unslugged paths keep their meaning exactly — bound
@@ -1502,7 +1513,9 @@ export async function handle(
    *
    * Beside /api/reach and gated the same way — below handleMobileApi, so the
    * POST has already been challenged for the pairing (or an admitted phone's
-   * own) token and the GET for at least the read-only one. The device is the
+   * own) token and the GET for at least the read-only one. On top of that both
+   * require a cookrew-seal/2 inner request and owner pairing
+   * (path-report-routes.ts): a report names this Mac's addresses. The device is the
    * one the BRIDGE named, never one the body claims: `bridgeDevice` was taken
    * off the request above and cannot be set by the caller.
    *
@@ -1511,7 +1524,10 @@ export async function handle(
    */
   if (
     await handlePathReportRoutes(request, response, url, {
-      device: { deviceId: bridgeDevice?.deviceId ?? null, ...(bridgeDevice?.name ? { name: bridgeDevice.name } : {}) }
+      device: { deviceId: bridgeDevice?.deviceId ?? null, ...(bridgeDevice?.name ? { name: bridgeDevice.name } : {}) },
+      // The owner's credential, as the fleet feed above asks it: a GET needs
+      // it on top of a cookrew-seal/2 road; the wall token reads nothing here.
+      owner: !!authed.pairingToken && authed.companionGate(presentedToken(request, url))
     })
   ) {
     return
@@ -1529,13 +1545,19 @@ export async function handle(
    * classification here would be a second chance to call a tailnet address a
    * LAN one and switch a phone onto a path that cannot carry it.
    *
-   * BELOW handleMobileApi ON PURPOSE, which is what gates it: the addresses of
-   * someone's Mac and the fingerprint of its certificate are not for anyone who
-   * can reach the port. `relay` is absent because this route cannot know it —
+   * Below handleMobileApi for the ordinary credential gate; the route also
+   * requires owner pairing and v2 seal proof before building the answer.
+   * `relay` is absent because this route cannot know it —
    * the link is index.ts's, and a phone reading this is not looking for the
    * path it is already on.
    */
   if (request.method === 'GET' && url.pathname === '/api/reach') {
+    // This legacy response can contain LAN addresses. Neither the relay nor a
+    // read-only wall credential may receive it without an authenticated v2 seal.
+    if (!sealedV2Of(request)) return respondJson(response, 403, { error: 'sealed session required' })
+    if (!authed.pairingToken || !authed.companionGate(presentedToken(request, url))) {
+      return respondJson(response, 403, { error: 'owner pairing required' })
+    }
     const account = deps.identity?.account() ?? null
     if (!account) {
       respondJson(response, 404, { error: 'no account on this desktop' })
@@ -1576,8 +1598,8 @@ export async function handle(
   /**
    * THE OWNER'S PUBLIC FACE, for the companion's avatar and its path sheet.
    *
-   * Beside /api/reach and gated the same way — below handleMobileApi, so it
-   * needs the pairing token. A phone that holds that token is an admitted
+   * Below handleMobileApi, so it needs a read credential. Unlike /api/reach,
+   * this public-face route does not require a sealed session. A paired phone is an admitted
    * device of this account and may see what any of the account's devices see:
    * a name, two initials, an avatar. companion-account.ts builds the answer
    * member by member; nothing here may grow a field by accident.

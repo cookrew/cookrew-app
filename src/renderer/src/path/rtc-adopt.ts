@@ -18,10 +18,23 @@ import type { PathReportProbe } from '../../../shared/path-report'
 import type { RtcLink } from './rtc-link'
 
 /** The attempt's row in the path report. */
-export type RtcRow = PathReportProbe & { readonly kind: 'rtc'; readonly outcome: 'answered' | 'timeout' | 'closed' }
+export type RtcRow = PathReportProbe & {
+  readonly kind: 'rtc'
+  readonly outcome: 'answered' | 'timeout' | 'closed' | 'unbound'
+}
+
+/** The Mac answered, and the answer did not prove it came from the Mac (shared/rtc-bind.ts). */
+export interface RtcUnbound {
+  readonly unbound: string
+}
+
+/** No link, and why: no answer, or an answer whose link never opened (path/rtc-link.ts · failed). */
+export interface RtcTimedOut {
+  readonly timedOut: string
+}
 
 export interface RtcAdoptDeps {
-  readonly connect: () => Promise<RtcLink | null>
+  readonly connect: () => Promise<RtcLink | RtcUnbound | RtcTimedOut | null>
   readonly plane: () => DataPlane
   readonly adopt: (plane: DataPlane) => void
   readonly fallBack: () => void
@@ -54,6 +67,9 @@ export const adoptRtcLink = async (deps: RtcAdoptDeps): Promise<RtcRow> => {
   const live = (): boolean => deps.live?.() !== false
   const link = await deps.connect().catch(() => null)
   if (!link) return row('timeout', 'webrtc')
+  if ('timedOut' in link) return row('timeout', `webrtc: ${link.timedOut}`)
+  // Not adopted: the relay stays the plane, and the report says why.
+  if ('unbound' in link) return row('unbound', `webrtc: ${link.unbound}`)
   if (!live()) {
     link.close()
     return row('closed', link.via)

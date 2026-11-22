@@ -25,6 +25,8 @@ enum PairStage: Equatable {
   case digits
   case working(JoinStep)
   case paired(String)
+  /** The six words the Mac shows too: the owner compares them there, and the relay road goes sealed. */
+  case words(String, [String])
   case notice(PairNotice)
 }
 
@@ -41,6 +43,8 @@ enum PairNotice: Equatable {
 
 /** How long the tick stays up before the cards. */
 private let pairedSeconds = 1.2
+/** Long enough to read six words aloud and look at the Mac. */
+private let wordsSeconds = 60.0
 
 /** Paired or not, and everything that goes with being paired. */
 @MainActor
@@ -50,6 +54,10 @@ final class WatchApp {
   private let origin: String
   private let registry: HTTPRegistryAPI
   private(set) var store: WatchStore?
+  /** The relay road's sealed session for the store in use: closed when the store goes, never left polling. */
+  private var liveSealer: WatchSealer?
+  /** A pairing whose words are on screen, waiting for the owner's Match on the watch. */
+  private var awaitingWords: WatchSession?
   private var keeper: AccountKeeper?
   private(set) var desktop = ""
   private(set) var username: String?
@@ -97,7 +105,25 @@ final class WatchApp {
     // With no account the relay would only refuse, and read as the Mac forgetting this watch.
     let urls = session.bases.filter { held != nil || $0.kind != "relay" }.compactMap { URL(string: $0.url) }
     let roams = session.bases.contains { $0.kind == "relay" }
-    store = WatchStore(api: HTTPWatchAPI(bases: urls, token: session.token, relay: pass, guarded: roams), feel: feel)
+    // The relay road, sealed once the owner confirmed this watch's words on the Mac (WatchSeal.swift).
+    let key = sessionKey(session)
+    let sealer = pass.flatMap { relay in
+      session.seal.map { peer in WatchSealer(peer: peer, device: vault.device(), relay: relay, pinned: session.sealPinned, onPinned: { vault.markSealed(key) }) }
+    }
+    retireSealer()
+    liveSealer = sealer
+    let api = HTTPWatchAPI(
+      bases: urls, token: session.token, relay: pass, guarded: roams, sealer: sealer,
+      rekeyed: session.sealRekeyed, onToken: { vault.traded(key, token: $0) },
+      latest: { vault.session(key).map { ($0.token, $0.sealRekeyed) } }
+    )
+    store = WatchStore(api: api, feel: feel)
+  }
+
+  private func retireSealer() {
+    let old = liveSealer
+    liveSealer = nil
+    if let old { Task { await old.close() } }
   }
 
   /** The paired Mac as the account lists it: by its id, or by its name. */
@@ -160,6 +186,7 @@ final class WatchApp {
   /** Pair another machine of the account: its code adds it beside the ones held. */
   func addMachine() {
     store = nil
+    retireSealer()
     enterCode()
   }
 
@@ -185,6 +212,7 @@ final class WatchApp {
   func signInAgain() {
     keeper?.retire()
     store = nil
+    retireSealer()
     enterCode()
   }
 
@@ -233,12 +261,34 @@ final class WatchApp {
   }
 
   private func finish(_ session: WatchSession) async {
-    vault.save(session)
     feel(.sent)
     stage = .paired(session.desktop)
     try? await Task.sleep(nanoseconds: UInt64(pairedSeconds * 1_000_000_000))
+    guard let offer = session.offer else { return keep(session.matched(nil)) }
+    // Kept now, with no seal: a watch closed on the words screen still holds the token its claim was given.
+    vault.save(session.matched(nil))
+    // The words are computed HERE, from this watch's own key and the key offered: words taken from the answer
+    // would be whatever the carrier of the answer wanted. The owner compares them with the Mac's.
+    awaitingWords = session
+    stage = .words(session.desktop, offer.words(ownX: vault.device().publicX))
+    try? await Task.sleep(nanoseconds: UInt64(wordsSeconds * 1_000_000_000))
+    // No answer: no seal. The watch keeps its old way (or the Mac it had already matched). Only this pairing's
+    // words: a later pairing on screen now is not this timer's to answer.
+    if case .words = stage, awaitingWords == session { wordsAnswered(match: false) }
+  }
+
+  /** The owner's answer on the watch: Match keeps the Mac's key; anything else keeps none of it. */
+  func wordsAnswered(match: Bool) {
+    guard case .words = stage, let session = awaitingWords, let offer = session.offer else { return }
+    awaitingWords = nil
+    keep(session.matched(match ? offer.matched(ownX: vault.device().publicX) : nil))
+  }
+
+  private func keep(_ session: WatchSession) {
+    vault.save(session)
     typed = ""
-    open(session)
+    // What the shelf holds now: a pin and a Mac matched before are kept by a pairing that matched none.
+    open(vault.session(sessionKey(session)) ?? session)
   }
 
   private func stopped(_ why: JoinFailure) {
@@ -286,12 +336,11 @@ final class WatchApp {
     busy = true
     defer { busy = false }
     do {
-      let reply = try await claimWatch(base: base, code: digits)
+      let reply = try await claimWatch(base: base, code: digits, device: vault.device())
       let bases = basesAfterClaim(typed: Base(kind: "typed", url: base.absoluteString), named: reply.bases)
-      let session = WatchSession(desktop: reply.desktop, bases: bases, token: reply.token)
-      vault.save(session)
+      let session = WatchSession(desktop: reply.desktop, bases: bases, token: reply.token, offer: reply.sealOffer)
       digits = ""
-      open(session)
+      await finish(session)
     } catch WatchError.refused(let reason) {
       digits = ""
       failure = .refused(reason)
@@ -324,6 +373,7 @@ final class WatchApp {
     UserDefaults.standard.removeObject(forKey: keptZoomKey)
     ThumbPictures.forget()
     store = nil
+    retireSealer()
     username = nil
     heldMachines = []
     current = nil
@@ -561,6 +611,7 @@ private struct PairingView: View {
     case .working(.joining): JoinSteps(done: [], now: "Joining your account…")
     case .working(.finding): JoinSteps(done: ["Joined your account"], now: "Finding your computer…")
     case .paired(let desktop): JoinSteps(done: ["Joined your account", "Paired with \(desktop)"], now: nil)
+    case .words(let desktop, let words): SealWordsView(desktop: desktop, words: words, onAnswer: app.wordsAnswered)
     case .notice(let notice): noticeView(notice)
     }
   }
@@ -616,3 +667,27 @@ struct LinkChip: View {
     }
   }
 }
+
+/**
+ * SIX WORDS, ON THE WRIST AND ON THE MAC. The Mac shows the same six in its watch sheet,
+ * made from both keys; the owner says there that they match, and from then on this
+ * watch reaches that Mac through the relay end to end.
+ */
+private struct SealWordsView: View {
+  let desktop: String
+  let words: [String]
+  let onAnswer: (Bool) -> Void
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Same words on \(desktop)?").font(.headline)
+        Text(words.joined(separator: " ")).font(.system(.title3, design: .rounded)).fixedSize(horizontal: false, vertical: true)
+        Text("The computer's Apple Watch sheet must show these same six words. Tap Same words there too: until then this watch reaches it only at home.").font(.footnote).foregroundStyle(.secondary)
+        Button("They match") { onAnswer(true) }
+        Button("They don't", role: .destructive) { onAnswer(false) }
+      }
+    }
+  }
+}
+

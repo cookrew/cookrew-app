@@ -598,7 +598,7 @@ export const ON_ACCENT = [
   '.cr-chip.role.amber', '.cr-chip.sel', '.cr-ckpt-action.rewind.armed', '.cr-ckpt-here',
   '.cr-ckpt-row.active .cr-ckpt-dot i', '.cr-ckpt-tick', '.cr-ckpt-tick.rewind', '.cr-fn-stage', '.cr-git-dirty',
   '.cr-led', '.cr-led.busy', '.cr-more-item.on', '.cr-path-relay .cr-path-dot', '.cr-routing-btn.primary',
-  '.cr-routing-entry.online .cr-routing-lamp', '.cr-routing-pick.on', '.cr-routing-status.online .cr-routing-lamp',
+  '.cr-routing-entry.online .cr-routing-lamp', '.cr-routing-menu .cr-remote-magpie .fr-foot button.fr-go', '.cr-routing-pick.on', '.cr-routing-status.online .cr-routing-lamp',
   '.cr-routing-tick.btn', '.cr-sheet .gs-primary', ".cr-viewseg button[aria-pressed='true']", '.cr-ws-create',
   '.cr-pet-card-send', '.cr-wsw-actions button.primary', '.door-moved-b.primary', '.event-toast-count',
   '.gk-tick.done', '.gk-tick.now', '.lod-overlay .attach-tab.on', '.note-header', '.popout-ask-live',

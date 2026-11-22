@@ -213,6 +213,26 @@ export function ownerSecretPaths(
     // The per-harness gateway key names (route program, E2E round).
     path.join(base, 'route-keys.json'),
     // The plugin file Magpie writes for this app carries `route.key`.
-    path.join(base, 'magpie.json')
+    path.join(base, 'magpie.json'),
+    // The key that signs in to Magpie's own settings page (route/magpie-web.ts).
+    path.join(base, 'magpie-web.json'),
+    path.join(base, 'magpie-web.json.tmp'),
+    // Lane Magpie: the names of keys being made (share-intents.ts); the hashes of
+    // keys given to the owner's other computers (magpie-remote/bound-keys.ts); and
+    // the keys other computers gave this one, sealed (magpie-remote/remotes.ts).
+    path.join(base, 'share-intents.json'),
+    path.join(base, 'share-intents.json.tmp'),
+    path.join(base, 'magpie-bound-keys.json'),
+    path.join(base, 'magpie-bound-keys.json.tmp'),
+    path.join(base, 'magpie-remotes.json'),
+    path.join(base, 'magpie-remotes.json.tmp'),
+    // Which browser cards are signed in to Magpie's page (magpie-card-open.ts).
+    path.join(base, 'magpie-cards.json'),
+    path.join(base, 'magpie-cards.json.tmp'),
+    // Names and ids only, but it is the owner's record of which keys went where (route/share-audit.ts).
+    path.join(base, 'share-audit.log'),
+    // Ids of blocked desktops' keys still to revoke (magpie-remote/blocked.ts).
+    path.join(base, 'magpie-blocked-revokes.json'),
+    path.join(base, 'magpie-blocked-revokes.json.tmp')
   ]
 }

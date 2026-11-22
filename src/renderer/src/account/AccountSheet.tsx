@@ -329,7 +329,7 @@ export function AccountSheet({
   const tabIntent: PageIntent = state === 'register' ? 'create' : 'sign-in'
 
   return (
-    <div className="gs-scrim cr-sheet" role="dialog" aria-modal="true" aria-label={title}>
+    <div className="gs-scrim cr-sheet cr-acct-layer" role="dialog" aria-modal="true" aria-label={title}>
       <div
         className="gs-sheet gs-small cr-sheet cr-acct-sheet"
         onKeyDown={(e) => {

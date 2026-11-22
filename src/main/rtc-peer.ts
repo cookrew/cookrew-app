@@ -8,8 +8,16 @@
  * iPhone). WebRTC needs neither. The phone sends an offer over the relay it
  * is already on; this Mac answers with candidates on exactly the addresses
  * it publishes (its LAN address first, then its tailnet address), ICE finds
- * the direct pair, and DTLS is authenticated by the fingerprint carried in
- * that answer — which arrived over the relay's TLS, from this Mac.
+ * the direct pair, and DTLS is authenticated by the fingerprints in the two
+ * SDPs.
+ *
+ * THE RELAY READS BOTH SDPs, so the fingerprints alone would let it swap them
+ * and sit in the middle. The answer therefore goes out with a binding
+ * (shared/rtc-bind.ts · `bind`): the offer's fingerprints as this Mac received
+ * them and the answer's, signed by this Mac's account device key. The console
+ * sets the answer only when that verifies over its own offer, for the machine
+ * whose id is the key's hash. This proves the Mac to the console; the console
+ * is proved to the Mac as before, by the token on every request it carries.
  *
  * Probe round (P0): one data channel, `cookrew-probe`, that answers a ping
  * with this Mac's device id. Since round P1 the link carries the data plane
@@ -25,6 +33,7 @@ import { RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER } from './relay-device'
 import { decodeFrame, encodeFrame } from '../shared/relay-frame'
 import { createRtcOutbox, type RtcOutbox } from './rtc-outbox'
 import { isBrowserFrame } from './socket-bridge'
+import { makeRtcBind, type RtcBind, type RtcBindSigner } from '../shared/rtc-bind'
 
 export const RTC_PROBE_LABEL = 'cookrew-probe'
 /**
@@ -99,6 +108,8 @@ export interface RtcHostDeps {
   readonly log?: (message: string) => void
   readonly graceMs?: number
   readonly silentMs?: number
+  /** This Mac's account device key, to sign the binding with; null without an account. */
+  readonly signer?: () => RtcBindSigner | null
 }
 
 /** What a channel tells the peer it rides on. */
@@ -119,6 +130,11 @@ interface PeerState {
 export interface RtcHost {
   /** Answer an offer; null when refused (busy, no hosts, no account). */
   readonly answer: (offerSdp: string) => Promise<string | null>
+  /**
+   * The binding that goes beside an answer (shared/rtc-bind.ts): the offer as
+   * it arrived and the answer as sent. Null with no account or no key.
+   */
+  readonly bind: (offerSdp: string, answerSdp: string) => RtcBind | null
   readonly open: () => number
   readonly close: () => void
 }
@@ -375,8 +391,15 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
     }
   }
 
+  const bind = (offerSdp: string, answerSdp: string): RtcBind | null => {
+    const device = deps.deviceId()
+    if (device === null) return null
+    return makeRtcBind({ device, offerSdp, answerSdp, signer: deps.signer?.() ?? null })
+  }
+
   return {
     answer,
+    bind,
     open: () => peers.size,
     close: () => {
       for (const state of [...peers.values()]) state.end('host closed')

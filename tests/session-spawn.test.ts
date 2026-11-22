@@ -34,10 +34,11 @@ describe('servedSpawn — the command is wrapped under Seatbelt', () => {
     expect(cap.writes[0].path).toBe(out.profilePath)
   })
 
-  it.skipIf(process.platform === 'win32')('writes the profile inside the sandbox, so END removes it', () => {
+  it.skipIf(process.platform === 'win32')('writes the profile OUTSIDE the sandbox, where the seat cannot swap it', () => {
     const cap = capture()
     const out = servedSpawn({ file: 'sh', args: [] }, ctx(), cap.write)
-    expect(out.profilePath.startsWith('/base/sessions/svc/svc-ana-1/')).toBe(true)
+    expect(out.profilePath.startsWith('/base/sessions/')).toBe(false)
+    expect(out.profilePath.startsWith('/base/seat-profiles/svc/')).toBe(true)
   })
 
   it.skipIf(process.platform === 'win32')('the profile confines writes to this sandbox and denies EVERY other session', () => {

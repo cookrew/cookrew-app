@@ -2,9 +2,10 @@ import { randomBytes } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { ViewerWho } from '../shared/remote-access'
-import { UNLOCK_INFO, UNLOCK_PASSWORD_MAX, type UnlockAnswer, type UnlockBegin, type UnlockOutcome } from '../shared/remote-unlock'
+import { REMEMBER_INFO, UNLOCK_INFO, UNLOCK_PASSWORD_MAX, type UnlockAnswer, type UnlockBegin, type UnlockOutcome, type UnlockRoad } from '../shared/remote-unlock'
 import { generateSealKeyPair, openBody, type SealKeyPair } from '../shared/relay-seal'
 import { writeFileAtomic } from './atomic-file'
+import type { RememberedUnlocks } from './unlock-remembered'
 
 /**
  * THE MAC'S SIDE OF A REMOTE UNLOCK.
@@ -15,6 +16,12 @@ import { writeFileAtomic } from './atomic-file'
  * are asked twice, because Stop can land between the challenge and the typing.
  *
  * Attempts are counted for the machine, not the device: macOS counts them that way.
+ *
+ * REMEMBER (on the console, inside cookrew-seal/2 only): a page that asks to remember a
+ * password that worked gets an id (unlock-remembered.ts), and keeps a box sealed to this
+ * Mac's unlock key holding the password and that id (REMEMBER_INFO). It later sends the box
+ * in place of the password. The box is taken only on a v2 road, only while the id is held
+ * for the same device; otherwise "forgotten", and nothing is typed.
  */
 
 export const UNLOCK_ATTEMPTS = 3
@@ -41,13 +48,17 @@ export interface UnlockDoorDeps {
   /** Types at the lock screen and presses Return. */
   type(password: string): Promise<void>
   record(outcome: string, who: ViewerWho): void
+  /** Remembered passwords' ids. Absent: this Mac remembers nothing for a page. */
+  remembered?: RememberedUnlocks
   now?: () => number
   sleep?: (ms: number) => Promise<void>
 }
 
 export interface UnlockDoor {
-  begin(who: ViewerWho): Promise<UnlockBegin>
-  unlock(who: ViewerWho, wire: string): Promise<UnlockAnswer>
+  begin(who: ViewerWho, road?: UnlockRoad): Promise<UnlockBegin>
+  unlock(who: ViewerWho, wire: string, road?: UnlockRoad): Promise<UnlockAnswer>
+  /** The page's own Forget: its remembered id goes, inside v2 and for its own device only. */
+  forget(who: ViewerWho, id: unknown, road?: UnlockRoad): boolean
   /** Someone at the Mac turned remote control on. */
   reopen(): void
 }
@@ -57,16 +68,37 @@ const BUSY = 'An unlock is already under way.'
 const REFUSED = 'That request could not be read. Try again.'
 const UNTYPABLE = 'This password cannot be typed from here: it has a character no key makes. Unlock it at the Mac.'
 const CLOSED = 'Too many wrong passwords. Turn remote control off and on at the Mac to try again.'
+const FORGOTTEN = 'This Mac no longer takes the password this device remembered. Type it again.'
+/** What a Forget the Mac could not write answers: a fixed sentence, never the file system's (it names paths). */
+export const FORGET_FAILED = 'This Mac could not forget that password just now. Try again, or rotate the pairing at the Mac.'
 
-const readSealed = (opened: string | null): { challenge: string; password: string } | null => {
+const isPassword = (p: unknown): p is string => typeof p === 'string' && p.length > 0 && p.length <= UNLOCK_PASSWORD_MAX
+
+const parsed = (opened: string | null): Record<string, unknown> | null => {
   if (opened === null) return null
   try {
-    const raw = JSON.parse(opened) as { c?: unknown; p?: unknown } | null
-    if (typeof raw?.c !== 'string' || typeof raw.p !== 'string') return null
-    return raw.p.length > 0 && raw.p.length <= UNLOCK_PASSWORD_MAX ? { challenge: raw.c, password: raw.p } : null
+    const raw = JSON.parse(opened) as unknown
+    return typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null
   } catch {
     return null
   }
+}
+
+/** A typed password, or a remembered box: exactly one of the two. */
+type Asked = { readonly challenge: string; readonly password: string; readonly remember: boolean } | { readonly challenge: string; readonly box: string }
+
+const readSealed = (opened: string | null): Asked | null => {
+  const raw = parsed(opened)
+  if (raw === null || typeof raw.c !== 'string') return null
+  if (raw.p !== undefined && raw.b !== undefined) return null
+  if (typeof raw.b === 'string') return { challenge: raw.c, box: raw.b }
+  return isPassword(raw.p) ? { challenge: raw.c, password: raw.p, remember: raw.m === 1 } : null
+}
+
+/** A remembered password's box: the password and its id, under the remember label only. */
+const readBox = (opened: string | null): { password: string; id: string } | null => {
+  const raw = parsed(opened)
+  return raw !== null && isPassword(raw.p) && typeof raw.r === 'string' ? { password: raw.p, id: raw.r } : null
 }
 
 /**
@@ -165,16 +197,52 @@ export function createUnlockDoor(deps: UnlockDoorDeps): UnlockDoor {
     }
   }
 
+  /** Remembering works on a v2 road only, and only with a store of ids. */
+  const remembers = (road: UnlockRoad | undefined): RememberedUnlocks | null => (road?.sealedV2 === true ? (deps.remembered ?? null) : null)
+
+  /** The password to type: the one sent, or the one in a live box; else the answer that stops here. */
+  const passwordOf = (who: ViewerWho, asked: Asked, road: UnlockRoad | undefined): { password: string; id: string | null } | UnlockAnswer => {
+    if (!('box' in asked)) return { password: asked.password, id: null }
+    const held = remembers(road)
+    if (held === null) return { ok: false, outcome: 'refused', error: REFUSED }
+    const box = readBox(openBody(deps.keyPair().privateKey, REMEMBER_INFO, asked.box))
+    if (box === null) return { ok: false, outcome: 'refused', error: REFUSED }
+    if (!held.live(box.id, who.key)) {
+      deps.record('a remembered password this Mac no longer takes', who)
+      return { ok: false, outcome: 'forgotten', error: FORGOTTEN }
+    }
+    return box
+  }
+
+  /** A wrong password is the answer whatever happens here: an id that cannot be dropped is said in the record only. */
+  const dropQuietly = (id: string, who: ViewerWho): void => {
+    try {
+      deps.remembered?.drop(id, who.key)
+    } catch {
+      deps.record('a remembered password stopped working and could not be taken back', who)
+    }
+  }
+
+  /** The Mac is open whatever happens here: an id that cannot be kept is an unlock with nothing remembered. */
+  const issued = (held: RememberedUnlocks, who: ViewerWho): { remembered?: string } => {
+    try {
+      return { remembered: held.issue(who.key) }
+    } catch {
+      deps.record('unlocked; the password could not be remembered', who)
+      return {}
+    }
+  }
+
   return {
-    async begin(who) {
+    async begin(who, road) {
       const stop = stopped(who)
       if (stop !== null) return stop
       if (!(await deps.locked())) return { ok: false, outcome: 'not-locked', error: NOT_LOCKED }
       const value = randomBytes(32).toString('base64url')
       challenges.set(who.key, { value, until: now() + UNLOCK_CHALLENGE_MS })
-      return { ok: true, key: deps.keyPair().publicKey, challenge: value }
+      return { ok: true, key: deps.keyPair().publicKey, challenge: value, ...(remembers(road) ? { remember: 1 as const } : {}) }
     },
-    async unlock(who, wire) {
+    async unlock(who, wire, road) {
       const stop = stopped(who)
       if (stop !== null) return stop
       const sealed = readSealed(openBody(deps.keyPair().privateKey, UNLOCK_INFO, wire))
@@ -182,14 +250,32 @@ export function createUnlockDoor(deps: UnlockDoorDeps): UnlockDoor {
         challenges.delete(who.key)
         return { ok: false, outcome: 'refused', error: REFUSED }
       }
-      if (deps.typable && !deps.typable(sealed.password)) return { ok: false, outcome: 'failed', error: UNTYPABLE }
+      const found = passwordOf(who, sealed, road)
+      if ('ok' in found) return found
+      if (deps.typable && !deps.typable(found.password)) return { ok: false, outcome: 'failed', error: UNTYPABLE }
       // Before the first await: two devices must not both get past this line.
       typing = true
       try {
         if (!(await deps.locked())) return { ok: false, outcome: 'not-locked', error: NOT_LOCKED }
-        return await typeIt(who, sealed.password)
+        const answer = await typeIt(who, found.password)
+        // A remembered password that stopped working is taken back: the page drops its box too.
+        if (!answer.ok && answer.outcome === 'wrong' && found.id !== null) dropQuietly(found.id, who)
+        const held = remembers(road)
+        // A new id only for a typed password the page asked to remember; a box keeps the id it holds.
+        if (answer.ok && held !== null && !('box' in sealed) && sealed.remember) return { ...answer, ...issued(held, who) }
+        return answer
       } finally {
         typing = false
+      }
+    },
+    forget(who, id, road) {
+      const held = remembers(road)
+      if (held === null || typeof id !== 'string') return false
+      try {
+        return held.drop(id, who.key)
+      } catch {
+        deps.record('a remembered password could not be forgotten', who)
+        throw new Error(FORGET_FAILED)
       }
     },
     reopen() {

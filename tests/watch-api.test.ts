@@ -1,3 +1,5 @@
+import { relayLineHeaders, SEALED_PEER_HEADER, sealProofHeaders } from '../src/main/seal-proof'
+import { DOOR_MARKER, SEALED_MARKER } from '../src/shared/remote-unlock'
 import { readFileSync, writeFileSync, existsSync, mkdtempSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -339,6 +341,91 @@ describe('through the real gate', () => {
     expect(refused.status).toBe(403)
     expect(await refused.json()).toEqual({ ok: false, reason: 'wrong' })
     expect(await paired()).toMatch(/.{16,}/)
+  })
+
+  it('a claim that brings a watch key gets this Mac\'s key and the words, and only once the claim stood', async () => {
+    const offered: Array<{ deviceId: string; x: string }> = []
+    const macKey = { kty: 'OKP' as const, crv: 'Ed25519' as const, x: Buffer.alloc(32, 7).toString('base64url') }
+    setWatchHost({
+      ...host(pairing),
+      seal: {
+        sealedOnRelay: () => false,
+        isWatch: () => false,
+        offer: async (deviceId, jwk) => {
+          offered.push({ deviceId, x: jwk.x })
+          return { deviceId: 'mac-device', jwk: macKey, nonce: 'n', words: ['able', 'baby', 'cable', 'dance', 'eagle', 'fabric'] }
+        }
+      }
+    })
+    const watchId = '0f0e0d0c-0b0a-4908-8706-050403020100'
+    const jwk = { kty: 'OKP', crv: 'Ed25519', x: Buffer.alloc(32, 3).toString('base64url') }
+    await post('/api/watch/code', PAIRING)
+    expect((await post('/api/watch/claim', null, { code: 'nope', deviceId: watchId, jwk })).status).toBe(403)
+    expect(offered).toEqual([])
+    const { code } = (await (await post('/api/watch/code', PAIRING)).json()) as { code: string }
+    const claimed = (await (await post('/api/watch/claim', null, { code, deviceId: watchId.toUpperCase(), jwk })).json()) as { seal?: unknown }
+    expect(claimed.seal).toEqual({ deviceId: 'mac-device', jwk: macKey, nonce: 'n', words: ['able', 'baby', 'cable', 'dance', 'eagle', 'fabric'] })
+    expect(offered).toEqual([{ deviceId: watchId, x: jwk.x }])
+  })
+
+  it('a claim with no key, or a key that is not an Ed25519 one, is the old claim', async () => {
+    let asked = 0
+    setWatchHost({ ...host(pairing), seal: { sealedOnRelay: () => false, isWatch: () => false, offer: async () => (asked++, null) } })
+    for (const extra of [{}, { deviceId: '0f0e0d0c-0b0a-4908-8706-050403020100', jwk: { kty: 'EC', crv: 'P-256', x: 'a' } }]) {
+      const { code } = (await (await post('/api/watch/code', PAIRING)).json()) as { code: string }
+      const claimed = (await (await post('/api/watch/claim', null, { code, ...extra })).json()) as { ok: boolean; seal?: unknown }
+      expect(claimed.ok).toBe(true)
+      expect(claimed.seal).toBeUndefined()
+    }
+    expect(asked).toBe(0)
+  })
+
+  it('the claim\'s token is traded for a new one only inside the confirmed watch\'s own sealed session, and the old one stops working', async () => {
+    const WATCH = '0f0e0d0c-0b0a-4908-8706-050403020100'
+    setWatchHost({ ...host(pairing), seal: { sealedOnRelay: () => true, isWatch: (id) => id === WATCH, offer: async () => null } })
+    const old = await paired()
+    // In the clear (no seal proof): no such route.
+    expect((await post('/api/watch/rekey', old)).status).toBe(404)
+    const proof = { [SEALED_MARKER]: sealProofHeaders()[SEALED_MARKER] }
+    // Sealed, but a phone's or the console's code-mode session, which names no device: no such route,
+    // whatever token it holds (Relay round 4, D).
+    expect((await call('/api/watch/rekey', old, { method: 'POST', body: '{}', headers: proof })).status).toBe(404)
+    // Sealed by a device that is not the confirmed watch (a desktop, a watch still waiting for its words): none.
+    const other = { ...proof, [SEALED_PEER_HEADER]: '53ab5b71-1430-891d-a7ce-2e3d6f3856bc' }
+    expect((await call('/api/watch/rekey', old, { method: 'POST', body: '{}', headers: other })).status).toBe(404)
+    // The watch's id with no seal proof is anyone's to write: none.
+    expect((await call('/api/watch/rekey', old, { method: 'POST', body: '{}', headers: { [SEALED_PEER_HEADER]: WATCH } })).status).toBe(404)
+    const sealed = { ...proof, [SEALED_PEER_HEADER]: WATCH }
+    expect((await call('/api/watch/rekey', 'not-the-token', { method: 'POST', body: '{}', headers: sealed })).status).toBe(404)
+    const traded = await call('/api/watch/rekey', old, { method: 'POST', body: '{}', headers: sealed })
+    const { token } = (await traded.json()) as { token: string }
+    expect(token).toMatch(/.{16,}/)
+    expect(token).not.toBe(old)
+    // The answer may be lost, or another part of the watch still holds the old token: until the new one is
+    // presented, the old one still works, and asking again gives the same new token.
+    expect((await call('/api/watch/cards', old)).status).toBe(200)
+    const again = (await (await call('/api/watch/rekey', old, { method: 'POST', body: '{}', headers: sealed })).json()) as { token: string }
+    expect(again.token).toBe(token)
+    expect((await call('/api/watch/cards', token)).status).toBe(200)
+    // The new token was presented: the old one still serves calls already on their way, for a minute.
+    expect((await call('/api/watch/cards', old)).status).toBe(200)
+  })
+
+  it('once a watch key is confirmed, the watch token is refused in the clear on the relay line, whatever device the relay names', async () => {
+    let confirmed = false
+    setWatchHost({ ...host(pairing), seal: { sealedOnRelay: () => confirmed, isWatch: () => false, offer: async () => null } })
+    const token = await paired()
+    const line = relayLineHeaders()
+    expect((await call('/api/watch/cards', token, { headers: line })).status).toBe(200)
+    confirmed = true
+    // 403 sealed-only, never 401: a watch takes a 401 for being forgotten and would let go of its pairing.
+    const refused = await call('/api/watch/cards', token, { headers: line })
+    expect(refused.status).toBe(403)
+    expect(await refused.json()).toEqual({ error: 'sealed-only' })
+    // Through a served door, a watch token is never taken at all.
+    expect((await call('/api/watch/cards', token, { headers: { [DOOR_MARKER]: '1' } })).status).toBe(403)
+    // Not the relay line (home, or out of the sealed session): taken as before.
+    expect((await call('/api/watch/cards', token)).status).toBe(200)
   })
 
   it('only the owner mints a code or asks after the pairing', async () => {

@@ -109,8 +109,8 @@ export interface PlaneHealth {
    * The two signals above are evidence that a plane STOPPED WORKING, and both
    * wait for a few of them because one is a hiccup. This is evidence that the
    * plane is the wrong machine — a re-check whose signature named another
-   * origin, or a registry that no longer vouches for it (path/plane-recheck.ts)
-   * — and there is nothing to wait for: every further request would carry the
+   * origin, or a registry that no longer vouches for it (the name re-check,
+   * gone with the per-machine names on 2026-11-16) — and there is nothing to wait for: every further request would carry the
    * pairing token to it. The hold comes with it, so the switcher cannot adopt
    * the same name again on the next tick.
    */

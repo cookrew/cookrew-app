@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { AccountStatus } from '../../../shared/account-v2'
 import { cookrew } from '../api'
 import { AccountAvatar } from './Avatar'
@@ -14,7 +15,7 @@ import { ProfileSheet, type ProfileTab } from './ProfileSheet'
 import { ResumeSession } from './ResumeSession'
 import { SecurityCard } from './SecurityCard'
 import { securityActions } from './security-actions'
-import { onAccountAsk, onAccountSheetRequest, onJoinRequest } from './open-request'
+import { onAccountAsk, onAccountSheetRequest, onJoinRequest, type AccountSheetTarget } from './open-request'
 import { onImportRequest } from '../import-request'
 
 /**
@@ -70,6 +71,7 @@ export function useAccountSurface(): AccountSurface {
    */
   const [joining, setJoining] = useState<string | null>(null)
   const [tab, setTab] = useState<ProfileTab>('PROFILE')
+  const [profileRequest, setProfileRequest] = useState(0)
   /** The request a system notification was clicked for (D6). */
   const [focusRequest, setFocusRequest] = useState<string | null>(null)
   /** A failure from the D3 card's own actions, said on the card. */
@@ -157,20 +159,27 @@ export function useAccountSurface(): AccountSurface {
   // gate sheet's identify step opens this in place). A signed-in account
   // lands on its profile; no account lands on the claim sheet, which V3-02
   // grows into the three-state sheet — this is its one entry either way.
-  const open = useCallback((): void => {
+  const openTarget = useCallback((target: AccountSheetTarget): void => {
     if (status?.username) {
-      setTab('PROFILE')
+      const wanted: ProfileTab = target === 'devices' ? 'DEVICES' : 'PROFILE'
+      // An open profile keeps its own tab and any half-typed step-up. Remount
+      // it only when the request names a different tab than it opened on, so
+      // asking again for the tab already shown wipes nothing.
+      if (sheet === 'profile' && tab === wanted) return
+      setTab(wanted)
+      if (sheet === 'profile') setProfileRequest((previous) => previous + 1)
       setSheet('profile')
     } else {
       setInitialTab('signin')
       setSheet('account')
     }
-  }, [status?.username])
+  }, [status?.username, sheet, tab])
+  const open = useCallback((): void => openTarget('profile'), [openTarget])
 
   useEffect(() => {
     if (!supported) return
-    return onAccountSheetRequest(open)
-  }, [supported, open])
+    return onAccountSheetRequest(openTarget)
+  }, [supported, openTarget])
 
   // The Seats tab's OPEN asks App for the import sheet (import-request.ts).
   // That sheet is the answer, so this one steps aside rather than sit over it.
@@ -277,6 +286,7 @@ export function useAccountSurface(): AccountSurface {
       )}
       {sheet === 'profile' && status?.username && (
         <ProfileSheet
+          key={profileRequest}
           status={status}
           initialTab={tab}
           focusRequestId={focusRequest}
@@ -311,5 +321,11 @@ export function useAccountSurface(): AccountSurface {
     </>
   )
 
-  return { avatar: <AccountAvatar status={status} onOpen={open} />, overlays }
+  // Other sheets such as Launch settings are portaled to document.body. Put
+  // the account surface beside them rather than inside App's stacking context,
+  // so an account sheet requested from those sheets is actually clickable.
+  return {
+    avatar: <AccountAvatar status={status} onOpen={open} />,
+    overlays: typeof document === 'undefined' ? overlays : createPortal(overlays, document.body)
+  }
 }

@@ -40,7 +40,7 @@ export type PathBadgeInput = {
   readonly desktopName?: string
   readonly latencyMs?: number | null
   /**
-   * The companion is racing a better path right now (path/switch.ts).
+   * The companion is racing a better path right now.
    *
    * Separate from `link`, because the two are different facts: `reconnecting`
    * means the channel this page is using is down, and probing means it is up
@@ -53,10 +53,9 @@ export type PathBadgeInput = {
    * THIS PAGE WAS SERVED UNDER A RELAY PREFIX, so the relay is what is
    * carrying the data plane — whatever host the address bar shows.
    *
-   * The origin alone cannot answer this. Reach v2.1 gives every Mac real
-   * certificates for names like `192-168-2-40.<id>.d.cookrew.dev`, and a relay
-   * can be fronted by any host at all; classifying by hostname would then read
-   * LAN off a page whose every request is going through cookrew.dev.
+   * The origin alone cannot answer this: a relay can be fronted by any host
+   * at all, and classifying by hostname would then read LAN off a page whose
+   * every request is going through cookrew.dev.
    *
    * It says only "do not read the address bar"; WHICH path is carrying the
    * data plane is `plane`, below.
@@ -67,8 +66,8 @@ export type PathBadgeInput = {
    *
    * Only meaningful under a prefix, and it is the whole of the promise the
    * address bar can no longer keep: the page stays at cookrew.dev for the life
-   * of the session while the requests underneath move to the Mac's own trusted
-   * name and back. The badge is then the only thing on screen telling the
+   * of the session while the requests underneath move onto the WebRTC link to
+   * the Mac and back. The badge is then the only thing on screen telling the
    * truth about the transport, which is why it is a supplied FACT — read off
    * the store that composes the request URLs — and never re-derived here.
    *
@@ -76,7 +75,20 @@ export type PathBadgeInput = {
    * plane that has not moved has not moved.
    */
   readonly plane?: 'LAN' | 'TAILNET' | 'RELAY'
+  /**
+   * WHY THE PLANE STAYS ON THE RELAY although the Mac answered a direct link
+   * (path/companion.ts): its answer did not prove itself (shared/rtc-bind.ts).
+   * Read only while the word is RELAY; absent when nothing was refused.
+   */
+  readonly held?: DirectHeld | null
 }
+
+/**
+ * A direct link that answered and was not taken: the Mac's Cookrew sends no
+ * binding (`old-mac`), this browser cannot check one (`browser`), or the
+ * binding did not prove the answer is the Mac's (`unproved`).
+ */
+export type DirectHeld = 'old-mac' | 'browser' | 'unproved'
 
 export type PathBadgeView = {
   readonly state: PathState
@@ -108,6 +120,17 @@ const PATH_SENTENCES: Record<PathState, string> = {
   RELAY: 'Via cookrew.dev relay. It goes direct by itself when your Mac can be reached from here.',
   OFFLINE: 'Not reachable right now.',
   PROBING: 'Looking for the best way to your Mac.'
+}
+
+/**
+ * The relay's sentence when a direct link answered and was refused. The
+ * default one promises to go direct "when your Mac can be reached", which is
+ * untrue here: it was reached, and the link was not taken on purpose.
+ */
+const HELD_SENTENCES: Record<DirectHeld, string> = {
+  'old-mac': 'Via cookrew.dev relay. Update Cookrew on your Mac to go direct: this version cannot prove a direct link is its own.',
+  browser: 'Via cookrew.dev relay. This browser cannot check your Mac\'s signature, so it does not go direct.',
+  unproved: 'Via cookrew.dev relay. A direct link answered but could not prove it was your Mac, so it was not used.'
 }
 
 /** Strip brackets so an IPv6 literal from a URL can be matched as an address. */
@@ -172,13 +195,13 @@ export const classifyOrigin = (
   const host = hostOf(origin)
   if (!host) return 'OFFLINE'
   /**
-   * A REACH v2.1 NAME IS THE ADDRESS IT SPELLS, NOT THE ZONE IT SITS IN.
+   * A MAC'S OWN NAME IS THE ADDRESS IT SPELLS, NOT THE ZONE IT SITS IN.
    *
-   * `192-168-2-40.<id>.d.cookrew.dev` is the Wi-Fi, and it fell through every
-   * test below to the closing "a public name we cannot name" — so the badge
-   * said RELAY over a page whose bytes never left the house. That is the one
-   * reading the badge exists to prevent, and it is what a phone gets from
-   * every trusted URL `cookrew mobile` prints.
+   * The console never reaches a Mac by name (2026-11-16), but until the
+   * desktop stops handing its names out (lane LAN step D) a phone can still
+   * load the page a Mac serves itself at `192-168-2-40.<id>.d.cookrew.dev`,
+   * and every byte of that page stays on the Wi-Fi. Calling it RELAY is the
+   * one reading the badge exists to prevent. Goes with the names.
    */
   const spelled = addressFromTrustedName(host)
   if (spelled !== null) return isTailnetHostname(spelled) ? 'TAILNET' : isLanHostname(spelled) ? 'LAN' : 'RELAY'
@@ -207,7 +230,7 @@ export const pathBadgeView = (input: PathBadgeInput): PathBadgeView => {
     state,
     word: state,
     pulsing: state === 'PROBING',
-    sentence: PATH_SENTENCES[state],
+    sentence: state === 'RELAY' && input.held ? HELD_SENTENCES[input.held] : PATH_SENTENCES[state],
     desktopName: input.desktopName ?? null,
     latencyMs: typeof input.latencyMs === 'number' ? input.latencyMs : null,
     switchDesktopUrl: input.machinesUrl ?? null

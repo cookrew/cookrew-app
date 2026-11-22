@@ -1,0 +1,15 @@
+/* Your computers (DevicesGuide.tsx): the same four steps in the first run and in Launch settings. */
+.cr-devices { display: grid; gap: 8px; margin: 14px 0 }
+.cr-devices-steps { margin: 0; padding-left: 0; list-style: none; display: grid; gap: 12px }
+.cr-devices-step { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--line, rgba(127, 127, 127, 0.25)); border-radius: 8px }
+.cr-devices-step[data-done='true'] > b::after { content: ' ✓'; color: var(--ok, #2e9e5b) }
+.cr-devices-step small { color: var(--muted) }
+.cr-devices-list { margin: 2px 0; padding-left: 18px }
+.cr-devices-agents { display: grid; gap: 2px; margin-top: 4px }
+.cr-devices-line { display: inline-flex; gap: 6px; align-items: center; max-width: 100% }
+.cr-devices-line code { font-family: var(--font-mono); font-size: 11px; overflow-x: auto; white-space: nowrap; max-width: 52ch }
+.cr-devices-use { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; justify-content: space-between }
+.cr-devices-use .cr-routing-bad { flex-basis: 100% }
+@media (max-width: 700px) {
+  .cr-devices-line code { max-width: 70vw }
+}

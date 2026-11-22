@@ -8,7 +8,7 @@
 import path from 'node:path'
 import type { BrowserNodeData, BrowserTab } from '../shared/model'
 import { activeBrowserTab, browserTabs } from '../shared/model'
-import { HeadlessInstance, type HeadlessOptions, type HeadlessPageState } from './headless-chrome'
+import { HeadlessInstance, type HeadlessCookie, type HeadlessOptions, type HeadlessPageState } from './headless-chrome'
 import type { BrowserInstance } from './browser-instance'
 import { parseUseUrl, useUrl, type UseTarget } from '../shared/use-url'
 import { mainDrawsCard } from './browser-owner'
@@ -77,6 +77,8 @@ export class HeadlessBrowserManager {
   private readonly lastUsed = new Map<string, number>()
   private shuttingDown = false
   private shutdownPromise: Promise<void> | null = null
+  /** Cookies main set for a card this run (magpie-card-open.ts): every instance started for it gets them first. Memory only. */
+  private readonly primed = new Map<string, readonly HeadlessCookie[]>()
 
   constructor(private readonly deps: HeadlessBrowserManagerDeps) {}
 
@@ -223,6 +225,23 @@ export class HeadlessBrowserManager {
     }
   }
 
+  /**
+   * Sign a card in: the cookies go into the running browser now, and into every
+   * Chrome started for this card later this run, before its first page loads.
+   */
+  async primeCookies(browserId: string, cookies: readonly HeadlessCookie[]): Promise<void> {
+    this.primed.set(browserId, cookies)
+    // A Chrome that cannot take them now (stopped, crashed) gets them from `primed` when it starts again.
+    const live = this.instances.get(browserId)
+    if (live?.setCookies) await live.setCookies(cookies).catch(() => undefined)
+    // One still starting got its options before this: set them once it is up.
+    const starting = this.starting.get(browserId)
+    if (starting) {
+      const instance = await starting.promise
+      if (instance?.setCookies) await instance.setCookies(cookies).catch(() => undefined)
+    }
+  }
+
   /** The device a use address names, a Chrome for anything else — or nothing, when the desktop cannot provide it. */
   private makeInstanceFor(browserId: string, node: BrowserNodeData): BrowserInstance | null {
     const active = activeBrowserTab(node)
@@ -243,7 +262,8 @@ export class HeadlessBrowserManager {
       width: clampSize(node.size.width, 800),
       height: clampSize(node.size.height, 600),
       tabs: browserTabs(node),
-      activeTabId: active.id
+      activeTabId: active.id,
+      ...(this.primed.has(browserId) ? { cookies: this.primed.get(browserId) } : {})
     }
     return (this.deps.makeInstance ?? ((opts) => new HeadlessInstance(opts)))(options)
   }
@@ -291,6 +311,8 @@ export class HeadlessBrowserManager {
 
   /** Permanent node deletion: stop first, then remove its persistent profile. */
   async discard(browserId: string): Promise<void> {
+    // Signed in for good only while the card exists: a stop or a workspace switch keeps it.
+    this.primed.delete(browserId)
     await this.remove(browserId)
     await this.deps.deleteProfile?.(browserId)
   }

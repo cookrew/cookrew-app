@@ -38,7 +38,9 @@ describe('readGrant — the budget is required, and refuses the whole grant', ()
       env: ['ANTHROPIC_API_KEY'],
       envFile: null,
       files: [],
-      maxSessions: 3
+      maxSessions: 3,
+      // Every other loopback port is denied to a seat; none lent unless named.
+      loopbackPorts: []
     })
   })
 

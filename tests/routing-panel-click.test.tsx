@@ -61,7 +61,7 @@ describeWithChrome('the Routing panel, clicked', () => {
     await click(page, '.cr-more-menu .cr-routing-entry')
   }
 
-  it('ADD → API key → deepseek types the key line once, without Enter, and focuses the pane; INSTALL types with Enter', async () => {
+  it('ADD → API key opens Magpie’s own settings and types nothing; INSTALL types with Enter', async () => {
     const browser = await launchChrome({ width: 1280, height: 900, chrome })
     try {
       const page: CdpPage = await connectPage(browser.port)
@@ -79,22 +79,19 @@ describeWithChrome('the Routing panel, clicked', () => {
       await sleep(400)
       await click(page, '.cr-routing-add .cr-routing-btn')
       await sleep(200)
-      await click(page, '.cr-routing-menu button[aria-expanded]')
-      await sleep(200)
-      await click(page, '[data-preset="deepseek"]')
-      // The Setup card is created through the normal path and typed into once it is on the canvas.
+      // A key goes into Magpie's own page, never a terminal: nothing is typed, and no key line exists to type.
+      await click(page, '.cr-routing-menu [data-item="api-key"]')
       await sleep(1500)
       const typed = await page.evaluate<{ terminalId: string; data: string }[]>('window.__typed()')
-      expect(typed.map((t) => t.data)).toEqual(['magpie provider add deepseek '])
-      expect(await page.evaluate<boolean>('window.__setupFocused()'), 'the Setup pane holds the focus after the key line').toBe(true)
+      expect(typed).toEqual([])
+      expect(await page.evaluate<number>("document.querySelectorAll('[data-preset]').length"), 'no vendor list to type a key line for').toBe(0)
       // The same card again: INSTALL types its line with Enter, and nothing else was typed in between.
       await page.evaluate("window.__routeStatus('absent')")
       await sleep(300)
       await click(page, '.cr-routing-status .cr-routing-btn')
       await sleep(600)
       const after = await page.evaluate<{ terminalId: string; data: string }[]>('window.__typed()')
-      expect(after.map((t) => t.data)).toEqual(['magpie provider add deepseek ', 'curl -fsSL https://usemagpie.ai/install.sh | sh\r'])
-      expect(new Set(after.map((t) => t.terminalId)).size, 'one Setup card for both lines').toBe(1)
+      expect(after.map((t) => t.data)).toEqual(['curl -fsSL https://usemagpie.ai/install.sh | sh\r'])
       expect(await page.evaluate<number>("document.querySelectorAll('.cr-routing-panel input').length")).toBe(0)
       expect(errors).toEqual([])
       page.close()

@@ -1,10 +1,11 @@
 import type { SetupRunning } from './setup-line-state'
 import { useEffect, useState } from 'react'
-import type { HarnessRow, RouteState } from '../../../shared/route'
+import { ROUTE_HTTP_SCHEMA_VERSION, type HarnessRow, type RouteState } from '../../../shared/route'
 import { SETUP_LINE_COPY } from '../../../shared/first-run-copy'
 import { ROUTING_COPY } from '../../../shared/route-view'
-import { Accounts, Harnesses, LiveRoutes, Rented, SignInLink, StatusLine, type RunLine } from './RoutingSections'
+import { Accounts, Harnesses, LiveRoutes, LoopbackRemotes, PlainRemotes, RemoteRisks, Rented, SignInLink, StatusLine, type RunLine } from './RoutingSections'
 import { SetupScreen } from './SetupScreen'
+import { ROUTE_UPDATE_REQUIRED } from './route-state-order'
 import './routing-panel.css'
 
 /**
@@ -27,6 +28,8 @@ export interface RoutingPanelProps {
   state: RouteState | null
   /** False on a bridge without the route methods. */
   available: boolean
+  /** A future route schema was rejected before reaching consumers. */
+  incompatible?: boolean
   /** Type one line into the Setup card (use-setup-terminal). */
   onRun: RunLine
   /** The Setup card, once it exists — its screen is shown under the sections. */
@@ -48,6 +51,10 @@ export interface RoutingPanelProps {
   onZoom?: (terminalId: string) => void
   /** The person's own endpoint: where it is changed once the first run is over. */
   access?: React.ReactNode
+  /** Connect an AI account (first-run/AccountWays.tsx), drawn first while nothing is connected. */
+  guide?: React.ReactNode
+  /** Share this computer's Magpie with the owner's other devices (ShareDevices.tsx). */
+  share?: React.ReactNode
 }
 
 export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null {
@@ -76,14 +83,20 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
             ✕
           </button>
         </div>
-        {!available || state === null ? (
+        {props.incompatible ? (
+          <div className="cr-routing-bad" role="alert">{ROUTE_UPDATE_REQUIRED}</div>
+        ) : !available || state === null ? (
           <div className="cr-routing-empty">
             <b>{available ? 'READING THE GATEWAY…' : 'NOT ON THIS BRIDGE'}</b>
             {available ? 'one moment' : 'this desktop does not answer for routing yet — update it'}
           </div>
+        ) : state.schemaVersion !== undefined && state.schemaVersion > ROUTE_HTTP_SCHEMA_VERSION ? (
+          <div className="cr-routing-bad" role="alert">{ROUTE_UPDATE_REQUIRED}</div>
         ) : (
           <>
             <StatusLine state={state} onRun={onRun} running={running} />
+            {state.withheld?.endpointInventory && <div className="cr-routing-bad" role="alert">Routing details are hidden on this device because the host configuration could not be read.</div>}
+            {state.withheld?.providerData && <div className="cr-routing-bad" role="alert">Provider details and model choices are hidden on this device because their source cannot be verified.</div>}
             <SignInLink running={running} />
             {(running !== null || stuck) && onStop && (
               <div className="cr-routing-stop" role="status">
@@ -99,8 +112,13 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
                 {error}
               </div>
             )}
+            <LoopbackRemotes rows={state.loopbackRemotes} onRun={onRun} />
+            <PlainRemotes rows={state.plainRemotes} />
+            <RemoteRisks risks={state.remoteRisks} />
+            {props.guide}
             <Harnesses rows={state.harnesses} onRun={onRun} onAddToDock={onAddToDock} running={running} />
             <Accounts state={state} onRun={onRun} onSetDefault={onSetDefault} onSetSharedMcp={onSetSharedMcp} running={running} />
+            {props.share}
             <LiveRoutes state={state} names={names} onZoom={onZoom} />
             <Rented state={state} />
           </>

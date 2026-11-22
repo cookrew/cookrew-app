@@ -7,12 +7,19 @@
  * the channel (main/rtc-peer.ts), so a request here becomes the same
  * loopback request a relayed one does — the server cannot tell them apart,
  * and nothing about auth or routing is new. What is new is the path: no
- * name to resolve, no proxy to route it, no certificate authority, and the
- * DTLS fingerprint the link is checked against arrived over the relay's TLS.
+ * name to resolve, no proxy to route it, no certificate authority.
+ *
+ * WHAT THE LINK IS CHECKED AGAINST. DTLS checks each end against the
+ * fingerprints in the SDPs, and both SDPs cross the relay, which reads them
+ * and could swap them. So no answer is set until `trust` says its binding
+ * verifies (shared/rtc-bind.ts): the Mac's device signature over THIS page's
+ * offer and the answer as it will be set. An answer without one — an older
+ * Mac, or a relay in the middle — is no link: the page stays on the relay.
  */
 
 import { decodeFrame, encodeFrame, type RelayFrame } from '../../../shared/relay-frame'
 import { socketLabel } from '../../../shared/rtc-socket-chunks'
+import type { RtcBindVerdict } from '../../../shared/rtc-bind'
 import { RtcWebSocket, type SocketChannel } from './rtc-socket'
 
 export const RTC_BRIDGE_LABEL = 'cookrew-bridge'
@@ -52,9 +59,21 @@ export const RTC_BODY_CHUNK = 16 * 1024
 /** Statuses whose Response may not carry a body. */
 const BODILESS = new Set([101, 204, 205, 304])
 
+/** The Mac's answer and the binding beside it (`bind` absent from an older Mac). */
+export interface RtcAnswer {
+  readonly sdp: string
+  readonly bind?: unknown
+}
+
 export interface RtcLinkDeps {
-  /** POST the offer over the current plane; the Mac's answer SDP, or null. */
-  readonly offer: (sdp: string) => Promise<string | null>
+  /** POST the offer over the current plane; the Mac's answer (a bare SDP is one with no binding), or null. */
+  readonly offer: (sdp: string) => Promise<RtcAnswer | string | null>
+  /** Does the answer's binding verify over this offer? Nothing is set until it does. */
+  readonly trust: (offerSdp: string, answer: RtcAnswer) => Promise<RtcBindVerdict>
+  /** An answer `trust` refused, and why: for the path report. */
+  readonly refused?: (why: string) => void
+  /** No answer, or an answer that never opened a link, and at which stage: for the path report. */
+  readonly failed?: (why: string) => void
   readonly peer?: () => RTCPeerConnection
   readonly gatherMs?: number
   readonly openMs?: number
@@ -147,7 +166,48 @@ const gathered = (pc: RTCPeerConnection, ms: number): Promise<void> =>
     })
   })
 
-/** Open a link, or null when the Mac offers none or nothing connects in time. */
+/**
+ * How many candidates of each kind an offer carries: COUNTS ONLY, never an
+ * address. A phone that offers no host candidate at all (or only mDNS names)
+ * tells a different story from one whose candidates never reached the Mac.
+ */
+export const offerCandidateKinds = (sdp: string): string => {
+  const kinds = sdp
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('a=candidate:'))
+    .map((line) => {
+      const parts = line.split(' ')
+      const typ = parts[parts.indexOf('typ') + 1] ?? ''
+      if (typ === 'host') return (parts[4] ?? '').endsWith('.local') ? 'mdns' : 'host'
+      return typ === 'srflx' || typ === 'prflx' ? 'srflx' : 'other'
+    })
+  const count = (kind: string): number => kinds.filter((one) => one === kind).length
+  return `${count('host')} host, ${count('mdns')} mdns, ${count('srflx')} srflx`
+}
+
+/** The browser's own states for a link still being opened. */
+const browserStates = (pc: RTCPeerConnection, channel: RTCDataChannel): string =>
+  `ice ${pc.iceConnectionState ?? '?'}, conn ${pc.connectionState ?? '?'}, ch ${channel.readyState ?? '?'}`
+
+/** Where a link that never opened was stuck, with the offer's candidate kinds always (rows are cut at 120). */
+const neverOpened = (stuck: string, offerSdp: string): string => `never opened (${stuck}; offer ${offerCandidateKinds(offerSdp)})`
+
+/**
+ * The binding's verdict on this answer. FAILS CLOSED: a check that throws,
+ * rejects, answers something else, or was never given is a refusal.
+ */
+const checkAnswer = async (deps: RtcLinkDeps, offerSdp: string, answer: RtcAnswer): Promise<RtcBindVerdict> => {
+  const failed: RtcBindVerdict = { ok: false, why: 'binding check failed' }
+  try {
+    const verdict = await deps.trust(offerSdp, answer)
+    if (verdict?.ok === true) return verdict
+    return verdict?.ok === false && typeof verdict.why === 'string' ? verdict : failed
+  } catch {
+    return failed
+  }
+}
+
+/** Open a link, or null when the Mac offers none, its answer is not bound to it, or nothing connects in time. */
 export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null> => {
   const make = deps.peer ?? ((): RTCPeerConnection => new RTCPeerConnection({ iceServers: [] }))
   let pc: RTCPeerConnection
@@ -277,24 +337,42 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
     }
   })
 
+  let offerSdp = ''
+  /** How the exchange ended early, said once, after the try: a refusal, or a failure for the report. */
+  let early: { readonly refused: string } | { readonly failed: string } | null = null
   try {
     await pc.setLocalDescription(await pc.createOffer())
     await gathered(pc, deps.gatherMs ?? RTC_GATHER_MS)
-    const answer = await deps.offer(pc.localDescription?.sdp ?? '')
-    if (answer === null) {
-      shut('no answer')
-      return null
+    // The offer checked is the very one sent: its fingerprint is this page's own.
+    offerSdp = pc.localDescription?.sdp ?? ''
+    const got = await deps.offer(offerSdp)
+    if (got === null) {
+      early = { failed: 'no answer' }
+    } else {
+      const answer: RtcAnswer = typeof got === 'string' ? { sdp: got } : got
+      const verdict = await checkAnswer(deps, offerSdp, answer)
+      if (!verdict.ok) early = { refused: verdict.why }
+      else await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp }).catch(() => void (early = { failed: 'answer not applied' }))
     }
-    await pc.setRemoteDescription({ type: 'answer', sdp: answer })
   } catch {
-    shut('no answer')
+    early = { failed: 'no answer' }
+  }
+  if (early !== null) {
+    const ended: { readonly refused: string } | { readonly failed: string } = early
+    shut('refused' in ended ? 'unbound' : 'no answer')
+    if ('refused' in ended) deps.refused?.(ended.refused)
+    else deps.failed?.(ended.failed)
     return null
   }
   const timer = setTimeout(() => via(null), deps.openMs ?? RTC_OPEN_MS)
   const name = await ready
   clearTimeout(timer)
   if (name === null || closed) {
+    // Read before shut() closes the peer, which would make every state 'closed'.
+    const ended = endedAs as RtcLinkEnd | null
+    const why = neverOpened(ended !== null ? ended.reason : browserStates(pc, channel), offerSdp)
     shut('never opened')
+    deps.failed?.(why)
     return null
   }
   startedAt = now()

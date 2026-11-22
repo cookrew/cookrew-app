@@ -79,7 +79,7 @@ describe('the run decision', () => {
     const failed = await runLine({ line: 'magpie serve', currentKey: () => 'a', ensure: async () => { throw new Error('the Setup card did not appear on the canvas') }, send: async () => ({ ok: true, runId: null }) })
     expect(failed).toEqual({ ok: false, reason: 'the Setup card did not appear on the canvas', busy: false })
     const sent: [string, boolean][] = []
-    const ok = await runLine({ line: 'magpie provider add deepseek ', currentKey: () => 'a', ensure: async () => ({ id: 't1', fresh: true }), send: async ({ id, fresh }) => (sent.push([id, fresh]), { ok: true, runId: null }) })
+    const ok = await runLine({ line: 'magpie autostart on', currentKey: () => 'a', ensure: async () => ({ id: 't1', fresh: true }), send: async ({ id, fresh }) => (sent.push([id, fresh]), { ok: true, runId: null }) })
     expect(ok).toEqual({ ok: true, runId: null, id: 't1' })
     expect(sent).toEqual([['t1', true]])
   })

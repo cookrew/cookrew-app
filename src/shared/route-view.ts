@@ -1,5 +1,5 @@
 import { TOOL_NOTES } from './first-run-copy'
-import type { CardRouteState, HarnessRow, RouteDecision, RouteModel, RouteQuota, RouteState } from './route'
+import { ROUTE_HIDDEN, type CardRouteState, type HarnessRow, type RouteDecision, type RouteModel, type RouteQuota, type RouteState } from './route'
 
 /**
  * WHAT THE ROUTING PANEL AND THE RTE DIAL SAY — as words and numbers, no DOM.
@@ -21,6 +21,7 @@ export const ROUTING_COPY = {
   wiredByProbe: 'found on this machine',
   defaultNone: 'direct — pick a model to route new cards',
   defaultLabel: 'DEFAULT',
+  hiddenOnDevice: ROUTE_HIDDEN,
   settingsLabel: 'Settings',
   mcpLabel: 'MCP',
   mcpShared: 'shared',
@@ -33,12 +34,14 @@ export const ROUTING_COPY = {
   addSubscription: 'Subscription',
   addKey: 'API key',
   addLocal: 'Local',
+  addRemote: 'Another computer’s Magpie',
+  addRemoteHint: 'opens Magpie’s settings: Providers › Add › Remote magpie, address and key typed there',
   addGroup: 'Routing group',
   groupNeedsTwo: 'needs two models in the catalog',
   addAutoGroup: 'Auto group (local tier)',
   autoGroupNeedsScript: 'run the auto-group script once',
   noRoutable: 'no routable models',
-  keyHint: 'the line is typed; paste the key and press Enter — it never touches Cookrew'
+  keyHint: 'opens Magpie’s settings: Providers › Add, the key typed there, never in a terminal'
 } as const
 
 /** Key presets the Add menu offers; each is one `magpie provider add <preset> <key>` line. */
@@ -68,12 +71,13 @@ export function statusLine(state: RouteState): StatusLine {
   const g = state.gateway
   const where = g ? `${g.url.replace(/^https?:\/\//, '')}` : 'gateway'
   const groups = state.models.filter((m) => m.group).length
-  const def = state.defaultModel ?? 'direct'
+  const groupText = state.withheld?.endpointInventory || state.withheld?.providerData ? `groups ${ROUTE_HIDDEN}` : `${groups} group${groups === 1 ? '' : 's'}`
+  const def = state.withheld?.defaultModel ? ROUTE_HIDDEN : state.defaultModel ?? 'direct'
   return {
     status: 'online',
-    text: `${where} · ${state.providers} provider${state.providers === 1 ? '' : 's'} · ${groups} group${groups === 1 ? '' : 's'} · default ${def}`,
+    text: `${where} · ${state.providers} provider${state.providers === 1 ? '' : 's'} · ${groupText} · default ${def}`,
     action: null,
-    source: g?.source === 'plugin' ? ROUTING_COPY.wiredByPlugin : ROUTING_COPY.wiredByProbe
+    source: (g?.source ?? state.gatewaySource) === 'plugin' ? ROUTING_COPY.wiredByPlugin : ROUTING_COPY.wiredByProbe
   }
 }
 

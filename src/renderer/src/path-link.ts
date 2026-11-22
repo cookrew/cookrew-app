@@ -4,6 +4,7 @@ import { dataPlane } from './data-plane'
 import {
   classifyOrigin,
   pathBadgeView,
+  type DirectHeld,
   type PathLink,
   type PathBadgeView,
   type PathState
@@ -31,11 +32,13 @@ export type PathLinkState = {
   readonly link: PathLink
   readonly latencyMs: number | null
   readonly desktopName: string | null
-  /** A better path is being raced right now. See path/switch.ts. */
+  /** A better path is being raced right now. */
   readonly probing: boolean
+  /** A direct link answered and was refused, and why (path/companion.ts). Null when none was. */
+  readonly held: DirectHeld | null
 }
 
-const IDLE: PathLinkState = { link: 'live', latencyMs: null, desktopName: null, probing: false }
+const IDLE: PathLinkState = { link: 'live', latencyMs: null, desktopName: null, probing: false, held: null }
 
 let state: PathLinkState = IDLE
 const listeners = new Set<(next: PathLinkState) => void>()
@@ -89,6 +92,18 @@ export const forgetLatency = (): void => {
 export const setProbing = (on: boolean): void => {
   if (state.probing === on) return
   state = { ...state, probing: on }
+  announce()
+}
+
+/**
+ * WHY THE PLANE STAYS ON THE RELAY: the companion sets it when a direct
+ * link's answer is refused and puts it down (null) when one is adopted. The
+ * word stays RELAY either way; only the sentence stops promising a link that
+ * was reached and turned down on purpose.
+ */
+export const setDirectHeld = (held: DirectHeld | null): void => {
+  if (state.held === held) return
+  state = { ...state, held }
   announce()
 }
 
@@ -155,9 +170,9 @@ const registryOf = (): string | undefined => {
  *
  * `clientBase()` is non-empty only on the console with a machine in scope,
  * where it is that machine's relay address: exactly the case where every
- * request this client makes goes through the registry. Reading it off the origin would
- * be wrong twice over in Reach v2.1: a Mac's own certificates now carry names
- * under `d.cookrew.dev`, and a relay may be fronted by any host at all.
+ * request this client makes goes through the registry (or the WebRTC link the
+ * plane says it moved onto). Reading it off the origin would be wrong: a relay
+ * may be fronted by any host at all.
  */
 const relayed = (): boolean => clientBase() !== ''
 
@@ -182,6 +197,7 @@ export const currentPathBadge = (): PathBadgeView =>
     link: state.link,
     latencyMs: state.latencyMs,
     probing: state.probing,
+    held: state.held,
     relayed: relayed(),
     ...(relayed()
       ? {

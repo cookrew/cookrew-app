@@ -16,52 +16,19 @@ import { describe, expect, it } from 'vitest'
 import {
   PATH_REPORT_MIN_GAP_MS,
   createPathReporter,
-  postPathReport,
-  reportedAttempts
+  postPathReport
 } from '../src/renderer/src/path/report'
-import type { PathAttempt } from '../src/renderer/src/path-attempts'
 import type { PathReport } from '../src/shared/path-report'
 
 const TOKEN = 'a-very-secret-pairing-token'
-
-const attempt = (over: Partial<PathAttempt> = {}): PathAttempt => ({
-  name: '192.168.1.24:8643',
-  outcome: 'blocked',
-  ms: 1,
-  plane: 'LAN',
-  chosen: false,
-  ...over
-})
 
 const report = (over: Partial<PathReport> = {}): PathReport => ({
   at: 1_800_000_000_000,
   plane: 'RELAY',
   permission: 'denied',
   browser: 'Chrome 142',
-  attempts: reportedAttempts([attempt({ detail: 'TypeError: Failed to fetch' })]),
+  attempts: [{ name: '192.168.1.24:8643', outcome: 'blocked', ms: 1, detail: 'TypeError: Failed to fetch' }],
   ...over
-})
-
-describe('the rows on the wire', () => {
-  it('carries what happened, including the status and the browser’s own words', () => {
-    const rows = reportedAttempts([
-      attempt({ outcome: 'http', status: 421, ms: 12 }),
-      attempt({ name: '10.0.0.9:8643', outcome: 'timeout', ms: 800 })
-    ])
-    expect(rows[0]).toEqual({ name: '192.168.1.24:8643', outcome: 'http', status: 421, ms: 12 })
-    expect(rows[1]).toEqual({ name: '10.0.0.9:8643', outcome: 'timeout', ms: 800 })
-  })
-
-  it('drops the two fields that are the panel’s business, not the Mac’s', () => {
-    const [row] = reportedAttempts([attempt({ chosen: true })])
-    expect(row).not.toHaveProperty('plane')
-    expect(row).not.toHaveProperty('chosen')
-  })
-
-  it('is bounded, so a strange card cannot post an unbounded body', () => {
-    const many = Array.from({ length: 40 }, (_, i) => attempt({ name: `10.0.0.${i}:8643` }))
-    expect(reportedAttempts(many)).toHaveLength(12)
-  })
 })
 
 describe('one POST per race', () => {
@@ -180,7 +147,8 @@ describe('what leaves the phone', () => {
     await postPathReport(report(over), {
       url: '/api/path/report',
       headers: { authorization: `Bearer ${TOKEN}` },
-      fetch: async (url, init) => {
+      // The one sender a report has: the sealed session (tests/path-report-addresses.test.ts).
+      sealed: async (url, init) => {
         seen = { url, init }
         return { ok: status < 400, status }
       }
@@ -206,7 +174,7 @@ describe('what leaves the phone', () => {
     expect(body.toLowerCase()).not.toContain('token')
   })
 
-  it('carries no URL, only the address form a reader can act on', async () => {
+  it('carries no URL, only the address form a reader can act on (inside the seal)', async () => {
     const { init } = await capture()
     const body = String(init.body)
     expect(body).not.toContain('://')

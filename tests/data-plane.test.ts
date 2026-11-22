@@ -7,7 +7,7 @@
 //
 //   relay   https://api.cookrew.dev/api/m/<id>/api/state   (the console)
 //           /playground/api/state                           (a machine's own page)
-//   direct  https://192-168-2-40.<id>.d.cookrew.dev:8643/playground/api/state
+//   direct  https://192.168.2.40:8643/playground/api/state
 //
 // The difference that matters is the BASE, and it is the one a reader would
 // get wrong: the relay prefix belongs to cookrew.dev, and carrying it onto the
@@ -29,7 +29,7 @@ import { inConsole, relayBaseFor } from './support/console-scope'
 const DEVICE = '11111111-2222-3333-4444-555555555555'
 /** The machine's address on the relay, as the console reaches it: another origin. */
 const BASE = relayBaseFor(DEVICE)
-const LAN = `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`
+const LAN = 'https://192.168.2.40:8643'
 const LAN_PLANE: DataPlane = { origin: LAN, kind: 'lan' }
 
 describe('the composition rule, on its own', () => {
@@ -207,7 +207,7 @@ describe('the browser socket follows the plane too', () => {
   it('upgrades a direct origin rather than borrowing the page origin', () => {
     const scoped = `${LAN}${streamPath(ID, 800, 1400)}`
     expect(socketUrl('https://cookrew.dev', scoped)).toBe(
-      `wss://192-168-2-40.${DEVICE}.d.cookrew.dev:8643/api/browser/${ID}/stream?w=800&h=1400`
+      `wss://192.168.2.40:8643/api/browser/${ID}/stream?w=800&h=1400`
     )
     // The socket must go to the Mac, not to whatever served the page.
     expect(socketUrl('https://cookrew.dev', scoped)).not.toContain('cookrew.dev/api')
@@ -217,5 +217,32 @@ describe('the browser socket follows the plane too', () => {
     expect(socketUrl('http://localhost:8639', streamPath(ID, 320, 320))).toBe(
       `ws://localhost:8639/api/browser/${ID}/stream?w=320&h=320`
     )
+  })
+})
+
+describe('who may move the plane (security review of the names removal, 2026-11-19)', () => {
+  // With the names gone, nothing proves an origin any more: a plane with one
+  // would send the pairing token to wherever it points (planeRequestInit). So
+  // the only moves left are the WebRTC link the Mac's device key bound
+  // (rtc-adopt.ts, origin '') and the way back to the relay. The origin-plane
+  // code itself goes with the desktop's names (lane LAN step D).
+  it('is the link adoption and the fallback, and nothing else in the app', async () => {
+    const { readdirSync, readFileSync, statSync } = await import('node:fs')
+    // Spelled with '/' on every system (Windows reads it too), so the list compares the same everywhere.
+    const files = (dir: string): string[] =>
+      readdirSync(dir).flatMap((name) => {
+        const at = `${dir}/${name}`
+        return statSync(at).isDirectory() ? files(at) : /\.tsx?$/.test(name) ? [at] : []
+      })
+    const callers = files('src')
+      .filter((file) => !file.endsWith('data-plane.ts'))
+      .filter((file) => /\bsetDataPlane\b/.test(readFileSync(file, 'utf8')))
+      .sort()
+    expect(callers).toEqual(['src/renderer/src/path/companion.ts', 'src/renderer/src/plane-health.ts'])
+    // companion.ts hands it to the link adoption only; plane-health.ts sets the relay only.
+    expect(readFileSync('src/renderer/src/path/companion.ts', 'utf8').match(/\bsetDataPlane\b/g)).toHaveLength(2)
+    expect(readFileSync('src/renderer/src/path/companion.ts', 'utf8')).toContain('adopt: setDataPlane,')
+    expect(readFileSync('src/renderer/src/plane-health.ts', 'utf8')).toContain('setDataPlane(RELAY_PLANE)')
+    expect(readFileSync('src/renderer/src/path/rtc-adopt.ts', 'utf8')).toContain("deps.adopt({ origin: '', kind: network, transport: 'rtc' })")
   })
 })

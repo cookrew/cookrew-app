@@ -2,10 +2,10 @@
 // over real HTTP.
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BridgeDialer } from '../src/main/canvas-bridge'
 import { createSealTerminus, type SealTerminus, type SealTerminusDeps } from '../src/main/canvas-seal-terminus'
-import { openSeal, SealRefusedError, type SealClient } from '../src/renderer/src/path/seal-client'
+import { openSeal, SEAL_VERSION_PATH, SealDowngradedError, SealRefusedError, type SealClient } from '../src/renderer/src/path/seal-client'
 import { connectCodeId, newConnectCode, proveReplaced, replacedKeyOf, startHandshake } from '../src/shared/canvas-seal'
 
 const encoded = (code: Uint8Array): string => Buffer.from(code).toString('base64url')
@@ -231,7 +231,85 @@ describe('openSeal', () => {
     client.close()
     await expect(waiting).rejects.toThrow()
     await expect(client.request({ method: 'GET', path: '/b', headers: {} })).rejects.toThrow()
-    await new Promise((resolve) => setTimeout(resolve, 30))
-    expect(terminus.stats().listening).toBe(0)
+    // The held line lets go as soon as the server sees the client hang up: waited for, not a fixed 30 ms (a slow
+    // Windows runner took longer).
+    await vi.waitFor(() => expect(terminus.stats().listening).toBe(0), { timeout: 3000 })
+  })
+})
+
+describe('openSeal across versions', () => {
+  /** A Mac from before v2 reads only v1's fields: what reaches it is the hello without its offer. */
+  const asOldMac = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    if (!String(input).endsWith('/~seal/hello') || typeof init?.body !== 'string') return fetch(input, init)
+    const { vs: _offer, ...v1 } = JSON.parse(init.body) as Record<string, unknown>
+    return fetch(input, { ...init, body: JSON.stringify(v1) })
+  }
+
+  const pinned = (start: boolean) => {
+    let v2 = start
+    return { v2: () => v2, sawV2: () => void (v2 = true), held: () => v2 }
+  }
+
+  it('speaks v2 to a Mac that does, and remembers it', async () => {
+    const { url, code } = await bed()
+    const pin = pinned(false)
+    const client = await openSeal({ url, code: encoded(code), retryMs: 5, pin })
+    clients.push(client)
+    expect(pin.held()).toBe(true)
+    // Says which session it is: a remembered password is sent on a v2 one only (unlock-sealed.ts).
+    expect(client.version).toBe(2)
+    expect(JSON.parse(text((await client.request({ method: 'GET', path: '/v2', headers: {} })).body))).toMatchObject({ path: '/v2' })
+  })
+
+  it('still works with a Mac from before v2, sealed on v1, and remembers nothing', async () => {
+    const { url, code } = await bed()
+    const pin = pinned(false)
+    const client = await openSeal({ url, code: encoded(code), retryMs: 5, fetchFn: asOldMac, pin })
+    clients.push(client)
+    expect(pin.held()).toBe(false)
+    expect(client.version).toBe(1)
+    const answer = await client.request({ method: 'POST', path: '/v1', headers: { authorization: 'Bearer t' }, body: 'b' })
+    expect(JSON.parse(text(answer.body))).toEqual({ method: 'POST', path: '/v1', auth: 'Bearer t', body: 'b' })
+  })
+
+  it('once pinned to v2, a v1 answer is refused: no quieter session, and nothing sent', async () => {
+    const { url, code } = await bed()
+    let asked = 0
+    const counting = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (String(input).includes('/~seal/up')) asked += 1
+      return asOldMac(input, init)
+    }
+    await expect(openSeal({ url, code: encoded(code), retryMs: 5, fetchFn: counting, pin: pinned(true) })).rejects.toMatchObject({ why: 'proof' })
+    expect(asked).toBe(0)
+  })
+
+  it('a carrier that takes the offer off a v2 Mac\'s hello is caught inside the sealed v1 session: pinned, refused, nothing sent', async () => {
+    // A Mac whose companion answers its own seal routes, as the real one does (mobile-server.ts · routeSeal).
+    const versioned: BridgeDialer = (input, onResponse) => {
+      if (input.path !== SEAL_VERSION_PATH) return echo(input, onResponse, () => undefined)
+      return {
+        write: () => undefined,
+        end: () =>
+          onResponse({
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            onData: (listener) => listener(Buffer.from(JSON.stringify({ versions: [2, 1] }))),
+            onEnd: (listener) => setImmediate(listener),
+            pause: () => undefined,
+            resume: () => undefined
+          }),
+        destroy: () => undefined
+      }
+    }
+    const { url, code } = await bed({ dial: versioned })
+    const pin = pinned(false)
+    await expect(openSeal({ url, code: encoded(code), retryMs: 5, fetchFn: asOldMac, pin })).rejects.toBeInstanceOf(SealDowngradedError)
+    expect(pin.held()).toBe(true)
+  })
+
+  it('the terminus says what it speaks at the version route', async () => {
+    const { url } = await bed()
+    const answer = await fetch(url(SEAL_VERSION_PATH))
+    expect(await answer.json()).toEqual({ versions: [2, 1] })
   })
 })

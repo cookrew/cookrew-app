@@ -71,11 +71,11 @@ private struct Refusal: Decodable {
 }
 
 /** The one pairing call: no token yet, one address. */
-public func claimWatch(base: URL, code: String, session: URLSession = .shared) async throws -> ClaimReply {
+public func claimWatch(base: URL, code: String, device: WatchDevice? = nil, session: URLSession = .shared) async throws -> ClaimReply {
   var request = URLRequest(url: base.appending(path: "api/watch/claim"), timeoutInterval: 12)
   request.httpMethod = "POST"
   request.setValue("application/json", forHTTPHeaderField: "content-type")
-  request.httpBody = try JSONSerialization.data(withJSONObject: ["code": code])
+  request.httpBody = try JSONSerialization.data(withJSONObject: ["code": code].merging(device?.sealFields ?? [:]) { first, _ in first })
   let (data, response): (Data, URLResponse)
   do {
     (data, response) = try await session.data(for: request)
@@ -128,7 +128,21 @@ func within<Value: Sendable>(_ seconds: TimeInterval, _ work: @escaping @Sendabl
 /** The Mac over HTTP: the base that last answered, then the others in order. */
 public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   private let bases: [URL]
-  private let token: String
+  private var heldToken: String
+  /** The token now held: the claim's, until the sealed session traded it for one nobody saw. */
+  private var token: String {
+    lock.lock()
+    defer { lock.unlock() }
+    return heldToken
+  }
+  /** Traded already, for this machine (kept in the shelf), so not again. */
+  private var rekeyed: Bool
+  private var rekeying: Task<Void, Never>?
+  private let onToken: (@Sendable (String) -> Void)?
+  /** What the vault holds now: another instance (the background refresh) may have traded the token since. */
+  private let latest: (@Sendable () -> (token: String, rekeyed: Bool)?)?
+  /** The vault's token as this instance last read it: only a change since then is taken up, never a step back. */
+  private var lastVaultToken: String?
   private let session: URLSession
   private let relay: RelayPass?
   /** A watch that roams: its plain roads may be anyone's, so they prove themselves first. */
@@ -137,10 +151,28 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   private var sticky = 0
   private var proven: [URL: Date] = [:]
 
-  public init(bases: [URL], token: String, session: URLSession = .shared, relay: RelayPass? = nil, guarded: Bool? = nil) {
+  private let sealer: WatchSealer?
+
+  public init(
+    bases: [URL],
+    token: String,
+    session: URLSession = .shared,
+    relay: RelayPass? = nil,
+    guarded: Bool? = nil,
+    sealer: WatchSealer? = nil,
+    rekeyed: Bool = false,
+    onToken: (@Sendable (String) -> Void)? = nil,
+    latest: (@Sendable () -> (token: String, rekeyed: Bool)?)? = nil
+  ) {
+    self.latest = latest
+    // What this instance was made with is what the vault held then: a vault that moves after is taken up.
+    self.lastVaultToken = token
+    self.sealer = sealer
+    self.rekeyed = rekeyed
+    self.onToken = onToken
     self.guarded = guarded ?? (relay != nil)
     self.bases = bases
-    self.token = token
+    self.heldToken = token
     self.session = session
     self.relay = relay
   }
@@ -267,8 +299,69 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
    * from the relay never reached the Mac, so even a write moves on from it; a
    * 502 or 504 may have, so a write stops there.
    */
+  /**
+   * THE CLAIM'S TOKEN, TRADED ONCE (main/watch-routes.ts · handleWatchRekey). It crossed the network in the
+   * clear when the watch was paired, so the first time this watch's relay road is sealed, it asks inside that
+   * session for a new one and drops the old. Every call waits for the trade, so none goes out on a token that
+   * is about to stop working. Not let in sealed yet: nothing is traded, and it is asked again later.
+   *
+   * SWIFT 6 NOTE (Relay round 4, E; documented, not changed): `lock.lock()` / `lock.unlock()` here and in
+   * `rekey` are called from async functions. Under this package's Swift 5 language mode that is a warning
+   * ("unavailable from asynchronous contexts"); in Swift 6 language mode it is an error. It is sound today
+   * because no critical section holds an `await`: each lock/unlock pair runs to its end on one thread. The
+   * Swift 6 move is `lock.withLock { ... }` for each section (or the state into an actor), with no `await`
+   * inside, before the package's language mode goes to 6.
+   */
+  private func tradeToken() async {
+    // One token for the whole watch: a newer one in the vault (traded by another instance) is taken up first.
+    if let kept = latest?() {
+      lock.lock()
+      // Only a vault that moved since this instance last looked, and never during this instance's own trade:
+      // its new token reaches the vault a moment after it is held here, and reading in between would step back.
+      if rekeying == nil, let seen = lastVaultToken, kept.token != seen, kept.token != heldToken {
+        heldToken = kept.token
+        rekeyed = kept.rekeyed
+      }
+      lastVaultToken = kept.token
+      lock.unlock()
+    }
+    guard let sealer, await sealer.isPinned else { return }
+    let running: Task<Void, Never> = {
+      lock.lock()
+      defer { lock.unlock() }
+      if rekeyed { return Task {} }
+      if let rekeying { return rekeying }
+      let task = Task { await self.rekey(sealer) }
+      rekeying = task
+      return task
+    }()
+    await running.value
+  }
+
+  private func rekey(_ sealer: WatchSealer) async {
+    defer {
+      lock.lock()
+      rekeying = nil
+      lock.unlock()
+    }
+    guard let base = bases.first(where: onRelay),
+      let answer = try? await sealer.exchange(base: base, method: "POST", path: "/api/watch/rekey", headers: ["authorization": "Bearer \(token)", "content-type": "application/json"], body: Data("{}".utf8)),
+      answer.1.statusCode == 200,
+      let said = try? JSONSerialization.jsonObject(with: answer.0) as? [String: Any],
+      let fresh = said["token"] as? String, fresh.count >= 16
+    else { return }
+    // Into the vault first, then held here: another instance that reads the vault never sees it behind this one.
+    onToken?(fresh)
+    lock.lock()
+    heldToken = fresh
+    lastVaultToken = fresh
+    rekeyed = true
+    lock.unlock()
+  }
+
   private func call(_ method: String, _ path: String, query: [URLQueryItem] = [], body: [String: Any]? = nil, tag: String? = nil) async throws -> (Data, HTTPURLResponse) {
     guard !bases.isEmpty else { throw WatchError.unreachable }
+    await tradeToken()
     let payload = try body.map { try JSONSerialization.data(withJSONObject: $0) }
     let read = method == "GET"
     var signedOut = false
@@ -280,6 +373,29 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
       if !query.isEmpty { url.append(queryItems: query) }
       let relayed = onRelay(url)
       do {
+        // The relay road, sealed once the Mac lets this watch in (WatchSeal.swift); nil is the old way.
+        if relayed, let sealer {
+          var headers = ["authorization": "Bearer \(token)"]
+          if let tag { headers["if-none-match"] = tag }
+          if payload != nil { headers["content-type"] = "application/json" }
+          let inner = "/\(path)" + (query.isEmpty ? "" : "?" + (url.query(percentEncoded: true) ?? ""))
+          let answer: (Data, HTTPURLResponse)?
+          do {
+            answer = try await sealer.exchange(base: bases[index], method: method, path: inner, headers: headers, body: payload, timeout: read ? 10 : 30)
+          } catch is SealRoadClosed {
+            // The session never opened, so nothing reached the Mac: the next road (home), a write's too.
+            continue
+          } catch {
+            // The sealed relay road failed mid-call: a read tries the next road; a write may have reached the
+            // Mac and stops. Never the plain relay on this same road.
+            if read { continue }
+            throw WatchError.unreachable
+          }
+          if let answer {
+            stick(index)
+            return answer
+          }
+        }
         let relaySession = relayed ? await relay?.token() : nil
         guard var answer = try await exchange(request(url, method, payload: payload, tag: tag, relaySession: relaySession)) else { continue }
         if let relaySession, sessionRefused(answer) {

@@ -62,6 +62,12 @@ export interface ServiceGrant {
   readonly files: readonly GrantedFile[]
   /** How many sessions this grant may ever mint. Required, and > 0. */
   readonly maxSessions: number
+  /**
+   * Loopback ports a session of this service may dial (its own dev server, say).
+   * Every other loopback port is denied to a served seat (session-sandbox.ts), and
+   * the gateway's, Magpie's page and a tunnel's stay denied even when listed here.
+   */
+  readonly loopbackPorts: readonly number[]
 }
 
 /**
@@ -149,7 +155,13 @@ export function readGrant(
     if (file) files.push(file)
   }
 
-  return { grant: { env, envFile, files, maxSessions: max }, problems }
+  const loopbackPorts: number[] = []
+  for (const item of arrayOf(e.loopbackPorts, `${serviceId}: "loopbackPorts"`, problems)) {
+    if (typeof item === 'number' && Number.isInteger(item) && item > 0 && item < 65536) loopbackPorts.push(item)
+    else problems.push(`${serviceId}: "loopbackPorts" takes port numbers — got ${JSON.stringify(item)}`)
+  }
+
+  return { grant: { env, envFile, files, maxSessions: max, loopbackPorts: [...new Set(loopbackPorts)] }, problems }
 }
 
 /**

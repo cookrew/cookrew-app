@@ -33,7 +33,7 @@ describe('a served pane and the owner\'s screen', () => {
     ]
     for (const rule of rules) {
       expect(profile).toContain(rule)
-      expect(profile.indexOf(rule)).toBeGreaterThan(profile.indexOf('(allow process-exec process-fork signal)'))
+      expect(profile.indexOf(rule)).toBeGreaterThan(profile.indexOf('(allow process-exec process-fork)'))
     }
   })
 })
