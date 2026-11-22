@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { accountStarting, accountVia, defaultChoices, guideVisible, needsDefault, subscriptionLines, type AccountRoute } from '../src/shared/ai-account'
+import { accountKnowledge, accountStarting, accountVia, defaultChoices, guideVisible, needsDefault, subscriptionLines, type AccountRoute } from '../src/shared/ai-account'
 import type { HarnessRow, RouteModel } from '../src/shared/route'
 
 const harness = (id: HarnessRow['id'], installed: boolean, signedIn: boolean | null): HarnessRow => ({
@@ -45,6 +45,19 @@ describe('accountVia: is there any account an agent can run on?', () => {
     expect(accountVia({ route: route({ status: 'online', models: [model('deepseek/chat')] }), endpoint: false })).toBeNull()
     expect(accountVia({ route: route({ status: 'offline', defaultModel: 'deepseek/chat' }), endpoint: false })).toBeNull()
     expect(accountVia({ route: route({ status: 'online', defaultModel: 'mac/group/smart' }), endpoint: false })).toBe('magpie')
+  })
+})
+
+describe('account knowledge', () => {
+  it('does not claim no account when the default or inventory is withheld', () => {
+    const hiddenDefault = route({ status: 'online', models: [model('a/b')], withheld: { defaultModel: true } })
+    const hiddenCatalog = route({ status: 'online', withheld: { endpointInventory: true } })
+    expect(accountKnowledge({ route: hiddenDefault, endpoint: false })).toEqual({ via: null, known: false })
+    expect(accountKnowledge({ route: hiddenCatalog, endpoint: false })).toEqual({ via: null, known: false })
+    expect(accountKnowledge({ route: hiddenDefault, endpoint: true })).toEqual({ via: 'endpoint', known: true })
+    expect(needsDefault(hiddenDefault)).toBe(false)
+    expect(accountKnowledge({ route: route(), endpoint: false })).toEqual({ via: null, known: true })
+    expect(accountKnowledge({ route: null, endpoint: false })).toEqual({ via: null, known: false })
   })
 })
 

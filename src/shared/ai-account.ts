@@ -13,7 +13,7 @@ import type { RouteModel, RouteState } from './route'
  * through Magpie only then (route program: the default is picked, never inferred).
  */
 
-export type AccountRoute = Pick<RouteState, 'status' | 'defaultModel' | 'models' | 'harnesses'>
+export type AccountRoute = Pick<RouteState, 'status' | 'defaultModel' | 'models' | 'harnesses' | 'withheld'>
 
 export interface AccountFacts {
   readonly route: AccountRoute | null
@@ -36,6 +36,13 @@ export function accountVia({ route, endpoint }: AccountFacts): AccountVia | null
   return null
 }
 
+/** Unknown is not no account: a restricted route can hide the Magpie default. */
+export function accountKnowledge(facts: AccountFacts): { via: AccountVia | null; known: boolean } {
+  const via = accountVia(facts)
+  const hidden = facts.route?.withheld?.defaultModel || facts.route?.withheld?.endpointInventory || facts.route?.withheld?.providerData
+  return { via, known: via !== null || (facts.route !== null && !hidden) }
+}
+
 /**
  * Magpie is set up but not answering yet: at login it may start after Cookrew. Not an
  * account to run on now, and not a reason to say there is none.
@@ -46,7 +53,7 @@ export function accountStarting(route: AccountRoute | null): boolean {
 
 /** Magpie has something to run on and nothing is picked: the one step left. */
 export function needsDefault(route: AccountRoute | null): boolean {
-  return route?.status === 'online' && route.defaultModel === null && route.models.length > 0
+  return route?.status === 'online' && !route.withheld?.defaultModel && !route.withheld?.endpointInventory && !route.withheld?.providerData && route.defaultModel === null && route.models.length > 0
 }
 
 const isGroup = (m: RouteModel): boolean => m.group || m.id.startsWith('group/') || m.id.includes('/group/')

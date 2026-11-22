@@ -28,7 +28,7 @@ function CopyLine({ line }: { line: string }): React.JSX.Element {
 
 function Step({ step, title, does, children }: { step: GuideStep | undefined; title: string; does: string; children?: React.ReactNode }): React.JSX.Element {
   return (
-    <li className="cr-devices-step" data-step={step?.id} data-done={step?.done === true}>
+    <li className="cr-devices-step" data-step={step?.id} data-done={step?.done === null ? 'unknown' : step?.done === true}>
       <b>{title}</b>
       <small>{does}</small>
       {step?.blocked && <small className="cr-routing-bad">{step.blocked}</small>}
@@ -64,7 +64,7 @@ function UseRow({ desktop, busy, blocked, problem, onUse, onStop }: { desktop: G
   )
 }
 
-export function DevicesGuideView({ state, switches, modelHere, model, onUse, onStop, onAccount }: { state: MagpieRemoteState; switches: LiveValues | null; modelHere: boolean; model?: React.ReactNode; onUse: (d: GuideDesktop) => void; onStop: (d: GuideDesktop) => void; onAccount: () => void }): React.JSX.Element {
+export function DevicesGuideView({ state, switches, modelHere, model, onUse, onStop, onAccount }: { state: MagpieRemoteState; switches: LiveValues | null; modelHere: boolean | null; model?: React.ReactNode; onUse: (d: GuideDesktop) => void; onStop: (d: GuideDesktop) => void; onAccount: () => void }): React.JSX.Element {
   const list = state.list
   const desktops = list?.desktops ?? []
   const steps = guideSteps({ signedIn: list?.signedIn ?? false, desktops, modelHere, switches })
@@ -100,6 +100,7 @@ export function DevicesGuideView({ state, switches, modelHere, model, onUse, onS
           ))}
         </Step>
         <Step step={at('model')} title={COPY.STEP_MODEL} does={COPY.STEP_MODEL_DOES}>
+          {modelHere === null && <small>Model availability is hidden on this device.</small>}
           {model}
         </Step>
         <Step step={at('use')} title={COPY.STEP_USE} does={COPY.STEP_USE_DOES}>
@@ -114,7 +115,7 @@ export function DevicesGuideView({ state, switches, modelHere, model, onUse, onS
   )
 }
 
-export function DevicesGuideBound({ store, modelHere, model }: { store: MagpieRemoteStore; modelHere: boolean; model?: React.ReactNode }): React.JSX.Element | null {
+export function DevicesGuideBound({ store, modelHere, model }: { store: MagpieRemoteStore; modelHere: boolean | null; model?: React.ReactNode }): React.JSX.Element | null {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
   const switches = useMagpieSwitches().values
   useEffect(() => {
@@ -136,7 +137,7 @@ export function DevicesGuideBound({ store, modelHere, model }: { store: MagpieRe
 }
 
 /** Absent where the bridge cannot list the account's computers: the phone and an older desktop. */
-export function DevicesGuide({ modelHere, model }: { modelHere: boolean; model?: React.ReactNode }): React.JSX.Element | null {
+export function DevicesGuide({ modelHere, model }: { modelHere: boolean | null; model?: React.ReactNode }): React.JSX.Element | null {
   // Rendered where there is no window (a server render, a test): nothing to list from, so no guide.
   if (typeof window === 'undefined') return null
   const bridge = cookrew()

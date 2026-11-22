@@ -2,7 +2,7 @@ import { inputRefused } from './prompt/input-refused'
 import type { StrayPane } from '../../shared/stray-pane'
 import type { LaunchFailure } from '../../shared/launch-failure'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
-import type { CardRouteState, RouteState } from '../../shared/route'
+import { ROUTE_HTTP_SCHEMA_VERSION, ROUTE_SCHEMA_PARAM, type CardRouteState, type RouteState } from '../../shared/route'
 import { AuthError, authStore, type AuthScope } from './auth-gate'
 import { ReconnectingStream, attachTerminalStream } from './live-stream'
 import { recordLatency, setDesktopName, setPathLink, setRegistryOrigin } from './path-link'
@@ -446,6 +446,18 @@ function bootNonce(): string {
   return random.replace(/[^a-z0-9-]/gi, '').slice(0, 36)
 }
 
+/**
+ * The route schema this client can read, in the URL (shared/route.ts ·
+ * ROUTE_SCHEMA_PARAM). An old client never adds it, so a Mac on the new
+ * server refuses it the route rather than handing it a projection whose
+ * `withheld` and `remoteRisks` rows it cannot render.
+ */
+function routeSchemaPath(path: string): string {
+  const at = path.indexOf('?')
+  if (at < 0) return `${path}?${ROUTE_SCHEMA_PARAM}=${ROUTE_HTTP_SCHEMA_VERSION}`
+  return `${path}&${ROUTE_SCHEMA_PARAM}=${ROUTE_HTTP_SCHEMA_VERSION}`
+}
+
 function sharedEvents(): ReconnectingStream {
   // openEventSource adds the credential in whichever way this plane allows.
   // Reads are gated now, so a tokenless stream is a 401 the client would retry
@@ -466,7 +478,7 @@ function sharedEvents(): ReconnectingStream {
         // gets the snapshot, which is how a dropped stream heals (L7).
         const first = !streamOpenedOnce
         streamOpenedOnce = true
-        return openEventSource(seated(apiPath(first ? `/api/events?boot=${bootNonce()}` : '/api/events')))
+        return openEventSource(seated(apiPath(routeSchemaPath(first ? `/api/events?boot=${bootNonce()}` : '/api/events'))))
       },
       // The one place the companion learns its link is down. Without this the
       // badge would report the address bar forever, which is a memory rather
@@ -799,12 +811,12 @@ export function createRemoteApi(): CookrewApi {
     // the desktop renderer gets — so nothing here polls.
     listTuning: () => req<Record<string, AgentTuning>>(apiPath('/api/tuning')),
     // Magpie routing over the companion's API (LEDGER endpoints).
-    routeState: () => req<RouteState>(apiPath('/api/route')),
+    routeState: () => req<RouteState>(apiPath(routeSchemaPath('/api/route'))),
     setupLineStart: (ask) => req<SetupStart>(apiPath('/api/setup-line'), 'POST', ask),
     setupLineNow: (terminalId, runId) => req<SetupLineNow>(apiPath(`/api/setup-line?terminal=${encodeURIComponent(terminalId)}&run=${encodeURIComponent(runId)}`)),
     setupLineCurrent: (terminalId) => req<SetupLineRun | null>(apiPath(`/api/setup-line?terminal=${encodeURIComponent(terminalId)}`)),
-    routeSetDefault: (model) => req<RouteState>(apiPath('/api/route/default'), 'PUT', { model }),
-    routeSetSharedMcp: (on) => req<RouteState>(apiPath('/api/route/shared-mcp'), 'PUT', { on }),
+    routeSetDefault: (model) => req<RouteState>(apiPath(routeSchemaPath('/api/route/default')), 'PUT', { model }),
+    routeSetSharedMcp: (on) => req<RouteState>(apiPath(routeSchemaPath('/api/route/shared-mcp')), 'PUT', { on }),
     terminalRoute: (terminalId) => req<CardRouteState>(apiPath(`/api/terminal/${encodeURIComponent(terminalId)}/route`)),
     terminalRouteSet: (terminalId, route) => req<CardRouteState>(apiPath(`/api/terminal/${encodeURIComponent(terminalId)}/route`), 'PUT', { route }),
     onRoute: (cb) => subscribe<RouteState>('route', cb),

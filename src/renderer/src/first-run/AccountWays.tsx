@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ACCOUNT_COPY } from '../../../shared/account-guide-copy'
-import { accountVia, defaultChoices, needsDefault, subscriptionLines } from '../../../shared/ai-account'
+import { accountKnowledge, defaultChoices, needsDefault, subscriptionLines } from '../../../shared/ai-account'
 import type { RouteState } from '../../../shared/route'
 import { openMagpieSettings } from '../routing/magpie-card'
 import { MagpieSwitches, useMagpieSwitches } from '../routing/MagpieSwitches'
@@ -50,7 +50,9 @@ export function AccountWays({ route, endpointActive, endpoint, onRun, running, o
   const read = useMagpieSwitches().values
   const on = switches ?? read ?? SHOW_ALL
   const installed = route !== null && (route.status !== 'absent' || route.switchedOff === true)
-  const via = accountVia({ route, endpoint: endpointActive })
+  const account = accountKnowledge({ route, endpoint: endpointActive })
+  const via = account.via
+  const hiddenRoute = route !== null && !account.known
   const held = running !== null
   const press = (line: string, label: string, options?: RunOptions): React.JSX.Element => (
     <button key={line} type="button" className="fr-fix" disabled={held} title={line} onClick={() => onRun(line, options)}>
@@ -71,7 +73,9 @@ export function AccountWays({ route, endpointActive, endpoint, onRun, running, o
   return (
     <div className="fr-access fr-accounts" data-ready={via !== null}>
       <h2 className="fr-access-head">{ACCOUNT_COPY.HEAD}</h2>
-      <p className="fr-why">{via === null ? ACCOUNT_COPY.LEDE : ACCOUNT_COPY.READY(via)}</p>
+      <p className="fr-why">{via !== null ? ACCOUNT_COPY.READY(via) : hiddenRoute ? 'The default route is hidden on this device; its selection is unknown.' : ACCOUNT_COPY.LEDE}</p>
+      {route?.withheld?.endpointInventory && <p className="fr-note">Routing details are hidden on this device because the host configuration could not be read.</p>}
+      {route?.withheld?.providerData && <p className="fr-note">Provider details and model choices are hidden on this device because their source cannot be verified.</p>}
       {showSwitches && <MagpieSwitches installed={installed} />}
       {magpie === 'offline' && route && (
         <Way title={ACCOUNT_COPY.STOPPED_MAGPIE}>{press(route.setup.serveLine, ACCOUNT_COPY.START_MAGPIE)}</Way>

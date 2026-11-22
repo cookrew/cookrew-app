@@ -1,3 +1,17 @@
+import { ROUTE_HTTP_SCHEMA_VERSION, type RouteState } from '../../../shared/route'
+
+export const ROUTE_UPDATE_REQUIRED = 'Update this client to view routing safely.'
+
+/** Reject incompatible snapshots before any consumer sees their fields. */
+export function routeSnapshot(value: unknown): { state: RouteState | null; incompatible: boolean } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return { state: null, incompatible: true }
+  const version = (value as { schemaVersion?: unknown }).schemaVersion
+  if (version !== undefined && (typeof version !== 'number' || !Number.isInteger(version) || version > ROUTE_HTTP_SCHEMA_VERSION || version < 1)) {
+    return { state: null, incompatible: true }
+  }
+  return { state: value as RouteState, incompatible: false }
+}
+
 /**
  * WHICH ROUTE STATE IS THE NEWEST.
  *

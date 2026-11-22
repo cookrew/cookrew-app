@@ -19,6 +19,23 @@ const paint = (route: RouteState | null, endpointActive = false): string =>
 const linesOf = (html: string): string[] => [...html.matchAll(/title="([^"]+)"/g)].map((m) => m[1].replace(/&#x27;/g, "'"))
 
 describe('AccountWays', () => {
+  it('treats a withheld default as unknown, not as a missing account or unset pick', () => {
+    const state = routeFixture('online', { defaultModel: null, harnesses: [], withheld: { defaultModel: true } })
+    expect(state.models.length).toBeGreaterThan(0)
+    const html = paint(state)
+    expect(html).toContain('The default route is hidden on this device; its selection is unknown.')
+    expect(html).not.toContain('class="fr-field fr-default"')
+    expect(html).not.toContain('Agents need an AI account')
+  })
+
+  it('explains that an unreadable inventory hides models rather than proving no catalog exists', () => {
+    const source = routeFixture('online', { harnesses: [] })
+    expect(source.models.length).toBeGreaterThan(0)
+    const html = paint({ ...source, models: [], quotas: [], live: [], withheld: { endpointInventory: true, defaultModel: true }, defaultModel: null })
+    expect(html).toContain('Routing details are hidden on this device because the host configuration could not be read.')
+    expect(html).not.toContain('class="fr-field fr-default"')
+  })
+
   it('offers all four ways while nothing is connected', () => {
     const html = paint(routeFixture('online', { defaultModel: null, harnesses: [] }))
     expect(html).toContain('Connect an AI account')

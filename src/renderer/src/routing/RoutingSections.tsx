@@ -144,7 +144,19 @@ export function Harnesses({
   )
 }
 
-export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: { setup: RouteState['setup']; onRun: RunLine; defaultOpen?: boolean; running?: SetupRunning | null }): React.JSX.Element {
+export function AddMenu({
+  setup,
+  onRun,
+  defaultOpen = false,
+  running = null,
+  withheld
+}: {
+  setup: RouteState['setup']
+  onRun: RunLine
+  defaultOpen?: boolean
+  running?: SetupRunning | null
+  withheld?: RouteState['withheld']
+}): React.JSX.Element {
   const busyFor = (line: string | null): string | null => (line === null ? null : runningLabel(running, line))
   const [open, setOpen] = useState(defaultOpen)
   // Keys are typed into Magpie's own page, never a terminal (routing/magpie-card.ts): what went wrong opening it.
@@ -203,11 +215,11 @@ export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: {
           {/* Main sends the group line only with two catalogue models filled in — never a placeholder; below two there is nothing to type. */}
           <button type="button" role="menuitem" disabled={setup.addGroupLine === null || busyFor(setup.addGroupLine) !== null} onClick={() => setup.addGroupLine !== null && run(setup.addGroupLine)}>
             <b>{ROUTING_COPY.addGroup}</b>
-            <span className="c">{busyFor(setup.addGroupLine) ?? setup.addGroupLine ?? ROUTING_COPY.groupNeedsTwo}</span>
+            <span className="c">{busyFor(setup.addGroupLine) ?? setup.addGroupLine ?? (withheld?.addGroupLine ? ROUTING_COPY.hiddenOnDevice : ROUTING_COPY.groupNeedsTwo)}</span>
           </button>
           {/* The local tier (design §5): main sends the script's printed command when the gateway lists ollama models to build it from; until then the item says to run the script. */}
           {(() => {
-            const auto = autoGroupItem(setup)
+            const auto = withheld?.addAutoGroupLine ? { line: null, why: ROUTING_COPY.hiddenOnDevice } : autoGroupItem(setup)
             return (
               <button type="button" role="menuitem" data-item="auto-group" disabled={auto.line === null || busyFor(auto.line) !== null} title={auto.why ?? auto.line ?? undefined} onClick={() => auto.line !== null && run(auto.line)}>
                 <b>{ROUTING_COPY.addAutoGroup}</b>
@@ -251,7 +263,7 @@ export function Accounts({
     <>
       <div className="cr-routing-seg">
         Models &amp; accounts <span className="sp" />
-        <AddMenu setup={state.setup} onRun={onRun} running={running} />
+        <AddMenu setup={state.setup} onRun={onRun} running={running} withheld={state.withheld} />
       </div>
       {state.quotas.map((q) => (
         <AccountCard key={`${q.provider}:${q.account ?? ''}`} q={q} now={now} />
@@ -261,9 +273,9 @@ export function Accounts({
         <span className="cr-routing-seg" style={{ margin: 0 }}>
           {ROUTING_COPY.defaultLabel}
         </span>
-        {state.defaultModel === null && <span className="small">{ROUTING_COPY.defaultNone}</span>}
-        {choices.map((id) => {
-          const on = id === 'direct' ? state.defaultModel === null : state.defaultModel === id
+        {state.defaultModel === null && <span className="small">{state.withheld?.defaultModel ? ROUTING_COPY.hiddenOnDevice : state.withheld?.providerData ? 'direct · model choices hidden on this device' : ROUTING_COPY.defaultNone}</span>}
+        {!state.withheld?.providerData && choices.map((id) => {
+          const on = !state.withheld?.defaultModel && (id === 'direct' ? state.defaultModel === null : state.defaultModel === id)
           return (
             <button
               key={id}
@@ -278,9 +290,9 @@ export function Accounts({
           )
         })}
       </div>
-      {onSetSharedMcp && <SharedMcp on={state.sharedMcp} servers={state.mcpServers} onSet={onSetSharedMcp} />}
+      {onSetSharedMcp && <SharedMcp on={state.sharedMcp} servers={state.mcpServers} withheld={state.withheld} onSet={onSetSharedMcp} />}
       <details className="cr-routing-fold">
-        <summary>▸ Model catalogue · {state.models.length} · /v1/models</summary>
+        <summary>▸ Model catalogue · {state.withheld?.endpointInventory || state.withheld?.providerData ? ROUTING_COPY.hiddenOnDevice : state.models.length} · /v1/models</summary>
         <div>
           {state.models.map((m) => (
             <ModelLine key={m.id} m={m} />
@@ -292,7 +304,12 @@ export function Accounts({
 }
 
 /** One MCP hub for every agent (shared) or each agent its own (own); read at each agent's next spawn. */
-function SharedMcp({ on, servers, onSet }: { on: boolean; servers: readonly string[] | null | undefined; onSet: (on: boolean) => void }): React.JSX.Element {
+function SharedMcp({ on, servers, withheld, onSet }: {
+  on: boolean
+  servers: readonly string[] | null | undefined
+  withheld?: RouteState['withheld']
+  onSet: (on: boolean) => void
+}): React.JSX.Element {
   const picks: { value: boolean; label: string }[] = [
     { value: true, label: ROUTING_COPY.mcpShared },
     { value: false, label: ROUTING_COPY.mcpOwn }
@@ -315,7 +332,11 @@ function SharedMcp({ on, servers, onSet }: { on: boolean; servers: readonly stri
         </button>
       ))}
       <span className="small">{on ? ROUTING_COPY.mcpSharedNote : ROUTING_COPY.mcpOwnNote}</span>
-      {on && <span className="small cr-routing-mcplib">{mcpLibraryLine(servers)}</span>}
+      {on && <span className="small cr-routing-mcplib">
+        {withheld?.mcpServers
+          ? `${servers?.length ? `${mcpLibraryLine(servers)} · ` : ''}${ROUTING_COPY.hiddenOnDevice}`
+          : mcpLibraryLine(servers)}
+      </span>}
     </div>
   )
 }
@@ -341,6 +362,9 @@ export function LiveRoutes({
   onZoom?: (terminalId: string) => void
 }): React.JSX.Element | null {
   if (state.status === 'absent') return null
+  if (state.withheld?.endpointInventory || state.withheld?.providerData) {
+    return <><div className="cr-routing-seg">Live routes</div><div className="small" style={{ padding: '4px 8px' }}>Live routes are hidden on this device.</div></>
+  }
   if (state.status === 'offline' || state.live.length === 0) {
     return (
       <>
@@ -421,6 +445,16 @@ export function LoopbackRemotes({ rows, onRun }: { rows: readonly { id: string; 
           </p>
         )
       })}
+    </div>
+  )
+}
+
+export function RemoteRisks({ risks }: { risks: RouteState['remoteRisks'] }): React.JSX.Element | null {
+  if (!risks?.plain && !risks?.loopback) return null
+  return (
+    <div className="cr-routing-bad" role="alert" data-section="remote-risks">
+      {risks.plain && <p>{risks.plain}</p>}
+      {risks.loopback && <p>{risks.loopback}</p>}
     </div>
   )
 }

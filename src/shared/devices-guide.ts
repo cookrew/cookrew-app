@@ -1,4 +1,5 @@
 import type { LiveValues } from './launch-settings'
+import type { RouteState } from './route'
 import { codexInstallLine } from './route-lines'
 
 /**
@@ -56,7 +57,7 @@ export type GuideStepId = 'computers' | 'agents' | 'model' | 'use'
 
 export interface GuideStep {
   readonly id: GuideStepId
-  readonly done: boolean
+  readonly done: boolean | null
   /** What stands in the way, when something does. */
   readonly blocked: string | null
 }
@@ -66,8 +67,16 @@ export interface GuideFacts {
   /** The account's OTHER desktops. */
   readonly desktops: readonly GuideDesktop[]
   /** This computer's Magpie has a model to route to. */
-  readonly modelHere: boolean
+  readonly modelHere: boolean | null
   readonly switches: LiveValues | null
+}
+
+export function modelHereForRoute(route: RouteState | null): boolean | null {
+  // Not read yet (or not readable) is "no model here yet", as before schema 2.
+  // Only a host that says it withheld the catalog makes the answer unknown.
+  if (route === null) return false
+  if (route.withheld?.endpointInventory || route.withheld?.providerData) return null
+  return route.status === 'online' && route.models.length > 0
 }
 
 export function guideSteps(facts: GuideFacts): GuideStep[] {
@@ -77,7 +86,7 @@ export function guideSteps(facts: GuideFacts): GuideStep[] {
     { id: 'computers', done: facts.signedIn && facts.desktops.length > 0, blocked: facts.signedIn ? null : DEVICES_COPY.SIGN_IN_FIRST },
     // An agent on another computer cannot be seen from here: this step is never marked done for it.
     { id: 'agents', done: false, blocked: null },
-    { id: 'model', done: facts.modelHere || used, blocked: null },
+    { id: 'model', done: used ? true : facts.modelHere, blocked: null },
     { id: 'use', done: used, blocked: remoteOn ? null : DEVICES_COPY.SWITCHES_FIRST }
   ]
 }

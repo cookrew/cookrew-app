@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { cookrew } from '../api'
 import type { RouteState } from '../../../shared/route'
-import { createRouteOrder } from './route-state-order'
+import { createRouteOrder, routeSnapshot } from './route-state-order'
 
 /**
  * THE GATEWAY'S STATE, PUSHED. One read at mount, then `onRoute` — main
@@ -26,6 +26,8 @@ import { createRouteOrder } from './route-state-order'
 export interface RouteStateControls {
   state: RouteState | null
   available: boolean
+  /** The server sent a schema this client cannot safely consume. */
+  incompatible: boolean
   setDefault: (model: string | null) => void
   /** The shared-MCP switch; the next spawn of each agent reads it. */
   setSharedMcp: (on: boolean) => void
@@ -36,15 +38,18 @@ export interface RouteStateControls {
 }
 
 export function useRouteState(): RouteStateControls {
-  const [state, setState] = useState<RouteState | null>(null)
+  const [snapshot, setSnapshot] = useState<{ state: RouteState | null; incompatible: boolean }>({ state: null, incompatible: false })
   const [available, setAvailable] = useState(true)
   const [error, setError] = useState<{ text: string; at: number } | null>(null)
   const order = useRef(createRouteOrder())
   const alive = useRef(true)
 
-  const apply = useCallback((next: RouteState): void => {
+  const apply = useCallback((next: unknown): void => {
     order.current.applied()
-    setState(next)
+    setSnapshot(routeSnapshot(next))
+    // A state that arrived proves the host answers: a failed first read (a
+    // relay hiccup at boot) must not leave routing marked unavailable.
+    setAvailable(true)
   }, [])
 
   const reread = useCallback((): void => {
@@ -75,7 +80,8 @@ export function useRouteState(): RouteStateControls {
         if (alive.current && order.current.stillNewest(issued)) apply(next)
       })
       .catch(() => {
-        if (alive.current) setAvailable(false)
+        // A push that landed first already proved the host answers.
+        if (alive.current && order.current.stillNewest(issued)) setAvailable(false)
       })
     const off = api.onRoute?.((next) => {
       if (alive.current) apply(next)
@@ -88,7 +94,7 @@ export function useRouteState(): RouteStateControls {
 
   const setDefault = (model: string | null): void => {
     const api = cookrew()
-    if (!api.routeSetDefault) return
+    if (!api.routeSetDefault || snapshot.incompatible || snapshot.state?.withheld?.providerData) return
     setError(null)
     api
       .routeSetDefault(model)
@@ -100,7 +106,7 @@ export function useRouteState(): RouteStateControls {
 
   const setSharedMcp = (on: boolean): void => {
     const api = cookrew()
-    if (!api.routeSetSharedMcp) return
+    if (!api.routeSetSharedMcp || snapshot.incompatible) return
     setError(null)
     api
       .routeSetSharedMcp(on)
@@ -110,5 +116,5 @@ export function useRouteState(): RouteStateControls {
       .catch((e: unknown) => setError({ text: `MCP switch not set: ${e instanceof Error ? e.message : String(e)}`, at: Date.now() }))
   }
 
-  return { state, available, setDefault, setSharedMcp, reread, error }
+  return { state: snapshot.state, incompatible: snapshot.incompatible, available, setDefault, setSharedMcp, reread, error }
 }

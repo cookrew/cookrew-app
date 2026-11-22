@@ -85,7 +85,7 @@ export function AccountNudge({
       clearTimeout(decide)
     }
   }, [armed, recheck])
-  if (!guideVisible({ stage, via, settled, dismissed })) return null
+  if (!known || !guideVisible({ stage, via, settled, dismissed })) return null
   return (
     <AccountNudgeView
       onOpen={onOpen}

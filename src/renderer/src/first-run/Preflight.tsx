@@ -12,7 +12,7 @@ import { useEndpointActive } from './AccountNudge'
 import { AccountWays } from './AccountWays'
 import { RemoteRows } from './RemoteRows'
 import { DevicesGuide } from '../routing/DevicesGuide'
-import { DEVICES_COPY } from '../../../shared/devices-guide'
+import { DEVICES_COPY, modelHereForRoute } from '../../../shared/devices-guide'
 import { firstAgentHarness, stillMissing } from './first-run-rules'
 import { firstRun } from './first-run-state'
 
@@ -252,7 +252,7 @@ export function Preflight({
       }
     >
       <AccountWays route={route} endpointActive={endpointActive} endpoint={<AccessRows bare onChange={check} />} onRun={runLine} running={setup.running} onSetDefault={onSetDefault} />
-      <DevicesGuide modelHere={route !== null && route.status === 'online' && route.models.length > 0} model={<small>{DEVICES_COPY.MODEL_ABOVE}</small>} />
+      <DevicesGuide modelHere={modelHereForRoute(route)} model={<small>{DEVICES_COPY.MODEL_ABOVE}</small>} />
       <RemoteRows />
     </PreflightView>
   )

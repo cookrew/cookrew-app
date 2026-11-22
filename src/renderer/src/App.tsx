@@ -137,7 +137,7 @@ import { AccountWays } from './first-run/AccountWays'
 import { useFirstRunStage } from './first-run/first-run-state'
 import { ShareDevices } from './routing/ShareDevices'
 import { useMagpieSwitches } from './routing/MagpieSwitches'
-import { accountStarting, accountVia } from '../../shared/ai-account'
+import { accountKnowledge, accountStarting } from '../../shared/ai-account'
 import { FirstRunHints } from './first-run/FirstRunHints'
 import { FirstRunScreens } from './first-run/FirstRunScreens'
 import { useZoomFull } from './zoom/zoom-store'
@@ -368,7 +368,8 @@ function Canvas(): React.JSX.Element {
   // Bumped when the guide's endpoint rows save or remove one.
   const [endpointTick, setEndpointTick] = useState(0)
   const endpointActive = useEndpointActive(`${routingOpen}:${setupBusy}:${firstRunStage}:${endpointTick}`)
-  const accountNow = accountVia({ route: routeState.state, endpoint: endpointActive })
+  const accountStatus = accountKnowledge({ route: routeState.state, endpoint: endpointActive })
+  const accountNow = accountStatus.via
   const cardNames = useMemo(() => new Map((workspace?.nodes ?? []).map((n) => [n.id, n.name])), [workspace?.nodes])
   /**
    * A workspace switch replaces every node while the viewport still frames the
@@ -1709,6 +1710,7 @@ function Canvas(): React.JSX.Element {
           onClose={() => setRoutingOpen(false)}
           state={routeState.state}
           available={routeState.available}
+          incompatible={routeState.incompatible}
           onRun={(line, options) => void setupTerminal.run(line, options)}
           setupTerminalId={setupTerminal.terminalId}
           focusTick={setupTerminal.focusTick}
@@ -1736,7 +1738,7 @@ function Canvas(): React.JSX.Element {
           <AccountNudge
             stage={firstRunStage ?? 'preflight'}
             via={accountNow ?? (accountStarting(routeState.state) ? 'magpie' : null)}
-            known={routeState.state !== null}
+            known={accountStatus.known}
             // The Keychain answer it waits for lands late on THIS desktop only: a remote canvas reads the desktop's
             // state as it is, and asks nothing more after boot (perf gate remote-open).
             recheck={isRemoteMode() ? undefined : rereadRoute}
