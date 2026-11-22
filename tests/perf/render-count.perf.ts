@@ -209,9 +209,12 @@ describeWithChrome('React render count of the zoom view', () => {
       // The other side of zero: the faces were seen between press and rest.
       expect(leg.travel, 'the zoom travelled over frames, not jumped').toBe(true)
       // Enough frames that a commit per frame could not hide under the commit
-      // budget: twice it. A fixed 20 failed a slow macOS runner (10 frames over
-      // the zoom, PR #126) with every render and commit gate passed.
-      expect(leg.census.frames).toBeGreaterThan(RENDER.commitsPerStopZoom * 2)
+      // budget: more frames than the budget, with one to spare. A fixed 20
+      // failed a slow macOS runner (10 frames over the zoom, PR #126), and
+      // twice the budget failed one on 2026-11-22 (7 and 8 frames, main and
+      // dev alike) with every render and commit gate passed. A commit per
+      // frame over 6 frames is 6 commits, still over the budget of 4.
+      expect(leg.census.frames).toBeGreaterThan(RENDER.commitsPerStopZoom + 1)
       expect(rendersOf(leg.census, 'AgentNode')).toBe(0)
       expect(rendersOf(leg.census, 'ItemNode')).toBe(0)
       expect(leg.census.commits).toBeLessThanOrEqual(RENDER.commitsPerStopZoom)
