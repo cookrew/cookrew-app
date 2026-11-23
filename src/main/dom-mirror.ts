@@ -102,8 +102,8 @@ export interface MirrorDeps {
 
 /**
  * The page as a mirror: reading order, elements by ref, and whether the screen
- * is still the better source. A failure is a thrown error: the caller keeps the
- * stream it had rather than drawing a page it could not read.
+ * is still the better source. A failure is a thrown error: the caller says so
+ * rather than drawing a page it could not read (cast-mirror.ts).
  */
 export async function captureMirror(deps: MirrorDeps, url: string, title: string): Promise<MirrorPage> {
   const answer = (await deps.send('Accessibility.getFullAXTree', {})) as { nodes?: AxNode[] }

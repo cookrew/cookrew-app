@@ -30,6 +30,9 @@ import {
 } from './browser-signin'
 import { COPY_BINDING, PAGE_COPY_SCRIPT, PASTE_FUNCTION, copyText } from './page-copy'
 import { FIELDS_BINDING, FIELDS_WATCH, PAGE_FIELDS_SCRIPT, sanitizeFieldReport, type FieldReport } from './page-fields'
+import type { MirrorPage } from '../shared/dom-mirror'
+import type { MirrorCommand } from './dom-mirror'
+import { actOnTab, readMirror, type MirrorActResult, type MirrorTab } from './mirror-instance'
 
 function httpJson<T>(url: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -909,6 +912,32 @@ export class HeadlessInstance {
     const page = this.pages.get(this.activeTabId)
     if (!page) return Promise.reject(new Error('active browser tab is unavailable'))
     return this.evaluateOn(page, expression)
+  }
+
+  /** The active tab as a mirror's narrow view of it (mirror-instance.ts): four CDP methods and our own probe. */
+  private mirrorTab(): MirrorTab | null {
+    const page = this.pages.get(this.activeTabId)
+    if (!page) return null
+    return {
+      send: (method, params) => page.cdp.send(method, params),
+      on: (event, listener) => page.cdp.on(event, listener),
+      off: (event, listener) => page.cdp.off(event, listener),
+      evaluate: (expression) => this.evaluateOn(page, expression)
+    }
+  }
+
+  /** The active page as data for a viewer to draw (dom-mirror.ts). Rejects when no tab is attached. */
+  mirrorPage(url: string, title: string): Promise<MirrorPage> {
+    const tab = this.mirrorTab()
+    if (!tab) return Promise.reject(new Error('active browser tab is unavailable'))
+    return readMirror(tab, url, title)
+  }
+
+  /** One act on one element of the active page, by the ref its mirror gave. */
+  async actMirror(command: MirrorCommand): Promise<MirrorActResult> {
+    const tab = this.mirrorTab()
+    if (!tab) return { ok: false, why: 'The page is not open.' }
+    return actOnTab(tab, command)
   }
 
   async navigate(url: string): Promise<void> {

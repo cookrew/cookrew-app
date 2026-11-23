@@ -14,6 +14,7 @@ import {
 } from './browser-engine'
 import { cookrew, hasNativeWebview, isRemoteMode } from './api'
 import { MobileBrowserFrame } from './MobileBrowserFrame'
+import { RemoteBrowserView } from './mirror/RemoteBrowserView'
 import { OpenExternal } from './nodes/OpenExternal'
 import {
   initialBackoff,
@@ -653,6 +654,18 @@ function BrowserTabView({
     case 'pending':
       return visible ? <BrowserCapabilityLoading browserId={browserId} /> : null
     case 'headless-stream':
+      // Another device sees a web page drawn from data by default; the screen
+      // is a button away (mirror/RemoteBrowserView.tsx). A use card is a
+      // screen, and the desktop keeps its pixel view.
+      if (client === 'remote' && !vphone) {
+        return visible ? (
+          <RemoteBrowserView
+            browserId={browserId}
+            zoomed={zoomed}
+            actions={zoomed ? <OpenExternal url={tab.url} className="browser-frame-btn" /> : null}
+          />
+        ) : null
+      }
       return visible ? (
         <MobileBrowserFrame
           browserId={browserId}

@@ -516,6 +516,9 @@ export function useBrowserStream(
         return
       }
 
+      // The page as data belongs to the mirror's own line (mirror/useMirrorPage.ts), never to a picture.
+      if (msg.kind === 'mirror') return
+
       if (msg.kind === 'fields') {
         const fields: StreamFieldsAt = { revision: msg.revision, focus: msg.focus, fields: msg.fields }
         latestFieldsRef.current = fields

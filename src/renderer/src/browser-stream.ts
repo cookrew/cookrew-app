@@ -22,6 +22,7 @@
 
 import { parseCardControl, parseRemoteState } from '../../shared/remote-access'
 import type { UseStatus } from '../../shared/use-signal'
+import { parseMirrorMessage, type MirrorMessage } from './mirror/mirror-message'
 import type { FitRect } from './browser-frame'
 
 /** Requested screencast viewport bounds — Forge clamps 320..2048 (default 800x1400). */
@@ -315,6 +316,8 @@ export type StreamMessage =
   | { kind: 'copy'; text: string }
   /** Where the page's text fields are, in FRAME px of `revision` (page-fields.ts). */
   | ({ kind: 'fields'; revision: number } & StreamFields)
+  /** The page as data, or why it could not be read or acted on (mirror/mirror-message.ts). */
+  | { kind: 'mirror'; message: MirrorMessage }
 
 /**
  * Parse a server→client WS payload into a typed message, or null to ignore.
@@ -397,6 +400,10 @@ export function parseStreamObject(raw: unknown): StreamMessage | null {
   }
   if (obj.t === 'copy') {
     return typeof obj.text === 'string' && obj.text.length > 0 ? { kind: 'copy', text: obj.text } : null
+  }
+  if (obj.t === 'dom' || obj.t === 'dom-refused') {
+    const message = parseMirrorMessage(obj)
+    return message ? { kind: 'mirror', message } : null
   }
   if (obj.t === 'status') {
     const state = obj.state
