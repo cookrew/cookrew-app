@@ -140,6 +140,10 @@ export function listFolder(shared: readonly string[], root: string, rel: string,
   const entries: FileEntry[] = []
   let truncated = false
   for (const name of [...names].sort((a, b) => a.localeCompare(b))) {
+    // Dotfiles hold credentials far more often than they hold something to
+    // look at (.env, .git, .ssh): a device browsing this computer does not see
+    // them, and there is no option in the request that changes that.
+    if (name.startsWith('.')) continue
     if (entries.length >= FILE_LIST_MAX) {
       truncated = true
       break

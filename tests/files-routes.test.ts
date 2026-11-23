@@ -31,9 +31,12 @@ async function start() {
   writeFileSync(path.join(shared, 'report.html'), '<h1>r</h1>')
   writeFileSync(path.join(secret, 'private.txt'), 'no')
   const state = { name: 'W', dir: workspace, dirs: [workspace], nodes: [], connections: [] }
+  const saved: string[][] = []
   const deps = {
     pairingToken: TOKEN,
+    wallToken: 'wall-reader',
     sharedFolders: () => [shared, secret],
+    saveSharedFolders: (roots: readonly string[]) => void saved.push([...roots]),
     store: Object.assign(new EventEmitter(), { focusedState: state, workspaceState: () => state }),
     turns: Object.assign(new EventEmitter(), { list: () => [] }),
     ops: { listWorkspaces: () => ({ workspaces: [], activeId: 'w' }) }
@@ -46,7 +49,7 @@ async function start() {
   })
   servers.push(server)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  return { origin: `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`, workspace, shared, secret }
+  return { origin: `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`, workspace, shared, secret, saved }
 }
 
 const auth = { authorization: `Bearer ${TOKEN}` }
@@ -85,6 +88,14 @@ describe('GET /api/files/*', () => {
     }
   })
 
+  it('refuses a read-only wall reader: watching the canvas is not walking a disk', async () => {
+    const { origin, shared } = await start()
+    const wall = { authorization: 'Bearer wall-reader' }
+    for (const at of ['/api/files/roots', `/api/files/list?root=${encodeURIComponent(shared)}&path=`, `/api/files/raw?root=${encodeURIComponent(shared)}&path=report.html`]) {
+      expect((await fetch(`${origin}${at}`, { headers: wall })).status).toBe(401)
+    }
+  })
+
   it('refuses a root that is not shared (403) and a path outside it', async () => {
     const { origin, workspace } = await start()
     const outside = await fetch(`${origin}/api/files/raw?root=${encodeURIComponent(workspace)}&path=../secret/private.txt`, { headers: auth })
@@ -98,5 +109,36 @@ describe('GET /api/files/*', () => {
     const response = await fetch(`${origin}/api/files/raw?root=${encodeURIComponent(shared)}&path=gone.txt`, { headers: auth })
     expect(response.status).toBe(404)
     expect(((await response.json()) as { why: string }).why).toContain('no longer')
+  })
+})
+
+describe('PUT /api/files/roots', () => {
+  it('lets the owner change what this computer shares', async () => {
+    const { origin, workspace, shared, saved } = await start()
+    const response = await fetch(`${origin}/api/files/roots`, {
+      method: 'PUT',
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ roots: [shared, '/Users/x/Media', 'relative'] })
+    })
+    expect(response.status).toBe(200)
+    expect(saved).toEqual([[shared, '/Users/x/Media']])
+    const body = (await response.json()) as { roots: { path: string }[] }
+    expect(body.roots.map((r) => r.path)).toEqual([workspace, shared, '/Users/x/Media'])
+  })
+
+  it('refuses a read-only reader and a body that is not a list', async () => {
+    const { origin, shared } = await start()
+    const wall = await fetch(`${origin}/api/files/roots`, {
+      method: 'PUT',
+      headers: { authorization: 'Bearer wall-reader', 'content-type': 'application/json' },
+      body: JSON.stringify({ roots: [shared] })
+    })
+    expect(wall.status).toBeGreaterThanOrEqual(401)
+    const bad = await fetch(`${origin}/api/files/roots`, {
+      method: 'PUT',
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ roots: 'nope' })
+    })
+    expect(bad.status).toBe(400)
   })
 })

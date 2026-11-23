@@ -146,7 +146,12 @@
   gap: 12px;
 }
 
-/* Open here (BarCards.tsx): the artifact drawn on the phone, under the card's own lines. */
+.item-card .zv-artifact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .item-card .zv-open-here {
   align-self: flex-start;
   height: 30px;

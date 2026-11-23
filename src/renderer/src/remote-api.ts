@@ -45,7 +45,9 @@ import { relayMachines, relayMachineWhy } from './relay-machine-call'
 import { parseMachineGauges } from '../../shared/machine-gauges'
 import { isStripeCheckoutUrl } from '../../shared/stripe-checkout'
 import { SKIN_PATH } from '../../shared/skins'
-import { decodeArtifactResponse, type ArtifactPayload } from './artifact/artifact-decode'
+import { decodeArtifactResponse, decodeFileResponse, type ArtifactFile, type ArtifactPayload } from './artifact/artifact-decode'
+import { decodeFilesListing, decodeFilesRoots, type FilesRoots } from './artifact/files-data'
+import type { Listing } from '../../main/file-server'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -97,27 +99,27 @@ export class HttpStatusError extends Error {
   }
 }
 
+async function readHttpFailure(response: Response, sameMachine: () => boolean, passive?: boolean) {
+  const detail: unknown = await response.json().catch(() => ({ error: String(response.status) }))
+  // Check before reporting a refusal or settling a seat on the device.
+  if (!sameMachine()) throw machineLeft()
+  const body = detail as { error?: unknown; why?: unknown } | null
+  const message = typeof body?.error === 'string' ? body.error : `HTTP ${response.status}`
+  const httpError = new HttpStatusError(message, response.status, detail)
+  if (relayRefusedSession(response.status, body?.error)) return { failure: httpError, body }
+  if (response.status === 401) {
+    const failure = new AuthError(message, /read-only/i.test(message) ? 'read-only' : 'none')
+    if (!(passive && failure.scope === 'read-only')) authStore().report(failure)
+    return { failure, body }
+  }
+  // The workspace this phone stood on is gone: back to following the desktop.
+  if (response.status === 409 && message === SEAT_GONE && settleSeat({ workspaces: [] })) sharedEvents().reopen()
+  return { failure: httpError, body }
+}
+
 async function parse<T>(response: Response, options: ParseOptions = {}): Promise<T> {
   const sameMachine = options.sameMachine ?? heldScope()
-  if (!response.ok) {
-    const detail = await response.json().catch(() => ({ error: String(response.status) }))
-    // Before the refusal is reported or a seat settled: both would land on the next machine.
-    if (!sameMachine()) throw machineLeft()
-    const message = (detail as { error?: string }).error ?? `HTTP ${response.status}`
-    // The relay's own no to the account session: the machine said nothing, and is not unpaired.
-    if (relayRefusedSession(response.status, (detail as { error?: unknown }).error)) throw new HttpStatusError(message, response.status, detail)
-    if (response.status === 401) {
-      // A stale credential is the most likely error this client will ever
-      // see. Raise it as its own type so it reaches the re-pair screen
-      // instead of being counted as a generic network hiccup.
-      const failure = new AuthError(message, /read-only/i.test(message) ? 'read-only' : 'none')
-      if (!(options.passive && failure.scope === 'read-only')) authStore().report(failure)
-      throw failure
-    }
-    // The workspace this phone stood on is gone: back to following the desktop.
-    if (response.status === 409 && message === SEAT_GONE && settleSeat({ workspaces: [] })) sharedEvents().reopen()
-    throw new HttpStatusError(message, response.status, detail)
-  }
+  if (!response.ok) throw (await readHttpFailure(response, sameMachine, options.passive)).failure
   const text = await response.text()
   if (!sameMachine()) throw machineLeft()
   return (text ? JSON.parse(text) : undefined) as T
@@ -330,17 +332,54 @@ async function readImage(ref: ImageRef): Promise<ImageBytes | null> {
  * 404's own words reach the sheet. `fallbackName` is the card's name, for when
  * the route's name header cannot be read across origins.
  */
-export async function artifactView(id: string, fallbackName?: string): Promise<ArtifactPayload> {
+function fetchSeatedRead(path: string, init: Pick<RequestInit, 'signal'> = {}): Promise<Response> {
   const headers: Record<string, string> = {}
   const token = authStore().token()
   if (token) headers.authorization = `Bearer ${token}`
+  return planeFetch(seated(path), { ...init, headers })
+}
+
+export async function artifactView(id: string, fallbackName?: string, signal?: AbortSignal): Promise<ArtifactPayload> {
   const sameMachine = heldScope()
-  const response = await planeFetch(seated(apiPath(`/api/artifact/${encodeURIComponent(id)}`)), { headers })
+  const response = await fetchSeatedRead(apiPath(`/api/artifact/${encodeURIComponent(id)}`), { signal })
   if (!response.ok) return parse<never>(response, { sameMachine })
   const view = await decodeArtifactResponse(response, fallbackName)
   // Bytes read after another machine was entered are that one's to ignore.
   if (!sameMachine()) throw machineLeft()
   return view
+}
+
+export type FilesRefusal = { readonly error: string; readonly why: string }
+
+const FILES_UNREACHABLE = 'The computer did not answer for its files. It may need a newer Cookrew, or try again in a moment.'
+
+async function filesRead<T>(path: string, decode: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T | FilesRefusal> {
+  const sameMachine = heldScope()
+  const stillReading = (): boolean => !signal?.aborted && sameMachine()
+  const response = await fetchSeatedRead(path, { signal })
+  if (!response.ok) {
+    const { failure, body } = await readHttpFailure(response, stillReading)
+    // A refusal without a why (a relay error, an older computer without /api/files) gets plain words.
+    return { error: failure.message, why: typeof body?.why === 'string' ? body.why : FILES_UNREACHABLE }
+  }
+  const value = await decode(response)
+  if (!stillReading()) throw machineLeft()
+  return value
+}
+
+export function filesRoots(signal?: AbortSignal): Promise<FilesRoots | FilesRefusal> {
+  return filesRead(apiPath('/api/files/roots'), decodeFilesRoots, signal)
+}
+
+export function filesList(root: string, path: string, signal?: AbortSignal): Promise<Listing | FilesRefusal> {
+  const query = new URLSearchParams({ root, path })
+  return filesRead(apiPath(`/api/files/list?${query}`), decodeFilesListing, signal)
+}
+
+export function filesRaw(root: string, path: string, signal?: AbortSignal): Promise<ArtifactFile | FilesRefusal> {
+  const query = new URLSearchParams({ root, path })
+  const fallbackName = path.slice(path.lastIndexOf('/') + 1)
+  return filesRead(apiPath(`/api/files/raw?${query}`), (response) => decodeFileResponse(response, 'x-cookrew-file', fallbackName), signal)
 }
 
 /**

@@ -211,6 +211,8 @@ export interface MobileServerDeps {
   routeBus?: MobileApiDeps['routeBus']
   /** Folders shared beyond the workspace's own, for GET /api/files/* — see MobileApiDeps. */
   sharedFolders?: MobileApiDeps['sharedFolders']
+  /** The owner's own list, changed from the owner's pairing — see MobileApiDeps. */
+  saveSharedFolders?: MobileApiDeps['saveSharedFolders']
   /** 'changed' when the registry took a different reach card — the phone re-races on it. */
   reachBus?: MobileApiDeps['reachBus']
   /** The one stream (T2) — passed straight through to handleMobileApi, which

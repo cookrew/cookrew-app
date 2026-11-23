@@ -50,6 +50,14 @@ describe('a listing', () => {
     expect(listing.entries.find((e) => e.name === 'escape.txt')?.kind).toBe('file')
   })
 
+  it('does not list dotfiles, which hold credentials more often than things to look at', () => {
+    const { sharedRoot } = bed()
+    writeFileSync(path.join(sharedRoot, '.env'), 'SECRET=1')
+    const listing = listFolder([sharedRoot], sharedRoot, '')
+    if (isRefusal(listing)) throw new Error('refused')
+    expect(listing.entries.map((e) => e.name)).not.toContain('.env')
+  })
+
   it('refuses a root the owner did not share', () => {
     const { sharedRoot, other } = bed()
     expect(listFolder([sharedRoot], other, '')).toMatchObject({ error: 'outside' })

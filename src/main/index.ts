@@ -2,7 +2,7 @@ import { launchBoot } from './launch-settings-boot'
 import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, net, Notification, powerMonitor, powerSaveBlocker, safeStorage, session, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createHash, randomUUID } from 'node:crypto'
@@ -8707,6 +8707,14 @@ app.whenReady().then(() => {
       } catch {
         return []
       }
+    },
+    // The owner's own list, written atomically and readable by them alone.
+    saveSharedFolders: (roots: readonly string[]) => {
+      const file = path.join(homedir(), '.cookrew', 'shared-roots.json')
+      mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+      const tmp = `${file}.${process.pid}.tmp`
+      writeFileSync(tmp, JSON.stringify({ roots: [...roots] }, null, 2), { mode: 0o600 })
+      renameSync(tmp, file)
     },
     // The screen wall's pictures, for the phone (GET /api/workspaces/shots).
     workspaceShots: currentWorkspaceShots,
