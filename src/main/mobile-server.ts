@@ -209,6 +209,8 @@ export interface MobileServerDeps {
   /** The route program's endpoints and stream frames — see MobileApiDeps; passed through as-is. */
   route?: MobileApiDeps['route']
   routeBus?: MobileApiDeps['routeBus']
+  /** Folders shared beyond the workspace's own, for GET /api/files/* — see MobileApiDeps. */
+  sharedFolders?: MobileApiDeps['sharedFolders']
   /** 'changed' when the registry took a different reach card — the phone re-races on it. */
   reachBus?: MobileApiDeps['reachBus']
   /** The one stream (T2) — passed straight through to handleMobileApi, which

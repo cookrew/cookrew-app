@@ -6,6 +6,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, s
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createHash, randomUUID } from 'node:crypto'
+import { parseSharedRoots } from '../shared/shared-roots'
 import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, paneSizes, sessionNameFor } from './pty'
 import { buildInbox, type InboxNode } from './inbox'
@@ -8698,6 +8699,15 @@ app.whenReady().then(() => {
       hold: () => routeService.hold()
     },
     routeBus,
+    // Folders this computer shares with its devices beyond the workspace's own
+    // (shared-roots.ts): a phone or console reads them the way a NAS is read.
+    sharedFolders: () => {
+      try {
+        return parseSharedRoots(JSON.parse(readFileSync(path.join(homedir(), '.cookrew', 'shared-roots.json'), 'utf8')))
+      } catch {
+        return []
+      }
+    },
     // The screen wall's pictures, for the phone (GET /api/workspaces/shots).
     workspaceShots: currentWorkspaceShots,
     // Terminals from an earlier login, for the phone (GET /api/terminal-session).
