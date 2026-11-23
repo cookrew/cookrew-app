@@ -18,11 +18,9 @@
  * the page wanted to run. A link's address is kept as data only and is never
  * followed from the device.
  *
- * PIXELS ARE A MODE, NOT A FALLBACK (owner ruling, 2026-11-23). A viewer on
- * another device draws this mirror by default. A canvas, a video, a page whose
- * meaning lives in an image: the mirror says so (`pixelOnly`), and the viewer
- * says so in words beside a Screen button — it never switches to the stream on
- * its own.
+ * PIXELS REMAIN THE FALLBACK. A canvas, a video, a page whose meaning lives in
+ * an image: the mirror says so (`pixelOnly`) and the viewer keeps the stream it
+ * already had.
  */
 
 export type MirrorRole =
@@ -58,7 +56,7 @@ export interface MirrorPage {
   readonly blocks: readonly MirrorBlock[]
   /** Some of the page was left out (too long, or content the mirror cannot carry). */
   readonly truncated: boolean
-  /** Meaning lives in pixels here: the viewer says so and offers the screen, without switching to it. */
+  /** Meaning lives in pixels here: the viewer should keep streaming the screen. */
   readonly pixelOnly: boolean
 }
 
