@@ -49,14 +49,18 @@ function Body({ state, title }: { state: SheetState; title: string }): React.JSX
   const { show, objectUrl } = state
   switch (show.as) {
     case 'frame':
-      return <iframe className="cr-artifact-frame" title={title} sandbox={FRAME_SANDBOX} srcDoc={show.srcdoc} referrerPolicy="no-referrer" />
+      // A blob URL, not srcdoc: a srcdoc document inherits THIS page's CSP, so a
+      // console policy that allows no inline script would freeze the artifact.
+      return objectUrl
+        ? <iframe className="cr-artifact-frame" title={title} sandbox={FRAME_SANDBOX} src={objectUrl} referrerPolicy="no-referrer" />
+        : <p className="cr-artifact-note">Nothing to show.</p>
     case 'image':
       return objectUrl ? <img className="cr-artifact-image" src={objectUrl} alt={title} /> : <p className="cr-artifact-note">No picture to show.</p>
     case 'pdf':
+      // An iframe, not <object>: the console's policy allows frames from blob: and
+      // nothing from object-src, and Chromium shows PDFs in a frame natively.
       return objectUrl ? (
-        <object className="cr-artifact-frame" data={objectUrl} type="application/pdf" aria-label={title}>
-          <p className="cr-artifact-note">This device cannot show the PDF here. Save it to read it.</p>
-        </object>
+        <iframe className="cr-artifact-frame" title={title} src={objectUrl} referrerPolicy="no-referrer" />
       ) : (
         <p className="cr-artifact-note">No PDF to show.</p>
       )
@@ -136,10 +140,13 @@ export function ArtifactSheet({ id, name, onClose }: { id: string; name: string;
         const key = await cacheKeyOf(id, payload)
         const saved = key === null ? false : await isSaved(key)
         if (!live) return
-        const blob = blobOf(payload)
+        // A frame's document travels as srcdoc in the payload; make it a blob so the
+        // frame has an address of its own, outside this page's CSP.
+        const show = showOf(payload)
+        const blob = show.as === 'frame' ? new Blob([show.srcdoc], { type: 'text/html' }) : blobOf(payload)
         url = blob === null ? null : URL.createObjectURL(blob)
         kept.current = { key, blob }
-        setState({ phase: 'ready', payload, show: showOf(payload), objectUrl: url, saveName: saveNameOf(payload), saved })
+        setState({ phase: 'ready', payload, show, objectUrl: url, saveName: saveNameOf(payload), saved })
       } catch (error) {
         // Left for another machine: nothing to say about this one.
         if (!live || (error as Error | undefined)?.name === 'AbortError') return

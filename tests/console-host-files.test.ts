@@ -57,6 +57,13 @@ describe('the policy the console runs under', () => {
     expect(consoleHeaders({ api: API })).not.toContain('d.cookrew.dev')
   })
 
+  it('lets an artifact open in a sandboxed blob frame on this device, and frames nothing else', () => {
+    // The viewer draws a note or an HTML artifact from a blob URL in a frame
+    // sandboxed to allow-scripts only; without blob: here, the console shows a
+    // blank where the artifact should be.
+    expect(directive('frame-src')).toBe("frame-src 'self' blob:")
+  })
+
   it('cannot be framed, rebased or made to post a form', () => {
     expect(directive('frame-ancestors')).toBe("frame-ancestors 'none'")
     expect(directive('base-uri')).toBe("base-uri 'none'")
