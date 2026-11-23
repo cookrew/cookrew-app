@@ -1,7 +1,7 @@
 // READING A PAGE, AND PRESSING ONE ELEMENT OF IT (main/dom-mirror.ts): the
 // device sends a ref and a verb; nothing else reaches the page.
 import { describe, expect, it, vi } from 'vitest'
-import { actOnMirror, blockOf, captureMirror, pixelProbe } from '../src/main/dom-mirror'
+import { actOnMirror, blockOf, captureMirror, mirrorSend, pixelProbe } from '../src/main/dom-mirror'
 
 const ax = (over: Record<string, unknown>) => ({ nodeId: '1', ...over })
 
@@ -105,5 +105,20 @@ describe('the pixel probe', () => {
     expect(asked).toHaveLength(1)
     expect(asked[0]).toContain("querySelectorAll('canvas,video,iframe,embed,object')")
     expect(asked[0]).not.toContain('${')
+  })
+})
+
+describe('the CDP a mirror may reach', () => {
+  it('passes the four methods a mirror needs and refuses everything else', async () => {
+    const inner = vi.fn(async () => ({}))
+    const send = mirrorSend(inner)
+    for (const method of ['Accessibility.getFullAXTree', 'DOM.resolveNode', 'Runtime.callFunctionOn', 'Runtime.releaseObject']) {
+      await send(method, {})
+    }
+    expect(inner).toHaveBeenCalledTimes(4)
+    for (const forbidden of ['Runtime.evaluate', 'Page.navigate', 'Network.getCookies', 'Input.dispatchKeyEvent']) {
+      await expect(send(forbidden, {})).rejects.toThrow('not part of a mirror')
+    }
+    expect(inner).toHaveBeenCalledTimes(4)
   })
 })
