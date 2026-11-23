@@ -38,11 +38,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      # npm ci triggers postinstall (electron-rebuild for node-pty against
-      # Electron's ABI), so native toolchains on the runners are exercised here.
-      - run: npm ci
+      - uses: ./.github/actions/restore-installed-deps
+        id: deps
+
+      # This cache contains executables that Release can package. Only trusted
+      # main pushes can seed it, before the tests or app build touch the tree.
+      - if: steps.deps.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Check the fresh install before saving
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: node scripts/check-installed-deps.mjs
+
+      - uses: actions/cache/save@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.deps.outputs.restored != 'true'
+        with:
+          path: node_modules
+          key: ${{ steps.deps.outputs.key }}
+
+      - name: Build macOS helpers after restoring dependencies
+        if: runner.os == 'macOS' && steps.deps.outputs.cache-hit == 'true'
+        run: |
+          node scripts/build-cr-listen.mjs
+          node scripts/build-cr-disclaim.mjs
 
       - run: npm run typecheck
 
