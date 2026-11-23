@@ -38,6 +38,7 @@ import { backCardsOf, cardsSeenOf, goneCards, type CardsSeen } from './full-back
 import type { BackInput } from '../nav-events'
 import { BarGroups } from './BarGroups'
 import { barCard } from './bar-pick'
+import { artifactSheet } from '../artifact/open-artifact'
 import { setFaceSlot } from '../prompt/face-slot'
 import { CrIcon } from '../icons'
 import { promptFold, takeBack } from '../prompt/prompt-fold'
@@ -581,6 +582,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
+      // An artifact sheet over everything (artifact/ArtifactSheet.tsx) takes its own Esc.
+      if (artifactSheet.get()) return
       // A bar group's card (BarGroups.tsx) closes first, before the box or the view.
       if (barCard.get() && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop, .cr-name-input, .pf-who')) {
         e.preventDefault()
@@ -628,10 +631,11 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     const release = holder.hold({
       wants: () => {
         if ((navigator as { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive === false) return false
-        return barCard.get() !== null || shelfCardOpen.current || pickOpen.current || promptFold.wantsBack() || zoomStore.canBack()
+        return artifactSheet.get() !== null || barCard.get() !== null || shelfCardOpen.current || pickOpen.current || promptFold.wantsBack() || zoomStore.canBack()
       },
       back: () => {
-        // A bar group's card first (BarGroups.tsx), as Esc closes it first.
+        // An artifact sheet over everything first (artifact/ArtifactSheet.tsx), then a bar group's card (BarGroups.tsx).
+        if (artifactSheet.get()) return artifactSheet.close()
         if (barCard.get()) return barCard.close()
         if (shelfCardOpen.current) return backSteps.current.closeShelfCard()
         if (pickOpen.current) return backSteps.current.clearPick()
@@ -641,10 +645,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     const offFold = promptFold.subscribe(holder.sync)
     const offZoom = zoomStore.subscribe(holder.sync)
     const offBar = barCard.subscribe(holder.sync)
+    const offSheet = artifactSheet.subscribe(holder.sync)
     return () => {
       offFold()
       offZoom()
       offBar()
+      offSheet()
       release()
     }
   }, [])

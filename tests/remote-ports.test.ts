@@ -70,6 +70,22 @@ describe('remoteLoopbackPorts', () => {
     expect(remoteLoopbackPorts(env, () => JSON.stringify({ providers: 'x' }))).toEqual([])
   })
 
+  it('tells Cookrew’s own forwarder apart from a tunnel made by hand', () => {
+    const json = list([
+      { id: 'solis-core', preset: 'remote-magpie', chat: 'http://127.0.0.1:3428/peer/deviceB0000000000000000000000002/v1', url: 'http://127.0.0.1:3428/peer/deviceB0000000000000000000000002' },
+      { id: 'my-tunnel', preset: 'remote-magpie', chat: 'http://127.0.0.1:13425/v1' },
+      // The forwarder's port, but not its path: someone else's server there.
+      { id: 'squatter', preset: 'remote-magpie', chat: 'http://127.0.0.1:3428/v1' },
+      // A peer path on another port is not our forwarder either.
+      { id: 'other-port', preset: 'remote-magpie', chat: 'http://127.0.0.1:13426/peer/deviceB0000000000000000000000002/v1' }
+    ])
+    const rows = remoteLoopbackProviders(env, () => json)
+    expect(rows.filter((row) => row.id === 'solis-core').every((row) => row.managed)).toBe(true)
+    expect(rows.filter((row) => row.id === 'my-tunnel').every((row) => !row.managed)).toBe(true)
+    expect(rows.filter((row) => row.id === 'squatter').every((row) => !row.managed)).toBe(true)
+    expect(rows.filter((row) => row.id === 'other-port').every((row) => !row.managed)).toBe(true)
+  })
+
   it('looks where Magpie keeps its settings, XDG first', () => {
     expect(providersFile(env)).toBe(path.join('/Users/x', '.config', 'magpie', 'providers.json'))
     expect(providersFile({ home: '/h', env: { XDG_CONFIG_HOME: '/xdg' } })).toBe(path.join('/xdg', 'magpie', 'providers.json'))
@@ -83,7 +99,7 @@ describe('remoteLoopbackProviders', () => {
       { id: 'office', preset: 'remote-magpie', chat: 'http://192.168.1.20:3425/v1' },
       { id: 'Bad Id', preset: 'remote-magpie', chat: 'http://127.0.0.1:1/v1' }
     ])
-    expect(remoteLoopbackProviders(env, () => json)).toEqual([{ id: 'solis', port: 13425 }])
+    expect(remoteLoopbackProviders(env, () => json)).toEqual([{ id: 'solis', port: 13425, managed: false }])
   })
 })
 

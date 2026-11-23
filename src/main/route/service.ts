@@ -115,7 +115,7 @@ export interface RouteServiceDeps {
   /** Loopback ports of Remote magpie tunnels made by hand (route/remote-ports.ts): denied to the sandbox too. */
   remotePorts?: () => number[]
   /** The same, by provider id, for the panel's warning. */
-  remoteLoopback?: () => { id: string; port: number }[]
+  remoteLoopback?: () => { id: string; port: number; managed?: boolean }[]
   /** Remote magpie providers on plain http off a tailnet (route/remote-ports.ts). */
   plainRemotes?: () => { id: string; host: string }[]
   /** Private configured endpoints, sampled whenever cached route data can change. */

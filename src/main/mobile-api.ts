@@ -27,6 +27,7 @@ import { remoteSousHost } from "./sous-remote-config";
 import type { AgentRegistry } from "./agent-registry";
 import type { RenameOutcome } from "../shared/rename-plan";
 import type { TraceReader } from "./trace";
+import { artifactView } from "./artifact-view";
 import {
   boardWindowMs,
   buildBoard,
@@ -890,6 +891,35 @@ export async function handleMobileApi(
     const body = await readJson<{ skin?: unknown }>(request);
     const skin = deps.skin.choose(body.skin);
     respondJson(response, skin === null ? 400 : 200, skin === null ? { error: "Not a skin" } : { skin });
+    return true;
+  }
+
+  // AN ARTIFACT, FOR THIS DEVICE TO DRAW ITSELF (main/artifact-view.ts). A note
+  // travels as markdown; a file card as its bytes, once, with an ETag to cache
+  // by. Looking at what an agent made must not need the screen streamed here.
+  const artifactMatch = p.match(/^\/api\/artifact\/([^/]+)$/);
+  if (method === "GET" && artifactMatch) {
+    if (!canRead) {
+      respondJson(response, 401, { error: "Unauthorized — pairing required." });
+      return true;
+    }
+    const view = artifactView(scopedState(), decodeURIComponent(artifactMatch[1]));
+    if (view === null) {
+      respondJson(response, 404, { error: "No such card." });
+      return true;
+    }
+    if (view.kind === "file") {
+      response.writeHead(200, {
+        "content-type": view.mime,
+        "content-length": view.bytes.length,
+        "cache-control": "private, max-age=300",
+        etag: `"${view.hash}"`,
+        "x-cookrew-artifact": encodeURIComponent(view.name)
+      });
+      response.end(view.bytes);
+      return true;
+    }
+    respondJson(response, 200, view);
     return true;
   }
 

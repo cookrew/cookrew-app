@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { isTailnetPeer, type Tailnet } from './tailnet'
+import { MAGPIE_FORWARD_PORTS } from '../../shared/remote-magpie'
 import type { DiscoveryEnv } from './discovery'
 
 /**
@@ -95,6 +96,12 @@ const portOf = (raw: unknown): number | null => {
 export interface LoopbackRemote {
   readonly id: string
   readonly port: number
+  /**
+   * True when this is Cookrew's own sealed link: the provider points at the
+   * forwarder (`/peer/<device>` on a MAGPIE_FORWARD_PORTS port). It is not a
+   * tunnel someone made by hand, and taking it out would cut the connection.
+   */
+  readonly managed: boolean
 }
 
 /** The loopback ports of every Remote magpie provider; empty when the list cannot be read. */
@@ -126,11 +133,26 @@ export function remoteLoopbackProviders(d: DiscoveryEnv, read: (file: string) =>
       const port = portOf(provider[field])
       if (port !== null && !seen.has(port)) {
         seen.add(port)
-        rows.push({ id: provider.id, port })
+        rows.push({ id: provider.id, port, managed: isForwarderUrl(provider[field], port) })
       }
     }
   }
   return rows.sort((a, b) => a.id.localeCompare(b.id) || a.port - b.port)
+}
+
+/**
+ * Is this address Cookrew's own forwarder? A provider Cookrew adds for "Use its
+ * Magpie" names `http://127.0.0.1:<forward port>/peer/<device>`. Anything else on
+ * loopback is a link a person made themselves — a tunnel — and is treated as one.
+ */
+function isForwarderUrl(raw: unknown, port: number): boolean {
+  if (typeof raw !== 'string' || !MAGPIE_FORWARD_PORTS.includes(port)) return false
+  try {
+    const url = new URL(raw)
+    return (url.hostname === '127.0.0.1' || url.hostname === 'localhost') && /^\/peer\/[A-Za-z0-9_-]{8,128}(\/|$)/.test(url.pathname)
+  } catch {
+    return false
+  }
 }
 
 export interface PlainRemote {

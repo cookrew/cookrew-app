@@ -16,7 +16,10 @@ interface RestrictedRouteState extends Pick<RouteState,
 }
 
 const PLAIN_RISK = 'A Remote Magpie connection uses plain HTTP off a tailnet. Its key and requests cross the network unencrypted. Use a tailnet address or HTTPS in Magpie settings on the host computer.'
-const LOOPBACK_RISK = 'A Remote Magpie connection uses a local tunnel. If the tunnel stops, another program can receive its key and requests. Review the connection in Magpie settings on the host computer.'
+// True for a hand-made tunnel and for Cookrew's own sealed link alike: either
+// way, a program that takes the port while nothing is serving it receives the
+// requests. The key itself stays in Cookrew and is put on per request.
+const LOOPBACK_RISK = 'A Remote Magpie connection reaches another computer through this one’s loopback. A program that takes that port while nothing is serving it receives the requests. Review the connection in Magpie settings on the host computer.'
 const staticSetup = setupLines('')
 const number = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null
 
