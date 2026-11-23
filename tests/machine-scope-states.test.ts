@@ -37,6 +37,8 @@ const REGISTERED: Record<string, readonly string[]> = {
   'prompt/live-line.ts': ['typed lines'],
   'prompt/prompt-draft.ts': ['prompt drafts'],
   'prompt/reply-voice.ts': ['reply voice'],
+  // An artifact drawn on this device (artifact/ArtifactSheet.tsx): one machine's page, closed on a change.
+  'artifact/open-artifact.ts': ['artifact sheet'],
   'prompt/use-preset-commands.ts': ['preset offers'],
   'prompt/wait-answer.ts': ['menu answers'],
   'remote-api.ts': ['machine api'],

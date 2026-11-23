@@ -146,6 +146,13 @@
   gap: 12px;
 }
 
+/* Open here (BarCards.tsx): the artifact drawn on the phone, under the card's own lines. */
+.item-card .zv-open-here {
+  align-self: flex-start;
+  height: 30px;
+  padding: 0 12px;
+}
+
 .item-card .cr-pet-card-face {
   flex: 0 0 auto;
   display: grid;

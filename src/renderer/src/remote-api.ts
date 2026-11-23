@@ -45,6 +45,7 @@ import { relayMachines, relayMachineWhy } from './relay-machine-call'
 import { parseMachineGauges } from '../../shared/machine-gauges'
 import { isStripeCheckoutUrl } from '../../shared/stripe-checkout'
 import { SKIN_PATH } from '../../shared/skins'
+import { decodeArtifactResponse, type ArtifactPayload } from './artifact/artifact-decode'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -315,6 +316,31 @@ async function readImage(ref: ImageRef): Promise<ImageBytes | null> {
   const response = await planeFetch(url, { headers })
   if (!response.ok) return null
   return { mime: response.headers.get('content-type') ?? 'image/png', bytes: new Uint8Array(await response.arrayBuffer()) }
+}
+
+/**
+ * AN ARTIFACT, FOR THIS DEVICE TO DRAW ITSELF (mobile-api · /api/artifact/<id>,
+ * main/artifact-view.ts): a note's markdown, a page's address, a refusal, or a
+ * file card's bytes, sent once over the plane already carrying the session.
+ *
+ * Its own fetch rather than req(): a file answer is bytes, not JSON. It still
+ * goes the way every read does — apiPath for the machine and plane, the seat
+ * (the route reads the seated workspace), the pairing token, planeFetch — and
+ * a refusal goes through parse(), so a 401 reaches the re-pair screen and a
+ * 404's own words reach the sheet. `fallbackName` is the card's name, for when
+ * the route's name header cannot be read across origins.
+ */
+export async function artifactView(id: string, fallbackName?: string): Promise<ArtifactPayload> {
+  const headers: Record<string, string> = {}
+  const token = authStore().token()
+  if (token) headers.authorization = `Bearer ${token}`
+  const sameMachine = heldScope()
+  const response = await planeFetch(seated(apiPath(`/api/artifact/${encodeURIComponent(id)}`)), { headers })
+  if (!response.ok) return parse<never>(response, { sameMachine })
+  const view = await decodeArtifactResponse(response, fallbackName)
+  // Bytes read after another machine was entered are that one's to ignore.
+  if (!sameMachine()) throw machineLeft()
+  return view
 }
 
 /**

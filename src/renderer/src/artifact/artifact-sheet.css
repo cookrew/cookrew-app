@@ -1,0 +1,127 @@
+/* The artifact sheet (ArtifactSheet.tsx): full screen on a phone, a large panel
+   on a wide one. Under the re-pair screen (auth-gate.css, 3000), over the rest. */
+.cr-artifact-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  background: rgba(20, 17, 12, 0.55);
+}
+
+.cr-artifact-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(960px, 100%);
+  height: min(900px, 100%);
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  background: var(--cream);
+  color: var(--ink);
+  overflow: hidden;
+}
+
+.cr-artifact-head,
+.cr-artifact-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+}
+
+.cr-artifact-head {
+  border-bottom: 1.5px solid var(--line);
+}
+
+.cr-artifact-foot {
+  border-top: 1.5px solid var(--line);
+}
+
+.cr-artifact-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 600 14px/1.2 var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-artifact-x {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border: 1.5px solid var(--line);
+  border-radius: 6px;
+  background: var(--cream);
+  color: var(--ink);
+  font: 18px/1 var(--font-mono);
+  cursor: pointer;
+}
+
+.cr-artifact-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: auto;
+  background: var(--cream);
+}
+
+.cr-artifact-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.cr-artifact-image {
+  max-width: 100%;
+  max-height: 100%;
+  margin: auto;
+  object-fit: contain;
+}
+
+.cr-artifact-note {
+  margin: auto;
+  padding: 24px;
+  max-width: 46ch;
+  font: 14px/1.5 var(--font-mono);
+  text-align: center;
+}
+
+.cr-artifact-link,
+.cr-artifact-save {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 14px;
+  border: 1.5px solid var(--line);
+  border-radius: 6px;
+  background: var(--amber-soft);
+  color: var(--ink);
+  font: 600 13px/1 var(--font-mono);
+  text-decoration: none;
+}
+
+.cr-artifact-saved {
+  font: 12px/1.2 var(--font-mono);
+  color: var(--muted);
+}
+
+@media (max-width: 700px) {
+  .cr-artifact-sheet {
+    padding: 0;
+  }
+
+  .cr-artifact-panel {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
