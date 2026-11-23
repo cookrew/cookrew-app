@@ -8,6 +8,14 @@ import type { BrowserTab } from '../shared/model'
 import type { BrowserViewportState } from './browser-viewport'
 import type { ArrivingDownload } from './browser-downloads'
 import type { FrameMeta, HeadlessCookie, HeadlessPageState, HeadlessStopResult } from './headless-chrome'
+
+export interface BrowserProxyCookie {
+  readonly name: string
+  readonly value: string
+  readonly domain: string
+  readonly partitionKey?: unknown
+  readonly partitionKeyOpaque?: boolean
+}
 import type { MirrorPage } from '../shared/dom-mirror'
 import type { MirrorCommand } from './dom-mirror'
 
@@ -33,6 +41,8 @@ export interface BrowserInstance {
   start(): Promise<void>
   /** Set cookies in the running browser. Absent where there is no web page to sign in (a phone). */
   setCookies?(cookies: readonly HeadlessCookie[]): Promise<void>
+  /** Cookies Chrome matches to one URL in this card's web profile. */
+  cookiesFor?(url: string): Promise<readonly BrowserProxyCookie[]>
   stop(gracefulTimeoutMs?: number): Promise<HeadlessStopResult>
   syncTabs(tabs: BrowserTab[], activeTabId: string): Promise<void>
   resize(width: number, height: number): Promise<void>

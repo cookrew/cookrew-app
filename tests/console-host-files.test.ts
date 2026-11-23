@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
 import { consoleHeaders, consolePolicy, firstLoad, fontsNamed, withIntegrity } from '../scripts/console-host-files.mjs'
+import { PROXY_FRAME_SCRIPT, PROXY_FRAME_SCRIPT_HASH } from '../src/shared/web-proxy-frame.mjs'
 
 /**
  * WHAT THE CONSOLE'S STATIC HOST IS TOLD, AND WHAT THE PAGE PINS
@@ -38,9 +39,10 @@ describe('the policy the console runs under', () => {
     expect(directive('font-src')).toBe("font-src 'self'")
   })
 
-  it('runs only its own scripts, and nothing inline', () => {
+  it('permits the bundled scripts and the exact sandbox frame bootstrap', () => {
     expect(directive('default-src')).toBe("default-src 'none'")
-    expect(directive('script-src')).toBe("script-src 'self'")
+    expect(PROXY_FRAME_SCRIPT_HASH).toBe(`'sha256-${createHash('sha256').update(PROXY_FRAME_SCRIPT).digest('base64')}'`)
+    expect(directive('script-src')).toBe(`script-src 'self' ${PROXY_FRAME_SCRIPT_HASH}`)
     expect(policy).not.toContain('unsafe-eval')
     expect(directive('script-src')).not.toContain('unsafe-inline')
   })

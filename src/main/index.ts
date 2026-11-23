@@ -8600,6 +8600,7 @@ app.whenReady().then(() => {
     rtc: rtcHost,
     // The browser card's socket over plain HTTP, for a phone on the relay.
     socketBridge: createSocketBridge({ port: MOBILE_PORT }),
+    webProxy: { session: (id) => browserManager.get(id) },
     build: { id: () => buildId, bus: buildBus },
     // The account's skin: the phone wears it and may pick another (skin-store.ts).
     skin: skins,
