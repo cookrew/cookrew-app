@@ -332,11 +332,15 @@ async function readImage(ref: ImageRef): Promise<ImageBytes | null> {
  * 404's own words reach the sheet. `fallbackName` is the card's name, for when
  * the route's name header cannot be read across origins.
  */
-function fetchSeatedRead(path: string, init: Pick<RequestInit, 'signal'> = {}): Promise<Response> {
+function fetchSeatedRead(path: string, init: Pick<RequestInit, 'signal' | 'method'> = {}): Promise<Response> {
   const headers: Record<string, string> = {}
   const token = authStore().token()
   if (token) headers.authorization = `Bearer ${token}`
   return planeFetch(seated(path), { ...init, headers })
+}
+
+export function fetchBrowserPage(path: string, method: 'GET' | 'HEAD', signal: AbortSignal): Promise<Response> {
+  return fetchSeatedRead(apiPath(path), { method, signal })
 }
 
 export async function artifactView(id: string, fallbackName?: string, signal?: AbortSignal): Promise<ArtifactPayload> {

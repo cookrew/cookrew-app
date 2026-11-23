@@ -31,7 +31,8 @@ import {
 import { COPY_BINDING, PAGE_COPY_SCRIPT, PASTE_FUNCTION, copyText } from './page-copy'
 import { FIELDS_BINDING, FIELDS_WATCH, PAGE_FIELDS_SCRIPT, sanitizeFieldReport, type FieldReport } from './page-fields'
 import type { MirrorPage } from '../shared/dom-mirror'
-import type { MirrorCommand } from './dom-mirror'
+import { readProxyCookies, type MirrorCommand } from './dom-mirror'
+import type { BrowserProxyCookie } from './browser-instance'
 import { actOnTab, readMirror, type MirrorActResult, type MirrorTab } from './mirror-instance'
 
 function httpJson<T>(url: string): Promise<T> {
@@ -978,6 +979,13 @@ export class HeadlessInstance {
   async setCookies(cookies: readonly HeadlessCookie[]): Promise<void> {
     if (this.browserCdp === null) throw new Error('The browser is not running.')
     await this.browserCdp.send('Storage.setCookies', { cookies })
+  }
+
+  async cookiesFor(url: string): Promise<readonly BrowserProxyCookie[]> {
+    const page = this.pages.get(this.activeTabId)
+    if (!page) throw new Error('active browser tab is unavailable')
+    const result = await readProxyCookies((method, params) => page.cdp.send(method, params), url) as { cookies: BrowserProxyCookie[] }
+    return result.cookies
   }
 
   /** Update the node-card fallback without clobbering a viewer-owned viewport. */

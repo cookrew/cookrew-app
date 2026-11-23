@@ -206,9 +206,9 @@ describe('source rules for the mirror view', () => {
     expect(view).toContain("onClick={() => choose('page')}")
   })
 
-  it('remote web cards take the mirror; use cards and the desktop keep their view', () => {
+  it('mounts the Page and Screen switch for remote HTTP(S) browser cards', () => {
     const layer = readFileSync(path.join(__dirname, '../src/renderer/src/BrowserLayer.tsx'), 'utf8')
-    expect(layer).toContain("if (client === 'remote' && !vphone) {")
+    expect(layer).toContain("if (client === 'remote' && isWebProxyUrl(tab.url)) {")
     expect(layer).toContain('<RemoteBrowserView')
   })
 })

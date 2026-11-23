@@ -32,6 +32,7 @@
 // not run. A host taken over whole serves its own page with its own pins:
 // nothing here stops that. Chunks loaded later are not pinned yet.
 import { createHash } from 'node:crypto'
+import { PROXY_FRAME_SCRIPT_HASH } from '../src/shared/web-proxy-frame.mjs'
 
 export const CONSOLE_HOST_MARK = '# console.cookrew.dev, built by scripts/console-host-files.mjs.'
 
@@ -53,7 +54,7 @@ function apiOrigin(raw, local) {
 export function consolePolicy({ api, local = false }) {
   return [
     "default-src 'none'",
-    "script-src 'self'",
+    `script-src 'self' ${PROXY_FRAME_SCRIPT_HASH}`,
     "style-src 'self' 'unsafe-inline'",
     `connect-src 'self' ${apiOrigin(api, local)}`,
     "img-src 'self' data: blob:",
