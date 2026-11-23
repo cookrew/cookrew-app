@@ -82,8 +82,13 @@ describe('installed dependency key', () => {
       const manifestPath = resolve(cwd, 'package.json')
       const lockPath = resolve(cwd, 'package-lock.json')
       const put = (path: string, value: object) => writeFileSync(path, JSON.stringify(value))
+      // Child-process env keys are case-insensitive on Windows. Strip GitHub's
+      // originals before supplying fixtures so ImageOs cannot mask ImageOS.
+      const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => (
+        !['imageos', 'imageversion', 'github_output'].includes(name.toLowerCase())
+      )))
       const key = (image = 'image-a', imageVersion = '20261123.1') => execFileSync(process.execPath, [script], {
-        cwd, encoding: 'utf8', env: { ...process.env, ImageOS: image, ImageVersion: imageVersion, GITHUB_OUTPUT: '' }
+        cwd, encoding: 'utf8', env: { ...env, ImageOS: image, ImageVersion: imageVersion }
       }).trim()
       const scripts = resolve(cwd, 'scripts')
       mkdirSync(scripts)
