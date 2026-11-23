@@ -45,7 +45,13 @@ jobs:
   # Nothing is built from a tag that fails its own tests or names another version.
   verify:
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [typecheck, 1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,23 +59,29 @@ jobs:
 
       - run: node scripts/release-gate.mjs branch "$GITHUB_REF_NAME"
 
+      - run: node scripts/release-gate.mjs tag "$GITHUB_REF_NAME"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      - run: node scripts/release-gate.mjs tag "$GITHUB_REF_NAME"
+      - uses: ./.github/actions/restore-installed-deps
+        id: deps
 
-      - run: npm ci
+      - if: steps.deps.outputs.cache-hit != 'true'
+        run: npm ci
 
-      - run: npm run typecheck
+      - if: matrix.task == 'typecheck'
+        run: npm run typecheck
 
-      - run: npm test
+      - if: matrix.task != 'typecheck'
+        run: npm test -- --shard=${{ matrix.task }}/6
 
   build:
     needs: verify
     # A dispatch or a pull request skips verify, and still has to build.
-    if: ${{ !cancelled() && (needs.verify.result == 'success' || needs.verify.result == 'skipped') }}
+    # A tag must pass every matrix member, not just reach a skipped result.
+    if: ${{ !cancelled() && (needs.verify.result == 'success' || (!startsWith(github.ref, 'refs/tags/') && needs.verify.result == 'skipped')) }}
     strategy:
       fail-fast: false
       matrix:
@@ -90,11 +102,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      # postinstall rebuilds node-pty against Electron's ABI. This is the step
-      # that cannot be done cross-platform, and the reason this job exists.
-      - run: npm ci
+      - uses: ./.github/actions/restore-installed-deps
+        id: deps
+
+      # On a miss, postinstall rebuilds node-pty against Electron's ABI.
+      - if: steps.deps.outputs.cache-hit != 'true'
+        run: npm ci
+
+      # These helpers are outside node_modules and are built fresh, not cached.
+      - name: Build macOS helpers after restoring dependencies
+        if: runner.os == 'macOS' && steps.deps.outputs.cache-hit == 'true'
+        run: |
+          node scripts/build-cr-listen.mjs
+          node scripts/build-cr-disclaim.mjs
 
       # build-cr-listen.mjs exits 0 when clang fails, so the app still runs on a
       # broken dev machine, and a missing extraResource is only a warning. A
@@ -234,6 +255,8 @@ jobs:
             release/*.zip
             release/*.exe
             release/*.AppImage
+          # The installers already compress their payloads.
+          compression-level: 0
           if-no-files-found: error
           retention-days: 14
 
