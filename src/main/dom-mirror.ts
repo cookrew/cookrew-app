@@ -185,28 +185,6 @@ export async function actOnMirror(deps: Pick<MirrorDeps, 'send'>, command: Mirro
   }
 }
 
-/**
- * THE ONLY CDP A MIRROR MAY REACH. The browser instance's own `send` is wide
- * on purpose (an agent drives the page); a request that arrives from another
- * device must not share that width. These four methods read a page and press
- * one element in it, and nothing here takes code from the caller: the only
- * expression that ever runs is `pixelProbe`'s, which is ours.
- */
-export const MIRROR_CDP: ReadonlySet<string> = new Set([
-  'Accessibility.getFullAXTree',
-  'DOM.resolveNode',
-  'Runtime.callFunctionOn',
-  'Runtime.releaseObject'
-])
-
-/** A tab's `send`, narrowed to the methods a mirror has any business with. */
-export function mirrorSend(send: (method: string, params: Record<string, unknown>) => Promise<unknown>): CdpSend {
-  return async (method, params) => {
-    if (!MIRROR_CDP.has(method)) throw new Error(`${method} is not part of a mirror`)
-    return send(method, params)
-  }
-}
-
 /** The fixed probe a live instance hands to `captureMirror`; it evaluates OUR string only. */
 export const pixelProbe = (evaluate: (expression: string) => Promise<unknown>): (() => Promise<string[]>) => async () => {
   const answer = await evaluate(PIXEL_PROBE)
