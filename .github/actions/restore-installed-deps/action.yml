@@ -1,0 +1,33 @@
+name: Restore installed dependencies
+description: Restore an exact npm CI install for this Node, operating system, and architecture
+outputs:
+  key:
+    description: Cache key for the installed dependency tree
+    value: ${{ steps.key.outputs.key }}
+  cache-hit:
+    description: Whether the exact tree was restored and passed the dependency smoke check
+    value: ${{ steps.smoke.outputs.usable }}
+  restored:
+    description: Whether a cache already exists at the exact key
+    value: ${{ steps.restore.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - id: key
+      shell: bash
+      run: node scripts/ci-installed-deps-key.mjs
+    - id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: node_modules
+        key: ${{ steps.key.outputs.key }}
+    - id: smoke
+      if: steps.restore.outputs.cache-hit == 'true'
+      shell: bash
+      run: |
+        if node scripts/check-installed-deps.mjs; then
+          printf 'usable=true\n' >> "$GITHUB_OUTPUT"
+        else
+          echo '::warning::The installed dependency cache failed its smoke check. Reinstalling.'
+          printf 'usable=false\n' >> "$GITHUB_OUTPUT"
+        fi
