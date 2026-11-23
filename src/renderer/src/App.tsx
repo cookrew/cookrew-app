@@ -106,6 +106,7 @@ const StageView = lazy(() => import('./stage/StageView').then((m) => ({ default:
 import { GateSheet } from './GateSheet'
 import { ImportServedSheet } from './ImportServedSheet'
 import { ArtifactSheetHost } from './artifact/ArtifactSheet'
+import { FilesSheetHost } from './artifact/FilesSheet'
 import { SourcePicker } from './use/SourcePicker'
 import { RemoteHostBanner } from './use/RemoteHostBanner'
 import { UnlockSheet } from './use/UnlockSheet'
@@ -1804,6 +1805,7 @@ function Canvas(): React.JSX.Element {
         <CommandBox open={commandOpen} onClose={closeCommand} phone={isRemoteMode()} />
         {/* An artifact drawn on this device (bar item card · Open here, phone and console only). */}
         <ArtifactSheetHost />
+        <FilesSheetHost />
         {/* Identity: the sheets and the lock. Mounted here, after everything
             else, so the lock screen is drawn over the canvas it covers. */}
         {account.overlays}

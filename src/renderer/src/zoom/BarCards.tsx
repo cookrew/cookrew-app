@@ -11,6 +11,7 @@ import { useWaitAnswer } from '../prompt/wait-answer'
 import { promptBox } from '../prompt/box-focus'
 import { isRemoteMode } from '../api'
 import { openArtifact } from '../artifact/open-artifact'
+import { filesSheet } from '../artifact/open-files'
 import '../pets/pets.css'
 import './agent-card.css'
 
@@ -178,19 +179,31 @@ export function BarItemCard({ item, crew, since, anchor, onOpen, onAgent, onOuts
   return (
     <BarCardFrame anchor={anchor} className={`item-card item ${item.kind}`} label={item.title} keep={NEVER} onOutside={onOutside} onClose={onClose}>
       <ItemCard item={item} crew={crew} since={since} controls={{ draft: KEEP_DRAFT, open: onOpen, close: onClose }} onAgent={onAgent} />
-      {/* On the phone and the console: the artifact itself, drawn here (artifact/ArtifactSheet.tsx), not the computer's screen. */}
       {isRemoteMode() && (
-        <button
-          type="button"
-          className="cr-pet-card-open zv-open-here"
-          title="Show it on this device"
-          onClick={() => {
-            openArtifact(item.id, item.title)
-            onClose()
-          }}
-        >
-          OPEN HERE
-        </button>
+        <div className="zv-artifact-actions">
+          <button
+            type="button"
+            className="cr-pet-card-open zv-open-here"
+            title="Show it on this device"
+            onClick={() => {
+              filesSheet.close()
+              openArtifact(item.id, item.title)
+              onClose()
+            }}
+          >
+            OPEN HERE
+          </button>
+          <button
+            type="button"
+            className="cr-pet-card-open zv-open-here"
+            onClick={() => {
+              filesSheet.open()
+              onClose()
+            }}
+          >
+            Files
+          </button>
+        </div>
       )}
     </BarCardFrame>
   )

@@ -18,21 +18,23 @@ import { escapeHtml, renderNoteMarkdown } from '../note-markdown'
  *   card's own, and the hash is taken here, the same sha256 the computer took.
  */
 
+export interface ArtifactFile {
+  readonly kind: 'file'
+  readonly name: string
+  /** The base MIME type, with no parameters. */
+  readonly mime: string
+  /** SHA-256 hex of the bytes, or null when unavailable. */
+  readonly hash: string | null
+  readonly bytes: ArrayBuffer
+}
+
 export type ArtifactPayload =
   | { readonly kind: 'note'; readonly name: string; readonly title: string; readonly markdown: string }
   | { readonly kind: 'link'; readonly name: string; readonly url: string }
   | { readonly kind: 'unavailable'; readonly name: string; readonly why: string }
-  | {
-      readonly kind: 'file'
-      readonly name: string
-      /** The base type, lower-case, no parameters: `text/html`. Text is UTF-8 (the route says so). */
-      readonly mime: string
-      /** sha256 hex of the bytes; null only where this page cannot hash (no WebCrypto). */
-      readonly hash: string | null
-      readonly bytes: ArrayBuffer
-    }
+  | ArtifactFile
 
-/** How the sheet draws one. `frame` is always a sandboxed srcdoc frame. */
+/** How the sheet draws one. A frame is a sandboxed blob document. */
 export type ArtifactShow =
   | { readonly as: 'frame'; readonly srcdoc: string }
   | { readonly as: 'image' }
@@ -97,13 +99,29 @@ function nameFrom(header: string | null, fallback: string | undefined): string {
   return fallback?.trim() || DEFAULT_NAME
 }
 
+async function filePayload(bytes: ArrayBuffer, mime: string, named: string | null, hash: string | null, fallbackName?: string): Promise<ArtifactFile> {
+  return { kind: 'file', name: nameFrom(named, fallbackName), mime, hash: hash ?? (await sha256Hex(bytes)), bytes }
+}
+
+function fileHeaders(response: Response, nameHeader: string): { mime: string; named: string | null; hash: string | null } {
+  return {
+    mime: baseType(response.headers.get('content-type')),
+    named: response.headers.get(nameHeader),
+    hash: STRONG_HASH.exec(response.headers.get('etag') ?? '')?.[1] ?? null
+  }
+}
+
+/** A successful raw-file response always carries bytes, including JSON files. */
+export async function decodeFileResponse(response: Response, nameHeader: string, fallbackName: string): Promise<ArtifactFile> {
+  const { mime, named, hash } = fileHeaders(response, nameHeader)
+  return filePayload(await response.arrayBuffer(), mime, named, hash, fallbackName)
+}
+
 /** Read a 2xx answer of the artifact route. A refusal status is the caller's to handle first. */
 export async function decodeArtifactResponse(response: Response, fallbackName?: string): Promise<ArtifactPayload> {
-  const mime = baseType(response.headers.get('content-type'))
-  const named = response.headers.get(NAME_HEADER)
-  const strong = STRONG_HASH.exec(response.headers.get('etag') ?? '')?.[1] ?? null
+  const { mime, named, hash } = fileHeaders(response, NAME_HEADER)
   const bytes = await response.arrayBuffer()
-  const routeSaysFile = named !== null || strong !== null
+  const routeSaysFile = named !== null || hash !== null
   if (mime === 'application/json' && !routeSaysFile) {
     try {
       const envelope = envelopeOf(JSON.parse(new TextDecoder().decode(bytes)))
@@ -112,7 +130,7 @@ export async function decodeArtifactResponse(response: Response, fallbackName?: 
       // Not JSON that parses: a file that only claims the type.
     }
   }
-  return { kind: 'file', name: nameFrom(named, fallbackName), mime, hash: strong ?? (await sha256Hex(bytes)), bytes }
+  return filePayload(bytes, mime, named, hash, fallbackName)
 }
 
 const FRAME_STYLE = [

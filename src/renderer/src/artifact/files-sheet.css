@@ -1,0 +1,94 @@
+.cr-files-browser {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  font: 14px/1.4 var(--font-mono);
+}
+
+.cr-files-path {
+  border-bottom: 1px solid var(--line);
+}
+
+.cr-files-path ol,
+.cr-files-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cr-files-path ol {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  padding: 2px 14px;
+}
+
+.cr-files-path li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cr-files-path li + li::before {
+  content: '/';
+  color: var(--muted);
+}
+
+.cr-files-path button,
+.cr-files-entry {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+
+.cr-files-path button {
+  min-height: 40px;
+  padding: 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.cr-files-path span {
+  overflow-wrap: anywhere;
+}
+
+.cr-files-list li {
+  border-bottom: 1px solid var(--line);
+}
+
+.cr-files-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  text-align: start;
+}
+
+.cr-files-entry span {
+  min-width: 0;
+}
+
+button.cr-files-entry {
+  cursor: pointer;
+}
+
+button.cr-files-entry:is(:hover, :focus-visible) {
+  background: var(--amber-soft);
+}
+
+.cr-files-message,
+.cr-files-entry small {
+  color: var(--muted);
+}
+
+.cr-files-message {
+  margin: 12px 14px;
+}

@@ -28,6 +28,8 @@ import type { AgentRegistry } from "./agent-registry";
 import type { RenameOutcome } from "../shared/rename-plan";
 import type { TraceReader } from "./trace";
 import { artifactView } from "./artifact-view";
+import { fileRoots, isRefusal, listFolder, readShared } from "./file-server";
+import { parseSharedRoots, sharedRoots } from "../shared/shared-roots";
 import {
   boardWindowMs,
   buildBoard,
@@ -385,6 +387,18 @@ export interface MobileApiDeps {
     turn: (terminalId: string, knob: string, value: string) => { ok: boolean; reason?: string };
   };
   tuningBus?: EventEmitter;
+  /**
+   * Folders this computer shares beyond its workspace's own (shared-roots.ts):
+   * a device lists them and reads their files the way a NAS would. Read on
+   * every request, so a folder added a minute ago is answerable now.
+   */
+  sharedFolders?: () => string[];
+  /**
+   * Save the owner's shared folders. Absent: this computer's list cannot be
+   * changed from here, and a request to change it is refused rather than kept
+   * in memory. Only the owner's own pairing may call it.
+   */
+  saveSharedFolders?: (roots: readonly string[]) => void;
   /**
    * Signals on the cables ("A asked B", "B answered A" — cable-signal.ts),
    * one small frame each, so the phone's harness lights the same way the
@@ -891,6 +905,79 @@ export async function handleMobileApi(
     const body = await readJson<{ skin?: unknown }>(request);
     const skin = deps.skin.choose(body.skin);
     respondJson(response, skin === null ? 400 : 200, skin === null ? { error: "Not a skin" } : { skin });
+    return true;
+  }
+
+  // WHICH FOLDERS THIS COMPUTER SHARES is the owner's to change, and only from
+  // the owner's own pairing: a wall or a companion seat reads the list, it does
+  // not decide what its computer hands out.
+  if (method === "PUT" && p === "/api/files/roots") {
+    if (!ownerPairing) {
+      respondJson(response, 401, { error: "Unauthorized — the owner's pairing is required." });
+      return true;
+    }
+    const body = await readJson<{ roots?: unknown }>(request).catch(() => null);
+    const wanted = parseSharedRoots(body);
+    if (body === null || !Array.isArray(body.roots)) {
+      respondJson(response, 400, { error: "roots must be a list of absolute paths." });
+      return true;
+    }
+    if (typeof deps.saveSharedFolders !== "function") {
+      respondJson(response, 501, { error: "This computer's shared folders cannot be changed from here." });
+      return true;
+    }
+    try {
+      deps.saveSharedFolders(wanted);
+    } catch {
+      respondJson(response, 500, { error: "The list could not be saved." });
+      return true;
+    }
+    respondJson(response, 200, { roots: fileRoots(sharedRoots(scopedState().dirs ?? [scopedState().dir], wanted)) });
+    return true;
+  }
+
+  // THIS COMPUTER'S SHARED FOLDERS, FOR A DEVICE TO BROWSE (main/file-server.ts).
+  // The roots are this computer's to say: its workspace's own directories plus
+  // the ones its owner shared. A device names one back and a path inside it.
+  // Browsing a computer's shared folders is the OWNER's business: a wall screen
+  // reads the canvas, it does not walk a disk. The owner's pairing only.
+  if (method === "GET" && (p === "/api/files/roots" || p === "/api/files/list" || p === "/api/files/raw")) {
+    if (!ownerPairing) {
+      respondJson(response, 401, { error: "Unauthorized — the owner's pairing is required." });
+      return true;
+    }
+    const roots = sharedRoots(scopedState().dirs ?? [scopedState().dir], deps.sharedFolders?.() ?? []);
+    if (p === "/api/files/roots") {
+      respondJson(response, 200, { roots: fileRoots(roots) });
+      return true;
+    }
+    const root = url.searchParams.get("root") ?? "";
+    const rel = url.searchParams.get("path") ?? "";
+    if (p === "/api/files/list") {
+      const listing = listFolder(roots, root, rel);
+      if (isRefusal(listing)) {
+        const status = listing.error === "missing" ? 404 : listing.error === "not-dir" ? 409 : listing.error === "outside" ? 403 : 500;
+        respondJson(response, status, listing);
+        return true;
+      }
+      respondJson(response, 200, listing);
+      return true;
+    }
+    const read = readShared(roots, root, rel);
+    if (isRefusal(read)) {
+      const status = read.error === "missing" ? 404 : read.error === "not-file" ? 409 : read.error === "outside" ? 403 : read.error === "too-large" ? 413 : 500;
+      respondJson(response, status, read);
+      return true;
+    }
+    response.writeHead(200, {
+      "content-type": read.mime,
+      "content-length": read.bytes.length,
+      "cache-control": "no-store",
+      etag: `"${read.hash}"`,
+      "accept-ranges": "none",
+      "x-cookrew-file": encodeURIComponent(read.name)
+    });
+    response.end(read.bytes);
     return true;
   }
 
