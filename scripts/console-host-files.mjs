@@ -61,6 +61,10 @@ export function consolePolicy({ api, local = false }) {
     "font-src 'self'",
     "worker-src 'self'",
     "manifest-src 'self'",
+    // An artifact opened on this device is drawn in a sandboxed frame from a blob
+    // URL (src/renderer/src/artifact/ArtifactSheet.tsx): its scripts run, and the
+    // sandbox keeps them off this origin. Frames are otherwise this host only.
+    "frame-src 'self' blob:",
     "frame-ancestors 'none'",
     "base-uri 'none'",
     "form-action 'none'"

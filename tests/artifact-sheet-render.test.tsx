@@ -34,10 +34,12 @@ describe('a note', () => {
     const [frame] = iframes(html)
     expect(frame).toContain('sandbox="allow-scripts"')
     expect(frame).not.toContain('allow-same-origin')
-    // HTML attribute names are case-insensitive; React's server markup writes srcDoc.
-    expect(frame).toMatch(/ srcdoc="/i)
-    expect(frame).not.toMatch(/ src="/)
-    expect(frame).toContain('&lt;strong&gt;it&lt;/strong&gt;')
+    // The frame is a blob of the document, not srcdoc: a srcdoc frame inherits the
+    // console's CSP, which allows no inline script there.
+    expect(frame).toMatch(new RegExp(` src="${URL_}"`))
+    expect(frame).not.toMatch(/ srcdoc="/i)
+    // The document itself is not inlined here: it lives in the blob the frame points at.
+    expect(html).not.toContain('&lt;strong&gt;it&lt;/strong&gt;')
   })
 
   it('offers to save it, as markdown', () => {
@@ -67,8 +69,10 @@ describe('a file', () => {
     expect(iframes(html)).toHaveLength(0)
   })
 
-  it('a PDF is an object from its object URL', () => {
-    expect(paint(ready(file('application/pdf', '', 'a.pdf')))).toMatch(new RegExp(`<object[^>]*data="${URL_}"[^>]*type="application/pdf"`))
+  it('a PDF is a frame from its object URL (the console allows no object-src)', () => {
+    const html = paint(ready(file('application/pdf', '', 'a.pdf')))
+    expect(html).toMatch(new RegExp(`<iframe[^>]*src="${URL_}"`))
+    expect(html).not.toMatch(/<object/)
   })
 
   it('anything else is only a way to save it', () => {
@@ -111,6 +115,15 @@ describe('source rules', () => {
 
   it('never grants a frame the console origin', () => {
     for (const [, src] of sources) expect(src).not.toMatch(/allow-same-origin/)
+  })
+
+  it('gives a frame an address of its own, never srcdoc', () => {
+    // srcdoc inherits the console page's CSP (script-src 'self'), so an artifact
+    // with inline script would render blank there. A blob frame does not.
+    const sheet = sources.find(([name]) => name === 'ArtifactSheet.tsx')
+    expect(sheet).toBeDefined()
+    expect(sheet![1]).not.toMatch(/srcDoc=/)
+    expect(sheet![1]).toMatch(/new Blob\(\[show\.srcdoc\]/)
   })
 
   it('the bar item card offers Open here on the phone and console only', () => {
