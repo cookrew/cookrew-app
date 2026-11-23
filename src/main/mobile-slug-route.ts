@@ -24,7 +24,6 @@ const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 // One list, shared with the minting side — see workspace-slug.ts for why
 // `src` and `node_modules` are on it.
 import { RESERVED_SLUGS } from '../shared/workspace-slug'
-import { WEB_PROXY_ROUTE } from '../shared/web-proxy'
 
 export interface SlugRoute {
   /** Workspace scope, or null for the unslugged (focused-session) routes. */
@@ -234,8 +233,6 @@ export const SCOPE_AWARE: RegExp[] = [
   /^\/api\/call\/challenge$/,
   /^\/api\/call\/assert$/,
   // Node-addressed seat routes, from the ONE table below.
-  // The proxy authenticates before checking card membership in its scoped state.
-  WEB_PROXY_ROUTE,
   ...NODE_ROUTES
 ]
 

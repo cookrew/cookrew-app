@@ -1,23 +1,25 @@
 import { useCallback, useState } from 'react'
 import { MobileBrowserFrame } from '../MobileBrowserFrame'
-import { ProxyView } from './ProxyView'
+import { MirrorView } from './MirrorView'
 import { chooseRemoteBrowserMode, remoteBrowserMode, type RemoteBrowserMode } from './mirror-mode'
+import { useMirrorPage } from './useMirrorPage'
 
 /**
  * A WEB PAGE'S CARD, SEEN FROM ANOTHER DEVICE (mirror/RemoteBrowserView.tsx).
  *
- * The zoomed card draws the proxied page on this device. Screen opens the
- * computer's live view and Page returns here. When zoomed out, show the card's
- * thumbnail.
+ * Local by default: zoomed open, the card draws the page from data on this
+ * device (MirrorView). The computer's screen of it is a mode — the Screen
+ * button — and the Page button comes back. Neither view switches to the other
+ * on its own. Zoomed out, the card shows its picture as every card does.
+ *
+ * Remote viewers only: the desktop keeps its pixel view (BrowserLayer.tsx).
  */
 export function RemoteBrowserView({
   browserId,
-  cardUrl,
   zoomed,
   actions
 }: {
   browserId: string
-  cardUrl: string
   zoomed: boolean
   actions?: React.ReactNode
 }): React.JSX.Element {
@@ -30,7 +32,7 @@ export function RemoteBrowserView({
     [browserId]
   )
   if (zoomed && mode === 'page') {
-    return <ProxyView key={cardUrl} browserId={browserId} cardUrl={cardUrl} actions={actions} onScreen={() => choose('screen')} />
+    return <MirrorPanel browserId={browserId} actions={actions} onScreen={() => choose('screen')} />
   }
   return (
     <MobileBrowserFrame
@@ -46,7 +48,7 @@ export function RemoteBrowserView({
               type="button"
               className="browser-frame-btn mirror-page-btn"
               title="Show the page drawn on this device"
-              data-proxy-page="true"
+              data-mirror-page="true"
               onPointerDown={(event) => event.stopPropagation()}
               onKeyDown={(event) => event.stopPropagation()}
               onClick={() => choose('page')}
@@ -59,4 +61,17 @@ export function RemoteBrowserView({
       }
     />
   )
+}
+
+function MirrorPanel({
+  browserId,
+  actions,
+  onScreen
+}: {
+  browserId: string
+  actions?: React.ReactNode
+  onScreen: () => void
+}): React.JSX.Element {
+  const mirror = useMirrorPage(browserId, true)
+  return <MirrorView state={mirror.state} onAct={mirror.act} onScreen={onScreen} onReload={mirror.reload} onRetry={mirror.retry} actions={actions} />
 }

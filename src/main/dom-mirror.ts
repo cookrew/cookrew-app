@@ -199,23 +199,12 @@ export const MIRROR_CDP: ReadonlySet<string> = new Set([
   'Runtime.releaseObject'
 ])
 
-function allowlistedSend(send: CdpSend, allowed: ReadonlySet<string>, purpose: string): CdpSend {
+/** A tab's `send`, narrowed to the methods a mirror has any business with. */
+export function mirrorSend(send: (method: string, params: Record<string, unknown>) => Promise<unknown>): CdpSend {
   return async (method, params) => {
-    if (!allowed.has(method)) throw new Error(`${method} is not part of ${purpose}`)
+    if (!MIRROR_CDP.has(method)) throw new Error(`${method} is not part of a mirror`)
     return send(method, params)
   }
-}
-
-/** A tab's `send`, narrowed to the methods a mirror has any business with. */
-export function mirrorSend(send: CdpSend): CdpSend {
-  return allowlistedSend(send, MIRROR_CDP, 'a mirror')
-}
-
-const PROXY_COOKIE_CDP = new Set(['Network.getCookies'])
-
-/** A proxy reads cookies for one URL in the card's own profile. */
-export function readProxyCookies(send: CdpSend, url: string): Promise<unknown> {
-  return allowlistedSend(send, PROXY_COOKIE_CDP, 'the web proxy')('Network.getCookies', { urls: [url] })
 }
 
 /** The fixed probe a live instance hands to `captureMirror`; it evaluates OUR string only. */
