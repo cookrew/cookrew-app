@@ -1,0 +1,281 @@
+name: Release rehearsal
+
+# Cookrew had no packaging on any platform, so there was nothing to release
+# anywhere. This builds installable artifacts on the runners, which is not a
+# convenience: node-pty is a native module, so a Windows binary cannot be
+# produced from a Mac at all, and the macOS toolchain on a given developer
+# machine may be broken independently of the code.
+#
+# Manual dispatch, or a version tag. Also on PRs that touch the packaging
+# itself: a release pipeline nobody exercises until release day is a pipeline
+# that breaks on release day, and the path filter keeps it from building
+# installers for every unrelated change.
+on:
+  pull_request:
+    branches: [ci/release-six-minutes]
+    paths: ['.github/workflows/release-rehearsal.yml']
+
+# electron-builder publishes to a GitHub release on a tag build, and that path
+# needs a token with release-write access. Both build steps pass --publish never:
+# left to itself on CI it picks onTagOrDraft, and a dispatch from any branch could
+# then overwrite the assets of a draft for the same version.
+#
+# It uploads to a DRAFT release, which no updater can see. The publish job turns
+# it into the latest release once every build and the Mac verification are green,
+# so a red run leaves a draft that went nowhere. Publishing IS shipping: every
+# running app with updates on picks it up within six hours.
+#
+# To cut a release: bump the version on dev, merge dev into main with a merge
+# commit, and tag THAT merge commit `v<x.y.z>`. verify refuses any other tag
+# (release-gate.mjs branch): not on main, not a merge, or not a merge of dev.
+# A tag with a suffix (v0.5.0-beta.1) publishes as a prerelease, which no updater
+# offers.
+permissions:
+  contents: read
+
+jobs:
+  # Nothing is built from a tag that fails its own tests or names another version.
+  verify:
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'pull_request' && github.head_ref == 'ci/release-six-rehearsal')
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [typecheck, 1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - if: startsWith(github.ref, 'refs/tags/')
+        run: node scripts/release-gate.mjs branch "$GITHUB_REF_NAME"
+
+      - if: startsWith(github.ref, 'refs/tags/')
+        run: node scripts/release-gate.mjs tag "$GITHUB_REF_NAME"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: ./.github/actions/restore-installed-deps
+        id: deps
+
+      - if: steps.deps.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - if: matrix.task == 'typecheck'
+        run: npm run typecheck
+
+      - if: matrix.task != 'typecheck'
+        run: npm test -- --shard=${{ matrix.task }}/6
+
+  build:
+    needs: verify
+    # A dispatch or a pull request skips verify, and still has to build.
+    # A tag must pass every matrix member, not just reach a skipped result.
+    if: ${{ !cancelled() && (needs.verify.result == 'success' || (!startsWith(github.ref, 'refs/tags/') && needs.verify.result == 'skipped')) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            script: dist:mac
+            artifact: cookrew-macos
+          # windows-2022, not windows-latest: @electron/node-gyp's VS finder
+          # does not recognise the toolchain layout on the current latest image
+          # ("Could not find any Visual Studio installation"), while 2022 works.
+          - os: windows-2022
+            script: dist:win
+            artifact: cookrew-windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: ./.github/actions/restore-installed-deps
+        id: deps
+
+      # On a miss, postinstall rebuilds node-pty against Electron's ABI.
+      - if: steps.deps.outputs.cache-hit != 'true'
+        run: npm ci
+
+      # These helpers are outside node_modules and are built fresh, not cached.
+      - name: Build macOS helpers after restoring dependencies
+        if: runner.os == 'macOS' && steps.deps.outputs.cache-hit == 'true'
+        run: |
+          node scripts/build-cr-listen.mjs
+          node scripts/build-cr-disclaim.mjs
+
+      # build-cr-listen.mjs exits 0 when clang fails, so the app still runs on a
+      # broken dev machine, and a missing extraResource is only a warning. A
+      # release must not ship with hold-to-talk quietly gone.
+      - name: Require cr-listen
+        if: runner.os == 'macOS'
+        run: test -x resources/cr-listen/cr-listen
+
+      # Same for the browser cards' Chrome launcher: without it every user is
+      # told Cookrew "was prevented from modifying apps" when a card starts.
+      - name: Require cr-disclaim
+        if: runner.os == 'macOS'
+        run: test -x resources/cr-disclaim/cr-disclaim
+
+      # Which of the three macOS builds this is. Sees only whether each secret
+      # exists; the Windows leg never runs it. Half a set fails the job here.
+      - name: Plan macOS signing
+        id: signing
+        if: runner.os == 'macOS'
+        run: node scripts/mac-signing-plan.mjs
+        env:
+          HAS_CSC_LINK: 'false'
+          HAS_CSC_KEY_PASSWORD: 'false'
+          HAS_APPLE_API_KEY_P8: 'false'
+          HAS_APPLE_API_KEY_ID: 'false'
+          HAS_APPLE_API_ISSUER: 'false'
+          HAS_APPLE_ID: 'false'
+          HAS_APPLE_APP_SPECIFIC_PASSWORD: 'false'
+          HAS_APPLE_TEAM_ID: 'false'
+
+      # Correctness is gated by ci.yml. Running the suite again here would
+      # block Windows artifacts on 16 known POSIX assumptions in tests, which
+      # are a portability debt rather than a statement about the build.
+      - name: Build
+        if: steps.signing.outputs.sign != 'true'
+        run: npm run ${{ matrix.script }} -- --publish never
+        env:
+          # Only meaningful on tag builds, where electron-builder publishes
+          # the artifacts to the release for this tag.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Unsigned on purpose: do not pick up whatever the runner's keychain has.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      # Its own step, so the build tool and its plugins run with no secrets.
+      - name: Bundle
+        if: steps.signing.outputs.sign == 'true'
+        run: npx electron-vite build
+
+      # The only step that holds signing material. Kept apart from the plain
+      # build because electron-builder acts on these variables wherever it sees
+      # them: on the Windows leg it would try to sign an .exe with a macOS
+      # certificate.
+      - name: Build, sign and notarize
+        if: steps.signing.outputs.sign == 'true'
+        # Notarization waits on Apple. A stuck queue must not burn a runner for
+        # the six-hour default.
+        timeout-minutes: 60
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/cookrew-signing.keychain-db"
+          P12="$RUNNER_TEMP/cookrew-signing.p12"
+          APPLE_API_KEY=""
+          trap 'rm -f "$APPLE_API_KEY" "$P12"; security delete-keychain "$KEYCHAIN" 2>/dev/null || true' EXIT
+
+          # electron-builder 25 would import CSC_LINK into a keychain it locks
+          # with a random password, then pass the .p12's password to
+          # set-key-partition-list, which macOS 15 refuses (run 44096006620).
+          # So the keychain is built here, and electron-builder gets only the
+          # keychain and the identity's hash (a name starting "Developer ID
+          # Application:" would be refused).
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          (umask 077 && printf '%s' "$CSC_LINK" | base64 --decode > "$P12")
+          security import "$P12" -k "$KEYCHAIN" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+          rm -f "$P12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          SEARCH=()
+          while IFS= read -r line; do SEARCH+=("$(printf '%s' "$line" | sed 's/^[[:space:]]*"//; s/"$//')"); done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$KEYCHAIN" "${SEARCH[@]}"
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk 'NR==1{print $2}')
+          if [ -z "$IDENTITY" ]; then echo "::error::CSC_LINK holds no valid code-signing identity"; exit 1; fi
+          export CSC_KEYCHAIN="$KEYCHAIN"
+          export CSC_NAME="$IDENTITY"
+          unset CSC_LINK CSC_KEY_PASSWORD KEYCHAIN_PASSWORD
+
+          if [ "$NOTARIZE_WITH" = api-key ]; then
+            # electron-builder tries an Apple ID first and wants APPLE_API_KEY
+            # as a path to the .p8, not the key's text.
+            unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD
+            export APPLE_API_KEY="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY_ID.p8"
+            (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" > "$APPLE_API_KEY")
+          else
+            unset APPLE_API_KEY
+          fi
+          unset APPLE_API_KEY_P8
+          # Forced here and only here: with a bad certificate this run goes red
+          # instead of quietly shipping unsigned. npm ci already rebuilt node-pty,
+          # so no native build runs beside the certificate.
+          npx electron-builder --mac --publish never -c.forceCodeSigning=true -c.npmRebuild=false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTARIZE_WITH: ${{ steps.signing.outputs.notarize }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      # Checks the dmg people download, not the tree it was built from.
+      - name: Verify the notarized download
+        if: steps.signing.outputs.mode == 'notarized'
+        # spctl has been seen to sit for minutes behind a busy syspolicyd.
+        timeout-minutes: 15
+        run: |
+          # With assessments off spctl accepts anything and verify would fail
+          # every build. Nothing documents what these images ship with.
+          status=$(spctl --status 2>&1 || true)
+          echo "$status"
+          case "$status" in
+            *disabled*) sudo spctl --global-enable ;;
+          esac
+          for image in release/*.dmg; do
+            bash scripts/verify-mac-release.sh "$image"
+          done
+          echo "Verified: every dmg holds an app that is signed, notarized and stapled." >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          # Ship the installers, not the unpacked tree.
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.AppImage
+          # The installers already compress their payloads.
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+
+  # Measurement only: after the cold build, populate this PR's isolated cache.
+  # A rerun of the same PR receives it. No branch or tag can read this cache.
+  seed-rehearsal-cache:
+    if: github.event_name == 'pull_request' && github.head_ref == 'ci/release-six-rehearsal' && github.run_attempt == 1
+    needs: build
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: ./.github/actions/restore-installed-deps
+        id: deps
+      - if: steps.deps.outputs.cache-hit != 'true'
+        run: npm ci
+      - if: steps.deps.outputs.cache-hit != 'true'
+        run: node scripts/check-installed-deps.mjs
+      - uses: actions/cache/save@v4
+        if: steps.deps.outputs.restored != 'true'
+        with:
+          path: node_modules
+          key: ${{ steps.deps.outputs.key }}
