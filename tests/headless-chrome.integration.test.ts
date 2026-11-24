@@ -82,6 +82,67 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
     }
   }, 30000)
 
+  // 11-24: a phone's picture was 1x on a 3x screen, because screencast frames
+  // ignored the emulated scale (11-03). Launched with its scale forced, card
+  // Chrome must stream each ask at its own size, one size per revision.
+  it('streams a 2x ask at 2x, a 3x ask at 3x and a 1x ask at 1x, never mixing sizes in one revision', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'cookrew-headless-scale-'))
+    const instance = new HeadlessInstance({
+      executablePath: chrome as string,
+      profileDir: path.join(root, 'profile'),
+      width: 720,
+      height: 560,
+      tabs: [{ id: 'tab-a', url: `${origin}/scale`, title: '' }],
+      activeTabId: 'tab-a'
+    })
+    const widths = new Map<number, Set<number>>()
+    let lastFrame: { data: string; meta: FrameMeta } | null = null
+    instance.frameListeners.add((data, meta) => {
+      lastFrame = { data, meta }
+      const size = jpegSize(Buffer.from(data, 'base64'))
+      const revision = meta.revision ?? 0
+      if (size) widths.set(revision, new Set([...(widths.get(revision) ?? []), size.width]))
+    })
+    const sizeOf = (): number => {
+      const frame = lastFrame as { data: string; meta: FrameMeta } | null
+      return frame ? (jpegSize(Buffer.from(frame.data, 'base64'))?.width ?? 0) : 0
+    }
+    const repaint = (): Promise<unknown> =>
+      instance.evaluate(`document.body.style.background = document.body.style.background === 'white' ? '#fefefe' : 'white'`)
+    try {
+      await instance.start()
+      expect(instance.scaleCeiling).toBe(3)
+      instance.registerViewportViewer('phone')
+      instance.offerViewport('phone', { width: 390, height: 700, mobile: true, scale: 2 })
+      await waitFor(() => instance.viewportState.revision === 2)
+      await waitFor(async () => {
+        await repaint()
+        return lastFrame !== null && (lastFrame as { meta: FrameMeta }).meta.revision === 2 && sizeOf() === 780
+      })
+      expect(await instance.evaluate('devicePixelRatio')).toBeCloseTo(2, 5)
+
+      instance.offerViewport('phone', { width: 390, height: 700, mobile: true, scale: 3 })
+      await waitFor(() => instance.viewportState.revision === 3)
+      await waitFor(async () => {
+        await repaint()
+        return (lastFrame as { meta: FrameMeta } | null)?.meta.revision === 3 && sizeOf() === 1170
+      })
+
+      instance.offerViewport('phone', { width: 390, height: 700, mobile: true })
+      await waitFor(() => instance.viewportState.revision === 4)
+      await waitFor(async () => {
+        await repaint()
+        return (lastFrame as { meta: FrameMeta } | null)?.meta.revision === 4 && sizeOf() === 390
+      })
+      expect([...(widths.get(2) ?? [])]).toEqual([780])
+      expect([...(widths.get(3) ?? [])]).toEqual([1170])
+      expect([...(widths.get(4) ?? [])]).toEqual([390])
+    } finally {
+      await instance.stop()
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
   // 11-24: a card's Chrome was stopped by signal, which skips Chrome's write of
   // its cookies: a cookie set just before the stop was gone after a restart 7
   // times in 8. stop() asks Chrome to close first (headless-chrome.ts · terminateProcess).

@@ -55,13 +55,20 @@ export type ViewportControlMsg =
   | { t: 'viewport-claim'; width: number; height: number; mobile: boolean; scale?: number }
   | { t: 'viewport-release' }
 
-/** The largest device scale a view asks for (cast-viewport.ts · VIEWPORT_SCALE_MAX). */
+/** The largest device scale a view asks for when nobody said otherwise. */
 export const VIEW_SCALE_MAX = 2
+/** The most any Mac may allow (cast-viewport.ts · VIEWPORT_SCALE_MAX). */
+export const VIEW_SCALE_CEILING = 3
 
-/** A display's pixel ratio as a view's ask: half steps in [1, 2], so a Retina Mac draws the page 1:1. */
-export function viewScale(devicePixelRatio: number): number {
+/**
+ * A display's pixel ratio as a view's ask: half steps in [1, max]. The max is
+ * what the Mac allowed this viewer in its `ready` (cast-viewer.ts · scaleMax),
+ * so a 3x phone asks 2 when the Mac says 2, and 1 from a Mac that never said.
+ */
+export function viewScale(devicePixelRatio: number, max: number = VIEW_SCALE_MAX): number {
   if (!Number.isFinite(devicePixelRatio) || devicePixelRatio <= 1) return 1
-  return Math.min(VIEW_SCALE_MAX, Math.round(devicePixelRatio * 2) / 2)
+  const ceiling = Number.isFinite(max) ? Math.max(1, max) : 1
+  return Math.min(ceiling, Math.round(devicePixelRatio * 2) / 2)
 }
 
 /** Exhaustive renderer ownership contract for one browser tab surface. */
@@ -138,10 +145,11 @@ export function viewportControlMsg(
   t: ViewportControlKind,
   viewport: ViewportSize,
   mobile: boolean,
-  scale = 1
+  scale = 1,
+  scaleMax: number = VIEW_SCALE_MAX
 ): ViewportControlMsg {
   if (t === 'release') return { t: 'viewport-release' }
-  const ask = viewScale(scale)
+  const ask = viewScale(scale, scaleMax)
   return {
     t: t === 'claim' ? 'viewport-claim' : 'viewport-offer',
     width: clampViewport(viewport.width),
@@ -300,7 +308,8 @@ interface StreamFrameMeta {
 
 /** A parsed server→client message (Forge's `t`-tagged JSON text frames). */
 export type StreamMessage =
-  | ({ kind: 'ready'; w: number; h: number; revision?: number; mobile?: boolean })
+  /** `scaleMax`: the most device scale this viewer may ask for; absent from a Mac before it, read as 1. */
+  | ({ kind: 'ready'; w: number; h: number; revision?: number; mobile?: boolean; scaleMax?: number })
   | ({ kind: 'control' } & StreamControlFields)
   /**
    * One JPEG: `src` (a data: URL) off a socket, where it rode as base64 text;
@@ -376,12 +385,14 @@ export function parseStreamObject(raw: unknown): StreamMessage | null {
     const h = positiveNumber(obj.h) ?? 0
     const revision = finiteRevision(obj.revision)
     const mobile = typeof obj.mobile === 'boolean' ? obj.mobile : undefined
+    const scaleMax = positiveNumber(obj.scaleMax)
     return {
       kind: 'ready',
       w,
       h,
       ...(revision !== null ? { revision } : {}),
-      ...(mobile !== undefined ? { mobile } : {})
+      ...(mobile !== undefined ? { mobile } : {}),
+      ...(scaleMax !== null ? { scaleMax: Math.min(scaleMax, VIEW_SCALE_CEILING) } : {})
     }
   }
   if (obj.t === 'viewport-state') {

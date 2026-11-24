@@ -128,11 +128,11 @@ export function MobileBrowserFrame({
   const mobilePreference = mobileViewportPreference(view.w, coarsePointer)
   // A fine pointer has a keyboard: its keys come as keys, not a soft keyboard's input.
   const desktopInput = !coarsePointer
-  // NO 2x ASK (2026-11-03, measured): headless Chrome's screencast ignores
-  // deviceScaleFactor and keeps streaming 1x frames while the still-frame
-  // fallback (captureScreenshot) honours it, so a 2x ask made frames
-  // alternate 1x/2x and input mapped against the wrong size. The server
-  // still accepts a scale (cast-viewport.ts) for when a source honours it.
+  // NO SCALE FROM HERE. 11-03: headless screencast ignored deviceScaleFactor,
+  // so a 2x ask made frames alternate 1x/2x. 11-24: card Chrome is launched
+  // with its scale forced (headless-chrome.ts · CAST_SCALE_CEILING) and frames
+  // follow each ask; a phone asks its own pixel ratio, held to what the Mac
+  // allows it (useBrowserStream.ts · viewportAsk). The desktop stays at 1x.
   const scale = 1
   const stream = useBrowserStream(
     browserId,

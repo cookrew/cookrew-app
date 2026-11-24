@@ -66,8 +66,9 @@ describe('a viewer’s device scale (crisp on a Retina desktop, bounded for ever
       metrics: { width: 800, height: 600, mobile: false }
     })
   })
-  it('clamps to [1, 2] in half steps; junk is 1', () => {
-    expect(viewportScale(3)).toBe(2)
+  it('clamps to [1, 3] in half steps; junk is 1', () => {
+    expect(viewportScale(3)).toBe(3)
+    expect(viewportScale(4)).toBe(3)
     expect(viewportScale(1.3)).toBe(1.5)
     expect(viewportScale(0.5)).toBe(1)
     expect(viewportScale('2')).toBe(1)

@@ -15,7 +15,8 @@ import { DownloadWatcher, type ArrivingDownload } from './browser-downloads'
 import type { BrowserTab } from '../shared/model'
 import { observedBrowserUrl } from '../shared/browser-navigation'
 import type { CdpInputCommand } from '../shared/cast-input'
-import type { ViewportMetrics } from '../shared/cast-viewport'
+import { VIEWPORT_SCALE_MAX, type ViewportMetrics } from '../shared/cast-viewport'
+import { castTuning } from './cast-tuning'
 import {
   BrowserViewportCoordinator,
   type BrowserViewportState
@@ -148,10 +149,20 @@ export function headlessLaunchArgs(
     // still takes the email step with this off. (The chrome://settings/help
     // pop-up of the same day was the key codes, see cast-input.ts.)
     '--allow-browser-signin=false',
+    // A PHONE'S PICTURE AT ITS OWN SHARPNESS (measured on Chrome 158, 11-24).
+    // Headless screencast frames ignore the emulated deviceScaleFactor: a 3x
+    // viewport still streamed 390x844, so an iPhone stretched every frame 3x.
+    // With the process scale forced to the most any viewer may ask, frames
+    // follow each viewport's own scale — 1x stays 390x844, 2x is 780x1688 —
+    // and screencast and still frames agree (no 1x/2x alternation, 11-03).
+    `--force-device-scale-factor=${CAST_SCALE_CEILING}`,
     ...THROTTLE_FLAGS,
     url
   ]
 }
+
+/** The scale every card Chrome is launched able to stream (headlessLaunchArgs). */
+export const CAST_SCALE_CEILING = VIEWPORT_SCALE_MAX
 
 /**
  * What to run so Chrome starts. With a launcher (resources/cr-disclaim) Chrome
@@ -284,6 +295,19 @@ export class HeadlessInstance {
   private syncTail: Promise<void> = Promise.resolve()
 
   readonly frameListeners = new Set<(jpegBase64: string, meta: FrameMeta) => void>()
+  /** The most device scale this Chrome streams at: it is launched forced to it (headlessLaunchArgs). */
+  readonly scaleCeiling = CAST_SCALE_CEILING
+  /** The JPEG quality the running screencast was started with; 0 before the first. */
+  private streamQuality = 0
+
+  get frameQualityInUse(): number {
+    return this.streamQuality
+  }
+
+  /** A frame's JPEG quality: this card's own if it was given one, else the tuning's (cast-tuning.ts). */
+  private frameQuality(): number {
+    return this.opts.quality ?? castTuning().quality
+  }
   /** Text the active page copied (page-copy.ts); the cast decides which viewer gets it. */
   readonly copyListeners = new Set<(text: string) => void>()
   /** Viewers watching where the page's text fields are (page-fields.ts); the page reports only while this is non-empty. */
@@ -661,9 +685,10 @@ export class HeadlessInstance {
     if (this.fieldListeners.size > 0) this.setFieldWatch(next, true)
     await this.browserCdp?.send('Target.activateTarget', { targetId: next.targetId })
     if (!next.screencasting) {
+      this.streamQuality = this.frameQuality()
       await next.cdp.send('Page.startScreencast', {
         format: 'jpeg',
-        quality: this.opts.quality ?? 60,
+        quality: this.streamQuality,
         maxWidth: Math.round(this.width * this.scale),
         maxHeight: Math.round(this.height * this.scale),
         everyNthFrame: 1
@@ -822,7 +847,7 @@ export class HeadlessInstance {
       const [shot, layout] = await Promise.all([
         page.cdp.send('Page.captureScreenshot', {
           format: 'jpeg',
-          quality: this.opts.quality ?? 60
+          quality: this.frameQuality()
         }).catch(() => null) as Promise<{ data?: string } | null>,
         page.cdp.send('Page.getLayoutMetrics').catch(() => null) as Promise<{
           visualViewport?: { scale?: unknown }
@@ -1104,7 +1129,7 @@ export class HeadlessInstance {
 
     const exitedGracefully =
       gracefulTimeoutMs > 0
-        ? await waitForProcessExit(proc, gracefulTimeoutMs)
+        ? await waitForProcessExit(proc, browserCdp ? FORCED_SHUTDOWN_TIMEOUT_MS : gracefulTimeoutMs)
         : processExited(proc)
     if (exitedGracefully) return { pid, forced: false }
 

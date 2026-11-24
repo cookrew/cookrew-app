@@ -13,6 +13,7 @@ import { DEFAULT_DRAIN_THRESHOLD } from './screencast-pace'
 import type { BrowserInstance } from './browser-instance'
 import { MAC_VIEWER, type ViewerWho } from '../shared/remote-access'
 import { CastViewer, type OutboundFrame, type ViewerSink } from './cast-viewer'
+import { RELAY_MARKER } from './canvas-bridge'
 import {
   acceptKey,
   decodeFrame,
@@ -159,7 +160,10 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
     // do not replay a close event to late listeners; this ordering closes C-1's
     // startup-disconnect leak.
     const who = desktopAuthorized ? MAC_VIEWER : deps.who?.(url.searchParams.get('token'))
-    const client = new ClientConn(socket, () => clients.delete(client), browserId, who)
+    // The relay's bridge marks the socket it dials (socket-bridge.ts); a page's
+    // WebSocket cannot set the header, and setting it only lowers one's own scale.
+    const relayed = req.headers[RELAY_MARKER] === '1'
+    const client = new ClientConn(socket, () => clients.delete(client), browserId, who, relayed)
     clients.add(client)
     if (socket.destroyed) {
       client.close()
@@ -200,7 +204,8 @@ class ClientConn {
     private readonly socket: Duplex,
     onClosed: () => void,
     readonly browserId: string,
-    who?: ViewerWho
+    who?: ViewerWho,
+    relayed = false
   ) {
     const sink: ViewerSink = {
       sendControl: (message) => this.wsSend(JSON.stringify(message)),
@@ -209,7 +214,7 @@ class ClientConn {
       onceReady: (callback) => void this.socket.once('drain', callback),
       close: () => this.socket.destroy()
     }
-    this.viewer = new CastViewer(sink, onClosed, browserId, who)
+    this.viewer = new CastViewer(sink, onClosed, browserId, who, { relayed })
     socket.on('data', this.onData)
     socket.on('close', this.close)
     socket.on('error', this.close)

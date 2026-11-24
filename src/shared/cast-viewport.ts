@@ -9,25 +9,51 @@ export const VIEWPORT_MAX = 2048
 const MIN_ASPECT = 0.4
 const MAX_ASPECT = 2.5
 
-/** Device pixels per CSS px a viewer may ask for: crisp on a Retina desktop, never a bulk payload. */
-export const VIEWPORT_SCALE_MAX = 2
+/**
+ * Device pixels per CSS px the wire carries: a 3x phone's own ratio at most.
+ * What one viewer may actually have is narrower, and the Mac says so in its
+ * `ready` (cast-viewer.ts · scaleMax): this is only the vocabulary's bound.
+ */
+export const VIEWPORT_SCALE_MAX = 3
 
 export interface ViewportMetrics {
   width: number
   height: number
   mobile: boolean
   /**
-   * Device pixels per CSS px (Chrome's deviceScaleFactor). Absent = 1. The
-   * desktop asks for its own display's (a Retina Mac renders the page at 2x
-   * and draws it 1:1); the phone never sends one, so its frames stay 1x.
+   * Device pixels per CSS px (Chrome's deviceScaleFactor). Absent = 1. A phone
+   * asks for its own screen's, up to what the Mac allowed it; the desktop
+   * asks for none, so its frames stay 1x.
    */
   scale?: number
 }
 
-/** A requested scale in [1, VIEWPORT_SCALE_MAX], in half steps; anything else is 1. */
-export function viewportScale(raw: unknown): number {
+/** A requested scale in [1, max], in half steps; anything else is 1. */
+export function viewportScale(raw: unknown, max: number = VIEWPORT_SCALE_MAX): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return 1
-  return Math.min(Math.max(Math.round(raw * 2) / 2, 1), VIEWPORT_SCALE_MAX)
+  const ceiling = Number.isFinite(max) ? Math.min(Math.max(max, 1), VIEWPORT_SCALE_MAX) : 1
+  return Math.min(Math.max(Math.round(raw * 2) / 2, 1), ceiling)
+}
+
+/**
+ * The most device pixels one frame may hold: a 3x phone's whole screen
+ * (1290x2796). The viewport is shared, so whoever owns it sets every viewer's
+ * frame size; a 2048-wide window at 2x would otherwise be 4096 px frames for
+ * all of them.
+ */
+export const VIEWPORT_PIXEL_BUDGET = 1290 * 2796
+
+/** The most scale a width x height viewport may have within the pixel budget, in half steps, never under 1. */
+export function budgetScale(width: number, height: number): number {
+  if (!(width > 0) || !(height > 0)) return 1
+  return Math.max(1, Math.floor(Math.sqrt(VIEWPORT_PIXEL_BUDGET / (width * height)) * 2) / 2)
+}
+
+/** The same metrics with their scale held to what this viewer may have, and to the pixel budget. */
+export function capViewportScale(metrics: ViewportMetrics, max: number): ViewportMetrics {
+  const { scale: asked, ...rest } = metrics
+  const scale = Math.min(viewportScale(asked ?? 1, max), budgetScale(metrics.width, metrics.height))
+  return scale > 1 ? { ...rest, scale } : rest
 }
 
 export type ViewportWireMessage =

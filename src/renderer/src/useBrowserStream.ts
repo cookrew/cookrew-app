@@ -19,6 +19,7 @@ import {
   streamSupported,
   streamUrl,
   viewportControlMsg,
+  viewScale,
   type CastInputMsg,
   type StreamClient,
   type StreamEvent,
@@ -31,6 +32,10 @@ import {
   type ViewportSize
 } from './browser-stream'
 import { portLine, socketLine, type StreamLine, type StreamLineHandlers } from './stream-line'
+import { BridgeWebSocket } from './path/bridge-socket'
+import { CAST_STATS_EVERY_MS, CastStatsMeter, frameByteSize } from './cast-stats-meter'
+import type { CastLine } from '../../shared/cast-stats'
+import { budgetScale } from '../../shared/cast-viewport'
 import type { PaintableFrame } from './frame-painter'
 
 /** No first frame within this long after the line opens -> use the renderer fallback. */
@@ -54,6 +59,33 @@ export const FRAME_STALE_MS = 1200
 export const REMOTE_FRAME_STALE_MS = 6000
 /** Just under main's SOCKET_BRIDGE_RELEASE_MS, which counts from a little later. */
 const VIEWPORT_LET_GO_MS = 2500
+
+/**
+ * A viewport ask at the scale this viewer should be drawn at. A phone asks for
+ * its own screen's pixel ratio, up to the Mac's `scaleMax`, so its frames come
+ * at the sharpness it shows them. The desktop keeps the scale it was given
+ * (MobileBrowserFrame passes none: its frames stay 1x).
+ */
+export function viewportAsk(
+  kind: ViewportControlKind,
+  size: ViewportPreference,
+  client: StreamClient,
+  scaleMax: number
+): ReturnType<typeof viewportControlMsg> {
+  if (client === 'remote' && typeof window !== 'undefined') {
+    // Held to the Mac's pixel budget here too, so the ask is what will be drawn.
+    const max = Math.min(scaleMax, budgetScale(size.width, size.height))
+    return viewportControlMsg(kind, size, size.mobile, window.devicePixelRatio, max)
+  }
+  return viewportControlMsg(kind, size, size.mobile, size.scale)
+}
+
+/** Which line a socket is, for the stats: the relay's bridge, a real WebSocket, or the direct data channel. */
+export function socketKind(socket: object): CastLine {
+  if (socket instanceof BridgeWebSocket) return 'relay'
+  if (typeof WebSocket !== 'undefined' && socket instanceof WebSocket) return 'ws'
+  return 'link'
+}
 
 /** One received frame, ready to paint (frame-painter.ts). */
 export interface StreamFrame extends PaintableFrame {
@@ -180,6 +212,14 @@ export function useBrowserStream(
   const keepFrameRef = useRef(false)
 
   const lineRef = useRef<StreamLine | null>(null)
+  /**
+   * The most device scale the Mac lets this viewer ask for (its `ready`); 1
+   * until it says, and from a Mac that never will. Kept across redials to the
+   * same card, so a reconnect asks the right scale the first time.
+   */
+  const scaleMaxRef = useRef(1)
+  /** This line's live-view numbers, reported to the Mac while a phone watches (cast-stats-meter.ts). */
+  const meterRef = useRef<CastStatsMeter | null>(null)
   const gotFrameRef = useRef(false)
   const warnedRef = useRef(false)
   const liveRef = useRef(false)
@@ -231,13 +271,14 @@ export function useBrowserStream(
     const size = viewportRef.current
     if (!line?.isOpen()) return
     if (kind !== 'release' && !measuredViewport(size)) return
-    line.send(viewportControlMsg(kind, size, size.mobile, size.scale))
-  }, [])
+    line.send(viewportAsk(kind, size, client, scaleMaxRef.current))
+  }, [client])
 
   const claim = useCallback((): void => sendViewportControl('claim'), [sendViewportControl])
   const release = useCallback((): void => sendViewportControl('release'), [sendViewportControl])
 
   const receipt = useCallback((seq: number): void => {
+    meterRef.current?.paint(seq, Date.now())
     lineRef.current?.receipt(seq)
   }, [])
 
@@ -369,13 +410,34 @@ export function useBrowserStream(
     let deadline: ReturnType<typeof setTimeout> | null = null
     let staleTimer: ReturnType<typeof setInterval> | null = null
     let redial: ReturnType<typeof setTimeout> | null = null
+    let statsTimer: ReturnType<typeof setInterval> | null = null
     let resumingSince = 0
 
     const sendControl = (kind: ViewportControlKind): void => {
       const size = viewportRef.current
       if (!line?.isOpen()) return
       if (kind !== 'release' && !measuredViewport(size)) return
-      line.send(viewportControlMsg(kind, size, size.mobile, size.scale))
+      line.send(viewportAsk(kind, size, client, scaleMaxRef.current))
+    }
+
+    const stopStats = (): void => {
+      if (statsTimer) clearInterval(statsTimer)
+      statsTimer = null
+      meterRef.current = null
+    }
+
+    /** A phone says how its view is doing every few seconds while it watches (cast-stats-meter.ts). */
+    const startStats = (kind: CastLine): void => {
+      if (client !== 'remote') return
+      const meter = new CastStatsMeter(Date.now())
+      meterRef.current = meter
+      statsTimer = setInterval(() => {
+        if (disposed || failed || document.hidden) return
+        const size = viewportRef.current
+        const asked = viewScale(window.devicePixelRatio, Math.min(scaleMaxRef.current, budgetScale(size.width, size.height)))
+        const report = meter.report(Date.now(), kind, window.devicePixelRatio, asked)
+        if (report && line?.isOpen()) line.send(report)
+      }, CAST_STATS_EVERY_MS)
     }
 
     const fail = (event: 'error' | 'close'): void => {
@@ -389,6 +451,7 @@ export function useBrowserStream(
         clearInterval(staleTimer)
         staleTimer = null
       }
+      stopStats()
       liveRef.current = false
       setLive(false)
       advance(event)
@@ -438,6 +501,7 @@ export function useBrowserStream(
       }
       if (typeof msg.mobile === 'boolean') setEffectiveMobile(msg.mobile)
       const receivedAt = Date.now()
+      meterRef.current?.frame(msg.seq, frameByteSize(msg), receivedAt)
       lastFrameAtRef.current = receivedAt
       if (frameRevisionRef.current !== revision) {
         frameRevisionRef.current = revision
@@ -463,6 +527,7 @@ export function useBrowserStream(
       latestFrameRef.current = frame
       const listeners = frameListenersRef.current
       if (listeners.size === 0) {
+        meterRef.current?.paint(frame.seq, Date.now())
         line?.receipt(frame.seq)
       } else {
         for (const listener of listeners) listener(frame)
@@ -542,6 +607,13 @@ export function useBrowserStream(
         if (msg.w > 0 && msg.h > 0) setEffectiveViewport({ width: msg.w, height: msg.h })
         if (typeof msg.mobile === 'boolean') setEffectiveMobile(msg.mobile)
         if (typeof msg.revision === 'number') adoptViewportRevision(msg.revision)
+        // The Mac says how sharp this viewer may be. A change is asked for at
+        // once; the Mac folds it with the opening offer into one resize.
+        const scaleMax = msg.scaleMax ?? 1
+        if (scaleMax !== scaleMaxRef.current) {
+          scaleMaxRef.current = scaleMax
+          if (client === 'remote' && !document.hidden) sendControl('offer')
+        }
         // A revision+mobile ready identifies the arbitration-aware server;
         // wait for its immediately-following viewport-state before driving.
         if (typeof msg.revision === 'number' && typeof msg.mobile === 'boolean') {
@@ -616,6 +688,7 @@ export function useBrowserStream(
                 // (browser-cast.ts).
                 openWebSocket(apiPath(streamPath(browserId, w, h, null)))
           line = socketLine(socket, handlers)
+          startStats(socketKind(socket))
         }
       } catch {
         fail('error')
@@ -648,6 +721,7 @@ export function useBrowserStream(
       if (redial) clearTimeout(redial)
       if (deadline) clearTimeout(deadline)
       if (staleTimer) clearInterval(staleTimer)
+      stopStats()
       if (line?.isOpen()) sendControl('release')
       line?.close()
       if (lineRef.current === line) lineRef.current = null
@@ -700,6 +774,7 @@ export function useBrowserStream(
       })
     ) {
       line.send(inputWithRevision(msg, revision))
+      meterRef.current?.input(Date.now())
     }
   }, [])
 
