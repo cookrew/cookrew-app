@@ -8,8 +8,10 @@ import {
   MAX_ATTACHMENT_BYTES,
   oversizeAttachment,
   RELAY_BODY_MAX,
-  RELAY_LIMIT
+  RELAY_LIMIT,
+  SEALED_RELAY_LIMIT
 } from '../src/shared/attachment-limit'
+import { sealBodyLimits } from '../src/main/seal2-serve-http'
 import { MAX_ATTACHMENT_BYTES as SAVE_CAP } from '../src/main/attachments'
 import { BRIDGE_BODY_MAX } from '../src/main/canvas-bridge'
 import { CANVAS_BODY_MAX } from '../registry/src/v2-canvas-relay'
@@ -25,6 +27,15 @@ describe('the attachment cap', () => {
     expect(RELAY_BODY_MAX).toBe(CANVAS_BODY_MAX)
     expect(RELAY_BODY_MAX).toBe(BRIDGE_BODY_MAX)
     expect(RELAY_LIMIT.bytes).toBe(RELAY_BODY_MAX)
+  })
+
+  it('is 25 MB on the sealed relay, which the Mac takes at its own cap there', () => {
+    expect(SEALED_RELAY_LIMIT).toEqual({ bytes: 25 * MB, via: 'relay' })
+    expect(SEALED_RELAY_LIMIT.bytes).toBeLessThanOrEqual(sealBodyLimits('POST', '/api/attachments?name=a.mp4').max)
+    expect(sealBodyLimits('POST', '/api/upload').max).toBe(RELAY_BODY_MAX)
+    expect(oversizeAttachment([{ name: 'b.zip', size: 30 * MB }], SEALED_RELAY_LIMIT)).toBe(
+      "b.zip is 30 MB; through the relay attachments stop at 25 MB. On the Mac's Wi-Fi or tailnet they go up to 100 MB"
+    )
   })
 
   it('lets through files at or under it', () => {

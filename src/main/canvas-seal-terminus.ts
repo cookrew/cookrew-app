@@ -15,7 +15,7 @@ import { openSeal2Live } from './seal2-live'
 import { proveSuccessor } from '../shared/seal2/successor'
 import { RELAY_LINE_MARKER, SEALED_PEER_HEADER, SEALED_V2_HEADER } from './seal-proof'
 import { RELAY_SESSION_HEADER } from '../shared/machine-relay'
-import { serveHttpStream } from './seal2-serve-http'
+import { sealBodyLimits, sealBudget, serveHttpStream } from './seal2-serve-http'
 
 /**
  * THE MAC'S END OF THE SEALED SESSION (shared/canvas-seal.ts).
@@ -187,6 +187,12 @@ interface Stream {
   call: BridgeCall | null
   response: BridgeResponse | null
   bytes: number
+  /** The largest body this stream may send, and how long it may take (seal2-serve-http.ts · sealBodyLimits). */
+  max: number
+  bodyMs: number
+  /** An attachment's bytes count against the session's budget while they arrive; this many are counted now. */
+  budgeted: boolean
+  taken: number
   openedAt: number
   requestDone: boolean
   done: boolean
@@ -221,6 +227,12 @@ interface SessionDeps {
 function openSession(deps: SessionDeps): LiveSession {
   const { sealed, outer, dial, now, log } = deps
   const streams = new Map<number, Stream>()
+  const budget = sealBudget()
+  /** The body has arrived or is gone: what it counted is the session's again. */
+  const unbudget = (stream: Stream): void => {
+    budget.give(stream.taken)
+    stream.taken = 0
+  }
   let outbox: Array<{ readonly seq: number; wire: Uint8Array | null }> = []
   /** Where the unacknowledged records start: dropping from the front must not cost the whole array. */
   let head = 0
@@ -250,7 +262,10 @@ function openSession(deps: SessionDeps): LiveSession {
   const close = (why: string): void => {
     if (closed) return
     closed = true
-    for (const stream of streams.values()) stream.call?.destroy()
+    for (const stream of streams.values()) {
+      stream.call?.destroy()
+      unbudget(stream)
+    }
     streams.clear()
     down?.end()
     down = null
@@ -288,6 +303,7 @@ function openSession(deps: SessionDeps): LiveSession {
 
   const settle = (id: number, stream: Stream): void => {
     stream.done = true
+    unbudget(stream)
     if (streams.get(id) === stream) streams.delete(id)
   }
 
@@ -319,7 +335,8 @@ function openSession(deps: SessionDeps): LiveSession {
     if (!METHODS.has(frame.method)) return send({ kind: 'abort', stream: id, reason: 'bad-method' })
     if (id === 0 || streams.has(id)) return send({ kind: 'abort', stream: id, reason: 'in-use' })
     if (streams.size >= SEAL_MAX_STREAMS) return send({ kind: 'abort', stream: id, reason: 'busy' })
-    const stream: Stream = { call: null, response: null, bytes: 0, openedAt: now(), requestDone: false, done: false }
+    const limits = sealBodyLimits(frame.method, frame.path)
+    const stream: Stream = { call: null, response: null, bytes: 0, max: limits.max, bodyMs: Math.max(limits.ms, SEAL_BODY_MS), budgeted: limits.budgeted, taken: 0, openedAt: now(), requestDone: false, done: false }
     streams.set(id, stream)
     const failed = (error: Error): void => {
       if (stream.done) return
@@ -339,11 +356,20 @@ function openSession(deps: SessionDeps): LiveSession {
 
   const body = (frame: Extract<SealFrame, { kind: 'data' }>, stream: Stream): void => {
     stream.bytes += frame.data.length
-    if (stream.bytes > BRIDGE_BODY_MAX) {
+    if (stream.bytes > stream.max) {
       send({ kind: 'abort', stream: frame.stream, reason: 'body-too-large' })
       stream.call?.destroy()
       settle(frame.stream, stream)
       return
+    }
+    if (stream.budgeted) {
+      if (!budget.take(frame.data.length)) {
+        send({ kind: 'abort', stream: frame.stream, reason: 'busy' })
+        stream.call?.destroy()
+        settle(frame.stream, stream)
+        return
+      }
+      stream.taken += frame.data.length
     }
     stream.call?.write(Buffer.from(frame.data))
   }
@@ -375,6 +401,7 @@ function openSession(deps: SessionDeps): LiveSession {
       case 'end':
         if (stream) {
           stream.requestDone = true
+          unbudget(stream)
           stream.call?.end()
         }
         return
@@ -457,7 +484,7 @@ function openSession(deps: SessionDeps): LiveSession {
       }
       release()
       for (const [id, stream] of [...streams]) {
-        if (stream.requestDone || at - stream.openedAt <= SEAL_BODY_MS) continue
+        if (stream.requestDone || at - stream.openedAt <= stream.bodyMs) continue
         send({ kind: 'abort', stream: id, reason: 'body-timed-out' })
         stream.call?.destroy()
         settle(id, stream)
@@ -586,25 +613,29 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     reply(response, 200, { session: accepted.session.id, accept: accepted.accept })
   }
 
-  const streamHandler = (peer: SealPeer, said: SealOuter) => (stream: Seal2Stream): void => {
-    // In device mode the handshake proved who dialled: that, not the relay's word, names the device inside.
-    const outer: SealOuter = peer.mode === 'device' ? { ...said, device: peer.deviceId } : said
-    if (stream.kind === HTTP_KIND) {
-      if (peer.mode === 'device') {
-        const asked = readRequest(stream.fields)
-        // Judged on the path as the companion will read it: no dot segment, nothing encoded that could become one.
-        const plainPath = asked !== null && !/(^|\/)\.{1,2}(\/|\?|$)|%2e|%2f|%5c/i.test(asked.path.split('?')[0])
-        const allowed = asked !== null && plainPath && deps.deviceHttp?.(peer.deviceId, asked.method, asked.path) === true
-        if (!allowed) return stream.abort(ABORT.refused, 'not a route for this device')
+  const streamHandler = (peer: SealPeer, said: SealOuter): ((stream: Seal2Stream) => void) => {
+    // One budget per session: what its attachments may have arriving at once (seal2-serve-http.ts · SealBudget).
+    const budget = sealBudget()
+    return (stream: Seal2Stream): void => {
+      // In device mode the handshake proved who dialled: that, not the relay's word, names the device inside.
+      const outer: SealOuter = peer.mode === 'device' ? { ...said, device: peer.deviceId } : said
+      if (stream.kind === HTTP_KIND) {
+        if (peer.mode === 'device') {
+          const asked = readRequest(stream.fields)
+          // Judged on the path as the companion will read it: no dot segment, nothing encoded that could become one.
+          const plainPath = asked !== null && !/(^|\/)\.{1,2}(\/|\?|$)|%2e|%2f|%5c/i.test(asked.path.split('?')[0])
+          const allowed = asked !== null && plainPath && deps.deviceHttp?.(peer.deviceId, asked.method, asked.path) === true
+          if (!allowed) return stream.abort(ABORT.refused, 'not a route for this device')
+        }
+        const sealedPeer = peer.mode === 'device' ? peer.deviceId : undefined
+        return serveHttpStream(stream, { dial: deps.dial, headersFor: (asked) => innerHeaders(asked, outer, sealedPeer, true), log, budget })
       }
-      const sealedPeer = peer.mode === 'device' ? peer.deviceId : undefined
-      return serveHttpStream(stream, { dial: deps.dial, headersFor: (asked) => innerHeaders(asked, outer, sealedPeer, true), log })
+      // Own entries only: a kind named for something every object has ("constructor") is no handler.
+      const kinds = deps.kinds ?? {}
+      const handler = Object.prototype.hasOwnProperty.call(kinds, stream.kind) ? kinds[stream.kind] : undefined
+      if (typeof handler !== 'function') return stream.abort(ABORT.unknownKind, 'no such kind')
+      handler(stream, peer, outer)
     }
-    // Own entries only: a kind named for something every object has ("constructor") is no handler.
-    const kinds = deps.kinds ?? {}
-    const handler = Object.prototype.hasOwnProperty.call(kinds, stream.kind) ? kinds[stream.kind] : undefined
-    if (typeof handler !== 'function') return stream.abort(ABORT.unknownKind, 'no such kind')
-    handler(stream, peer, outer)
   }
 
   const dropQuietest = (): void => {

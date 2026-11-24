@@ -34,7 +34,7 @@ import { decodeFrame, encodeFrame } from '../shared/relay-frame'
 import { createRtcOutbox, type RtcOutbox } from './rtc-outbox'
 import { isBrowserFrame } from './socket-bridge'
 import { makeRtcBind, type RtcBind, type RtcBindSigner } from '../shared/rtc-bind'
-import { MAX_ATTACHMENT_BYTES } from '../shared/attachment-limit'
+import { ATTACH_UPLOAD_MAX, isAttachUpload } from './attachments'
 
 export const RTC_PROBE_LABEL = 'cookrew-probe'
 /**
@@ -48,15 +48,11 @@ export const RTC_BRIDGE_LABEL = 'cookrew-bridge'
 export const RTC_CHUNK = 16 * 1024
 /**
  * The largest ATTACHMENT the direct link takes. No registry stands in the
- * way here, so the relay's 4 MB is not this link's to keep for an upload: an
- * attachment up to the Mac's save cap must get through (2026-11-24, a 10 MB
- * video from the owner's phone was refused `body-too-large`). The 32 MB floor
- * is for a cached older phone bundle that still sends one as base64 JSON
- * (mobile-api.ts · ATTACH_BODY_LIMIT); the route itself still holds the save
- * cap, 100 MB since the phone compresses a video to fit (prompt/attach-plan.ts).
- * Every other route keeps the relay's ceiling.
+ * way here, so the relay's 4 MB is not this link's to keep for an upload
+ * (2026-11-24, a 10 MB video from the owner's phone was refused
+ * `body-too-large`). Every other route keeps the relay's ceiling.
  */
-export const RTC_BODY_MAX = Math.max(32 * 1024 * 1024, MAX_ATTACHMENT_BYTES)
+export const RTC_BODY_MAX = ATTACH_UPLOAD_MAX
 /**
  * Request bodies one link may hold at once while they arrive: two attachments
  * at the largest, and a bound on what one link can make the main process hold
@@ -65,12 +61,9 @@ export const RTC_BODY_MAX = Math.max(32 * 1024 * 1024, MAX_ATTACHMENT_BYTES)
  */
 export const RTC_BODY_BUDGET = 2 * RTC_BODY_MAX
 
-/** The attachment route, at the root or under a workspace slug, query aside. */
-const ATTACH_ROUTE = /^(?:\/[^/?#]+)?\/api\/attachments(?:[?#]|$)/
-
 /** How large a body this request may have on the direct link. */
 export const rtcBodyMaxFor = (method: string, path: string): number =>
-  method.toUpperCase() === 'POST' && ATTACH_ROUTE.test(path) ? RTC_BODY_MAX : BRIDGE_BODY_MAX
+  isAttachUpload(method, path) ? RTC_BODY_MAX : BRIDGE_BODY_MAX
 /**
  * A socket holding this many bytes not yet sent stops reading the companion
  * until it is down to the low mark. A browser card's frames never get there

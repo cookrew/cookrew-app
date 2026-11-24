@@ -27,6 +27,18 @@ export interface AttachLimit {
 export const MAC_LIMIT: AttachLimit = { bytes: MAX_ATTACHMENT_BYTES, via: 'mac' }
 export const RELAY_LIMIT: AttachLimit = { bytes: RELAY_BODY_MAX, via: 'relay' }
 
+/**
+ * THE RELAY, SEALED (cookrew-seal/2). A sealed body crosses the relay as many
+ * small POSTs, so the registry's 4 MB is not its limit; the Mac takes an
+ * attachment at its own cap on that path too (main/seal2-serve-http.ts). What
+ * the phone sends there is still every byte through cookrew.dev, a round trip
+ * per megabyte: 25 MB, the size WeChat sends a video at without asking, keeps
+ * a minute of 720p and a fair wait. Compressing (prompt/attach-plan.ts) fits
+ * a video to it.
+ */
+export const SEALED_RELAY_BODY_MAX = 25 * 1024 * 1024
+export const SEALED_RELAY_LIMIT: AttachLimit = { bytes: SEALED_RELAY_BODY_MAX, via: 'relay' }
+
 /** A file as a picker or a drop hands it over: all this needs is its name and size. */
 export interface SizedFile {
   readonly name: string

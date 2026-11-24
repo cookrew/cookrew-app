@@ -11,7 +11,7 @@ import {
   VIDEO_MAX_SECONDS,
   VIDEO_TOP_BPS
 } from '../src/renderer/src/prompt/attach-plan'
-import { MAC_LIMIT, MAX_ATTACHMENT_BYTES, RELAY_LIMIT } from '../src/shared/attachment-limit'
+import { MAC_LIMIT, MAX_ATTACHMENT_BYTES, RELAY_LIMIT, SEALED_RELAY_LIMIT } from '../src/shared/attachment-limit'
 
 const MB = 1024 * 1024
 
@@ -64,6 +64,16 @@ describe('a video', () => {
     const bytes = ((plan.videoBps + plan.audioBps) * 30) / 8
     expect(bytes).toBeLessThan(RELAY_LIMIT.bytes)
     expect(Math.max(plan.width, plan.height)).toBeLessThan(1280)
+  })
+
+  it('on the sealed relay, a minute from a phone camera is 720p under 25 MB, and ten minutes still go smaller', () => {
+    const minute = planVideo(phoneClip, SEALED_RELAY_LIMIT)
+    if (minute.kind !== 'encode') throw new Error('expected an encode')
+    expect(Math.max(minute.width, minute.height)).toBe(1280)
+    expect(((minute.videoBps + minute.audioBps) * 60) / 8).toBeLessThan(SEALED_RELAY_LIMIT.bytes)
+    const ten = planVideo({ ...phoneClip, seconds: VIDEO_MAX_SECONDS }, SEALED_RELAY_LIMIT)
+    if (ten.kind !== 'encode') throw new Error('expected an encode')
+    expect(((ten.videoBps + ten.audioBps) * VIDEO_MAX_SECONDS) / 8).toBeLessThan(SEALED_RELAY_LIMIT.bytes)
   })
 
   it('too long for the relay says how long the relay takes, and that the Wi-Fi takes more', () => {

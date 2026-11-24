@@ -250,9 +250,16 @@ describe('how large an attachment may be on the path it would take', () => {
   }
   const MACHINE = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
 
-  it("is the relay's on cookrew.dev's relay, where the registry refuses more", async () => {
+  it("is the relay's on cookrew.dev's relay in the clear, where the registry refuses more", async () => {
     const { attachLimit } = await fresh(MACHINE)
+    expect(attachLimit(() => false)).toEqual({ bytes: 4 * 1024 * 1024, via: 'relay' })
+    // A page holding no connect code has no sealed session to the machine.
     expect(attachLimit()).toEqual({ bytes: 4 * 1024 * 1024, via: 'relay' })
+  })
+
+  it('is 25 MB on the relay sealed, whose body goes as many small POSTs', async () => {
+    const { attachLimit } = await fresh(MACHINE)
+    expect(attachLimit(() => true)).toEqual({ bytes: 25 * 1024 * 1024, via: 'relay' })
   })
 
   it("is the Mac's on the direct link, which carries the relay's URLs and none of its ceiling", async () => {

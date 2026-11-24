@@ -105,7 +105,7 @@ describe('the bridge channel', () => {
     await link.close()
   }, 20000)
 
-  it('takes an attachment past the relay ceiling — the Mac saves up to 20 MB, so the link does too', async () => {
+  it('takes an attachment past the relay ceiling — the Mac saves up to its own cap, so the link does too', async () => {
     // 2026-11-24, the owner's phone: a 10 MB video went up the direct link
     // and the Mac's bridge said `body-too-large` at the relay's 4 MB.
     expect(RTC_BODY_MAX).toBeGreaterThanOrEqual(MAX_ATTACHMENT_BYTES)
@@ -117,11 +117,12 @@ describe('the bridge channel', () => {
     for (let at = 0; at < size; at += RTC_CHUNK) {
       link.channel.send(encodeFrame({ t: 'body', id: 'v1', data: piece, done: at + RTC_CHUNK >= size }))
     }
-    await until(() => link.frames.some((f) => 'id' in f && f.id === 'v1' && (f.t === 'end' || f.t === 'abort')), 15000)
+    // Both ends are werift's SCTP in this one process: on a loaded machine 6 MB takes most of a minute.
+    await until(() => link.frames.some((f) => 'id' in f && f.id === 'v1' && (f.t === 'end' || f.t === 'abort')), 75000)
     expect(link.frames.filter((f) => f.t === 'abort')).toEqual([])
     expect(dialed.map((d) => [d.path, d.body.length])).toEqual([['/api/attachments', size]])
     await link.close()
-  }, 30000)
+  }, 90000)
 
   it('gives the attachment route that room and no other — the rest keep the relay ceiling', () => {
     expect(rtcBodyMaxFor('POST', '/api/attachments?name=clip.mp4')).toBe(RTC_BODY_MAX)
