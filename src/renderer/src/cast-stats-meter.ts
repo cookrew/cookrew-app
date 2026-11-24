@@ -1,4 +1,4 @@
-import { CAST_STATS_TYPE, type CastLine } from '../../shared/cast-stats'
+import { CAST_STATS_TYPE, type CastLine, type CastStatsCodec } from '../../shared/cast-stats'
 
 /**
  * A LIVE VIEW'S NUMBERS, KEPT ON THE PHONE (cast-stats-meter.ts).
@@ -21,6 +21,7 @@ const ARRIVALS_KEPT = 64
 export interface CastStatsReport {
   readonly t: typeof CAST_STATS_TYPE
   readonly line: CastLine
+  readonly codec: CastStatsCodec
   readonly windowMs: number
   readonly frames: number
   readonly painted: number
@@ -87,7 +88,7 @@ export class CastStatsMeter {
   }
 
   /** The stretch since the last report, then a fresh one; null when nothing arrived in it. */
-  report(now: number, line: CastLine, dpr: number, scale: number): CastStatsReport | null {
+  report(now: number, line: CastLine, dpr: number, scale: number, codec: CastStatsCodec = 'jpeg'): CastStatsReport | null {
     const windowMs = Math.max(1, now - this.since)
     const result: CastStatsReport | null =
       this.frames === 0
@@ -95,6 +96,7 @@ export class CastStatsMeter {
         : {
             t: CAST_STATS_TYPE,
             line,
+            codec,
             windowMs,
             frames: this.frames,
             painted: this.painted,

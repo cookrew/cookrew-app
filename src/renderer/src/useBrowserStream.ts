@@ -36,6 +36,17 @@ import { BridgeWebSocket } from './path/bridge-socket'
 import { CAST_STATS_EVERY_MS, CastStatsMeter, frameByteSize } from './cast-stats-meter'
 import type { CastLine } from '../../shared/cast-stats'
 import { budgetScale } from '../../shared/cast-viewport'
+import { canDecodeCastVideo, CastVideoDecoder } from './cast-video-decoder'
+
+/** An H.264 chunk's frame meta: what the decoder carries through to the picture it makes. */
+type VideoMeta = Omit<Extract<StreamMessage, { kind: 'vframe' }>, 'kind' | 'chunk' | 'seq'>
+
+/** A decoded H.264 picture and the size it stands for in frame pixels. */
+interface VideoPicture {
+  video: VideoFrame
+  width: number
+  height: number
+}
 import type { PaintableFrame } from './frame-painter'
 
 /** No first frame within this long after the line opens -> use the renderer fallback. */
@@ -220,6 +231,8 @@ export function useBrowserStream(
   const scaleMaxRef = useRef(1)
   /** This line's live-view numbers, reported to the Mac while a phone watches (cast-stats-meter.ts). */
   const meterRef = useRef<CastStatsMeter | null>(null)
+  /** The line's H.264 decoder, while the Mac sends H.264 (cast-video-decoder.ts); null for JPEG. */
+  const decoderRef = useRef<CastVideoDecoder<VideoMeta> | null>(null)
   const gotFrameRef = useRef(false)
   const warnedRef = useRef(false)
   const liveRef = useRef(false)
@@ -285,6 +298,9 @@ export function useBrowserStream(
   const subscribeFrames = useCallback((listener: (frame: StreamFrame) => void): (() => void) => {
     const listeners = frameListenersRef.current
     listeners.add(listener)
+    // An H.264 picture is not kept for a painter that comes late (latestFrame):
+    // the Mac sends the picture again, whole, instead.
+    if (listeners.size === 1 && decoderRef.current) lineRef.current?.send({ t: 'vkey' })
     return () => {
       listeners.delete(listener)
     }
@@ -426,6 +442,29 @@ export function useBrowserStream(
       meterRef.current = null
     }
 
+    /** The Mac sends H.264 from now on (cast-video.ts): a decoder for this line. */
+    const startVideo = (): void => {
+      if (decoderRef.current) return
+      decoderRef.current = new CastVideoDecoder<VideoMeta>({
+        onPicture: (decoded) => {
+          if (disposed || failed) return decoded.frame.close()
+          onFrame({ kind: 'frame', seq: decoded.seq, ...decoded.meta }, { video: decoded.frame, width: decoded.width, height: decoded.height })
+        },
+        askKey: () => line?.send({ t: 'vkey' }),
+        ack: (n) => line?.send({ t: 'vack', n }),
+        // This browser's decoder keeps failing: JPEG again, which the Mac confirms.
+        giveUp: () => {
+          decoderRef.current = null
+          line?.send({ t: 'codecs', h264: false })
+        }
+      })
+    }
+
+    const stopVideo = (): void => {
+      decoderRef.current?.close()
+      decoderRef.current = null
+    }
+
     /** A phone says how its view is doing every few seconds while it watches (cast-stats-meter.ts). */
     const startStats = (kind: CastLine): void => {
       if (client !== 'remote') return
@@ -435,7 +474,7 @@ export function useBrowserStream(
         if (disposed || failed || document.hidden) return
         const size = viewportRef.current
         const asked = viewScale(window.devicePixelRatio, Math.min(scaleMaxRef.current, budgetScale(size.width, size.height)))
-        const report = meter.report(Date.now(), kind, window.devicePixelRatio, asked)
+        const report = meter.report(Date.now(), kind, window.devicePixelRatio, asked, decoderRef.current ? 'h264' : 'jpeg')
         if (report && line?.isOpen()) line.send(report)
       }, CAST_STATS_EVERY_MS)
     }
@@ -452,6 +491,7 @@ export function useBrowserStream(
         staleTimer = null
       }
       stopStats()
+      stopVideo()
       liveRef.current = false
       setLive(false)
       advance(event)
@@ -486,11 +526,16 @@ export function useBrowserStream(
       setLive(false)
     }
 
-    const onFrame = (msg: Extract<StreamMessage, { kind: 'frame' }>): void => {
+    /**
+     * One picture for the painter: a JPEG frame off the line, or an H.264
+     * chunk already decoded (`picture`, which whoever ends up holding it closes).
+     */
+    const onFrame = (msg: Extract<StreamMessage, { kind: 'frame' }>, picture?: VideoPicture): void => {
       const revision = msg.revision ?? viewportRevisionRef.current ?? 0
       if (viewportRevisionRef.current === null) adoptViewportRevision(revision)
       if (revision !== viewportRevisionRef.current) {
         // Not for this viewport: done with, so the line may send the next.
+        picture?.video.close()
         line?.receipt(msg.seq)
         return
       }
@@ -501,7 +546,8 @@ export function useBrowserStream(
       }
       if (typeof msg.mobile === 'boolean') setEffectiveMobile(msg.mobile)
       const receivedAt = Date.now()
-      meterRef.current?.frame(msg.seq, frameByteSize(msg), receivedAt)
+      // A chunk was counted when it arrived, before it was decoded.
+      if (!picture) meterRef.current?.frame(msg.seq, frameByteSize(msg), receivedAt)
       lastFrameAtRef.current = receivedAt
       if (frameRevisionRef.current !== revision) {
         frameRevisionRef.current = revision
@@ -521,14 +567,21 @@ export function useBrowserStream(
         receivedAt,
         ...(msg.bytes ? { bytes: msg.bytes } : {}),
         ...(msg.src ? { src: msg.src } : {}),
+        ...(picture ? { video: picture.video, width: picture.width, height: picture.height } : {}),
         ...(msg.scrollY !== undefined ? { scrollY: msg.scrollY } : {}),
         ...(msg.pageScaleFactor !== undefined ? { pageScale: msg.pageScaleFactor } : {})
       }
-      latestFrameRef.current = frame
-      const listeners = frameListenersRef.current
-      if (listeners.size === 0) {
+      // A decoded picture is the painter's to close, so it is never kept for a later one.
+      latestFrameRef.current = picture ? null : frame
+      const listeners = [...frameListenersRef.current]
+      if (listeners.length === 0) {
+        picture?.video.close()
         meterRef.current?.paint(frame.seq, Date.now())
         line?.receipt(frame.seq)
+      } else if (picture && listeners.length > 1) {
+        // Each painter closes what it is given: each gets its own.
+        for (const listener of listeners) listener({ ...frame, video: picture.video.clone() })
+        picture.video.close()
       } else {
         for (const listener of listeners) listener(frame)
       }
@@ -560,6 +613,29 @@ export function useBrowserStream(
           setLive(true)
         }
         for (const listener of beatListenersRef.current) listener(msg.seq)
+        return
+      }
+
+      if (msg.kind === 'video') {
+        if (msg.codec) startVideo()
+        else stopVideo()
+        // An H.264 viewer on the relay may be sharper than a JPEG one (cast-tuning.ts).
+        const scaleMax = msg.scaleMax ?? scaleMaxRef.current
+        if (scaleMax !== scaleMaxRef.current) {
+          scaleMaxRef.current = scaleMax
+          if (client === 'remote' && !document.hidden) sendControl('offer')
+        }
+        return
+      }
+
+      if (msg.kind === 'vframe') {
+        const decoder = decoderRef.current
+        if (!decoder) return
+        const arrivedAt = Date.now()
+        meterRef.current?.frame(msg.seq, Math.floor((msg.chunk.data.length * 3) / 4), arrivedAt)
+        lastFrameAtRef.current = arrivedAt
+        const { kind: _kind, chunk, seq: _seq, ...meta } = msg
+        decoder.push(chunk, meta)
         return
       }
 
@@ -652,6 +728,12 @@ export function useBrowserStream(
           sendControl(document.hidden ? 'release' : 'offer')
           if (document.hidden) line?.send({ t: 'visibility', hidden: true })
           if (watchFieldsRef.current) line?.send({ t: 'watch-fields' })
+          // A phone that can decode H.264 says so; the Mac decides (cast-video.ts).
+          if (client === 'remote') {
+            void canDecodeCastVideo().then((ok) => {
+              if (ok && !disposed && !failed && line?.isOpen()) line.send({ t: 'codecs', h264: true })
+            })
+          }
         },
         onMessage,
         onClose: () => fail('close'),
@@ -722,6 +804,7 @@ export function useBrowserStream(
       if (deadline) clearTimeout(deadline)
       if (staleTimer) clearInterval(staleTimer)
       stopStats()
+      stopVideo()
       if (line?.isOpen()) sendControl('release')
       line?.close()
       if (lineRef.current === line) lineRef.current = null

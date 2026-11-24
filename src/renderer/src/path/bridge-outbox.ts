@@ -58,6 +58,9 @@ export function coalesceInput(waiting: string, next: string): string | null {
       return sameFingers(a, b) ? next : null
     case 'compose':
       return next
+    // An H.264 acknowledgement covers every chunk up to it (cast-video.ts): the newest says it all.
+    case 'vack':
+      return num(b.n, 0) >= num(a.n, 0) ? next : waiting
     case 'wheel':
       if (a.mods !== b.mods) return null
       return JSON.stringify({ ...b, dy: num(a.dy, 0) + num(b.dy, 0), dx: num(a.dx, 0) + num(b.dx, 0) })

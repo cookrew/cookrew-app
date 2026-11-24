@@ -14,6 +14,9 @@ import { capViewportScale, sanitizeViewportMessage } from '../shared/cast-viewpo
 import { CAST_STATS_TYPE, sanitizeCastStats } from '../shared/cast-stats'
 import { appendCastStats, type CastStatsEntry } from './cast-stats-log'
 import { castTuning } from './cast-tuning'
+import { CAST_CODEC, VIDEO_ON_TYPE, isVideoKeyAsk, sanitizeCodecs, sanitizeVideoAck } from '../shared/cast-video'
+import type { CastEncoderHost } from './cast-encoder'
+import { VideoOut } from './cast-video-out'
 import type { ViewerWho } from '../shared/remote-access'
 import type { UseStatus } from '../shared/use-signal'
 import { jpegSize } from './jpeg-size'
@@ -91,7 +94,12 @@ export interface CastViewerOptions {
   readonly relayed?: boolean
   /** Where its live-view reports go; the real log by default (cast-stats-log.ts). */
   readonly report?: (entry: CastStatsEntry) => void
+  /** Where H.264 is encoded (cast-encoder.ts). Absent: every viewer gets JPEG. */
+  readonly encoder?: CastEncoderHost
 }
+
+/** The largest picture an H.264 viewer is checked for: a 3x phone's whole screen. */
+const VIDEO_CHECK_SIZE = { width: 1290, height: 2796 }
 
 /** A viewer no credential named: it can watch what it was let in to, and it can never hold control. */
 export const UNNAMED_VIEWER: ViewerWho = { key: 'unnamed', name: 'A paired device', here: false }
@@ -142,6 +150,11 @@ export class CastViewer {
   private sentBytes = 0
   private sentSize: { width: number; height: number } = { width: 0, height: 0 }
   private reportedAt = 0
+  /** This viewer's pictures as H.264 (cast-video-out.ts); null while it gets JPEG. */
+  private video: VideoOut | null = null
+  private videoAsked = false
+  /** The viewer said it decodes H.264, perhaps before Chrome was up to start it. */
+  private wantsVideo = false
   /**
    * The page copied: this viewer's clipboard gets it only if this viewer just
    * acted on the page. A page copying on its own, or after another viewer's
@@ -170,7 +183,64 @@ export class CastViewer {
   private allowedScale(): number {
     const tuning = castTuning()
     const ceiling = this.instance?.scaleCeiling ?? 1
-    return Math.min(ceiling, this.options.relayed ? tuning.relayScaleMax : tuning.scaleMax)
+    const relay = this.video ? tuning.relayVideoScaleMax : tuning.relayScaleMax
+    return Math.min(ceiling, this.options.relayed ? relay : tuning.scaleMax)
+  }
+
+  /**
+   * The phone can decode H.264: from the next picture on it gets chunks
+   * (cast-video.ts), if this Mac can encode them and the tuning has not turned
+   * them off. Anything short of that, and it keeps JPEG without being told.
+   */
+  private async startVideo(): Promise<void> {
+    const encoder = this.options.encoder
+    const tuning = castTuning()
+    if (this.videoAsked || !encoder || !tuning.h264) return
+    this.videoAsked = true
+    const ok = await encoder.supported(CAST_CODEC, VIDEO_CHECK_SIZE.width, VIDEO_CHECK_SIZE.height)
+    const instance = this.instance
+    if (!ok || this.closed || !instance) return
+    const relayed = this.options.relayed === true
+    const session = encoder.open({
+      codec: CAST_CODEC,
+      bitrate: (relayed ? tuning.relayH264Kbps : tuning.h264Kbps) * 1000,
+      framerate: relayed ? 10 : 30
+    })
+    // As many encoders as the Mac will run are open: this viewer keeps JPEG.
+    if (!session) return
+    this.video = new VideoOut({
+      session,
+      codec: CAST_CODEC,
+      send: (message) => this.sink.sendControl(message),
+      ready: () => this.sink.frameReady(),
+      onceReady: (callback) => this.sink.onceReady(callback),
+      delivered: (frame, context, bytes) => this.videoDelivered(frame, context, bytes),
+      failed: (error) => this.stopVideo(error ?? 'the H.264 encoder failed')
+    })
+    // The encoder's input is the screencast: sharp enough that it is not the blur.
+    instance.preferSourceQuality?.(this.id, tuning.h264SourceQuality)
+    this.sink.sendControl({ t: VIDEO_ON_TYPE, codec: CAST_CODEC, scaleMax: this.allowedScale() })
+  }
+
+  private videoDelivered(frame: OutboundFrame, context: MapContext, bytes: number): void {
+    this.sentFrames += 1
+    this.sentBytes += bytes
+    if (frame.size) this.sentSize = frame.size
+    this.ctx = context
+    this.deliveredRevision = frame.meta.revision
+    this.rememberFrameContext(frame.seq, frame.meta.revision, context)
+  }
+
+  /** Back to JPEG, and the viewer told why (`why` absent: it is leaving, nobody to tell). */
+  private stopVideo(why?: unknown): void {
+    const video = this.video
+    if (!video) return
+    this.video = null
+    video.close()
+    this.instance?.preferSourceQuality?.(this.id, null)
+    if (why === undefined) return
+    console.error('The live view went back to JPEG:', why)
+    if (!this.closed) this.sink.sendControl({ t: VIDEO_ON_TYPE, codec: null, scaleMax: this.allowedScale() })
   }
 
   get isClosed(): boolean {
@@ -211,6 +281,7 @@ export class CastViewer {
     })
     this.pushViewportState(viewport)
     if (instance.status) this.statusListener(instance.status)
+    if (this.wantsVideo) void this.startVideo()
   }
 
   fail(message: string): void {
@@ -264,6 +335,17 @@ export class CastViewer {
         revision
       }
     }
+    if (this.video) {
+      // H.264: the picture waits, not the chunk (cast-video-out.ts). Until the
+      // first chunk is out, JPEG goes on too, so the switch has no frozen picture.
+      this.video.offer(frame, frameContext)
+      if (this.video.flowing) {
+        // A JPEG still waiting for the line must not follow the chunks out.
+        this.latest = null
+        this.latestContext = null
+        return
+      }
+    }
     if (this.sink.frameReady()) {
       this.latest = null
       this.latestContext = null
@@ -314,8 +396,18 @@ export class CastViewer {
 
   /** One message from the viewer, already parsed: a viewport intent or input. */
   handleMessage(raw: unknown): void {
+    if (this.closed) return
+    // Said as the line opens, which can be before Chrome is up: kept until attach.
+    const codecs = sanitizeCodecs(raw)
+    if (codecs) {
+      this.wantsVideo = codecs.h264
+      if (this.instance && this.wantsVideo) void this.startVideo()
+      // A phone whose decoder gave up: back to JPEG, said so, and not started again.
+      else if (!codecs.h264) this.stopVideo('the viewer could not decode it')
+      return
+    }
     const instance = this.instance
-    if (!instance || this.closed) return
+    if (!instance) return
     const viewportMessage = sanitizeViewportMessage(raw)
     if (viewportMessage) {
       if (viewportMessage.type === 'release') instance.releaseViewport(this.id)
@@ -335,6 +427,15 @@ export class CastViewer {
     }
     if (input.t === CAST_STATS_TYPE) {
       this.recordStats(raw)
+      return
+    }
+    const acked = sanitizeVideoAck(raw)
+    if (acked !== null) {
+      this.video?.ack(acked)
+      return
+    }
+    if (isVideoKeyAsk(raw)) {
+      this.video?.keyAsked()
       return
     }
     if (input.t === 'watch-fields') {
@@ -516,6 +617,7 @@ export class CastViewer {
     this.held = null
     this.unwatchFields?.()
     this.unwatchFields = null
+    this.stopVideo()
     this.frameContexts.clear()
     this.instance?.frameListeners.delete(this.frameListener)
     this.instance?.statusListeners?.delete(this.statusListener)

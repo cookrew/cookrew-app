@@ -24,6 +24,13 @@ export interface PaintableFrame {
   src?: string
   /** The JPEG itself — a frame from the desktop's port. */
   bytes?: Uint8Array
+  /**
+   * A picture already decoded from H.264 (cast-video-decoder.ts), and the size
+   * it stands for in frame pixels. The painter owns it from here and closes it.
+   */
+  video?: VideoFrame
+  width?: number
+  height?: number
   /** Where the page is scrolled to in this picture, in CSS pixels. */
   scrollY?: number
   pageScale?: number
@@ -34,8 +41,12 @@ export interface PaintedFrame {
   revision: number
   width: number
   height: number
-  /** The frame's JPEG: what the card keeps as its picture at zoom-out (browser-poster.ts). */
-  blob: Blob
+  /**
+   * The frame's JPEG: what the card keeps as its picture at zoom-out
+   * (browser-poster.ts). Absent for an H.264 picture, which has none: the
+   * canvas is the picture then.
+   */
+  blob?: Blob
   scrollY?: number
   pageScale?: number
 }
@@ -62,7 +73,12 @@ export function frameBlob(frame: Pick<PaintableFrame, 'src' | 'bytes'>): Blob | 
   }
 }
 
-type Picture = ImageBitmap | HTMLImageElement
+type Picture = ImageBitmap | HTMLImageElement | VideoFrame
+
+/** A frame handed over and never drawn: its decoded picture is let go of now. */
+function release(frame: PaintableFrame | null): void {
+  frame?.video?.close()
+}
 
 /** Off the main thread where the engine can; an <img> decode where it cannot (an older iOS). */
 async function decodePicture(blob: Blob): Promise<Picture> {
@@ -79,6 +95,7 @@ async function decodePicture(blob: Blob): Promise<Picture> {
 }
 
 function pictureSize(picture: Picture): { width: number; height: number } {
+  if ('displayWidth' in picture) return { width: picture.displayWidth, height: picture.displayHeight }
   return 'naturalWidth' in picture
     ? { width: picture.naturalWidth, height: picture.naturalHeight }
     : { width: picture.width, height: picture.height }
@@ -96,9 +113,15 @@ export class FramePainter {
   ) {}
 
   push(frame: PaintableFrame): void {
-    if (this.disposed) return this.events.onSkipped(frame.seq)
+    if (this.disposed) {
+      release(frame)
+      return this.events.onSkipped(frame.seq)
+    }
     if (this.decoding) {
-      if (this.waiting) this.events.onSkipped(this.waiting.seq)
+      if (this.waiting) {
+        release(this.waiting)
+        this.events.onSkipped(this.waiting.seq)
+      }
       this.waiting = frame
       return
     }
@@ -107,33 +130,50 @@ export class FramePainter {
 
   dispose(): void {
     this.disposed = true
-    if (this.waiting) this.events.onSkipped(this.waiting.seq)
+    if (this.waiting) {
+      release(this.waiting)
+      this.events.onSkipped(this.waiting.seq)
+    }
     this.waiting = null
   }
 
   private async paint(frame: PaintableFrame): Promise<void> {
     this.decoding = true
     try {
-      const blob = frameBlob(frame)
-      if (!blob) return this.events.onSkipped(frame.seq)
+      let blob: Blob | null = null
       let picture: Picture
-      try {
-        picture = await decodePicture(blob)
-      } catch {
-        return this.events.onSkipped(frame.seq)
+      let size: { width: number; height: number }
+      if (frame.video) {
+        // Decoded already; drawn at the size it stands for (an odd last row or column was
+        // cropped to encode it), and never much larger than it is: the size came over the wire.
+        picture = frame.video
+        const own = { width: frame.video.displayWidth, height: frame.video.displayHeight }
+        size = {
+          width: Math.min(frame.width ?? own.width, own.width + 2),
+          height: Math.min(frame.height ?? own.height, own.height + 2)
+        }
+      } else {
+        blob = frameBlob(frame)
+        if (!blob) return this.events.onSkipped(frame.seq)
+        try {
+          picture = await decodePicture(blob)
+        } catch {
+          return this.events.onSkipped(frame.seq)
+        }
+        size = pictureSize(picture)
       }
       if (this.disposed) {
         if ('close' in picture) picture.close()
         return this.events.onSkipped(frame.seq)
       }
-      const { width, height } = this.drawSize(frame.revision, pictureSize(picture))
+      const { width, height } = this.drawSize(frame.revision, size)
       this.draw(picture, width, height)
       this.events.onPainted({
         seq: frame.seq,
         revision: frame.revision,
         width,
         height,
-        blob,
+        ...(blob ? { blob } : {}),
         ...(frame.scrollY !== undefined ? { scrollY: frame.scrollY } : {}),
         ...(frame.pageScale !== undefined ? { pageScale: frame.pageScale } : {})
       })

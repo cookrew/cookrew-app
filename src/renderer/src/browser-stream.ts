@@ -22,6 +22,7 @@
 
 import { parseCardControl, parseRemoteState } from '../../shared/remote-access'
 import type { UseStatus } from '../../shared/use-signal'
+import { readVideoChunk, VIDEO_FRAME_TYPE, VIDEO_ON_TYPE, type VideoChunkMessage } from '../../shared/cast-video'
 import type { FitRect } from './browser-frame'
 
 /** Requested screencast viewport bounds — Forge clamps 320..2048 (default 800x1400). */
@@ -324,6 +325,31 @@ export type StreamMessage =
   | { kind: 'copy'; text: string }
   /** Where the page's text fields are, in FRAME px of `revision` (page-fields.ts). */
   | ({ kind: 'fields'; revision: number } & StreamFields)
+  /** One H.264 chunk (cast-video.ts): it is decoded whatever its revision, or the chain breaks. */
+  | ({ kind: 'vframe'; seq: number; chunk: VideoChunkMessage } & StreamFrameMeta)
+  /** From the next picture on, chunks in `codec`; null: back to JPEG. `scaleMax` as in `ready`. */
+  | { kind: 'video'; codec: string | null; scaleMax?: number }
+
+/** A frame's meta, as a JPEG frame and an H.264 chunk both carry it. */
+function frameMeta(obj: Record<string, unknown>): StreamFrameMeta {
+  const meta = asRecord(obj.meta)
+  const revision = finiteRevision(obj.revision ?? meta?.revision)
+  const deviceWidth = positiveNumber(meta?.deviceWidth)
+  const deviceHeight = positiveNumber(meta?.deviceHeight)
+  const displayScale = positiveNumber(meta?.displayScale)
+  const pageScaleFactor = positiveNumber(meta?.pageScaleFactor)
+  const scrollY = typeof meta?.scrollY === 'number' && Number.isFinite(meta.scrollY) ? meta.scrollY : null
+  const mobile = typeof meta?.mobile === 'boolean' ? meta.mobile : undefined
+  return {
+    ...(revision !== null ? { revision } : {}),
+    ...(deviceWidth !== null ? { deviceWidth } : {}),
+    ...(deviceHeight !== null ? { deviceHeight } : {}),
+    ...(displayScale !== null ? { displayScale } : {}),
+    ...(pageScaleFactor !== null ? { pageScaleFactor } : {}),
+    ...(scrollY !== null ? { scrollY } : {}),
+    ...(mobile !== undefined ? { mobile } : {})
+  }
+}
 
 /**
  * Parse a server→client WS payload into a typed message, or null to ignore.
@@ -359,25 +385,23 @@ export function parseStreamObject(raw: unknown): StreamMessage | null {
   }
   const jpeg = obj.t === 'frame' && obj.jpeg instanceof Uint8Array && obj.jpeg.byteLength > 0 ? obj.jpeg : null
   if (obj.t === 'frame' && (typeof obj.data === 'string' || jpeg)) {
-    const meta = asRecord(obj.meta)
-    const revision = finiteRevision(obj.revision ?? meta?.revision)
-    const deviceWidth = positiveNumber(meta?.deviceWidth)
-    const deviceHeight = positiveNumber(meta?.deviceHeight)
-    const displayScale = positiveNumber(meta?.displayScale)
-    const pageScaleFactor = positiveNumber(meta?.pageScaleFactor)
-    const scrollY = typeof meta?.scrollY === 'number' && Number.isFinite(meta.scrollY) ? meta.scrollY : null
-    const mobile = typeof meta?.mobile === 'boolean' ? meta.mobile : undefined
     return {
       kind: 'frame',
       seq: typeof obj.seq === 'number' ? obj.seq : 0,
       ...(jpeg ? { bytes: jpeg } : { src: frameDataUrl(obj.data as string) }),
-      ...(revision !== null ? { revision } : {}),
-      ...(deviceWidth !== null ? { deviceWidth } : {}),
-      ...(deviceHeight !== null ? { deviceHeight } : {}),
-      ...(displayScale !== null ? { displayScale } : {}),
-      ...(pageScaleFactor !== null ? { pageScaleFactor } : {}),
-      ...(scrollY !== null ? { scrollY } : {}),
-      ...(mobile !== undefined ? { mobile } : {})
+      ...frameMeta(obj)
+    }
+  }
+  if (obj.t === VIDEO_FRAME_TYPE) {
+    const chunk = readVideoChunk(obj)
+    return chunk ? { kind: 'vframe', seq: chunk.seq, chunk, ...frameMeta(obj) } : null
+  }
+  if (obj.t === VIDEO_ON_TYPE) {
+    const scaleMax = positiveNumber(obj.scaleMax)
+    return {
+      kind: 'video',
+      codec: typeof obj.codec === 'string' && /^avc1\.[0-9a-f]{6}$/i.test(obj.codec) ? obj.codec : null,
+      ...(scaleMax !== null ? { scaleMax: Math.min(scaleMax, VIEW_SCALE_CEILING) } : {})
     }
   }
   if (obj.t === 'ready') {
