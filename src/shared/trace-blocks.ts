@@ -9,6 +9,8 @@
 import {
   CheckpointAssigner,
   checkpointIdentity,
+  commandLine,
+  slashCommandOf,
   type HistoryDelta,
   type SessionTurnAccumulator,
   type StreamingTurnParser
@@ -45,6 +47,14 @@ export interface TraceAddedPrompt {
   calls: number
   thoughts: number
   text: string
+  /**
+   * A slash command you ran here that asked the model for nothing (/compact,
+   * /model, /rename …): `text` is the command as typed, `output` what it
+   * printed (head-capped, plain text). It opens no checkpoint, like any words
+   * you added; a command that starts a turn is a checkpoint of its own.
+   */
+  command?: true
+  output?: string
 }
 
 export interface TraceBlock {
@@ -73,6 +83,8 @@ export interface TraceBlock {
   added?: TraceAddedPrompt[]
   /** Words sent and not read yet, oldest first. Only the newest turn can be waiting (TranscriptRow). */
   queued?: string[]
+  /** Slash commands run before this turn's prompt in a file that opened on them (a /model before the first words). */
+  lead?: TraceAddedPrompt[]
   startedAt: number
   endedAt: number
   /**
@@ -117,6 +129,8 @@ const ACTIVITY_ARG_CHARS = 80
 const ACTIVITY_RESULT_CHARS = 160
 /** Head of a thinking block: the chat shows it folded, as a glimpse of the reasoning. */
 const THOUGHT_CHARS = 600
+/** Head of what a slash command printed, shown under it in the chat. */
+const COMMAND_OUTPUT_CHARS = 400
 
 const head = (text: string, max: number): string =>
   text.length > max ? `${text.slice(0, max - 1)}…` : text
@@ -206,6 +220,33 @@ function claudeResultText(content: unknown): string {
     return head(texts.join('\n'), ACTIVITY_RESULT_CHARS)
   }
   return ''
+}
+
+/** The text of a record that can carry a local slash command or its output: a user record, or the `local_command` system record newer Claude Code writes. */
+function commandRecordText(entry: ClaudeEntry): string | null {
+  if (entry.isMeta === true) return null
+  if (entry.type === 'system') return entry.subtype === 'local_command' && typeof entry.content === 'string' ? entry.content : null
+  if (entry.type !== 'user') return null
+  const content = entry.message?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return null
+  const blocks = content as ClaudeContentBlock[]
+  if (blocks.some((b) => b?.type === 'tool_result')) return null
+  return blocks
+    .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text as string)
+    .join('\n')
+}
+
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]/g
+const COMMAND_OUTPUT_RE = /^\s*<local-command-(stdout|stderr)>([\s\S]*?)(?:<\/local-command-\1>\s*)?$/
+
+/** What a local command printed, as plain text ('' when it printed nothing), or null when the text is not command output. */
+function commandOutputOf(text: string): string | null {
+  const match = COMMAND_OUTPUT_RE.exec(text)
+  if (match === null) return null
+  return head(match[2].replace(ANSI_RE, '').trim(), COMMAND_OUTPUT_CHARS)
 }
 
 /** The image blocks of a prompt record, as where they are: never their bytes. */
@@ -311,6 +352,10 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
   const pendingCalls = new Map<string, TraceToolCall>()
   // Claude Code's prompt queue, as its records have moved it (claude-queue.ts).
   let queue: readonly string[] = []
+  // Local slash commands run before the first prompt: they wait for the turn they precede.
+  let lead: readonly TraceAddedPrompt[] = []
+  // The command line the next output record belongs to: only the record right after it.
+  let lastCommand: TraceAddedPrompt | null = null
   let at = -1
   return {
     feed(lines: string[]): void {
@@ -319,6 +364,8 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
         const entry = parseLine(line) as ClaudeEntry | null
         if (entry === null || typeof entry.type !== 'string') continue
         const content = entry.message?.content
+        const commandBefore = lastCommand
+        if (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system') lastCommand = null
         const step = assigner.feed(entry)
         if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
           const meta = entry.compactMetadata
@@ -353,9 +400,11 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
             ...(images.length > 0 ? { images } : {}),
             reply: '',
             activity: [],
+            ...(lead.length > 0 ? { lead: [...lead] } : {}),
             startedAt,
             endedAt: startedAt
           }
+          lead = []
           pendingCalls.clear()
           blocks.push(current)
           blockLines.push(at)
@@ -364,6 +413,30 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
         if (entry.type === 'queue-operation') {
           queue = queueAfter(queue, entry)
           if (current !== null) showQueue(current, queue)
+          continue
+        }
+        // A local slash command stands in the chat where you ran it, and what
+        // it printed under it; one that started a turn was a step above.
+        const said = commandRecordText(entry)
+        const command = said === null ? null : slashCommandOf(said)
+        if (command !== null && !command.prompts) {
+          const place = current === null
+            ? { at: 0, calls: 0, thoughts: 0 }
+            : { at: current.reply.length, calls: current.activity.length, thoughts: current.thoughts?.length ?? 0 }
+          const ran: TraceAddedPrompt = { ...place, text: commandLine(command), command: true }
+          if (current === null) lead = [...lead, ran]
+          else current.added = [...(current.added ?? []), ran]
+          lastCommand = ran
+          continue
+        }
+        const output = said === null ? null : commandOutputOf(said)
+        if (output !== null) {
+          if (commandBefore !== null && output.length > 0) {
+            const printed: TraceAddedPrompt = { ...commandBefore, output }
+            const swap = (list: readonly TraceAddedPrompt[]): TraceAddedPrompt[] => list.map((x) => (x === commandBefore ? printed : x))
+            if (current?.added?.includes(commandBefore) === true) current.added = swap(current.added)
+            else lead = swap(lead)
+          }
           continue
         }
         if (!current) continue
@@ -448,6 +521,8 @@ interface CodexRecord {
     output?: unknown
     /** New rollout format (codex-cli ≥ ~0.147): completed conversation items. */
     item?: { type?: string; content?: unknown; phase?: string }
+    /** A response_item message's content blocks. */
+    content?: unknown
     /** `task_complete` carries the closing reply verbatim. */
     last_agent_message?: string
     /**
@@ -509,6 +584,23 @@ export function parseCodexSessionMeta(line: string): CodexSessionMeta | null {
 
 /** response_item payload types that are conversation noise, not activity. */
 const CODEX_SILENT_ITEMS = new Set(['message', 'reasoning'])
+
+const CODEX_USER_GOAL = '<codex_internal_context source="user_goal">'
+const CODEX_GOAL_SET_RE = /User set the goal: "([\s\S]*?)"\s*(?:\n|<\/codex_internal_context>|$)/
+
+/**
+ * The objective of a goal you set with /goal, from the user message codex
+ * writes for it (measured on real rollouts, 2026-11): it carries no
+ * `user_message` event, then the turn it starts runs on. Null for anything
+ * else, a goal's status change included.
+ */
+function codexGoalOf(payload: CodexRecord['payload']): string | null {
+  if (payload?.type !== 'message' || payload.role !== 'user' || !Array.isArray(payload.content)) return null
+  const text = (payload.content as Array<{ text?: unknown }>).map((c) => (typeof c?.text === 'string' ? c.text : '')).join('\n')
+  if (!text.trimStart().startsWith(CODEX_USER_GOAL)) return null
+  const objective = CODEX_GOAL_SET_RE.exec(text)?.[1]?.trim()
+  return objective === undefined || objective.length === 0 ? null : objective
+}
 
 /** A resumable trace parser: feed rollout/session lines in any chunking and
  *  read the blocks so far — identical to a whole-file parse by construction
@@ -578,11 +670,15 @@ export function createCodexTraceAccumulator(): CodexTraceAccumulator {
   /** Each explicitly started file has one header, supplied by the reader. */
   let headerSeen = false
   const codexPending = new Map<string, TraceToolCall>()
+  // Typed prompts so far: their `p<N>` stays what it was before a /goal turn
+  // could open a block of its own (`g<N>`), so no identity already handed out moves.
+  let typed = 0
 
-  const open = (prompt: string, at: number): void => {
+  const open = (prompt: string, at: number, goal = false): void => {
     const namespace = `${sessionId ?? 'session'}${branch === null ? '' : `:${branch}`}`
+    if (!goal) typed += 1
     current = {
-      id: `${namespace}:p${blocks.length + 1}`,
+      id: goal ? `${namespace}:g${blocks.length + 1}` : `${namespace}:p${typed}`,
       index: blocks.length + 1,
       prompt,
       reply: '',
@@ -626,11 +722,19 @@ export function createCodexTraceAccumulator(): CodexTraceAccumulator {
       if (typeof payload.message === 'string') open(payload.message, at)
       return
     }
+    // A goal set with /goal starts a turn with no prompt event: it opens its own block.
+    if (record.type === 'response_item') {
+      const goal = codexGoalOf(payload)
+      if (goal !== null) {
+        open(`/goal ${goal}`, at, true)
+        return
+      }
+    }
     if (record.type === 'event_msg' && payload.type === 'item_completed') {
       const item = payload.item
       if (item?.type === 'UserMessage') {
         const prompt = codexItemText(item.content)
-        if (prompt !== null) open(prompt, at)
+        if (prompt !== null && !prompt.trimStart().startsWith(CODEX_USER_GOAL)) open(prompt, at)
       } else if (item?.type === 'AgentMessage') {
         const text = codexItemText(item.content)
         if (text !== null) reply(text, item.phase, at)

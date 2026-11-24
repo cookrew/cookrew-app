@@ -14,16 +14,65 @@ const MAX_REPLY_CHARS = 4000
 
 const INTERRUPTED = '[Request interrupted'
 
+/** A slash command as Claude Code writes it into its session file. */
+export interface SlashCommand {
+  /** Without the slash: 'goal', 'compact', 'code-review'. */
+  name: string
+  args: string
+  /**
+   * It asks the model for a turn, so it is an exchange like any prompt.
+   * Claude writes a prompt command (a skill, a custom command, a workflow)
+   * with `<command-message>` FIRST and its expansion as a meta record after
+   * it; a local command (/model, /compact, /rename …) leads with
+   * `<command-name>` and its output follows. `/goal <objective>` is written
+   * like a local command and still starts a turn (measured on 2.1.312-2.1.316:
+   * "Goal set: …", then a meta directive, then the agent works on it).
+   */
+  prompts: boolean
+}
+
+const COMMAND_RECORD_RE = /^\s*<(?:command-name|command-message)>/
+const COMMAND_NAME_RE = /<command-name>\s*\/?([^<\s]+)\s*<\/command-name>/
+const COMMAND_ARGS_RE = /<command-args>([\s\S]*?)<\/command-args>/
+/** `/goal` arguments that clear or show the goal: no turn runs for them. */
+const GOAL_LOCAL_ARGS = new Set(['clear', 'status'])
+
+/** The slash command a record's text carries, or null when it carries none. */
+export function slashCommandOf(text: string): SlashCommand | null {
+  if (!COMMAND_RECORD_RE.test(text)) return null
+  const name = COMMAND_NAME_RE.exec(text)?.[1]
+  if (name === undefined) return null
+  const args = (COMMAND_ARGS_RE.exec(text)?.[1] ?? '').trim()
+  const promptForm = /^\s*<command-message>/.test(text)
+  const goal = name === 'goal' && args.length > 0 && !GOAL_LOCAL_ARGS.has(args.toLowerCase())
+  return { name, args, prompts: promptForm || goal }
+}
+
+/** The command as it was typed: "/goal ship it", "/compact". */
+export function commandLine(command: Pick<SlashCommand, 'name' | 'args'>): string {
+  return command.args.length > 0 ? `/${command.name} ${command.args}` : `/${command.name}`
+}
+
 /**
  * User records that are UI/command noise, not conversation prompts:
- * slash-command wrappers, local command output, interruptions, caveats.
+ * local slash commands and their output, interruptions, caveats. A command
+ * that asks the model for a turn is NOT noise: it opens its own checkpoint
+ * (promptText), so the work it started is not filed under the turn before it.
  */
 export function isNoisePrompt(text: string): boolean {
+  if (slashCommandOf(text)?.prompts === true) return false
   return (
     /^\s*<(?:command-name|command-message|command-args|local-command-stdout)/.test(text) ||
     text.startsWith(INTERRUPTED) ||
     text.startsWith('Caveat: ')
   )
+}
+
+/** The prompt a prompt-bearing text stands for: a turn-starting command reads as typed. */
+function promptOf(text: string): string | null {
+  const command = slashCommandOf(text)
+  if (command?.prompts === true) return commandLine(command)
+  return isNoisePrompt(text) ? null : text.trim()
 }
 
 /**
@@ -71,9 +120,7 @@ function stoppedByOwner(entry: PromptEntryLike): boolean {
 export function promptText(entry: PromptEntryLike): string | null {
   if (entry.type !== 'user' || entry.isMeta === true) return null
   const content = entry.message?.content
-  if (typeof content === 'string') {
-    return isNoisePrompt(content) ? null : content.trim()
-  }
+  if (typeof content === 'string') return promptOf(content)
   if (Array.isArray(content)) {
     const blocks = content as ContentBlock[]
     if (blocks.some((b) => b?.type === 'tool_result')) return null
@@ -82,7 +129,7 @@ export function promptText(entry: PromptEntryLike): string | null {
       .map((b) => b.text as string)
       .join('\n')
       .trim()
-    return joined.length > 0 && !isNoisePrompt(joined) ? joined : null
+    return joined.length > 0 ? promptOf(joined) : null
   }
   return null
 }
