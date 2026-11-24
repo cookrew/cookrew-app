@@ -1,6 +1,6 @@
 {
   "name": "cookrew",
-  "version": "0.6.32",
+  "version": "0.6.33",
   "description": "Cookrew — a desktop app for running a crew of AI coding agents. One zoom from your devices down to a single agent, with artifacts, a phone companion and a CLI agents use to reach each other.",
   "main": "out/main/index.js",
   "type": "module",
@@ -51,10 +51,8 @@
     "electron-updater": "^6.3.9",
     "marked": "^15.0.0",
     "node-pty": "^1.0.0",
-    "parse5": "^7.3.0",
     "pinyin-pro": "3.29.5",
     "qrcode-terminal": "^0.12.0",
-    "undici": "^6.29.1",
     "viem": "^2.55.19",
     "werift": "^0.25.1"
   },

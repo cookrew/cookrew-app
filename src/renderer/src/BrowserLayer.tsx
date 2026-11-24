@@ -14,8 +14,6 @@ import {
 } from './browser-engine'
 import { cookrew, hasNativeWebview, isRemoteMode } from './api'
 import { MobileBrowserFrame } from './MobileBrowserFrame'
-import { RemoteBrowserView } from './mirror/RemoteBrowserView'
-import { isWebProxyUrl } from '../../shared/web-proxy'
 import { OpenExternal } from './nodes/OpenExternal'
 import {
   initialBackoff,
@@ -655,17 +653,6 @@ function BrowserTabView({
     case 'pending':
       return visible ? <BrowserCapabilityLoading browserId={browserId} /> : null
     case 'headless-stream':
-      // Remote HTTP(S) cards draw the page locally. Screen opens the stream.
-      if (client === 'remote' && isWebProxyUrl(tab.url)) {
-        return visible ? (
-          <RemoteBrowserView
-            browserId={browserId}
-            cardUrl={tab.url}
-            zoomed={zoomed}
-            actions={zoomed ? <OpenExternal url={tab.url} className="browser-frame-btn" /> : null}
-          />
-        ) : null
-      }
       return visible ? (
         <MobileBrowserFrame
           browserId={browserId}

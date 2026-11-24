@@ -18,7 +18,6 @@ import { copyArmed } from './page-copy'
 import type { BrowserViewportState } from './browser-viewport'
 import type { FrameMeta } from './headless-chrome'
 import type { BrowserInstance } from './browser-instance'
-import { answerMirror, mirrorRequest, type MirrorRequest } from './cast-mirror'
 
 /** What a frame carries besides its JPEG. */
 export interface OutboundFrameMeta {
@@ -124,14 +123,6 @@ export class CastViewer {
   /** When this viewer's own input last reached the page: a copy right after it is theirs (page-copy.ts). */
   private lastInputAt: number | null = null
   /**
-   * A viewer drawing the page from data (cast-mirror.ts) asks for no frames:
-   * the mirror is local, and a stream nobody shows is the line's cost for nothing.
-   */
-  private framesOff = false
-  /** Mirror requests run one at a time, in order; the AX read is not free. */
-  private mirrorTail: Promise<void> = Promise.resolve()
-  private mirrorQueued = 0
-  /**
    * The page copied: this viewer's clipboard gets it only if this viewer just
    * acted on the page. A page copying on its own, or after another viewer's
    * click, writes nobody's clipboard here.
@@ -194,7 +185,7 @@ export class CastViewer {
   }
 
   private pushFrame(base64: string, meta: FrameMeta): void {
-    if (this.closed || this.framesOff) return
+    if (this.closed) return
     const viewport = this.instance?.viewportState
     const bytes = frameBytes(base64)
     const size = jpegSize(bytes)
@@ -295,18 +286,7 @@ export class CastViewer {
       return
     }
     if (typeof raw !== 'object' || raw === null) return
-    // A mirror message names no point on the page, so it waits on no frame or
-    // revision: it is answered before that gate (cast-mirror.ts).
-    const mirror = mirrorRequest(raw)
-    if (mirror !== null) {
-      this.mirror(instance, mirror)
-      return
-    }
     const input = raw as Record<string, unknown>
-    if (input.t === 'frames') {
-      this.framesOff = input.on === false
-      return
-    }
     if (input.t === 'visibility') {
       instance.viewerHidden?.(this.id, input.hidden === true)
       return
@@ -350,27 +330,6 @@ export class CastViewer {
     for (const command of commands) this.dispatch(instance, command)
     this.lastInputAt = Date.now()
     this.remember(raw as Record<string, unknown>, frameContext?.ctx ?? this.ctx)
-  }
-
-  /**
-   * One mirror request, after the ones before it. The answer goes back on this
-   * viewer's own line; a viewer that left, or an instance that was replaced,
-   * gets nothing. Past MIRROR_QUEUE_MAX waiting, a request is refused in words.
-   */
-  private mirror(instance: BrowserInstance, request: MirrorRequest): void {
-    const stage = request.kind === 'act' ? 'act' : 'read'
-    if (this.mirrorQueued >= MIRROR_QUEUE_MAX) {
-      this.sink.sendControl({ t: 'dom-refused', why: 'Too much at once: wait for the page.', stage })
-      return
-    }
-    this.mirrorQueued += 1
-    if (stage === 'act') this.lastInputAt = Date.now()
-    this.mirrorTail = this.mirrorTail.then(async () => {
-      const current = !this.closed && this.instance === instance
-      const reply = current ? await answerMirror(instance, request, this.who) : null
-      this.mirrorQueued -= 1
-      if (reply !== null && !this.closed && this.instance === instance) this.sink.sendControl({ ...reply })
-    })
   }
 
   /** What is held down in Chrome on this viewer's behalf, for a viewer that leaves mid-press. */
@@ -500,9 +459,6 @@ export class CastViewer {
 
 /** Input with no point on the page: it needs no painted frame to map against. */
 const FRAME_CONTEXTS = 1024
-
-/** Mirror requests one viewer may have waiting at once. */
-export const MIRROR_QUEUE_MAX = 8
 
 const POINTLESS = new Set(['key', 'touchend', 'touchcancel', 'text', 'compose', 'paste'])
 

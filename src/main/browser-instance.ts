@@ -9,16 +9,6 @@ import type { BrowserViewportState } from './browser-viewport'
 import type { ArrivingDownload } from './browser-downloads'
 import type { FrameMeta, HeadlessCookie, HeadlessPageState, HeadlessStopResult } from './headless-chrome'
 
-export interface BrowserProxyCookie {
-  readonly name: string
-  readonly value: string
-  readonly domain: string
-  readonly partitionKey?: unknown
-  readonly partitionKeyOpaque?: boolean
-}
-import type { MirrorPage } from '../shared/dom-mirror'
-import type { MirrorCommand } from './dom-mirror'
-
 /**
  * WHAT A BROWSER CARD'S BACKING INSTANCE HAS TO BE.
  *
@@ -41,8 +31,6 @@ export interface BrowserInstance {
   start(): Promise<void>
   /** Set cookies in the running browser. Absent where there is no web page to sign in (a phone). */
   setCookies?(cookies: readonly HeadlessCookie[]): Promise<void>
-  /** Cookies Chrome matches to one URL in this card's web profile. */
-  cookiesFor?(url: string): Promise<readonly BrowserProxyCookie[]>
   stop(gracefulTimeoutMs?: number): Promise<HeadlessStopResult>
   syncTabs(tabs: BrowserTab[], activeTabId: string): Promise<void>
   resize(width: number, height: number): Promise<void>
@@ -99,12 +87,4 @@ export interface BrowserInstance {
   activeDownloads?(): readonly ArrivingDownload[]
   /** The agent's hand on a screen: gestures in viewport points, resolved once the device took them. */
   act?(gestures: readonly Gesture[]): Promise<void>
-  /**
-   * The page as data for a viewer to draw itself (dom-mirror.ts), read through
-   * the mirror's four CDP methods only. Absent on a use card: a device screen
-   * has no page to read. Rejects when the page cannot be read.
-   */
-  mirrorPage?(url: string, title: string): Promise<MirrorPage>
-  /** Press, focus, type into or check ONE element by the ref its mirror gave. */
-  actMirror?(command: MirrorCommand): Promise<{ ok: true } | { ok: false; why: string }>
 }

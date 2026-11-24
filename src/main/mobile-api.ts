@@ -57,8 +57,7 @@ import type {
 import { lightenCanvas } from "../shared/wire-canvas";
 import { machineCopy } from "../shared/machine-words";
 import { SEAT_GONE, type WorkspaceCheck, type WorkspaceRemovePlan } from "../shared/workspace-door";
-import { bearerToken, readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
-import { handleWebProxy, type WebProxyDeps } from "./web-proxy-server";
+import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
 import { cardCheckpoint, handleWatchClaim, handleWatchHello, handleWatchRekey, handleWatchRoutes, watchRouteAllowed, watchTokenAccepted, watchTokenAcceptedOn, watchWriteRefusal } from "./watch-routes";
 import { handlePhoneInviteRoute } from "./phone-invite";
 import { bridgeablePath, SOCKET_BRIDGE_MESSAGE_MAX, SOCKET_BRIDGE_PATH, SOCKET_BRIDGE_POST_MESSAGES, type SocketBridge } from "./socket-bridge";
@@ -317,8 +316,6 @@ export interface MobileApiDeps {
   };
   /** The browser card's socket over plain HTTP, for the relay (socket-bridge.ts). */
   socketBridge?: SocketBridge;
-  /** Card-owned Chrome profile for paired Page viewers. */
-  webProxy?: WebProxyDeps;
   /** The build this Mac serves (build-id.ts): sent on every stream, and again when it changes. */
   build?: { id: () => string; bus: EventEmitter };
   /**
@@ -791,11 +788,6 @@ export async function handleMobileApi(
   // The one place every pairing shows, whichever way it happened: the root
   // token on the LAN, a phone's own token, the relay. Free after the first.
   if (ownerPairing && fromAnotherDevice(request)) emit("phone_paired");
-
-  if ((method === "GET" || method === "HEAD") && await handleWebProxy(response, {
-    method, url, paired: ownerPairing && bearerToken(request) !== null,
-    workspace: () => seatGone ? null : scopedState(), deps: deps.webProxy
-  })) return true;
 
   // What the presented credential is worth. The phone asks BEFORE it acts, so
   // an unpaired device can say "you are unpaired" instead of letting every

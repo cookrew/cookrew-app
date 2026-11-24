@@ -256,7 +256,6 @@ export interface MobileServerDeps {
   rtc?: MobileApiDeps['rtc']
   /** The browser card's socket over plain HTTP (socket-bridge.ts) — passed straight through. */
   socketBridge?: MobileApiDeps['socketBridge']
-  webProxy?: MobileApiDeps['webProxy']
   /** The build this Mac serves — passed straight through. */
   build?: MobileApiDeps['build']
   /** The account's skin (skin-store.ts) — passed straight through. */
