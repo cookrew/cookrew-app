@@ -69,7 +69,20 @@ export interface BridgeBody {
   readonly m?: readonly string[]
   /** The newest frame painted. */
   readonly a?: number
+  /** The newest H.264 chunk decoded (cast-video.ts). */
+  readonly v?: number
   readonly end?: boolean
+}
+
+/** An H.264 acknowledgement's chunk number, or null for any other message. */
+export function videoAckOf(text: string): number | null {
+  if (!text.startsWith('{"t":"vack"')) return null
+  try {
+    const n = (JSON.parse(text) as { n?: unknown }).n
+    return typeof n === 'number' && Number.isInteger(n) && n > 0 ? n : null
+  } catch {
+    return null
+  }
 }
 
 /** gone: the Mac does not know the session. retry: it could not take this now. */
@@ -115,6 +128,13 @@ export class BridgeWebSocket {
   private painted_ = 0
   private ackSent = 0
   private ackQueued = false
+  /** The newest H.264 chunk decoded, and the newest the Mac has been told of. */
+  private decoded_ = 0
+  private decodedSent = 0
+  /** An acknowledgement-only POST is on its way: the one allowed past the in-flight cap. */
+  private ackFlying = false
+  /** The Mac reads acknowledgements as `v` (its hello said `acks`). */
+  private acksApart = false
   private lastHeard = 0
   private lastTick = 0
   private resuming = false
@@ -137,6 +157,16 @@ export class BridgeWebSocket {
 
   send(text: string): void {
     if (this.readyState !== OPEN || this.id === null) throw new DOMException('not open', 'InvalidStateError')
+    // AN H.264 ACKNOWLEDGEMENT DOES NOT QUEUE BEHIND INPUT (cast-video.ts). The
+    // Mac sends the next chunk only once the last are acknowledged, so one stuck
+    // behind a burst of touches held the picture back: 1.2 frames a second on a
+    // line with room for ten (11-24). It rides apart, as `v`, newest only.
+    const decoded = this.acksApart ? videoAckOf(text) : null
+    if (decoded !== null) {
+      if (decoded > this.decoded_) this.decoded_ = decoded
+      this.queuePump()
+      return
+    }
     // A press on a picture nobody can vouch for goes nowhere, and neither does what
     // is typed for it. The chip says the line is down.
     if (this.resuming && aimedInput(text)) {
@@ -154,6 +184,11 @@ export class BridgeWebSocket {
   painted(seq: number): void {
     if (!this.resumable || seq <= this.painted_) return
     this.painted_ = seq
+    this.queuePump()
+  }
+
+  /** Receipts and acknowledgements gathered in one turn go in one POST. */
+  private queuePump(): void {
     if (this.ackQueued) return
     this.ackQueued = true
     queueMicrotask(() => {
@@ -190,12 +225,14 @@ export class BridgeWebSocket {
     }
     stream.addEventListener('id', (event) => {
       if (!live()) return
-      const hello = parsed(event) as { id?: unknown; v?: unknown } | undefined
+      const hello = parsed(event) as { id?: unknown; v?: unknown; acks?: unknown } | undefined
       if (this.readyState === OPEN) return this.resumed()
       if (this.readyState !== CONNECTING) return
       if (typeof hello?.id !== 'string') return this.fail()
       this.id = hello.id
       this.resumable = hello.v === 2
+      // A Mac that reads `v` says so; an older one gets its acknowledgements as messages.
+      this.acksApart = this.resumable && hello.acks === true
       this.readyState = OPEN
       if (this.resumable) this.watchLine()
       this.onopen?.(new Event('open'))
@@ -353,13 +390,19 @@ export class BridgeWebSocket {
     while (this.flying < cap) {
       const batch = this.takeBatch()
       const ack = this.painted_ > this.ackSent ? this.painted_ : undefined
-      if (!batch && ack === undefined) return
+      const decoded = this.decoded_ > this.decodedSent ? this.decoded_ : undefined
+      if (!batch && ack === undefined && decoded === undefined) return
       this.ackSent = this.painted_
+      this.decodedSent = this.decoded_
       this.flying += 1
       const postedAt = Date.now()
       const texts = batch?.items.map((item) => item.text)
       const body: BridgeBody = this.resumable
-        ? { ...(batch ? { s: batch.s, m: texts } : {}), ...(ack !== undefined ? { a: ack } : {}) }
+        ? {
+            ...(batch ? { s: batch.s, m: texts } : {}),
+            ...(ack !== undefined ? { a: ack } : {}),
+            ...(decoded !== undefined ? { v: decoded } : {})
+          }
         : { m: texts }
       const abort = new AbortController()
       this.posts.add(abort)
@@ -384,6 +427,42 @@ export class BridgeWebSocket {
           if (this.resumable && !this.resuming && postedAt >= this.resumedAt) this.lost()
         })
     }
+    this.sendAckAlone(id)
+  }
+
+  /**
+   * Both POSTs are busy with input and an H.264 acknowledgement is waiting:
+   * one more POST may go, carrying nothing else. The Mac's next chunk waits on
+   * it, and a finger's next position is worth less than the picture that shows it.
+   */
+  private sendAckAlone(id: string): void {
+    if (!this.acksApart || this.ackFlying || this.resuming || this.decoded_ <= this.decodedSent) return
+    const decoded = this.decoded_
+    this.decodedSent = decoded
+    this.ackFlying = true
+    const abort = new AbortController()
+    this.posts.add(abort)
+    const timer = setTimeout(() => abort.abort(), BRIDGE_POST_TIMEOUT_MS)
+    const landed = (): void => {
+      clearTimeout(timer)
+      this.posts.delete(abort)
+      this.ackFlying = false
+    }
+    void this.deps
+      .post(id, { v: decoded }, abort.signal)
+      .then((answer) => {
+        landed()
+        if (answer === 'gone') return this.fail()
+        // The relay busy: wait as every other POST does, then say it again.
+        if (answer === 'retry') return this.again(null)
+        this.pump()
+      })
+      .catch(() => {
+        landed()
+        // Said again after the retry wait, whether or not anything else goes; the
+        // line's own watch decides whether it died.
+        this.again(null)
+      })
   }
 
   private again(batch: Batch | null): void {
@@ -391,6 +470,7 @@ export class BridgeWebSocket {
     if (!this.resumable) return this.pump()
     if (batch) this.redo = [...this.redo, batch].sort((a, b) => a.s - b.s)
     this.ackSent = 0
+    this.decodedSent = 0
     if (this.retryTimer !== null) return
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null

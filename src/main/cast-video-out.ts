@@ -9,9 +9,17 @@ import type { OutboundFrame } from './cast-viewer'
  * The screencast hands over pictures as fast as Chrome draws them; a chunk
  * depends on the one before it, so none may be lost on the way and none may
  * be sent faster than the line takes them. So the picture is what waits, not
- * the chunk: the newest one is held, and encoded only while fewer than
- * VIDEO_CREDIT chunks (and VIDEO_CREDIT_BYTES) are unacknowledged by the
- * phone. A slow line gets fewer frames, each one whole.
+ * the chunk: the newest one is held, and encoded only while the bytes the
+ * phone has not acknowledged fit the window. A slow line gets fewer frames,
+ * each one whole.
+ *
+ * THE WINDOW IS FELT OUT FROM HOW LONG ACKNOWLEDGEMENTS TAKE. It was three
+ * chunks, and on the relay an acknowledgement is a POST through cookrew.dev:
+ * the Mac sent 1.2 frames a second while using 4-19 KB/s of a ~100 KB/s line
+ * (phone stats, 11-24). Now, while a chunk comes back about as fast as the
+ * fastest lately, the window grows; once they come back slower, chunks are
+ * queueing somewhere, and the window gives back, since a queue is exactly the
+ * delay a finger feels (socket-bridge-session.ts learns its credit the same way).
  *
  * A PAGE AT REST IS SHARPENED, THEN QUIET. Under motion the encoder spends few
  * bits per frame and text softens; once the pictures stop coming the last one
@@ -25,9 +33,30 @@ import type { OutboundFrame } from './cast-viewer'
  * encoder is set up again; cast-encoder-script.ts).
  */
 
-export const VIDEO_CREDIT = 3
-export const VIDEO_CREDIT_BYTES = 512 * 1024
-/** An acknowledgement this late was lost: the chunk stops counting against the credit. */
+/** Bytes in flight: where the window starts, and how small and large it may become. */
+export const VIDEO_WINDOW_START = 96 * 1024
+/**
+ * Low enough to hold no queue worth feeling on a thin line: 48 KB was a second
+ * of standing queue at 50 KB/s (review 11-24). One chunk always goes whatever
+ * its size (pump), so a key frame larger than this is never stuck.
+ */
+export const VIDEO_WINDOW_MIN = 16 * 1024
+export const VIDEO_WINDOW_MAX = 512 * 1024
+/** Grown by at most this much per acknowledgement that shows no queue, and never by more than it acknowledged. */
+const WINDOW_GROW = 16 * 1024
+/** Measurements kept between reports, at most: a viewer whose reports never come must not grow them forever. */
+const MEASURED_MAX = 1000
+/** Given back to this share once acknowledgements show a queue, at most once per WINDOW_SHRINK_MS. */
+const WINDOW_SHRINK = 0.7
+const WINDOW_SHRINK_MS = 300
+/** Chunks in flight whatever their size: a run of tiny refreshes is no reason to send forty. */
+export const VIDEO_WINDOW_MAX_CHUNKS = 24
+/** How much slower than the fastest lately an acknowledgement may be and still be no queue. */
+const QUEUE_SLACK = 1.25
+const QUEUE_SLACK_MS = 60
+/** The fastest acknowledgement is forgotten after this: a phone moves to a slower network. */
+const FASTEST_MEMORY_MS = 10_000
+/** An acknowledgement this late was lost: the chunk stops counting against the window. */
 export const VIDEO_ACK_TIMEOUT_MS = 2500
 /**
  * Up to this many refreshes of a picture at rest, ended early once one comes
@@ -91,6 +120,15 @@ export class VideoOut {
   private timer: ReturnType<typeof setTimeout> | null = null
   private refreshTimer: ReturnType<typeof setTimeout> | null = null
   private readonly started: number
+  /** Bytes the phone may have unacknowledged; learned from how long acknowledgements take. */
+  private window = VIDEO_WINDOW_START
+  /** Recent acknowledgement round trips: the fastest of the last FASTEST_MEMORY_MS is the line's own. */
+  private samples: { at: number; took: number }[] = []
+  private shrunkAt = 0
+  /** When the newest picture began waiting to be encoded. */
+  private pendingSince = 0
+  /** What this stretch measured, for the viewer's report (cast-stats-log.ts). */
+  private measured = { encodeMs: [] as number[], waitMs: [] as number[], ackMs: [] as number[] }
 
   constructor(private readonly deps: VideoOutDeps) {
     this.started = this.now()
@@ -123,22 +161,77 @@ export class VideoOut {
         return
       }
     }
-    this.pending = { frame, context }
+    this.setPending({ frame, context })
     this.clearRefresh()
     this.pump()
   }
 
-  /** The phone has this chunk and every one before it. */
+  /** The picture to encode next, and when it began to wait (the report's waitMs). */
+  private setPending(picture: Picture): void {
+    if (this.pending === null) this.pendingSince = this.now()
+    this.pending = picture
+  }
+
+  /**
+   * The phone has this chunk and every one before it. One sample per
+   * acknowledgement, from its newest chunk: the older ones it covers waited for
+   * the acknowledgement to be sent (on the relay, behind a POST), and read as
+   * slow they would look like a queue that is not there (review 11-24).
+   */
   ack(n: number): void {
-    for (const sent of [...this.inFlight.keys()]) if (sent <= n) this.inFlight.delete(sent)
+    const newest = this.inFlight.get(n)
+    let acked = 0
+    for (const [sent, info] of [...this.inFlight]) {
+      if (sent > n) continue
+      acked += info.bytes
+      this.inFlight.delete(sent)
+    }
+    if (newest) this.learn(this.now() - newest.at, acked)
     this.pump()
+  }
+
+  /** The window, from one acknowledgement's round trip (see the head of this file). */
+  private learn(took: number, acked: number): void {
+    const now = this.now()
+    this.measure('ackMs', took)
+    this.samples = [...this.samples.filter((s) => now - s.at < FASTEST_MEMORY_MS), { at: now, took }]
+    const fastest = Math.min(...this.samples.map((s) => s.took))
+    const queueing = took > fastest * QUEUE_SLACK + QUEUE_SLACK_MS
+    if (!queueing) {
+      this.window = Math.min(VIDEO_WINDOW_MAX, this.window + Math.min(WINDOW_GROW, Math.max(acked, 1)))
+    } else if (now - this.shrunkAt >= WINDOW_SHRINK_MS) {
+      this.window = Math.max(VIDEO_WINDOW_MIN, Math.round(this.window * WINDOW_SHRINK))
+      this.shrunkAt = now
+    }
+  }
+
+  private measure(kind: 'encodeMs' | 'waitMs' | 'ackMs', value: number): void {
+    const list = this.measured[kind]
+    list.push(value)
+    if (list.length > MEASURED_MAX) list.splice(0, list.length - MEASURED_MAX)
+  }
+
+  /** The window now, in bytes (for tests and the viewer's report). */
+  get windowBytes(): number {
+    return this.window
+  }
+
+  /** What this stretch measured, then a fresh one: encode time, how long a picture waited, acknowledgement round trips. */
+  takeMeasured(): { encodeMs: number[]; waitMs: number[]; ackMs: number[]; windowKB: number } {
+    const out = { ...this.measured, windowKB: Math.round(this.window / 1024) }
+    this.measured = { encodeMs: [], waitMs: [], ackMs: [] }
+    return out
   }
 
   /** The phone's chain broke: the next chunk starts it again. */
   keyAsked(): void {
     this.needKey = true
     this.inFlight.clear()
-    if (!this.pending && this.last) this.pending = this.last
+    // Very likely another line (the phone came back on a new network): what was
+    // learned of the old one is no guide to this one.
+    this.window = Math.min(this.window, VIDEO_WINDOW_START)
+    this.samples = []
+    if (!this.pending && this.last) this.setPending(this.last)
     this.pump()
   }
 
@@ -161,9 +254,19 @@ export class VideoOut {
   private pump(): void {
     if (this.closed || this.encoding || !this.pending) return
     const now = this.now()
-    for (const [n, sent] of this.inFlight) if (now - sent.at >= VIDEO_ACK_TIMEOUT_MS) this.inFlight.delete(n)
+    let lost = false
+    for (const [n, sent] of this.inFlight) {
+      if (now - sent.at < VIDEO_ACK_TIMEOUT_MS) continue
+      this.inFlight.delete(n)
+      lost = true
+    }
+    // An acknowledgement that never came: the line is slower than the window thought.
+    if (lost && now - this.shrunkAt >= WINDOW_SHRINK_MS) {
+      this.window = Math.max(VIDEO_WINDOW_MIN, Math.round(this.window * WINDOW_SHRINK))
+      this.shrunkAt = now
+    }
     const bytes = [...this.inFlight.values()].reduce((sum, sent) => sum + sent.bytes, 0)
-    if (this.inFlight.size >= VIDEO_CREDIT || bytes >= VIDEO_CREDIT_BYTES) {
+    if (this.inFlight.size >= VIDEO_WINDOW_MAX_CHUNKS || (this.inFlight.size > 0 && bytes >= this.window)) {
       const oldest = Math.min(...[...this.inFlight.values()].map((sent) => sent.at))
       if (this.timer) clearTimeout(this.timer)
       this.timer = setTimeout(() => {
@@ -192,6 +295,7 @@ export class VideoOut {
     }
     const picture = this.pending
     this.pending = null
+    this.measure('waitMs', now - this.pendingSince)
     this.encode(picture)
   }
 
@@ -201,7 +305,8 @@ export class VideoOut {
     const size = this.canvasFor(frame.meta.revision, frame.size)
     this.encoding = true
     const key = this.needKey
-    const timestamp = Math.max(0, Math.round((this.now() - this.started) * 1000))
+    const encodeStart = this.now()
+    const timestamp = Math.max(0, Math.round((encodeStart - this.started) * 1000))
     const limit = this.count === 0 ? VIDEO_FIRST_ENCODE_TIMEOUT_MS : VIDEO_ENCODE_TIMEOUT_MS
     let watchdog: ReturnType<typeof setTimeout> | null = null
     const hung = new Promise<never>((_, reject) => {
@@ -215,6 +320,7 @@ export class VideoOut {
       (chunk) => {
         this.encoding = false
         if (this.closed) return
+        this.measure('encodeMs', this.now() - encodeStart)
         if (chunk) {
           this.count += 1
           const n = this.count
@@ -282,7 +388,7 @@ export class VideoOut {
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = null
       if (this.closed || this.pending || !this.last) return
-      this.pending = this.last
+      this.setPending(this.last)
       this.pump()
     }, VIDEO_REFRESH_MS)
   }

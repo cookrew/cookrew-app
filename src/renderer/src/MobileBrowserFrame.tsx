@@ -42,6 +42,7 @@ import { zoomStore } from './zoom/zoom-store'
 import { handOffPicture, shouldHandOff } from './browser-poster'
 import { useRemoteKeyboard } from './useRemoteKeyboard'
 import { FramePainter } from './frame-painter'
+import { pressMark, pressMoved, type PressMark } from './press-mark'
 import { createInputPump } from './input-pump'
 import { useGestureLead, type GestureLead } from './use-gesture-lead'
 import { RemoteKeyBar } from './RemoteKeyBar'
@@ -169,6 +170,8 @@ export function MobileBrowserFrame({
   const kbdRef = useRef(kbd)
   kbdRef.current = kbd
   const tapStart = useRef<{ x: number; y: number; at: number } | null>(null)
+  /** The press ring under the finger, if one is showing (press-mark.ts): a scroll or a pinch takes it away. */
+  const press = useRef<PressMark | null>(null)
   const lastTapAt = useRef(0)
   const raisedAt = useRef(0)
   const [fieldMode, setFieldMode] = useState<FieldMode>('text')
@@ -631,6 +634,10 @@ export function MobileBrowserFrame({
       touchGesture.current = update.state
       e.currentTarget.setPointerCapture(e.pointerId)
       sendFrameInput(update.message)
+      // The first finger's press is shown here at once; the page's answer is a round trip away.
+      // A second finger makes it a pinch, not a tap: the ring goes.
+      press.current?.cancel()
+      press.current = update.state.contacts.length === 1 && !stream.direct && boxRef.current ? pressMark(boxRef.current, e.clientX, e.clientY) : null
       gestureLead.down(e.pointerId, e.clientX, e.clientY)
       flingPoint.current = point
       // One finger on a web page may become a selection; a second is a pinch.
@@ -659,9 +666,17 @@ export function MobileBrowserFrame({
     // e.detail is the click multiplicity — a double-click carries 2 so the page
     // can select a word (3 = triple → select line/all).
     sendFrameInput(pointerMsg('down', point, e.detail, { button: buttonName(e.button), mods: modsOf(e) }))
+    // A left click is shown at once; a drag takes the ring away as it starts (onPointerMove).
+    press.current?.cancel()
+    press.current = e.button === 0 && !stream.direct && boxRef.current ? pressMark(boxRef.current, e.clientX, e.clientY) : null
   }
   const onPointerMove = (e: React.PointerEvent): void => {
     if (!interactive) return
+    // Past tap slop it is a scroll or a drag, and the picture moves with it: no ring left behind.
+    if (press.current && pressMoved(press.current, e.clientX, e.clientY, TAP_SLOP_PX)) {
+      press.current.cancel()
+      press.current = null
+    }
     const held = selecting.current
     if (held && held.pointerId === e.pointerId) {
       const point = framePoint(e)

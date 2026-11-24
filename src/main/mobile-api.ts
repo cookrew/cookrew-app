@@ -1195,20 +1195,22 @@ export async function handleMobileApi(
   }
   const bridgePost = p.match(/^\/api\/socket-bridge\/([0-9a-f-]{36})$/);
   if (deps.socketBridge && bridgePost && method === "POST") {
-    const body = await readJson<{ m?: unknown; s?: unknown; a?: unknown; end?: unknown }>(request);
+    const body = await readJson<{ m?: unknown; s?: unknown; a?: unknown; v?: unknown; end?: unknown }>(request);
     const messages = Array.isArray(body.m) ? body.m : [];
     const start = Number.isInteger(body.s) && (body.s as number) > 0 ? (body.s as number) : undefined;
     const painted = Number.isInteger(body.a) && (body.a as number) >= 0 ? (body.a as number) : undefined;
+    // The newest H.264 chunk the phone has (cast-video.ts), apart from the input queue.
+    const decoded = Number.isInteger(body.v) && (body.v as number) > 0 && (body.v as number) < Number.MAX_SAFE_INTEGER ? (body.v as number) : undefined;
     const leaving = body.end === true;
     if (
-      (messages.length === 0 && painted === undefined && !leaving) ||
+      (messages.length === 0 && painted === undefined && decoded === undefined && !leaving) ||
       messages.length > SOCKET_BRIDGE_POST_MESSAGES ||
       !messages.every((m): m is string => typeof m === "string" && m.length <= SOCKET_BRIDGE_MESSAGE_MAX)
     ) {
       respondJson(response, 400, { error: "m must be a short list of strings" });
       return true;
     }
-    if (!deps.socketBridge.post(bridgePost[1], { m: messages, s: start, a: painted, end: leaving }, presentedToken(request, url))) {
+    if (!deps.socketBridge.post(bridgePost[1], { m: messages, s: start, a: painted, v: decoded, end: leaving }, presentedToken(request, url))) {
       respondJson(response, 404, { error: "no such bridged socket" });
       return true;
     }
