@@ -143,6 +143,40 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
     }
   }, 30_000)
 
+  // 11-24 (review): the poller stopped photographing a live screencast, and the
+  // screencast's first frame of a new size can be lost to the change itself; a
+  // still page then sent nothing of the new revision for up to 3 s. Every viewer
+  // must see the new size at once, with nothing on the page moving.
+  it('shows a still page at its new size soon after every viewport change', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'cookrew-headless-still-'))
+    const instance = new HeadlessInstance({
+      executablePath: chrome as string,
+      profileDir: path.join(root, 'profile'),
+      width: 720,
+      height: 560,
+      tabs: [{ id: 'tab-a', url: `${origin}/still`, title: '' }],
+      activeTabId: 'tab-a'
+    })
+    let last: { revision: number } | null = null
+    instance.frameListeners.add((_data, meta) => void (last = { revision: meta.revision ?? 0 }))
+    try {
+      await instance.start()
+      instance.registerViewportViewer('phone')
+      const waits: number[] = []
+      for (const [revision, width] of [[2, 390], [3, 430], [4, 390]] as const) {
+        instance.offerViewport('phone', { width, height: 700, mobile: true, scale: 2 })
+        await waitFor(() => instance.viewportState.revision === revision)
+        const applied = Date.now()
+        await waitFor(() => (last as { revision: number } | null)?.revision === revision, 1500)
+        waits.push(Date.now() - applied)
+      }
+      expect(Math.max(...waits)).toBeLessThan(1500)
+    } finally {
+      await instance.stop()
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
   // 11-24: a card's Chrome was stopped by signal, which skips Chrome's write of
   // its cookies: a cookie set just before the stop was gone after a restart 7
   // times in 8. stop() asks Chrome to close first (headless-chrome.ts · terminateProcess).

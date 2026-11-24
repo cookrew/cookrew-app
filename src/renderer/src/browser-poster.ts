@@ -42,6 +42,19 @@ export function shouldHandOff(input: { wasOpen: boolean; open: boolean; painted:
  * exactly as it was: a card that keeps its last good picture beats one that
  * loses it.
  */
+/**
+ * The same for a picture that has no JPEG of its own (an H.264 frame,
+ * cast-video-decoder.ts): the canvas it was drawn on is made one, once, at
+ * zoom-out. Never per frame.
+ */
+export function handOffPicture(store: KeyedStore<string>, id: string, picture: Blob | HTMLCanvasElement): void {
+  if (picture instanceof Blob) return handOffBlob(store, id, picture)
+  if (picture.width === 0 || picture.height === 0) return
+  picture.toBlob((blob) => {
+    if (blob) handOffBlob(store, id, blob)
+  }, 'image/jpeg', 0.7)
+}
+
 export function handOffBlob(store: KeyedStore<string>, id: string, blob: Blob): void {
   let next: string
   try {

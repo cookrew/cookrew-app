@@ -17,6 +17,16 @@ import { VIEWPORT_SCALE_MAX } from '../shared/cast-viewport'
  *                  stream picks a change up when it next starts (a resize,
  *                  a tab switch)
  *
+ * And H.264 (cast-video.ts), for a viewer whose browser can decode it:
+ *
+ *   h264                 false turns it off for everyone; JPEG as before
+ *   h264Kbps             the encoder's aim on the LAN and the direct link
+ *   relayH264Kbps        the same on the relay
+ *   h264SourceQuality    the JPEG quality the screencast runs at while an H.264
+ *                        viewer watches: the encoder's input, so it must not be
+ *                        the blur it removes
+ *   relayVideoScaleMax   the relay's scale for an H.264 viewer, whose frames fit
+ *
  * A missing, unreadable or malformed file is the defaults; each field falls
  * back on its own. Read again whenever the file changes, never on a timer.
  */
@@ -26,6 +36,11 @@ export interface CastTuning {
   /** The same for a viewer that came through the relay (socket-bridge.ts), whose line is the thinnest. */
   readonly relayScaleMax: number
   readonly quality: number
+  readonly h264: boolean
+  readonly h264Kbps: number
+  readonly relayH264Kbps: number
+  readonly h264SourceQuality: number
+  readonly relayVideoScaleMax: number
 }
 
 /**
@@ -33,16 +48,36 @@ export interface CastTuning {
  * bytes (measured 11-24). The relay stays 1x until its stats say otherwise:
  * it sends at most four frames a second (socket-bridge.ts · SOCKET_BRIDGE_FRAME_MS)
  * down the slowest line there is.
+ *
+ * H.264 (measured 11-24, h264-live-view-report): 4 Mbps is 222–439 KB/s on a
+ * scrolling session against JPEG's 2.1–2.5 MB/s, and sharper at rest. On the
+ * relay 800 kbps keeps the worst measured session under the ~130 KB/s the
+ * owner's relay carried, with room to spare, and at 2x.
  */
-export const CAST_TUNING_DEFAULTS: CastTuning = { scaleMax: 2, relayScaleMax: 1, quality: 60 }
+export const CAST_TUNING_DEFAULTS: CastTuning = {
+  scaleMax: 2,
+  relayScaleMax: 1,
+  quality: 60,
+  h264: true,
+  h264Kbps: 4000,
+  relayH264Kbps: 800,
+  h264SourceQuality: 90,
+  relayVideoScaleMax: 2
+}
 
 function scaleField(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value)
     ? Math.min(Math.max(Math.round(value * 2) / 2, 1), VIEWPORT_SCALE_MAX)
     : fallback
 }
+
+function bounded(value: unknown, min: number, max: number, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(Math.max(Math.round(value), min), max) : fallback
+}
 const QUALITY_MIN = 30
 const QUALITY_MAX = 95
+const KBPS_MIN = 200
+const KBPS_MAX = 20_000
 
 export function castTuningFile(): string {
   return path.join(homedir(), '.cookrew', 'cast-tuning.json')
@@ -51,14 +86,16 @@ export function castTuningFile(): string {
 /** The file's fields, each bounded; anything unusable is its default. */
 export function parseCastTuning(raw: unknown): CastTuning {
   const obj = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
-  const quality = obj.quality
+  const d = CAST_TUNING_DEFAULTS
   return {
-    scaleMax: scaleField(obj.scaleMax, CAST_TUNING_DEFAULTS.scaleMax),
-    relayScaleMax: scaleField(obj.relayScaleMax, CAST_TUNING_DEFAULTS.relayScaleMax),
-    quality:
-      typeof quality === 'number' && Number.isFinite(quality)
-        ? Math.min(Math.max(Math.round(quality), QUALITY_MIN), QUALITY_MAX)
-        : CAST_TUNING_DEFAULTS.quality
+    scaleMax: scaleField(obj.scaleMax, d.scaleMax),
+    relayScaleMax: scaleField(obj.relayScaleMax, d.relayScaleMax),
+    quality: bounded(obj.quality, QUALITY_MIN, QUALITY_MAX, d.quality),
+    h264: typeof obj.h264 === 'boolean' ? obj.h264 : d.h264,
+    h264Kbps: bounded(obj.h264Kbps, KBPS_MIN, KBPS_MAX, d.h264Kbps),
+    relayH264Kbps: bounded(obj.relayH264Kbps, KBPS_MIN, KBPS_MAX, d.relayH264Kbps),
+    h264SourceQuality: bounded(obj.h264SourceQuality, QUALITY_MIN, QUALITY_MAX, d.h264SourceQuality),
+    relayVideoScaleMax: scaleField(obj.relayVideoScaleMax, d.relayVideoScaleMax)
   }
 }
 

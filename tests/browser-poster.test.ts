@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { handOffBlob, shouldHandOff } from '../src/renderer/src/browser-poster'
+import { handOffBlob, handOffPicture, shouldHandOff } from '../src/renderer/src/browser-poster'
 import { KeyedStore } from '../src/renderer/src/keyed-store'
 
 /**
@@ -82,6 +82,29 @@ describe('handing a live frame to the card', () => {
     expect(revoked).toEqual(['blob:old'])
   })
 
+  it('makes an H.264 picture, which has no JPEG, into one from its canvas, once', () => {
+    const store = new KeyedStore<string>()
+    const asked: { type?: string; quality?: unknown }[] = []
+    const jpeg = new Blob([new Uint8Array([0xff, 0xd8])], { type: 'image/jpeg' })
+    const canvas = {
+      width: 780,
+      height: 1400,
+      toBlob: (callback: (blob: Blob | null) => void, type?: string, quality?: unknown) => {
+        asked.push({ type, quality })
+        callback(jpeg)
+      }
+    } as unknown as HTMLCanvasElement
+    handOffPicture(store, 'b1', canvas)
+    expect(asked).toEqual([{ type: 'image/jpeg', quality: 0.7 }])
+    expect(store.get('b1')).toBe('blob:test/1')
+    // A JPEG picture goes as it is.
+    handOffPicture(store, 'b2', jpeg)
+    expect(created).toEqual([jpeg, jpeg])
+    // A canvas never drawn on has nothing to give.
+    handOffPicture(store, 'b3', { width: 0, height: 0, toBlob: () => asked.push({}) } as unknown as HTMLCanvasElement)
+    expect(asked).toHaveLength(1)
+  })
+
   it('leaves the store alone when the blob cannot become a URL', () => {
     vi.stubGlobal('URL', {
       ...URL,
@@ -119,10 +142,11 @@ describe('the zoomed frame', () => {
   })
 
   it('remembers the last painted live frame, and hands it off on the edge and at unmount', () => {
-    // The live view is a canvas now (frame-painter.ts): what it remembers is the painted JPEG.
-    expect(frame).toContain('lastPaintedRef.current = frame.blob')
+    // The live view is a canvas now (frame-painter.ts): what it remembers is the painted JPEG,
+    // or the canvas itself for an H.264 picture, which has none (cast-video-decoder.ts).
+    expect(frame).toContain('lastPaintedRef.current = frame.blob ?? canvas')
     expect(frame).toContain("shouldHandOff({ wasOpen: wasOpenRef.current, open, painted: lastPaintedRef.current !== null, computer: stream.deviceStatus?.use === 'computer' })")
-    expect(frame).toContain('handOffBlob(thumbStore, browserId, lastPaintedRef.current)')
+    expect(frame).toContain('handOffPicture(thumbStore, browserId, lastPaintedRef.current)')
   })
 
   it('does not cover a poster with the loading glyph — the status chip says the state', () => {

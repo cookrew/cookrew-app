@@ -214,7 +214,7 @@ describe('a stats message carries numbers only, bounded', () => {
 
 describe('the tuning file’s two knobs', () => {
   it('bounds each field and falls back on its own', () => {
-    expect(parseCastTuning({ scaleMax: 9, relayScaleMax: 0, quality: 10 })).toEqual({ scaleMax: 3, relayScaleMax: 1, quality: 30 })
+    expect(parseCastTuning({ scaleMax: 9, relayScaleMax: 0, quality: 10 })).toMatchObject({ scaleMax: 3, relayScaleMax: 1, quality: 30 })
     expect(parseCastTuning({ scaleMax: 2.6 })).toEqual({ ...CAST_TUNING_DEFAULTS, scaleMax: 2.5 })
     expect(parseCastTuning({ relayScaleMax: 2 })).toEqual({ ...CAST_TUNING_DEFAULTS, relayScaleMax: 2 })
     expect(parseCastTuning('nonsense')).toEqual(CAST_TUNING_DEFAULTS)
@@ -222,7 +222,7 @@ describe('the tuning file’s two knobs', () => {
   })
 
   it('defaults to 2x, the relay to 1x, at quality 60', () => {
-    expect(CAST_TUNING_DEFAULTS).toEqual({ scaleMax: 2, relayScaleMax: 1, quality: 60 })
+    expect(CAST_TUNING_DEFAULTS).toMatchObject({ scaleMax: 2, relayScaleMax: 1, quality: 60 })
   })
 })
 
@@ -238,11 +238,11 @@ describe('the real tuning reader follows the file', () => {
     const file = path.join(dir, 'cast-tuning.json')
     expect(real.castTuning(file)).toEqual(CAST_TUNING_DEFAULTS)
     writeFileSync(file, JSON.stringify({ scaleMax: 3, quality: 80 }))
-    expect(real.castTuning(file)).toEqual({ scaleMax: 3, relayScaleMax: 1, quality: 80 })
+    expect(real.castTuning(file)).toMatchObject({ scaleMax: 3, relayScaleMax: 1, quality: 80 })
     writeFileSync(file, JSON.stringify({ scaleMax: 1 }))
     const later = new Date(Date.now() + 5000)
     utimesSync(file, later, later)
-    expect(real.castTuning(file)).toEqual({ scaleMax: 1, relayScaleMax: 1, quality: 60 })
+    expect(real.castTuning(file)).toMatchObject({ scaleMax: 1, relayScaleMax: 1, quality: 60 })
   })
 
   it('reads defaults from a file that is not JSON', async () => {

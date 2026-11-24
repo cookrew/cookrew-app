@@ -14,6 +14,7 @@ import type { BrowserInstance } from './browser-instance'
 import { MAC_VIEWER, type ViewerWho } from '../shared/remote-access'
 import { CastViewer, type OutboundFrame, type ViewerSink } from './cast-viewer'
 import { RELAY_MARKER } from './canvas-bridge'
+import type { CastEncoderHost } from './cast-encoder'
 import {
   acceptKey,
   decodeFrame,
@@ -52,6 +53,8 @@ export interface BrowserCastDeps {
    * unnamed viewer can never hold control, so forgetting this closes, not opens.
    */
   who?: (credential: string | null) => ViewerWho
+  /** Where a viewer that can decode H.264 has its pictures encoded (cast-encoder.ts). Absent: JPEG for all. */
+  encoder?: CastEncoderHost
 }
 
 const STREAM_RE = /^\/api\/browser\/([^/]+)\/stream$/
@@ -163,7 +166,7 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
     // The relay's bridge marks the socket it dials (socket-bridge.ts); a page's
     // WebSocket cannot set the header, and setting it only lowers one's own scale.
     const relayed = req.headers[RELAY_MARKER] === '1'
-    const client = new ClientConn(socket, () => clients.delete(client), browserId, who, relayed)
+    const client = new ClientConn(socket, () => clients.delete(client), browserId, who, relayed, deps.encoder)
     clients.add(client)
     if (socket.destroyed) {
       client.close()
@@ -205,7 +208,8 @@ class ClientConn {
     onClosed: () => void,
     readonly browserId: string,
     who?: ViewerWho,
-    relayed = false
+    relayed = false,
+    encoder?: CastEncoderHost
   ) {
     const sink: ViewerSink = {
       sendControl: (message) => this.wsSend(JSON.stringify(message)),
@@ -214,7 +218,7 @@ class ClientConn {
       onceReady: (callback) => void this.socket.once('drain', callback),
       close: () => this.socket.destroy()
     }
-    this.viewer = new CastViewer(sink, onClosed, browserId, who, { relayed })
+    this.viewer = new CastViewer(sink, onClosed, browserId, who, { relayed, ...(encoder ? { encoder } : {}) })
     socket.on('data', this.onData)
     socket.on('close', this.close)
     socket.on('error', this.close)

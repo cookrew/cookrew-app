@@ -56,6 +56,10 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 const identityByBuild = new Map<string, NativeIdentity>()
 
 const POLL_INTERVAL_MS = 66
+/** A screencast silent this long is started again (pollTick). */
+const SCREENCAST_STALL_MS = 3000
+/** A viewer's raised screencast quality stays this long after it lets go (preferSourceQuality). */
+const QUALITY_RELEASE_MS = 10_000
 const NAVIGATION_TIMEOUT_MS = 15_000
 export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 4_000
 const FORCED_SHUTDOWN_TIMEOUT_MS = 1_000
@@ -249,6 +253,8 @@ interface PageBinding extends HeadlessPageState {
   cdp: CdpClient
   closing: boolean
   screencasting: boolean
+  /** The quality and size the running screencast was started with (ensureScreencast). */
+  castKey?: string
 }
 
 interface RuntimeRemoteObject {
@@ -279,6 +285,10 @@ export class HeadlessInstance {
   private pollTimer: ReturnType<typeof setInterval> | null = null
   private lastFrameAt = 0
   private lastHash = ''
+  /** When the screencast last sent a picture: a stall is when it has not for SCREENCAST_STALL_MS (pollTick). */
+  private lastScreencastAt = 0
+  /** The last picture sent, said again as a still page's heartbeat while the screencast lives (pollTick). */
+  private lastEmitted: { base64: string; meta: FrameMeta; revision: number } | null = null
   private width: number
   private height: number
   private mobile = false
@@ -304,9 +314,47 @@ export class HeadlessInstance {
     return this.streamQuality
   }
 
-  /** A frame's JPEG quality: this card's own if it was given one, else the tuning's (cast-tuning.ts). */
+  /** What each viewer asked the screencast's quality to be at least (an H.264 viewer's encoder input). */
+  private readonly qualityAsks = new Map<string, number>()
+
+  /**
+   * A frame's JPEG quality: this card's own if it was given one, else the
+   * tuning's (cast-tuning.ts), raised to the highest any viewer asked for.
+   */
   private frameQuality(): number {
-    return this.opts.quality ?? castTuning().quality
+    const base = this.opts.quality ?? castTuning().quality
+    return Math.max(base, ...this.qualityAsks.values())
+  }
+
+  /** A viewer's ask, let go of only after QUALITY_RELEASE_MS: one that comes back meanwhile changes nothing. */
+  private readonly qualityReleases = new Map<string, ReturnType<typeof setTimeout>>()
+
+  preferSourceQuality(viewerId: string, quality: number | null): void {
+    const releasing = this.qualityReleases.get(viewerId)
+    if (releasing) clearTimeout(releasing)
+    this.qualityReleases.delete(viewerId)
+    if (quality === null) {
+      if (!this.qualityAsks.has(viewerId)) return
+      // Every viewer gets the screencast's quality, and a change of it restarts the
+      // stream for all of them: a phone dropping off and back on must not flap it.
+      const timer = setTimeout(() => {
+        this.qualityReleases.delete(viewerId)
+        this.qualityAsks.delete(viewerId)
+        this.requalify()
+      }, QUALITY_RELEASE_MS)
+      timer.unref?.()
+      this.qualityReleases.set(viewerId, timer)
+      return
+    }
+    this.qualityAsks.set(viewerId, Math.min(95, Math.max(30, Math.round(quality))))
+    this.requalify()
+  }
+
+  /** The screencast takes its quality when it starts: started again if that changed. */
+  private requalify(): void {
+    const active = this.pages.get(this.activeTabId)
+    if (this.closed || !active?.screencasting) return
+    void this.ensureScreencast(active).catch((error: unknown) => console.error('Restarting a card screencast failed:', error))
   }
   /** Text the active page copied (page-copy.ts); the cast decides which viewer gets it. */
   readonly copyListeners = new Set<(text: string) => void>()
@@ -674,9 +722,11 @@ export class HeadlessInstance {
     const next = this.pages.get(tabId)
     if (!next) throw new Error(`headless tab '${tabId}' is unavailable`)
     const previous = this.pages.get(this.activeTabId)
-    if (previous && previous !== next && previous.screencasting) {
-      await previous.cdp.send('Page.stopScreencast').catch(() => undefined)
-      previous.screencasting = false
+    if (previous && previous !== next) {
+      await this.stopScreencast(previous)
+      // Another tab: the old one's picture and its screencast's clock are no heartbeat here.
+      this.lastEmitted = null
+      this.lastScreencastAt = 0
     }
     if (previous && previous !== next && this.fieldListeners.size > 0) this.setFieldWatch(previous, false)
     this.activeTabId = tabId
@@ -684,18 +734,69 @@ export class HeadlessInstance {
     this.lastFields = null
     if (this.fieldListeners.size > 0) this.setFieldWatch(next, true)
     await this.browserCdp?.send('Target.activateTarget', { targetId: next.targetId })
-    if (!next.screencasting) {
+    await this.ensureScreencast(next)
+    await this.refreshPageState(next)
+  }
+
+  /** The quality and size the active screencast must run with now. */
+  private castKey(): string {
+    return `${this.frameQuality()} ${Math.round(this.width * this.scale)}x${Math.round(this.height * this.scale)}`
+  }
+
+  /**
+   * EVERY SCREENCAST START AND STOP, ONE AT A TIME. A quality change, a viewport
+   * change and a quiet screencast each stop and start it, and interleaved they
+   * could leave it started at the old size with the flag saying all was well
+   * (review 11-24). Queued, each one reads what the stream must be when its
+   * turn comes, so the last one always leaves it right.
+   */
+  private castOp(op: () => Promise<void>): Promise<void> {
+    const run = this.castTail.then(op)
+    this.castTail = run.catch(() => undefined)
+    return run
+  }
+
+  private castTail: Promise<void> = Promise.resolve()
+
+  /**
+   * The page's screencast running with what it must have now (castKey), and
+   * started again if not. `fresh`: started again in any case. A screencast that
+   * has gone quiet answers a restart with a fresh frame of its own: the same
+   * pipeline, the same geometry, so a page that did not change comes back as the
+   * same picture. A screenshot is another picture (1400 rows where the
+   * screencast had 1398, measured 11-24), which every viewer had to be sent, and
+   * an H.264 viewer as a two-pixel shift of it all.
+   */
+  private ensureScreencast(page: PageBinding, fresh = false): Promise<void> {
+    return this.castOp(async () => {
+      const gone = (): boolean => this.closed || page.closing || this.activeTabId !== page.tabId
+      if (gone()) return
+      const key = this.castKey()
+      if (page.screencasting && page.castKey === key && !fresh) return
+      if (page.screencasting) {
+        await page.cdp.send('Page.stopScreencast').catch(() => undefined)
+        page.screencasting = false
+      }
+      if (gone()) return
       this.streamQuality = this.frameQuality()
-      await next.cdp.send('Page.startScreencast', {
+      await page.cdp.send('Page.startScreencast', {
         format: 'jpeg',
         quality: this.streamQuality,
         maxWidth: Math.round(this.width * this.scale),
         maxHeight: Math.round(this.height * this.scale),
         everyNthFrame: 1
       })
-      next.screencasting = true
-    }
-    await this.refreshPageState(next)
+      page.screencasting = true
+      page.castKey = key
+    })
+  }
+
+  private stopScreencast(page: PageBinding): Promise<void> {
+    return this.castOp(async () => {
+      if (!page.screencasting) return
+      await page.cdp.send('Page.stopScreencast').catch(() => undefined)
+      page.screencasting = false
+    })
   }
 
   /**
@@ -788,6 +889,7 @@ export class HeadlessInstance {
     if (page.tabId !== this.activeTabId || this.viewportCoordinator.state.transitioning) return
     const data = params.data
     if (typeof data === 'string' && data.length > 0) {
+      this.lastScreencastAt = Date.now()
       this.emitFrame(data, (params.metadata ?? {}) as FrameMeta)
     }
   }
@@ -840,9 +942,31 @@ export class HeadlessInstance {
       this.frameListeners.size === 0 ||
       this.viewportCoordinator.state.transitioning
     ) return
-    if (Date.now() - this.lastFrameAt < POLL_INTERVAL_MS) return
+    const now = Date.now()
+    if (now - this.lastFrameAt < POLL_INTERVAL_MS) return
+    // A LIVE SCREENCAST IS NOT PHOTOGRAPHED. A screenshot makes the screencast
+    // draw a frame of its own, a little different (another quality, two rows
+    // shorter), and the two chased each other: eight new pictures a second of a
+    // page nobody touched (measured 11-24), each a whole JPEG to every viewer and
+    // an H.264 key frame when the size flipped. Once the screencast has spoken, a
+    // still page is its last picture said again, and a screencast quiet for
+    // SCREENCAST_STALL_MS is started again rather than photographed. A
+    // screenshot is only for a screencast that has said nothing yet, or nothing
+    // since the viewport changed: its first frame of the new size can be lost to
+    // the change itself, and a still page would send no other (review 11-24).
     const page = this.pages.get(this.activeTabId)
     if (!page) return
+    const last = this.lastEmitted
+    if (this.lastScreencastAt > 0 && last && last.revision === this.viewportCoordinator.state.revision) {
+      if (now - this.lastScreencastAt >= SCREENCAST_STALL_MS && page.screencasting) {
+        this.lastScreencastAt = now
+        void this.ensureScreencast(page, true).catch((error: unknown) => console.error('Restarting a quiet card screencast failed:', error))
+      }
+      // Hashed only when a heartbeat is due: the same picture again is no news before that.
+      if (now - this.lastFrameAt >= STATIC_FRAME_HEARTBEAT_MS) this.emitFrame(last.base64, last.meta)
+      return
+    }
+    const screencastBefore = this.lastScreencastAt
     try {
       const [shot, layout] = await Promise.all([
         page.cdp.send('Page.captureScreenshot', {
@@ -854,6 +978,9 @@ export class HeadlessInstance {
           cssVisualViewport?: { pageY?: unknown }
         } | null>
       ])
+      // The screencast answered while the picture was taken: it is alive, and its
+      // picture of the same page stands. Sending this one too is the chase again.
+      if (this.lastScreencastAt !== screencastBefore) return
       const scale = layout?.visualViewport?.scale
       if (shot?.data && typeof scale === 'number' && Number.isFinite(scale) && scale > 0) {
         const pageY = layout?.cssVisualViewport?.pageY
@@ -875,6 +1002,7 @@ export class HeadlessInstance {
     if (!shouldEmitFrame(hash, this.lastHash, now, this.lastFrameAt)) return
     this.lastHash = hash
     this.lastFrameAt = now
+    this.lastEmitted = { base64, meta, revision: viewport.revision }
     const effectiveMeta: FrameMeta = {
       ...meta,
       deviceWidth: viewport.width,
@@ -984,10 +1112,7 @@ export class HeadlessInstance {
   private async applyViewportMetrics(metrics: ViewportMetrics): Promise<void> {
     if (this.closed) throw new Error('headless browser is closed')
     const active = this.pages.get(this.activeTabId)
-    if (active?.screencasting) {
-      await active.cdp.send('Page.stopScreencast').catch(() => undefined)
-      active.screencasting = false
-    }
+    if (active) await this.stopScreencast(active)
     this.width = metrics.width
     this.height = metrics.height
     this.mobile = metrics.mobile
@@ -1072,6 +1197,8 @@ export class HeadlessInstance {
     this.closed = true
     if (this.pollTimer) clearInterval(this.pollTimer)
     this.pollTimer = null
+    for (const timer of this.qualityReleases.values()) clearTimeout(timer)
+    this.qualityReleases.clear()
     this.frameListeners.clear()
     this.copyListeners.clear()
     this.fieldListeners.clear()

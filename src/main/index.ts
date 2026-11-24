@@ -305,6 +305,8 @@ import type { PresetPricing } from '../shared/preset-manifest'
 import { carrySessionToCwd } from './session-move'
 import { moveTerminalCwd } from './terminal-cwd'
 import { createBrowserCast } from './browser-cast'
+import { createCastEncoder } from './cast-encoder'
+import { ElectronEncoderWindow } from './cast-encoder-window'
 import { createBrowserCastIpc } from './browser-cast-ipc'
 import { WatchPairing } from './watch-pairing'
 import { createWatchHost } from './watch-host'
@@ -7599,9 +7601,17 @@ const browserCastIpc = createBrowserCastIpc({
 /** The wrist's credential (watch-pairing.ts): module scope, because rotating every session ends it too. */
 const watchPairing = new WatchPairing()
 
+/**
+ * Where a phone's live view is encoded as H.264 (cast-encoder.ts): a hidden
+ * window, made when the first viewer that can decode it arrives.
+ */
+const castEncoderWindow = new ElectronEncoderWindow(path.join(app.getPath('userData'), 'use-capture', 'cast-encoder.html'))
+const castEncoder = createCastEncoder(castEncoderWindow.page)
+
 const browserCast = createBrowserCast({
   getInstance: (browserId) => browserManager.get(browserId),
   enabled: streamsCard,
+  encoder: castEncoder,
   desktopToken: () => desktopBrowserStreamToken,
   // The console keeps its address while its data plane moves onto this Mac's
   // own name, so the Origin of that socket is the console's. Same-host alone
@@ -7797,6 +7807,8 @@ function createWindow(): void {
     mainWindow = null
     // The capture host is a hidden window: left open, it would keep the app from quitting.
     useInstances.dispose()
+    // So is the live view's encoder.
+    castEncoderWindow.dispose()
     deepLinks.gone()
     releaseRouteHold()
   })

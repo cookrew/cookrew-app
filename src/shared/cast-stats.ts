@@ -14,8 +14,13 @@ export const CAST_STATS_TYPE = 'stats'
 export const CAST_LINES = ['port', 'ws', 'link', 'relay'] as const
 export type CastLine = (typeof CAST_LINES)[number]
 
+/** How the pictures were sent (cast-video.ts). A report from before H.264 says nothing, and was JPEG. */
+export const CAST_STATS_CODECS = ['jpeg', 'h264'] as const
+export type CastStatsCodec = (typeof CAST_STATS_CODECS)[number]
+
 export interface CastStats {
   readonly line: CastLine
+  readonly codec: CastStatsCodec
   /** The window these numbers cover. */
   readonly windowMs: number
   /** Frames that arrived, and frames drawn (or passed over for a newer one). */
@@ -68,5 +73,6 @@ export function sanitizeCastStats(raw: unknown): CastStats | null {
   }
   const values = Object.values(numbers)
   if (values.some((value) => value === null)) return null
-  return { line, ...(numbers as { [K in keyof typeof numbers]: number }) }
+  const codec = CAST_STATS_CODECS.find((kind) => kind === msg.codec) ?? 'jpeg'
+  return { line, codec, ...(numbers as { [K in keyof typeof numbers]: number }) }
 }

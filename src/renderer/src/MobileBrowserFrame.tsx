@@ -39,7 +39,7 @@ import { hitArea, pictureFit, remoteLayout, ROW_HEIGHT_GUESS } from './use/remot
 import { FRAME_CONTROLS } from './use/RemotePanel'
 import { thumbStore, useThumb } from './activity-thumb-store'
 import { zoomStore } from './zoom/zoom-store'
-import { handOffBlob, shouldHandOff } from './browser-poster'
+import { handOffPicture, shouldHandOff } from './browser-poster'
 import { useRemoteKeyboard } from './useRemoteKeyboard'
 import { FramePainter } from './frame-painter'
 import { createInputPump } from './input-pump'
@@ -123,7 +123,8 @@ export function MobileBrowserFrame({
    */
   const poster = useThumb(browserId)
   /** The last painted live frame's JPEG: the card's picture at zoom-out. */
-  const lastPaintedRef = useRef<Blob | null>(null)
+  /** The last painted picture: its JPEG, or the canvas itself when it came as H.264 and has no JPEG. */
+  const lastPaintedRef = useRef<Blob | HTMLCanvasElement | null>(null)
   const wasOpenRef = useRef(open)
   const mobilePreference = mobileViewportPreference(view.w, coarsePointer)
   // A fine pointer has a keyboard: its keys come as keys, not a soft keyboard's input.
@@ -190,7 +191,7 @@ export function MobileBrowserFrame({
     // picture — once, here, never per frame. Read before the reset below
     // forgets it.
     if (shouldHandOff({ wasOpen: wasOpenRef.current, open, painted: lastPaintedRef.current !== null, computer: stream.deviceStatus?.use === 'computer' })) {
-      handOffBlob(thumbStore, browserId, lastPaintedRef.current as Blob)
+      handOffPicture(thumbStore, browserId, lastPaintedRef.current as Blob | HTMLCanvasElement)
     }
     wasOpenRef.current = open
     lastPaintedRef.current = null
@@ -210,7 +211,7 @@ export function MobileBrowserFrame({
   useEffect(
     () => () => {
       if (wasOpenRef.current && lastPaintedRef.current !== null) {
-        handOffBlob(thumbStore, browserId, lastPaintedRef.current)
+        handOffPicture(thumbStore, browserId, lastPaintedRef.current)
       }
     },
     [browserId]
@@ -241,7 +242,7 @@ export function MobileBrowserFrame({
         receipt(frame.seq)
         paintedFrameSeq.current = frame.seq
         paintedSize.current = { w: frame.width, h: frame.height }
-        lastPaintedRef.current = frame.blob
+        lastPaintedRef.current = frame.blob ?? canvas
         leadRef.current?.painted(frame.scrollY ?? null, frame.pageScale ?? null)
         const box = boxRef.current
         if (box) {

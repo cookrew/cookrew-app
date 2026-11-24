@@ -201,8 +201,9 @@ export class BridgeWebSocket {
       this.onopen?.(new Event('open'))
     })
     // Old Mac: every message is `m`. Otherwise `c` is numbered, `f` and `b` are not:
-    // a picture is replaced by the next one, and is never worth replaying.
-    for (const type of ['m', 'f', 'b']) {
+    // a picture is replaced by the next one, and is never worth replaying. `v` is
+    // an H.264 chunk: in order, every one, and not replayed either (cast-video.ts).
+    for (const type of ['m', 'f', 'b', 'v']) {
       stream.addEventListener(type, (event) => {
         if (!live()) return
         const data = parsed(event)

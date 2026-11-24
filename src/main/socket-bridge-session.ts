@@ -30,6 +30,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto'
 import type http from 'node:http'
 import { startSse, type SseSend } from './mobile-http'
 import type { LoopbackSocket } from './ws-client'
+import { isVideoChunk } from '../shared/cast-video'
 
 export const SOCKET_BRIDGE_RESUME_MS = 30_000
 /** A phone gone this long gives the viewport up, so the Mac's own view is not held to its shape. */
@@ -58,6 +59,8 @@ const HELD_POSTS = 32
 
 /** A browser card's screencast frame: each one is the whole picture. */
 export const isBrowserFrame = (text: string): boolean => text.startsWith('{"t":"frame"')
+/** "The picture stands": the line is alive, nothing to replay. */
+const isSameBeat = (text: string): boolean => text.startsWith('{"t":"same"')
 
 /** What a phone posts up a resumable session. */
 export interface BridgeUp {
@@ -203,7 +206,42 @@ export class BridgeSession {
 
   fromSocket(text: string): void {
     if (isBrowserFrame(text)) this.frame(text)
+    else if (isVideoChunk(text)) this.videoChunk(text)
+    else if (isSameBeat(text)) this.beat(text)
     else this.control(text)
+  }
+
+  /**
+   * An H.264 viewer's `same` (cast-video-out.ts): a beat, unnumbered, as a JPEG
+   * one is here. Numbered it would fill the ring a returning phone replays.
+   */
+  private beat(text: string): void {
+    if (!this.listener) return
+    try {
+      this.listener.send('b', JSON.parse(text))
+    } catch {
+      // Not ours to mend: dropped, the next beat comes.
+    }
+  }
+
+  /**
+   * An H.264 chunk (cast-video.ts): it depends on the one before, so it goes in
+   * order and is never replaced by a newer one; the Mac paces them by the
+   * phone's own acknowledgements. Not numbered and not kept: a phone that comes
+   * back has lost its chain anyway and asks for a key frame, and a kept chunk
+   * would push control messages out of the ring it is replayed from.
+   */
+  private videoChunk(text: string): void {
+    const listener = this.listener
+    if (!listener) return
+    listener.send('v', text)
+    if (this.paused || listener.response.writableLength <= SOCKET_BRIDGE_HIGH) return
+    this.paused = true
+    this.upstream?.pause()
+    listener.response.once('drain', () => {
+      this.paused = false
+      this.upstream?.resume()
+    })
   }
 
   private control(text: string): void {
