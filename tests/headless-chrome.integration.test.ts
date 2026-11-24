@@ -82,6 +82,36 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
     }
   }, 30000)
 
+  // 11-24: a card's Chrome was stopped by signal, which skips Chrome's write of
+  // its cookies: a cookie set just before the stop was gone after a restart 7
+  // times in 8. stop() asks Chrome to close first (headless-chrome.ts · terminateProcess).
+  it('keeps a cookie set just before the stop, across a restart', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'cookrew-headless-cookie-'))
+    const options = {
+      executablePath: chrome as string,
+      profileDir: path.join(root, 'profile'),
+      width: 720,
+      height: 560,
+      tabs: [{ id: 'tab-a', url: `${origin}/cookie`, title: '' }],
+      activeTabId: 'tab-a'
+    }
+    try {
+      const first = new HeadlessInstance(options)
+      await first.start()
+      await first.evaluate(`document.cookie = 'fresh-login=kept; path=/; Max-Age=3600'`)
+      expect((await first.stop()).forced).toBe(false)
+      const second = new HeadlessInstance(options)
+      try {
+        await second.start()
+        await expect(second.evaluate('document.cookie')).resolves.toContain('fresh-login=kept')
+      } finally {
+        await second.stop()
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
   it('shares tabs, emits frames, persists profile state, and exits cleanly', async () => {
     const executablePath = chrome as string
     const tabs: BrowserTab[] = [
