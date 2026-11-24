@@ -232,3 +232,40 @@ describe('adopting the link', () => {
     expect(ended).not.toHaveBeenCalled()
   })
 })
+
+describe('how large an attachment may be on the path it would take', () => {
+  // A fresh module graph per case: the console scope below must not leak into the suites above.
+  const fresh = async (machine: string | null): Promise<{
+    attachLimit: typeof import('../src/renderer/src/rtc-plane').attachLimit
+    setDataPlane: typeof import('../src/renderer/src/data-plane').setDataPlane
+  }> => {
+    vi.resetModules()
+    if (machine !== null) {
+      const { inConsole } = await import('./support/console-scope')
+      await inConsole(machine)
+    }
+    const { attachLimit } = await import('../src/renderer/src/rtc-plane')
+    const { setDataPlane: move } = await import('../src/renderer/src/data-plane')
+    return { attachLimit, setDataPlane: move }
+  }
+  const MACHINE = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+
+  it("is the relay's on cookrew.dev's relay, where the registry refuses more", async () => {
+    const { attachLimit } = await fresh(MACHINE)
+    expect(attachLimit()).toEqual({ bytes: 4 * 1024 * 1024, via: 'relay' })
+  })
+
+  it("is the Mac's on the direct link, which carries the relay's URLs and none of its ceiling", async () => {
+    const { attachLimit, setDataPlane: move } = await fresh(MACHINE)
+    move({ origin: '', kind: 'lan', transport: 'rtc' })
+    expect(attachLimit()).toEqual({ bytes: 20 * 1024 * 1024, via: 'mac' })
+  })
+
+  it("is the Mac's on a direct address, and on the Mac's own page", async () => {
+    const onConsole = await fresh(MACHINE)
+    onConsole.setDataPlane({ origin: 'https://192.168.2.40:8643', kind: 'lan' })
+    expect(onConsole.attachLimit().via).toBe('mac')
+    const ownPage = await fresh(null)
+    expect(ownPage.attachLimit().via).toBe('mac')
+  })
+})

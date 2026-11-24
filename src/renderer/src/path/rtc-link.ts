@@ -55,6 +55,17 @@ const RTTS_KEPT = 64
  * the size every browser takes — the Mac sends its chunks at the same size.
  */
 export const RTC_BODY_CHUNK = 16 * 1024
+/**
+ * A body going up stops while the channel holds more than RTC_BODY_HIGH bytes
+ * not yet sent, and goes on once it is down to RTC_BODY_LOW. Queued in one go,
+ * a 20 MB attachment is 27 MB of frames: past the 16 MB Chrome's channel takes
+ * (send throws), and every ping and keystroke waits behind all of it. The
+ * marks are the Mac's own for a socket going the other way (rtc-peer.ts).
+ */
+export const RTC_BODY_HIGH = 1024 * 1024
+export const RTC_BODY_LOW = 256 * 1024
+/** Looked at again this often while waiting, for a browser whose low-water event never comes. */
+const RTC_ROOM_POLL_MS = 100
 
 /** Statuses whose Response may not carry a body. */
 const BODILESS = new Set([101, 204, 205, 304])
@@ -234,6 +245,22 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
   let answered: ((alive: boolean) => void) | null = null
   const rtts: number[] = []
   const channel = pc.createDataChannel(RTC_BRIDGE_LABEL, { ordered: true })
+  channel.bufferedAmountLowThreshold = RTC_BODY_LOW
+
+  /** Resolves once the channel has room for more of a body, or is closed. */
+  const room = (): Promise<void> =>
+    new Promise<void>((resolve) => {
+      const check = (): void => {
+        if (!closed && channel.bufferedAmount > RTC_BODY_LOW) return
+        clearInterval(poll)
+        channel.removeEventListener('bufferedamountlow', check)
+        channel.removeEventListener('close', check)
+        resolve()
+      }
+      const poll = setInterval(check, RTC_ROOM_POLL_MS)
+      channel.addEventListener('bufferedamountlow', check)
+      channel.addEventListener('close', check)
+    })
 
   const shut = (reason: string): void => {
     if (closed) return
@@ -467,6 +494,17 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
           // Link already down.
         }
       })
+      const failed = (error: unknown): void => {
+        clearTimeout(stall)
+        if (!exchanges.delete(id)) return
+        reject(error)
+        // The Mac lets go of what arrived of the body, and the slot it holds.
+        try {
+          send({ t: 'end', id })
+        } catch {
+          // Link already down: the Mac lets go of everything with it.
+        }
+      }
       try {
         send({
           t: 'open',
@@ -475,19 +513,29 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
           path: input.path,
           headers: { ...input.headers, 'accept-encoding': 'identity' }
         })
-        const body = input.body ?? new Uint8Array(0)
-        let at = 0
-        do {
-          const slice = body.subarray(at, at + RTC_BODY_CHUNK)
-          at += RTC_BODY_CHUNK
-          send({ t: 'body', id, data: toBase64(slice), done: at >= body.length })
-        } while (at < body.length)
       } catch (error) {
-        clearTimeout(stall)
-        exchanges.delete(id)
-        reject(error)
+        failed(error)
+        return
       }
+      sendBody(id, input.body ?? new Uint8Array(0)).catch(failed)
     })
+
+  /**
+   * A request's body, a frame at a time, as fast as the channel takes it
+   * (RTC_BODY_HIGH). Synchronous up to the first wait, so a small body is
+   * all sent before `request` returns. Stops, quietly, once the exchange is
+   * over: the caller gave up or the link closed, which failed it already.
+   */
+  const sendBody = async (id: string, body: Uint8Array): Promise<void> => {
+    let at = 0
+    do {
+      if (channel.bufferedAmount > RTC_BODY_HIGH) await room()
+      if (!exchanges.has(id)) return
+      const slice = body.subarray(at, at + RTC_BODY_CHUNK)
+      at += RTC_BODY_CHUNK
+      send({ t: 'body', id, data: toBase64(slice), done: at >= body.length })
+    } while (at < body.length)
+  }
 
   return {
     via: name,

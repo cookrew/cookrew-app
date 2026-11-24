@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { cookrew } from '../api'
+import { cookrew, isRemoteMode } from '../api'
+import { oversizeAttachment } from '../../../shared/attachment-limit'
+import { attachLimit } from '../rtc-plane'
 import { getDraft } from './prompt-draft'
 import { pathsForFiles } from '../dropped-files'
 import { insertAttached, pastedImages, saveClipboardImages, type Caret } from './prompt-attach'
@@ -80,12 +82,22 @@ export function usePromptAttach({ draftKey, write, inputRef, refusal = null, asi
       })
   }
 
+  /**
+   * A phone's files go up as bytes, and the Mac saves none past its cap: say
+   * so before a byte goes up. A desktop hands over paths, which have no cap.
+   */
+  const tooLarge = (files: readonly File[]): boolean => {
+    const said = isRemoteMode() ? oversizeAttachment(files, attachLimit()) : null
+    if (said) onError(`Could not attach: ${said}`)
+    return said !== null
+  }
+
   const dropFiles = (files: File[]): void => {
-    if (files.length > 0) attach(() => pathsForFiles(files, cookrew()))
+    if (files.length > 0 && !tooLarge(files)) attach(() => pathsForFiles(files, cookrew()))
   }
 
   const takeImages = (images: File[]): void => {
-    if (images.length > 0) attach(() => saveClipboardImages(images, cookrew()))
+    if (images.length > 0 && !tooLarge(images)) attach(() => saveClipboardImages(images, cookrew()))
   }
 
   return {

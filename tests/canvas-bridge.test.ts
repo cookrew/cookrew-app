@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import {
+  BRIDGE_BODY_MAX,
   BRIDGE_CHUNK,
   RELAY_MARKER,
   createCanvasBridge,
@@ -81,7 +82,7 @@ afterAll(
 
 /** A bridge, its outgoing frames, and the two helpers every test wants. */
 const standUp = (
-  options: { maxOpen?: number; dial?: BridgeDialer } = {}
+  options: { maxOpen?: number; dial?: BridgeDialer; bodyMaxFor?: (method: string, path: string) => number; bodyBudget?: number } = {}
 ): {
   frame: (frame: RelayFrame) => void
   sent: () => RelayFrame[]
@@ -96,7 +97,9 @@ const standUp = (
       if (frame) sent.push(frame)
     },
     dial: options.dial ?? loopbackDialer(port),
-    ...(options.maxOpen === undefined ? {} : { maxOpen: options.maxOpen })
+    ...(options.maxOpen === undefined ? {} : { maxOpen: options.maxOpen }),
+    ...(options.bodyMaxFor === undefined ? {} : { bodyMaxFor: options.bodyMaxFor }),
+    ...(options.bodyBudget === undefined ? {} : { bodyBudget: options.bodyBudget })
   })
   return {
     frame: (frame) => bridge.frame(encodeFrame(frame)),
@@ -291,6 +294,47 @@ describe('what the bridge refuses', () => {
     for (let sent = 0; sent < 12; sent += 1) bridge.frame({ t: 'body', id: 'big', data: slab })
     expect(bridge.of('big')).toEqual([{ t: 'abort', id: 'big', reason: 'body-too-large' }])
     expect(bridge.open()).toBe(0)
+  })
+
+  it('takes a body past the registry ceiling on a route given its own, and still stops at that one', async () => {
+    // The direct link (rtc-peer.ts) has no registry in the way: an attachment
+    // up to the Mac's own save cap must get through it — on that route only.
+    const bridge = standUp({ bodyMaxFor: (method, path) => (method === 'POST' && path === '/up' ? 6 * 1024 * 1024 : BRIDGE_BODY_MAX) })
+    const slab = Buffer.alloc(BRIDGE_CHUNK, 7).toString('base64')
+    bridge.frame({ t: 'open', id: 'five', method: 'POST', path: '/up', headers: {} })
+    // 13 × 384 KB = 4.9 MB: over the relay's 4 MB, under this route's 6 MB.
+    for (let sent = 0; sent < 13; sent += 1) bridge.frame({ t: 'body', id: 'five', data: slab, done: sent === 12 })
+    await until(() => bridge.of('five').some((f) => f.t === 'end'), 'the answer')
+    expect(bridge.of('five').some((f) => f.t === 'abort')).toBe(false)
+    const echo = JSON.parse(bodyOf(bridge.of('five')).toString('utf8')) as { body: string }
+    expect(Buffer.byteLength(echo.body, 'utf8')).toBe(13 * BRIDGE_CHUNK)
+
+    bridge.frame({ t: 'open', id: 'seven', method: 'POST', path: '/up', headers: {} })
+    for (let sent = 0; sent < 17; sent += 1) bridge.frame({ t: 'body', id: 'seven', data: slab })
+    expect(bridge.of('seven')).toEqual([{ t: 'abort', id: 'seven', reason: 'body-too-large' }])
+
+    // Any other route keeps the relay's ceiling.
+    bridge.frame({ t: 'open', id: 'other', method: 'POST', path: '/else', headers: {} })
+    for (let sent = 0; sent < 12; sent += 1) bridge.frame({ t: 'body', id: 'other', data: slab })
+    expect(bridge.of('other')).toEqual([{ t: 'abort', id: 'other', reason: 'body-too-large' }])
+  })
+
+  it('holds no more body bytes at once than its budget, across every exchange, and frees them as they finish', async () => {
+    const slab = Buffer.alloc(BRIDGE_CHUNK, 7).toString('base64')
+    const bridge = standUp({ bodyBudget: 3 * BRIDGE_CHUNK })
+    bridge.frame({ t: 'open', id: 'a', method: 'POST', path: '/', headers: {} })
+    bridge.frame({ t: 'open', id: 'b', method: 'POST', path: '/', headers: {} })
+    bridge.frame({ t: 'body', id: 'a', data: slab })
+    bridge.frame({ t: 'body', id: 'a', data: slab })
+    bridge.frame({ t: 'body', id: 'b', data: slab })
+    // A fourth slab held at once is past the budget: the exchange that asked for it is turned away.
+    bridge.frame({ t: 'body', id: 'b', data: slab })
+    expect(bridge.of('b')).toEqual([{ t: 'abort', id: 'b', reason: 'busy' }])
+    expect(bridge.of('a')).toEqual([])
+    // b's bytes are let go with it, so a's next one fits.
+    bridge.frame({ t: 'body', id: 'a', data: slab, done: true })
+    await until(() => bridge.of('a').some((f) => f.t === 'end'), 'the answer')
+    expect(bridge.of('a').some((f) => f.t === 'abort')).toBe(false)
   })
 
   it('says nothing to a line that is not a frame', () => {

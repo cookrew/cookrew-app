@@ -2,9 +2,10 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { sanitizeAttachmentName } from '../shared/attach'
+import { MAX_ATTACHMENT_BYTES } from '../shared/attachment-limit'
 
-/** Hard cap for a single uploaded attachment (decoded bytes). */
-export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+/** Hard cap for a single uploaded attachment (decoded bytes); the phone reads the same one. */
+export { MAX_ATTACHMENT_BYTES }
 
 /** Where phone uploads land; agents receive the absolute path. */
 export function defaultAttachmentsDir(): string {

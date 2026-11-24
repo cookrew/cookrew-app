@@ -17,6 +17,7 @@ import { planeFetch } from './plane-fetch'
 import { onSealPinned, refusedInTheClear, sealedFetchFor } from './path/seal-plane'
 import { setDirectHeld } from './path-link'
 import { dataPlane } from './data-plane'
+import { MAC_LIMIT, RELAY_LIMIT, type AttachLimit } from '../../shared/attachment-limit'
 import { RtcEventSource, type RtcLink } from './path/rtc-link'
 import { socketUrl } from './browser-stream'
 import { watchStream } from './stream-watch'
@@ -66,6 +67,15 @@ export const linkPath = (url: string, base: string = clientBase()): string | nul
 
 /** Is this page on cookrew.dev's relay right now? It is the one plane behind an ingress. */
 const onRelay = (): boolean => dataPlane().origin === '' && clientBase() !== ''
+
+/**
+ * How large one attachment may be on the path it would take now: the Mac's
+ * cap on the direct link, or on a page talking to the Mac by its own address;
+ * the relay's when only the relay is there. A file between the two fails on
+ * the relay with `too_large` after it has gone up, so the box says so first.
+ */
+export const attachLimit = (): AttachLimit =>
+  dataPlane().transport !== 'rtc' && onRelay() ? RELAY_LIMIT : MAC_LIMIT
 
 /** The link to use for this URL right now, with its Mac path; null for the ordinary way. */
 export const viaLink = (url: string): { link: RtcLink; path: string } | null => {
