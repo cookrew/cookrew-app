@@ -90,7 +90,7 @@ export type PathBadgeInput = {
  * sealed session to the Mac so no offer may be sent (`unpaired` / `sealing`),
  * or the offer was answered and the link never opened (`ice`).
  */
-export type DirectHeld = 'old-mac' | 'browser' | 'unproved' | 'unpaired' | 'sealing' | 'ice'
+export type DirectHeld = 'old-mac' | 'browser' | 'unproved' | 'unpaired' | 'sealing' | 'ice' | 'sealedOnly'
 
 export type PathBadgeView = {
   readonly state: PathState
@@ -136,7 +136,10 @@ const HELD_SENTENCES: Record<DirectHeld, string> = {
   // The page's own state, not the Mac's: no offer may leave without a sealed session.
   unpaired: 'Via cookrew.dev relay. This browser has no sealed session with your Mac; pair it from the Mac once to go direct.',
   sealing: 'Via cookrew.dev relay. The sealed session to your Mac has not been confirmed yet.',
-  ice: 'Via cookrew.dev relay. Your Mac answered, but the direct link never opened (its addresses did not connect from here).'
+  ice: 'Via cookrew.dev relay. Your Mac answered, but the direct link never opened (its addresses did not connect from here).',
+  // Sealed-only on the Mac: every plain relayed request is refused until this
+  // device holds a sealed code (Seal 2), so the badge says what to do.
+  sealedOnly: 'Via cookrew.dev relay. Your Mac now refuses plain connections. Pair this device with it once (Pair a phone) to continue.'
 }
 
 /** Strip brackets so an IPv6 literal from a URL can be matched as an address. */

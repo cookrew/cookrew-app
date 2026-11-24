@@ -129,7 +129,7 @@ describe('the relay, when a direct link answered and was not taken (shared/rtc-b
 
   it('still reads RELAY, and says why it stays there instead of promising to go direct', () => {
     const plain = pathBadgeView(relay)
-    for (const held of ['old-mac', 'browser', 'unproved', 'unpaired', 'sealing', 'ice'] as const) {
+    for (const held of ['old-mac', 'browser', 'unproved', 'unpaired', 'sealing', 'ice', 'sealedOnly'] as const) {
       const view = pathBadgeView({ ...relay, held })
       expect(view.word, held).toBe('RELAY')
       expect(view.sentence, held).not.toBe(plain.sentence)
@@ -146,6 +146,7 @@ describe('the relay, when a direct link answered and was not taken (shared/rtc-b
     expect(pathBadgeView({ ...relay, held: 'unpaired' }).sentence).toMatch(/no sealed session with your Mac/i)
     expect(pathBadgeView({ ...relay, held: 'sealing' }).sentence).toMatch(/has not been confirmed yet/i)
     expect(pathBadgeView({ ...relay, held: 'ice' }).sentence).toMatch(/never opened/i)
+    expect(pathBadgeView({ ...relay, held: 'sealedOnly' }).sentence).toMatch(/refuses plain connections/i)
   })
 
   it('says nothing of it once the plane is direct, or while the link is down', () => {

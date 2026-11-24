@@ -101,6 +101,9 @@ export const setProbing = (on: boolean): void => {
  * word stays RELAY either way; only the sentence stops promising a link that
  * was reached and turned down on purpose.
  */
+/** The badge's reason now, for a caller that must not stomp another's (plane-fetch.ts). */
+export const directHeld = (): DirectHeld | null => state.held
+
 export const setDirectHeld = (held: DirectHeld | null): void => {
   if (state.held === held) return
   state = { ...state, held }

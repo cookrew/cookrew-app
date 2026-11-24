@@ -121,69 +121,58 @@ describe('the Mac sends H.264 at the speed the phone takes it', () => {
     expect(enc.calls.at(-1)?.key).toBe(false)
   })
 
-  it('grows the window while acknowledgements come back as fast as ever, and gives back once they slow', async () => {
+  it('budgets in-flight bytes by measured throughput, so a slow line still pipelines frames', async () => {
     vi.useFakeTimers()
     const { out, enc } = videoOut()
+    const chunk40 = 'A'.repeat(Math.ceil((40 * 1024 * 4) / 3))
     const send = async (seq: number): Promise<void> => {
       out.offer(picture(seq), CTX)
-      enc.calls.at(-1)?.answer({ data: 'AAAA', key: seq === 1 })
+      enc.calls.at(-1)?.answer({ data: chunk40, key: seq === 1 })
       await settle()
     }
-    // Fast round trips: 50 ms each, the window grows.
-    for (let i = 1; i <= 4; i++) {
+    // A fast line: 40 KB acknowledged every 100 ms is about 400 KB/s, and the
+    // budget is a round trip (never under 0.8 s) of it.
+    for (let i = 1; i <= 6; i++) {
       await send(i)
-      vi.advanceTimersByTime(50)
+      vi.advanceTimersByTime(100)
       out.ack(i)
     }
-    const grown = out.windowBytes
-    expect(grown).toBeGreaterThan(VIDEO_WINDOW_START)
-    // Then one that took 600 ms: a queue somewhere, the window gives back.
-    await send(5)
-    vi.advanceTimersByTime(600)
-    out.ack(5)
-    expect(out.windowBytes).toBeLessThan(grown)
+    const fast = out.windowBytes
+    expect(fast).toBeGreaterThan(VIDEO_WINDOW_START)
+    expect(fast).toBeLessThanOrEqual(VIDEO_WINDOW_MAX)
+    // The same 40 KB every 1200 ms is about 33 KB/s: the budget follows it down
+    // toward the floor, and the inflight time is capped above (a queue must not
+    // raise its own budget).
+    for (let i = 7; i <= 16; i++) {
+      await send(i)
+      vi.advanceTimersByTime(1200)
+      out.ack(i)
+    }
+    expect(out.windowBytes).toBeLessThanOrEqual(VIDEO_WINDOW_MAX)
     expect(out.windowBytes).toBeGreaterThanOrEqual(VIDEO_WINDOW_MIN)
-    const measured = out.takeMeasured()
-    expect(measured.ackMs).toEqual([50, 50, 50, 50, 600])
-    expect(measured.encodeMs).toHaveLength(5)
-    expect(out.takeMeasured().ackMs).toEqual([])
+    expect(out.windowBytes).toBeLessThan(fast)
   })
 
-  it('never grows past its ceiling, nor shrinks under its floor', async () => {
+  it('keeps its floor on a line whose acknowledgements stop coming, and its ceiling on a fast one', async () => {
     vi.useFakeTimers()
     const { out, enc } = videoOut()
-    // 40 KB chunks: the window grows by what an acknowledgement covers, at most 16 KB.
-    const chunk40 = 'A'.repeat(Math.ceil((40 * 1024 * 4) / 3))
-    for (let i = 1; i <= 60; i++) {
+    const chunk = 'A'.repeat(Math.ceil((60 * 1024 * 4) / 3))
+    for (let i = 1; i <= 80; i++) {
       out.offer(picture(i), CTX)
-      enc.calls.at(-1)?.answer({ data: chunk40, key: i === 1 })
+      enc.calls.at(-1)?.answer({ data: chunk, key: i === 1 })
       await settle()
+      vi.advanceTimersByTime(20)
       out.ack(i)
     }
     expect(out.windowBytes).toBe(VIDEO_WINDOW_MAX)
-    // Round trips far slower than the fastest of the last 10 s: a queue, each one.
-    for (let i = 61; i <= 75; i++) {
+    // Lost acknowledgements do not empty the window below its floor.
+    for (let i = 81; i <= 84; i++) {
       out.offer(picture(i), CTX)
-      enc.calls.at(-1)?.answer({ data: 'AAAA', key: false })
+      enc.calls.at(-1)?.answer({ data: chunk, key: false })
       await settle()
-      vi.advanceTimersByTime(500)
-      out.ack(i)
+      vi.advanceTimersByTime(3000)
     }
-    expect(out.windowBytes).toBe(VIDEO_WINDOW_MIN)
-  })
-
-  it('a line that is simply slower now is learned, not taken for a queue forever', async () => {
-    vi.useFakeTimers()
-    const { out, enc } = videoOut()
-    for (let i = 1; i <= 30; i++) {
-      out.offer(picture(i), CTX)
-      enc.calls.at(-1)?.answer({ data: 'AAAA', key: i === 1 })
-      await settle()
-      vi.advanceTimersByTime(i <= 3 ? 20 : 900)
-      out.ack(i)
-    }
-    // Past the 10 s memory, 900 ms is the new fastest, and the window grows again.
-    expect(out.windowBytes).toBeGreaterThan(VIDEO_WINDOW_MIN)
+    expect(out.windowBytes).toBeGreaterThanOrEqual(VIDEO_WINDOW_MIN)
   })
 
   it('never encodes two at once: the next waits for the chunk before it', async () => {

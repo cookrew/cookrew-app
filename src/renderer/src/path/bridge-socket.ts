@@ -40,6 +40,8 @@ export const BRIDGE_SILENT_MS = 8000
 /** A POST on a dead path does not fail, it hangs; numbered, it can safely go again. */
 export const BRIDGE_POST_TIMEOUT_MS = 8000
 export const BRIDGE_RESUME_BUDGET_MS = 25_000
+/** The least time between acknowledgement-only POSTs (bridge-socket.ts · sendAckAlone). */
+export const BRIDGE_ACK_MIN_MS = 120
 /** Heard from within this long: a network change is no news to this line. */
 const HEARD_LATELY_MS = 1500
 /** A dial that neither opens nor fails. */
@@ -133,6 +135,9 @@ export class BridgeWebSocket {
   private decodedSent = 0
   /** An acknowledgement-only POST is on its way: the one allowed past the in-flight cap. */
   private ackFlying = false
+  /** When the last acknowledgement-only POST went, and the one waiting for the gap to end. */
+  private ackAloneAt = 0
+  private ackTimer: ReturnType<typeof setTimeout> | null = null
   /** The Mac reads acknowledgements as `v` (its hello said `acks`). */
   private acksApart = false
   private lastHeard = 0
@@ -392,6 +397,21 @@ export class BridgeWebSocket {
       const ack = this.painted_ > this.ackSent ? this.painted_ : undefined
       const decoded = this.decoded_ > this.decodedSent ? this.decoded_ : undefined
       if (!batch && ack === undefined && decoded === undefined) return
+      // An acknowledgement on its own waits for the gap, here as in sendAckAlone:
+      // one POST per BRIDGE_ACK_MIN_MS carries the newest, not one per chunk.
+      if (!batch && ack === undefined && this.resumable) {
+        const since = Date.now() - this.ackAloneAt
+        if (since < BRIDGE_ACK_MIN_MS) {
+          if (this.ackTimer === null) {
+            this.ackTimer = setTimeout(() => {
+              this.ackTimer = null
+              this.pump()
+            }, BRIDGE_ACK_MIN_MS - since)
+          }
+          return
+        }
+        this.ackAloneAt = Date.now()
+      }
       this.ackSent = this.painted_
       this.decodedSent = this.decoded_
       this.flying += 1
@@ -437,6 +457,24 @@ export class BridgeWebSocket {
    */
   private sendAckAlone(id: string): void {
     if (!this.acksApart || this.ackFlying || this.resuming || this.decoded_ <= this.decodedSent) return
+    // AT MOST ONE ACKNOWLEDGEMENT POST EVERY BRIDGE_ACK_MIN_MS. On a relay whose
+    // round trip is near a second, six or more chunks in flight meant six or
+    // more POSTs a second upstream, competing with the finger's own input
+    // (measured 11-24: ack p50 690-1290 ms, input p50 up to 840 ms). The newest
+    // acknowledgement stands for all of them, so one every this often says the
+    // same thing with a fraction of the traffic.
+    const since = Date.now() - this.ackAloneAt
+    if (since < BRIDGE_ACK_MIN_MS) {
+      if (this.ackTimer === null) {
+        this.ackTimer = setTimeout(() => {
+          this.ackTimer = null
+          const live = this.id
+          if (live !== null) this.sendAckAlone(live)
+        }, BRIDGE_ACK_MIN_MS - since)
+      }
+      return
+    }
+    this.ackAloneAt = Date.now()
     const decoded = this.decoded_
     this.decodedSent = decoded
     this.ackFlying = true
@@ -487,8 +525,8 @@ export class BridgeWebSocket {
     this.readyState = CLOSED
     this.outbox = []
     this.redo = []
-    for (const timer of [this.dialTimer, this.patience, this.retryTimer]) if (timer !== null) clearTimeout(timer)
-    this.dialTimer = this.patience = this.retryTimer = null
+    for (const timer of [this.dialTimer, this.patience, this.retryTimer, this.ackTimer]) if (timer !== null) clearTimeout(timer)
+    this.dialTimer = this.patience = this.retryTimer = this.ackTimer = null
     for (const post of [...this.posts]) post.abort()
     if (this.watchdog !== null) clearInterval(this.watchdog)
     this.watchdog = null
