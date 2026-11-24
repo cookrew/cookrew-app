@@ -29,6 +29,9 @@ export interface CastStatsReport {
   readonly frameKB: number
   readonly paintP50: number
   readonly paintP95: number
+  /** H.264 only: arrival to the decoder's picture; paint is then the rest. 0 for JPEG. */
+  readonly decodeP50: number
+  readonly decodeP95: number
   readonly inputP50: number
   readonly inputP95: number
   readonly inputs: number
@@ -49,6 +52,9 @@ export class CastStatsMeter {
   private bytes = 0
   private painted = 0
   private readonly arrivals = new Map<number, number>()
+  /** When the decoder gave a chunk's picture (H.264), so its wait splits in two. */
+  private readonly decodedAt = new Map<number, number>()
+  private decodeWaits: number[] = []
   private paintWaits: number[] = []
   private inputWaits: number[] = []
   private inputs = 0
@@ -70,12 +76,28 @@ export class CastStatsMeter {
     }
   }
 
+  /** An H.264 chunk's picture came out of the decoder. */
+  decoded(seq: number, at: number): void {
+    const arrived = this.arrivals.get(seq)
+    if (arrived === undefined) return
+    this.decodedAt.set(seq, at)
+    this.decodeWaits.push(at - arrived)
+    while (this.decodedAt.size > ARRIVALS_KEPT) {
+      const oldest = this.decodedAt.keys().next().value
+      if (typeof oldest !== 'number') break
+      this.decodedAt.delete(oldest)
+    }
+  }
+
   paint(seq: number, at: number): void {
     const arrived = this.arrivals.get(seq)
     if (arrived === undefined) return
+    const decoded = this.decodedAt.get(seq)
     this.arrivals.delete(seq)
+    this.decodedAt.delete(seq)
     this.painted += 1
-    this.paintWaits.push(at - arrived)
+    // Arrival to paint for a JPEG; decoded to paint for H.264, its decode counted apart.
+    this.paintWaits.push(at - (decoded ?? arrived))
     if (this.pendingInputAt !== null && arrived >= this.pendingInputAt) {
       this.inputWaits.push(at - this.pendingInputAt)
       this.pendingInputAt = null
@@ -104,6 +126,8 @@ export class CastStatsMeter {
             frameKB: Math.round((this.bytes / 1024 / this.frames) * 10) / 10,
             paintP50: percentile(this.paintWaits, 50),
             paintP95: percentile(this.paintWaits, 95),
+            decodeP50: percentile(this.decodeWaits, 50),
+            decodeP95: percentile(this.decodeWaits, 95),
             inputP50: percentile(this.inputWaits, 50),
             inputP95: percentile(this.inputWaits, 95),
             inputs: this.inputs,
@@ -115,6 +139,7 @@ export class CastStatsMeter {
     this.bytes = 0
     this.painted = 0
     this.paintWaits = []
+    this.decodeWaits = []
     this.inputWaits = []
     this.inputs = 0
     return result

@@ -2505,6 +2505,40 @@ a.card-close {
   z-index: 2;
 }
 
+/* A press, drawn under the finger the moment it lands (press-mark.ts): the
+   page's own answer is a round trip away. Light ring with a dark edge, so it
+   reads on any page; it never takes input. */
+.cr-press {
+  position: absolute;
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(0, 0, 0, 0.2);
+  pointer-events: none;
+  z-index: 3;
+  animation: cr-press 420ms ease-out forwards;
+}
+
+@keyframes cr-press {
+  from {
+    opacity: 0.95;
+    transform: scale(0.45);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.25);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cr-press {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 /* Zoomed browser controls: viewport fit, keyboard, open-in-browser, floating
    bottom-right OVER the page. Deliberately NOT the .cr-btn bevel — a solid bar
    would cost the view its own height, and these sit on top of arbitrary web

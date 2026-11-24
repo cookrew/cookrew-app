@@ -10,7 +10,16 @@ vi.mock('../src/main/cast-tuning', async (importOriginal) => {
   return { ...real, castTuning: () => tuning.value }
 })
 
-import { VIDEO_CREDIT, VIDEO_FIRST_ENCODE_TIMEOUT_MS, VIDEO_KEY_MIN_MS, VIDEO_REFRESHES, VIDEO_REFRESH_MS, VideoOut } from '../src/main/cast-video-out'
+import {
+  VIDEO_FIRST_ENCODE_TIMEOUT_MS,
+  VIDEO_KEY_MIN_MS,
+  VIDEO_REFRESHES,
+  VIDEO_REFRESH_MS,
+  VIDEO_WINDOW_MAX,
+  VIDEO_WINDOW_MIN,
+  VIDEO_WINDOW_START,
+  VideoOut
+} from '../src/main/cast-video-out'
 import { CAST_ENCODER_MAX_SESSIONS, createCastEncoder, type CastEncoderHost, type CastEncoderOptions, type CastEncoderSession, type EncodedChunk } from '../src/main/cast-encoder'
 import { CastViewer, type OutboundFrame, type ViewerSink } from '../src/main/cast-viewer'
 import type { BrowserInstance } from '../src/main/browser-instance'
@@ -91,22 +100,90 @@ describe('the Mac sends H.264 at the speed the phone takes it', () => {
     expect(delivered).toEqual([1])
   })
 
-  it('holds the newest picture, not the chunk, while the phone has not caught up', async () => {
+  it('holds the newest picture, not the chunk, while the unacknowledged bytes fill the window', async () => {
     const { out, enc, sent } = videoOut()
-    for (let i = 1; i <= VIDEO_CREDIT; i++) {
+    // 40 KB chunks: three fill a 96 KB window.
+    const chunk40 = 'A'.repeat(Math.ceil((40 * 1024 * 4) / 3))
+    for (let i = 1; i <= 3; i++) {
       out.offer(picture(i), CTX)
-      enc.calls[i - 1].answer({ data: 'AAAA', key: i === 1 })
+      enc.calls[i - 1].answer({ data: chunk40, key: i === 1 })
       await settle()
     }
-    expect(sent.filter((m) => m.t === 'vframe')).toHaveLength(VIDEO_CREDIT)
+    expect(out.windowBytes).toBe(VIDEO_WINDOW_START)
+    expect(sent.filter((m) => m.t === 'vframe')).toHaveLength(3)
     out.offer(picture(10), CTX)
     out.offer(picture(11), CTX)
     out.offer(picture(12), CTX)
-    expect(enc.calls).toHaveLength(VIDEO_CREDIT)
+    expect(enc.calls).toHaveLength(3)
     out.ack(1)
-    expect(enc.calls).toHaveLength(VIDEO_CREDIT + 1)
+    expect(enc.calls).toHaveLength(4)
     expect(enc.calls.at(-1)?.base64).toBe('pic12')
     expect(enc.calls.at(-1)?.key).toBe(false)
+  })
+
+  it('grows the window while acknowledgements come back as fast as ever, and gives back once they slow', async () => {
+    vi.useFakeTimers()
+    const { out, enc } = videoOut()
+    const send = async (seq: number): Promise<void> => {
+      out.offer(picture(seq), CTX)
+      enc.calls.at(-1)?.answer({ data: 'AAAA', key: seq === 1 })
+      await settle()
+    }
+    // Fast round trips: 50 ms each, the window grows.
+    for (let i = 1; i <= 4; i++) {
+      await send(i)
+      vi.advanceTimersByTime(50)
+      out.ack(i)
+    }
+    const grown = out.windowBytes
+    expect(grown).toBeGreaterThan(VIDEO_WINDOW_START)
+    // Then one that took 600 ms: a queue somewhere, the window gives back.
+    await send(5)
+    vi.advanceTimersByTime(600)
+    out.ack(5)
+    expect(out.windowBytes).toBeLessThan(grown)
+    expect(out.windowBytes).toBeGreaterThanOrEqual(VIDEO_WINDOW_MIN)
+    const measured = out.takeMeasured()
+    expect(measured.ackMs).toEqual([50, 50, 50, 50, 600])
+    expect(measured.encodeMs).toHaveLength(5)
+    expect(out.takeMeasured().ackMs).toEqual([])
+  })
+
+  it('never grows past its ceiling, nor shrinks under its floor', async () => {
+    vi.useFakeTimers()
+    const { out, enc } = videoOut()
+    // 40 KB chunks: the window grows by what an acknowledgement covers, at most 16 KB.
+    const chunk40 = 'A'.repeat(Math.ceil((40 * 1024 * 4) / 3))
+    for (let i = 1; i <= 60; i++) {
+      out.offer(picture(i), CTX)
+      enc.calls.at(-1)?.answer({ data: chunk40, key: i === 1 })
+      await settle()
+      out.ack(i)
+    }
+    expect(out.windowBytes).toBe(VIDEO_WINDOW_MAX)
+    // Round trips far slower than the fastest of the last 10 s: a queue, each one.
+    for (let i = 61; i <= 75; i++) {
+      out.offer(picture(i), CTX)
+      enc.calls.at(-1)?.answer({ data: 'AAAA', key: false })
+      await settle()
+      vi.advanceTimersByTime(500)
+      out.ack(i)
+    }
+    expect(out.windowBytes).toBe(VIDEO_WINDOW_MIN)
+  })
+
+  it('a line that is simply slower now is learned, not taken for a queue forever', async () => {
+    vi.useFakeTimers()
+    const { out, enc } = videoOut()
+    for (let i = 1; i <= 30; i++) {
+      out.offer(picture(i), CTX)
+      enc.calls.at(-1)?.answer({ data: 'AAAA', key: i === 1 })
+      await settle()
+      vi.advanceTimersByTime(i <= 3 ? 20 : 900)
+      out.ack(i)
+    }
+    // Past the 10 s memory, 900 ms is the new fastest, and the window grows again.
+    expect(out.windowBytes).toBeGreaterThan(VIDEO_WINDOW_MIN)
   })
 
   it('never encodes two at once: the next waits for the chunk before it', async () => {
@@ -199,6 +276,27 @@ describe('the Mac sends H.264 at the speed the phone takes it', () => {
     expect(sent.at(-1)).toMatchObject({ w: 780, h: 1400 })
     out.offer({ ...picture(3, 'pic3', 2), size: { width: 1170, height: 2100 } }, CTX)
     expect(enc.calls[2].size).toEqual({ width: 1170, height: 2100 })
+  })
+
+  it('a refresh reports its own wait, not the one from when its picture first came', async () => {
+    vi.useFakeTimers()
+    const { out, enc } = videoOut()
+    // An encode that takes a while: the picture waited all of it.
+    out.offer(picture(1), CTX)
+    vi.advanceTimersByTime(200)
+    enc.calls[0].answer({ data: 'AAAA', key: true })
+    await settle()
+    out.takeMeasured()
+    vi.advanceTimersByTime(VIDEO_REFRESH_MS)
+    expect(enc.calls).toHaveLength(2)
+    enc.calls[1].answer({ data: 'A'.repeat(4000), key: false })
+    await settle()
+    vi.advanceTimersByTime(VIDEO_REFRESH_MS)
+    enc.calls[2].answer({ data: 'AAAA', key: false })
+    await settle()
+    const waits = out.takeMeasured().waitMs
+    // Each refresh waited about a tick, not everything since the picture arrived.
+    expect(waits.every((ms) => ms < VIDEO_REFRESH_MS * 2)).toBe(true)
   })
 
   it('says when the encoder failed, and stops', async () => {

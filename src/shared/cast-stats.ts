@@ -29,9 +29,12 @@ export interface CastStats {
   /** What arrived, in kilobytes per second, and per frame. */
   readonly kbps: number
   readonly frameKB: number
-  /** Arrival → drawn, in ms. */
+  /** Arrival → drawn in ms (H.264: decoded → drawn, its decode counted apart; from 0.6.36). */
   readonly paintP50: number
   readonly paintP95: number
+  /** H.264: arrival → the decoder's picture, in ms (paint is then decoded → drawn). 0 for JPEG or an older phone. */
+  readonly decodeP50: number
+  readonly decodeP95: number
   /** The viewer's input → the next frame drawn after it, in ms; 0 with no input. */
   readonly inputP50: number
   readonly inputP95: number
@@ -74,5 +77,8 @@ export function sanitizeCastStats(raw: unknown): CastStats | null {
   const values = Object.values(numbers)
   if (values.some((value) => value === null)) return null
   const codec = CAST_STATS_CODECS.find((kind) => kind === msg.codec) ?? 'jpeg'
-  return { line, codec, ...(numbers as { [K in keyof typeof numbers]: number }) }
+  // Newer phones split the H.264 wait; an older one's report stands without it.
+  const decodeP50 = bounded(msg.decodeP50, MAX_MS) ?? 0
+  const decodeP95 = bounded(msg.decodeP95, MAX_MS) ?? 0
+  return { line, codec, decodeP50, decodeP95, ...(numbers as { [K in keyof typeof numbers]: number }) }
 }

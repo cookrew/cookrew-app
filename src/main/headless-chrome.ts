@@ -58,6 +58,8 @@ const identityByBuild = new Map<string, NativeIdentity>()
 const POLL_INTERVAL_MS = 66
 /** A screencast silent this long is started again (pollTick). */
 const SCREENCAST_STALL_MS = 3000
+/** How long a Chrome asked to close (CDP Browser.close) has to write its profile and go. */
+const CLOSE_ASK_TIMEOUT_MS = 8_000
 /** A viewer's raised screencast quality stays this long after it lets go (preferSourceQuality). */
 const QUALITY_RELEASE_MS = 10_000
 const NAVIGATION_TIMEOUT_MS = 15_000
@@ -1240,9 +1242,11 @@ export class HeadlessInstance {
       return { pid, forced: false }
     }
     if (browserCdp && gracefulTimeoutMs > 0) {
-      // Chrome may drop the line before it answers; the exit is the answer.
+      // Chrome may drop the line before it answers; the exit is the answer. A loaded
+      // machine gets longer: running out the wait is the signal, and the signal is
+      // what loses the cookies (a real-Chrome run at load 60 did, 11-24).
       void browserCdp.send('Browser.close').catch(() => undefined)
-      const closed = await waitForProcessExit(proc, gracefulTimeoutMs)
+      const closed = await waitForProcessExit(proc, Math.max(gracefulTimeoutMs, CLOSE_ASK_TIMEOUT_MS))
       browserCdp.close()
       if (closed) return { pid, forced: false }
     } else {

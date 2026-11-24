@@ -67,6 +67,8 @@ export interface BridgeUp {
   readonly s?: number
   readonly m?: readonly string[]
   readonly a?: number
+  /** The newest H.264 chunk decoded (cast-video.ts): it goes to the Mac first, ahead of any input. */
+  readonly v?: number
   readonly end?: boolean
 }
 
@@ -176,8 +178,17 @@ export class BridgeSession {
     if (!old.response.writableEnded) old.response.end()
   }
 
+  /**
+   * The hello. `acks`: this Mac reads an H.264 acknowledgement as `v` on a POST
+   * (post below), so the phone may send it apart from its input. A phone told
+   * nothing (an older Mac) keeps sending it as a message, which that Mac reads.
+   */
+  private hello(): Record<string, unknown> {
+    return { id: this.id, v: 2, acks: true }
+  }
+
   opened(): void {
-    this.listener?.send('id', { id: this.id, v: 2 })
+    this.listener?.send('id', this.hello())
   }
 
   /** False when this phone cannot pick the session up from where it says it was. */
@@ -186,7 +197,7 @@ export class BridgeSession {
     const oldest = this.ring[0]?.n ?? this.nextN
     if (after + 1 < oldest) return false
     this.attach(response)
-    this.listener?.send('id', { id: this.id, v: 2 })
+    this.listener?.send('id', this.hello())
     for (const entry of this.ring) if (entry.n > after) this.listener?.send('c', [entry.n, entry.text])
     // Nothing in flight survived the line, and the picture has to be sent whole.
     this.inFlight = []
@@ -310,6 +321,8 @@ export class BridgeSession {
   }
 
   post(up: BridgeUp): void {
+    // Cumulative, so order does not matter, and the Mac's pacing waits on nothing else.
+    if (typeof up.v === 'number') this.upstream?.send(JSON.stringify({ t: 'vack', n: up.v }))
     if (typeof up.a === 'number') {
       const painted = up.a
       for (const frame of this.inFlight) if (frame.seq <= painted) this.learn(this.now() - frame.at)

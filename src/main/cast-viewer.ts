@@ -98,6 +98,13 @@ export interface CastViewerOptions {
   readonly encoder?: CastEncoderHost
 }
 
+/** A rounded percentile of what was measured; 0 for nothing. */
+function percentile(values: readonly number[], p: number): number {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  return Math.round(sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1))])
+}
+
 /** The largest picture an H.264 viewer is checked for: a 3x phone's whole screen. */
 const VIDEO_CHECK_SIZE = { width: 1290, height: 2796 }
 
@@ -498,6 +505,7 @@ export class CastViewer {
     this.reportedAt = now
     this.sentFrames = 0
     this.sentBytes = 0
+    const measured = this.video?.takeMeasured()
     ;(this.options.report ?? appendCastStats)({
       at: new Date(now).toISOString(),
       browserId: this.browserId,
@@ -505,6 +513,21 @@ export class CastViewer {
       relayed: this.options.relayed === true,
       phone,
       sent,
+      // The Mac's half of the wait (cast-video-out.ts): encoding, a picture held for
+      // the window, and how long the phone took to say it had a chunk.
+      ...(measured
+        ? {
+            video: {
+              windowKB: measured.windowKB,
+              encodeP50: percentile(measured.encodeMs, 50),
+              encodeP95: percentile(measured.encodeMs, 95),
+              waitP50: percentile(measured.waitMs, 50),
+              waitP95: percentile(measured.waitMs, 95),
+              ackP50: percentile(measured.ackMs, 50),
+              ackP95: percentile(measured.ackMs, 95)
+            }
+          }
+        : {}),
       // What is in force, not what the file says now: a quality change waits
       // for the next stream start, and a comparison must not be told otherwise.
       inUse: { scaleMax: this.allowedScale(), quality: this.instance?.frameQualityInUse ?? 0 }

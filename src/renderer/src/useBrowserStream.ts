@@ -448,6 +448,7 @@ export function useBrowserStream(
       decoderRef.current = new CastVideoDecoder<VideoMeta>({
         onPicture: (decoded) => {
           if (disposed || failed) return decoded.frame.close()
+          meterRef.current?.decoded(decoded.seq, Date.now())
           onFrame({ kind: 'frame', seq: decoded.seq, ...decoded.meta }, { video: decoded.frame, width: decoded.width, height: decoded.height })
         },
         askKey: () => line?.send({ t: 'vkey' }),

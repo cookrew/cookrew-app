@@ -31,6 +31,19 @@ export interface CastInUse {
   readonly quality: number
 }
 
+/** An H.264 viewer's Mac-side timings over the report's window, in ms (cast-video-out.ts). */
+export interface CastVideoTimings {
+  readonly windowKB: number
+  readonly encodeP50: number
+  readonly encodeP95: number
+  /** A picture held, waiting for the window or the encoder. */
+  readonly waitP50: number
+  readonly waitP95: number
+  /** Chunk sent to its acknowledgement back. */
+  readonly ackP50: number
+  readonly ackP95: number
+}
+
 export interface CastStatsEntry {
   readonly at: string
   readonly browserId: string
@@ -39,6 +52,7 @@ export interface CastStatsEntry {
   readonly phone: CastStats
   readonly sent: CastSent
   readonly inUse: CastInUse
+  readonly video?: CastVideoTimings
 }
 
 export function castStatsFile(): string {
