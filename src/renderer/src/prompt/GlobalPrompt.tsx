@@ -1141,7 +1141,12 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       <SentToast sent={toast.sent} />
       {attach.attaching && (
         <span className="cr-prompt-note" role="status">
-          attaching…
+          {attach.status ?? 'attaching…'}
+          {attach.compressing && (
+            <button type="button" className="cr-prompt-note-stop" onClick={attach.cancel} aria-label="Stop compressing">
+              ✕
+            </button>
+          )}
         </span>
       )}
       {/* The Mac's final can take seconds; the browser's is a beat and waits in the placeholder (earSays). */}

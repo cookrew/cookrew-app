@@ -131,8 +131,8 @@ describe('the bridge channel', () => {
     expect(rtcBodyMaxFor('POST', '/api/attachmentsx')).toBe(BRIDGE_BODY_MAX)
     expect(rtcBodyMaxFor('POST', '/api/terminal/t1/input')).toBe(BRIDGE_BODY_MAX)
     expect(rtcBodyMaxFor('POST', '/a/b/api/attachments')).toBe(BRIDGE_BODY_MAX)
-    // Three uploads at a time at the largest, and not unbounded.
-    expect(RTC_BODY_BUDGET).toBe(3 * RTC_BODY_MAX)
+    // Two attachments at the largest at once, and not unbounded.
+    expect(RTC_BODY_BUDGET).toBe(2 * RTC_BODY_MAX)
   })
 
   it('is kept past the TTL a probe gets — the session lives on it', async () => {

@@ -258,7 +258,7 @@ describe('how large an attachment may be on the path it would take', () => {
   it("is the Mac's on the direct link, which carries the relay's URLs and none of its ceiling", async () => {
     const { attachLimit, setDataPlane: move } = await fresh(MACHINE)
     move({ origin: '', kind: 'lan', transport: 'rtc' })
-    expect(attachLimit()).toEqual({ bytes: 20 * 1024 * 1024, via: 'mac' })
+    expect(attachLimit()).toEqual({ bytes: 100 * 1024 * 1024, via: 'mac' })
   })
 
   it("is the Mac's on a direct address, and on the Mac's own page", async () => {

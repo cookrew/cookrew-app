@@ -50,18 +50,20 @@ export const RTC_CHUNK = 16 * 1024
  * The largest ATTACHMENT the direct link takes. No registry stands in the
  * way here, so the relay's 4 MB is not this link's to keep for an upload: an
  * attachment up to the Mac's save cap must get through (2026-11-24, a 10 MB
- * video from the owner's phone was refused `body-too-large`). The headroom is
- * for a cached older phone bundle that still sends one as base64 JSON
+ * video from the owner's phone was refused `body-too-large`). The 32 MB floor
+ * is for a cached older phone bundle that still sends one as base64 JSON
  * (mobile-api.ts · ATTACH_BODY_LIMIT); the route itself still holds the save
- * cap. Every other route keeps the relay's ceiling.
+ * cap, 100 MB since the phone compresses a video to fit (prompt/attach-plan.ts).
+ * Every other route keeps the relay's ceiling.
  */
 export const RTC_BODY_MAX = Math.max(32 * 1024 * 1024, MAX_ATTACHMENT_BYTES)
 /**
- * Request bodies one link may hold at once while they arrive: room for the
- * phone's three uploads at a time (remote-api.ts · UPLOAD_CONCURRENCY) at the
- * largest, and a bound on what one link can make the main process hold.
+ * Request bodies one link may hold at once while they arrive: two attachments
+ * at the largest, and a bound on what one link can make the main process hold
+ * (the attach route reads its own copy as well). A prompt box sends a phone's
+ * files one at a time (use-prompt-attach.ts), so two is a second box at once.
  */
-export const RTC_BODY_BUDGET = 3 * RTC_BODY_MAX
+export const RTC_BODY_BUDGET = 2 * RTC_BODY_MAX
 
 /** The attachment route, at the root or under a workspace slug, query aside. */
 const ATTACH_ROUTE = /^(?:\/[^/?#]+)?\/api\/attachments(?:[?#]|$)/

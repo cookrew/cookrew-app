@@ -158,7 +158,12 @@ export function QuickReply({
       {reply.sent !== null && <span className="zv-sent">sent ✓</span>}
       {attach.attaching ? (
         <span className="zv-sent zv-attach-note" role="status">
-          attaching…
+          {attach.status ?? 'attaching…'}
+          {attach.compressing && (
+            <button type="button" className="zv-attach-stop" onClick={attach.cancel} aria-label="Stop compressing">
+              ✕
+            </button>
+          )}
         </span>
       ) : (
         note !== null && (

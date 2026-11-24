@@ -36,29 +36,29 @@ describe('the attachment cap', () => {
   it('names the first file over it, its size and the limit', () => {
     const said = oversizeAttachment([
       { name: 'a.png', size: 2 * MB },
-      { name: 'clip.mp4', size: 34.6 * MB },
-      { name: 'b.mov', size: 90 * MB }
+      { name: 'clip.mp4', size: 134.6 * MB },
+      { name: 'b.mov', size: 190 * MB }
     ])
-    expect(said).toBe('clip.mp4 is 34.6 MB; the Mac takes attachments up to 20 MB')
+    expect(said).toBe('clip.mp4 is 134.6 MB; the Mac takes attachments up to 100 MB')
   })
 
   it('never says a file just over the limit is the limit', () => {
     expect(oversizeAttachment([{ name: 'v.mp4', size: MAX_ATTACHMENT_BYTES + 300 * 1024 }], MAC_LIMIT)).toBe(
-      'v.mp4 is 20.3 MB; the Mac takes attachments up to 20 MB'
+      'v.mp4 is 100.3 MB; the Mac takes attachments up to 100 MB'
     )
   })
 
   it('says "a file" for one with no name', () => {
-    expect(oversizeAttachment([{ name: '', size: 21 * MB }])).toBe('a file is 21 MB; the Mac takes attachments up to 20 MB')
+    expect(oversizeAttachment([{ name: '', size: 121 * MB }])).toBe('a file is 121 MB; the Mac takes attachments up to 100 MB')
   })
 
   it('on the relay, says the relay is the limit and a direct path takes more', () => {
     expect(oversizeAttachment([{ name: 'clip.mp4', size: 10.2 * MB }], RELAY_LIMIT)).toBe(
-      "clip.mp4 is 10.2 MB; through the relay attachments stop at 4 MB. On the Mac's Wi-Fi or tailnet they go up to 20 MB"
+      "clip.mp4 is 10.2 MB; through the relay attachments stop at 4 MB. On the Mac's Wi-Fi or tailnet they go up to 100 MB"
     )
     // Too large for any path: the Mac's cap is the one worth saying.
-    expect(oversizeAttachment([{ name: 'long.mov', size: 80 * MB }], RELAY_LIMIT)).toBe(
-      'long.mov is 80 MB; the Mac takes attachments up to 20 MB'
+    expect(oversizeAttachment([{ name: 'long.mov', size: 180 * MB }], RELAY_LIMIT)).toBe(
+      'long.mov is 180 MB; the Mac takes attachments up to 100 MB'
     )
   })
 })

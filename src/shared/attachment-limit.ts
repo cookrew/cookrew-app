@@ -7,7 +7,7 @@
  * refuse anyway, but only after the upload, and in a transport's words
  * (`body-too-large`) rather than the file's.
  */
-export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+export const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 
 /**
  * What cookrew.dev's relay carries in one request body: the registry refuses

@@ -215,6 +215,16 @@ export const loopbackDialer =
     }
   }
 
+/** A body as it arrives, newest first. Immutable, and O(1) to add to. */
+type BodyPieces = { readonly last: Buffer; readonly before: BodyPieces } | null
+
+/** The pieces in the order they arrived. */
+const inOrder = (pieces: BodyPieces): Buffer[] => {
+  const out: Buffer[] = []
+  for (let at = pieces; at !== null; at = at.before) out.push(at.last)
+  return out.reverse()
+}
+
 /** Every exchange this desktop is answering right now. */
 interface Exchange {
   readonly method: string
@@ -222,7 +232,8 @@ interface Exchange {
   readonly headers: Record<string, string>
   /** The reserved seal, carried and never read. Absent when nobody sealed. */
   readonly sealed?: string
-  readonly body: readonly Buffer[]
+  /** The body so far, newest piece first: adding one costs the same at the 6,400th piece as at the first. */
+  readonly body: BodyPieces
   readonly bytes: number
   /** The largest body this one may have (`bodyMaxFor`). */
   readonly max: number
@@ -340,7 +351,8 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
     // books; a call that is over is not in flight.
     call = dialed
     if (!ended) calls.set(id, dialed)
-    if (exchange.bytes > 0) dialed.write(Buffer.concat(exchange.body as Buffer[]))
+    // Piece by piece: a 100 MB attachment joined first would be held twice.
+    if (exchange.bytes > 0) for (const piece of inOrder(exchange.body)) dialed.write(piece)
     dialed.end()
     if (discard) dialed.destroy()
   }
@@ -371,7 +383,7 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
             path: frame.path,
             headers: frame.headers,
             ...(frame.sealed === undefined ? {} : { sealed: frame.sealed }),
-            body: [],
+            body: null,
             bytes: 0,
             max: bodyMaxFor(frame.method, frame.path)
           })
@@ -393,7 +405,7 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
             abort(frame.id, 'busy')
             return
           }
-          const next: Exchange = { ...held, body: [...held.body, bytes], bytes: size }
+          const next: Exchange = { ...held, body: { last: bytes, before: held.body }, bytes: size }
           if (frame.done !== true) {
             arriving.set(frame.id, next)
             return
