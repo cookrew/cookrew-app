@@ -131,7 +131,7 @@ describe('the rtc row in a path report', () => {
     // The gap between knocks is path/rtc-trust.ts's (2 minutes, longer after a refused answer).
     expect(src).toContain('if (at - lastRtcAt < rtcGapMs) return []')
     // First in each race, unless the plane just failed or the phone is on a radio (no LAN in reach).
-    expect(src).toContain('const knocked = health.held() || onCellular() ? [] : await rtcKnock(raceSoon, live)')
+    expect(src).toContain('const knocked = health.held() || onCellular() ? [] : await rtcKnock(raceSoon, live, retry)')
     expect(src).toContain('reportLinkRows(knocked)')
     // The offer goes out one way only: path/rtc-offer.ts, sealed whenever the page has a session (step 2).
     expect(src).toContain('post: (sdp) => postRtcOffer(sdp)')

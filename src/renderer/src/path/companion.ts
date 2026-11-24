@@ -7,8 +7,8 @@ import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
 import { currentBrowser } from '../browser-family'
 import { createPathReporter, postPathReport } from './report'
 import { adoptRtcLink, type RtcRow } from './rtc-adopt'
-import { RTC_EVERY_MS, RTC_REFUSED_EVERY_MS, boundKnock, heldAfter, knockGapAfter } from './rtc-trust'
-import { postRtcOffer } from './rtc-offer'
+import { RTC_EVERY_MS, RTC_QUICK_MS, RTC_REFUSED_EVERY_MS, boundKnock, heldAfter, knockGapAfter } from './rtc-trust'
+import { lastOfferSealOutcome, postRtcOffer } from './rtc-offer'
 import { heldRtcLink, rtcLink, setRtcLink } from '../rtc-plane'
 import { isLanHostname, isTailnetHostname } from '../../../shared/path-badge'
 import { pageContext } from './page-context'
@@ -123,7 +123,7 @@ registerScopeState('path switch memory', () => {
  * plane is LAN or TAILNET by the Mac's word and the data moves onto it; its
  * row rides the path report. `onEnd` hears when an adopted link ends.
  */
-const rtcKnock = async (onEnd: () => void, live: () => boolean): Promise<RtcRow[]> => {
+const rtcKnock = async (onEnd: () => void, live: () => boolean, retry: (delay: number | null) => void): Promise<RtcRow[]> => {
   if (typeof RTCPeerConnection !== 'function' || dataPlane().kind !== 'relay') return []
   const at = Date.now()
   if (at - lastRtcAt < rtcGapMs) return []
@@ -166,11 +166,23 @@ const rtcKnock = async (onEnd: () => void, live: () => boolean): Promise<RtcRow[
     const held = heldAfter(knock.verdict())
     if (held !== undefined) setDirectHeld(held)
     const verdict = knock.verdict()
+    // Answered, and the link never opened: the row's name carries the stage (rtc-link.ts).
+    if (!verdict.verified && verdict.refused === null) {
+      // Answered and never opened, or no offer at all: the page can say which.
+      if (probe !== null && /never opened/.test(probe.name)) setDirectHeld('ice')
+      else {
+        const seal = lastOfferSealOutcome()
+        if (seal === 'no-code' || seal === 'old-mac') setDirectHeld('unpaired')
+        else if (seal === 'undecided') setDirectHeld('sealing')
+      }
+    }
     quietKnocks = !verdict.verified && verdict.refused === null ? quietKnocks + 1 : 0
     rtcGapMs = knockGapAfter(verdict, rtcGapMs, quietKnocks)
     // The wait runs from the refusal: a push that landed while the knock was
     // out (the relay knows when one is) zeroed the clock it started on.
     if (knock.verdict().refused !== null) lastRtcAt = Date.now()
+    const quick = !verdict.verified && verdict.refused === null && rtcGapMs === RTC_QUICK_MS
+    retry(quick ? Math.max(0, lastRtcAt + rtcGapMs - Date.now()) : null)
   }
   return probe ? [probe] : []
 }
@@ -217,6 +229,7 @@ const startPlaneSwitch = (): (() => void) => {
   // One asked for while a race is running is run when it is done; the loop
   // would drop it (one at a time).
   let soon: ReturnType<typeof setTimeout> | null = null
+  let retryTimer: ReturnType<typeof setTimeout> | null = null
   let racing = false
   let again = false
   let stopped = false
@@ -234,6 +247,17 @@ const startPlaneSwitch = (): (() => void) => {
       if (racing) again = true
       else raceNow()
     }, RACE_AFTER_END_MS)
+  }
+  // Only quick silent retries need their own clock; normal and refused gaps stay
+  // on the minute loop. The guarded race handles overlap and stale machines.
+  const retry = (delay: number | null): void => {
+    if (retryTimer !== null) clearTimeout(retryTimer)
+    retryTimer = null
+    if (delay === null) return
+    retryTimer = setTimeout(() => {
+      retryTimer = null
+      if (live() && document.visibilityState === 'visible') raceSoon()
+    }, delay)
   }
   // The watchdog asks the link before it gives up the plane (plane-health.ts).
   setPlaneLiveProbe((reason) => (dataPlane().transport === 'rtc' ? (rtcLink()?.probe(reason) ?? null) : null))
@@ -254,7 +278,7 @@ const startPlaneSwitch = (): (() => void) => {
     // candidates are its LAN addresses, and a knock from 5G spent ~10 s of
     // gathering and waiting to learn it. WebRTC over the tailnet never opened
     // from a phone (cookrew-webrtc-lan).
-    const knocked = health.held() || onCellular() ? [] : await rtcKnock(raceSoon, live)
+    const knocked = health.held() || onCellular() ? [] : await rtcKnock(raceSoon, live, retry)
     if (!live()) return
     // A local read and no request; the report below carries it to the Mac.
     await readLocalNetwork()
@@ -268,6 +292,7 @@ const startPlaneSwitch = (): (() => void) => {
     () => {
       stopped = true
       if (soon !== null) clearTimeout(soon)
+      if (retryTimer !== null) clearTimeout(retryTimer)
     },
     followDataPlane(),
     // The badge's latency is a measurement of the path it was taken on, and
