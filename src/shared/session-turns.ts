@@ -24,9 +24,9 @@ export interface SlashCommand {
    * Claude writes a prompt command (a skill, a custom command, a workflow)
    * with `<command-message>` FIRST and its expansion as a meta record after
    * it; a local command (/model, /compact, /rename …) leads with
-   * `<command-name>` and its output follows. `/goal <objective>` is written
-   * like a local command and still starts a turn (measured on 2.1.312-2.1.316:
-   * "Goal set: …", then a meta directive, then the agent works on it).
+   * `<command-name>` and its output follows. `/goal` is written like a local
+   * command and starts a turn only when its output says "Goal set:" — see
+   * CheckpointAssigner, which decides on that output, not on the arguments.
    */
   prompts: boolean
 }
@@ -34,8 +34,13 @@ export interface SlashCommand {
 const COMMAND_RECORD_RE = /^\s*<(?:command-name|command-message)>/
 const COMMAND_NAME_RE = /<command-name>\s*\/?([^<\s]+)\s*<\/command-name>/
 const COMMAND_ARGS_RE = /<command-args>([\s\S]*?)<\/command-args>/
-/** `/goal` arguments that clear or show the goal: no turn runs for them. */
-const GOAL_LOCAL_ARGS = new Set(['clear', 'status'])
+/**
+ * What /goal prints when it set a goal and a turn starts on it (every /goal
+ * with that output in the owner's sessions, 2.1.312-2.1.322, ran one). Clearing
+ * (clear, stop, off …), showing, an over-long or a refused goal print anything
+ * else and run no turn — so the output decides, never a list of arguments.
+ */
+const GOAL_SET_RE = /^\s*<local-command-stdout>\s*Goal set:/
 
 /** The slash command a record's text carries, or null when it carries none. */
 export function slashCommandOf(text: string): SlashCommand | null {
@@ -43,9 +48,7 @@ export function slashCommandOf(text: string): SlashCommand | null {
   const name = COMMAND_NAME_RE.exec(text)?.[1]
   if (name === undefined) return null
   const args = (COMMAND_ARGS_RE.exec(text)?.[1] ?? '').trim()
-  const promptForm = /^\s*<command-message>/.test(text)
-  const goal = name === 'goal' && args.length > 0 && !GOAL_LOCAL_ARGS.has(args.toLowerCase())
-  return { name, args, prompts: promptForm || goal }
+  return { name, args, prompts: /^\s*<command-message>/.test(text) }
 }
 
 /** The command as it was typed: "/goal ship it", "/compact". */
@@ -82,10 +85,33 @@ function promptOf(text: string): string | null {
  */
 export interface PromptEntryLike {
   type?: string
+  /** A system record's kind: `local_command` carries a command or its output. */
+  subtype?: string
   isMeta?: boolean
   uuid?: string
   parentUuid?: string
   message?: { content?: unknown }
+  /** A system record's text. */
+  content?: unknown
+}
+
+/**
+ * The text of a record that can carry a local slash command or its output: a
+ * user record, or the `local_command` system record newer Claude Code writes.
+ */
+export function commandRecordText(entry: PromptEntryLike): string | null {
+  if (entry.isMeta === true) return null
+  if (entry.type === 'system') return entry.subtype === 'local_command' && typeof entry.content === 'string' ? entry.content : null
+  if (entry.type !== 'user') return null
+  const content = entry.message?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return null
+  const blocks = content as ContentBlock[]
+  if (blocks.some((b) => b?.type === 'tool_result')) return null
+  return blocks
+    .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text as string)
+    .join('\n')
 }
 
 interface SessionEntry extends PromptEntryLike {
@@ -163,6 +189,8 @@ export interface CheckpointStep {
   id: CheckpointId
   /** True when this prompt collapses into the current checkpoint (same submission). */
   sibling: boolean
+  /** Opened by a command's output (/goal's "Goal set:"): the command record just before it is this turn's prompt. */
+  command?: true
 }
 
 /** FNV-1a, 32-bit, hex — a short stable digest of a prompt. Not a hash for
@@ -220,8 +248,27 @@ export class CheckpointAssigner {
   private currentParent: string | undefined
   /** uuid the current checkpoint is bound to (its continuation sibling). */
   private boundUuid: string | undefined
+  /** A `/goal <objective>` as typed, until the record after it says whether it set a goal. */
+  private goal: string | null = null
+
+  /** The last record fed was a `/goal <objective>`: the next one says whether it opens a turn. */
+  get awaitingGoal(): boolean {
+    return this.goal !== null
+  }
 
   feed(entry: PromptEntryLike): CheckpointStep | null {
+    const goal = this.goal
+    if (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system') this.goal = null
+    const said = commandRecordText(entry)
+    if (said !== null) {
+      const command = slashCommandOf(said)
+      if (command !== null && command.name === 'goal' && !command.prompts && command.args.length > 0) {
+        this.goal = commandLine(command)
+        return null
+      }
+      // The goal is set and the agent starts on it: the command was a prompt.
+      if (goal !== null && GOAL_SET_RE.test(said)) return { ...this.open(entry, goal), command: true }
+    }
     const prompt = promptText(entry)
     if (prompt === null) return null
     // Same submission as the current checkpoint (Claude's string mirror +
@@ -235,6 +282,10 @@ export class CheckpointAssigner {
       if (typeof entry.uuid === 'string') this.boundUuid = entry.uuid
       return { id: this.idOf(prompt), sibling: true }
     }
+    return this.open(entry, prompt)
+  }
+
+  private open(entry: PromptEntryLike, prompt: string): CheckpointStep {
     this.count += 1
     this.currentParent = entry.parentUuid
     this.boundUuid = typeof entry.uuid === 'string' ? entry.uuid : undefined

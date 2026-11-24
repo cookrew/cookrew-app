@@ -55,6 +55,9 @@ export const TranscriptRow = memo(
     ref
   ) {
     const legs = useMemo(() => (block ? chatLegsOf(block) : []), [block])
+    // The translation is of the closing answer: the last stretch that has one,
+    // not an empty one a /model after the reply left at the end.
+    const closingLeg = useMemo(() => closingLegOf(legs), [legs])
     // The prompt's screenshots, drawn under its words (CHAT and LOG; LIVE keeps "[Image #N]").
     const pictures = useMemo(() => (block ? picturesOfTurn(block, terminalId) : []), [block, terminalId])
     return (
@@ -98,7 +101,7 @@ export const TranscriptRow = memo(
                 covers the whole reply: it is the closing answer, the rest stay
                 as they ran. */}
             {legs.map((leg, i) => {
-              const closing = translated !== null && i === legs.length - 1
+              const closing = translated !== null && i === closingLeg
               return (
                 <Fragment key={i}>
                   {leg.words !== null &&
@@ -126,6 +129,12 @@ export const TranscriptRow = memo(
     )
   })
 )
+
+/** The stretch holding the turn's closing answer: the last with words, else the last. */
+function closingLegOf(legs: readonly { fold: ChatFold }[]): number {
+  for (let i = legs.length - 1; i >= 0; i--) if (legs[i].fold.answer.length > 0) return i
+  return legs.length - 1
+}
 
 /** A slash command you ran, on your side of the chat, and what it printed under it. */
 function CommandLine({ text, output }: Pick<TraceAddedPrompt, 'text' | 'output'>): React.JSX.Element {

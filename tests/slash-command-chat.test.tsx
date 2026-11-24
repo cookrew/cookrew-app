@@ -10,7 +10,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { isNoisePrompt, parseSessionTurns, slashCommandOf } from '../src/shared/session-turns'
 import { parseClaudeTrace, parseClaudeTraceDocument, parseCodexTrace, type TraceBlock } from '../src/shared/trace-blocks'
 import { traceBlockOf } from '../src/shared/stream-turns'
-import { buildForkedSessionLinesAtTurn } from '../src/shared/claude-fork'
+import { buildForkedSessionLinesAtTurn, buildForkedSessionLinesAtUuid, buildForkedSessionLinesForUuids } from '../src/shared/claude-fork'
+import { parseStreamState, STREAM_STATE_VERSION } from '../src/main/stream-state'
 import { chatLegsOf } from '../src/renderer/src/chat-fold'
 import { TranscriptRow } from '../src/renderer/src/TranscriptRow'
 import { TranscriptLookContext, type TranscriptLook } from '../src/renderer/src/transcript-look'
@@ -61,20 +62,18 @@ function session(): string[] {
 }
 
 describe('which commands are a turn', () => {
-  it('a prompt command and /goal with an objective ask the model for a turn; the rest do not', () => {
+  it('a prompt command asks the model for a turn; a local one, /goal included, is read as written', () => {
     expect(slashCommandOf(prompted('code-review', 'x'))).toEqual({ name: 'code-review', args: 'x', prompts: true })
-    expect(slashCommandOf(local('goal', 'ship it'))).toEqual({ name: 'goal', args: 'ship it', prompts: true })
-    expect(slashCommandOf(local('goal', 'clear'))?.prompts).toBe(false)
-    expect(slashCommandOf(local('goal'))?.prompts).toBe(false)
+    expect(slashCommandOf(local('goal', 'ship it'))).toEqual({ name: 'goal', args: 'ship it', prompts: false })
     expect(slashCommandOf(local('compact'))?.prompts).toBe(false)
     expect(slashCommandOf(local('model', 'opus'))?.prompts).toBe(false)
     expect(slashCommandOf('fix the <command-name> parser')).toBeNull()
     expect(slashCommandOf(stdout('ok'))).toBeNull()
   })
 
-  it('a command that runs a turn is not noise; local commands and their output still are', () => {
-    expect(isNoisePrompt(local('goal', 'ship it'))).toBe(false)
+  it('a prompt command is not noise; local commands and their output still are', () => {
     expect(isNoisePrompt(prompted('code-review'))).toBe(false)
+    expect(isNoisePrompt(local('goal', 'ship it'))).toBe(true)
     expect(isNoisePrompt(local('compact'))).toBe(true)
     expect(isNoisePrompt(stdout('Goal set: ship it'))).toBe(true)
   })
@@ -100,6 +99,28 @@ describe('the turns a session file holds', () => {
     expect(goalFirst.map((t) => [t.prompt, t.reply])).toEqual([['/goal keep CI green', 'On it.']])
   })
 
+  // Claude 2.1.322 clears a goal on stop/off/reset/none/cancel too, and refuses
+  // an over-long one: none of them prints "Goal set:", none runs a turn.
+  for (const [args, printed] of [['stop', 'Goal cleared'], ['off', 'No goal set'], ['x'.repeat(5000), 'Goal is too long']]) {
+    it(`/goal ${args.slice(0, 8)} that printed "${printed}" opens no turn, and stays a command line`, () => {
+      const lines = [said('hi', 0), answered('hello', 1), said(local('goal', args), 2), said(stdout(printed), 3)]
+      expect(parseSessionTurns(lines).map((t) => t.prompt)).toEqual(['hi'])
+      const [block] = parseClaudeTrace(lines)
+      expect(block.added?.map((a) => [a.text.slice(0, 13), a.output])).toEqual([[`/goal ${args}`.slice(0, 13), printed]])
+    })
+  }
+
+  it('a /goal that set a goal is its turn\'s prompt, not also a line in the turn before', () => {
+    const blocks = parseClaudeTrace(lines)
+    expect(blocks[0].added?.map((a) => a.text)).toEqual(['/model opus'])
+    expect(blocks[1].prompt).toBe('/goal ship the release notes')
+  })
+
+  it('a goal set in the newer system-record form opens its turn too', () => {
+    const goal = parseSessionTurns([localCommand(local('goal', 'go'), 0), localCommand(stdout('Goal set: go'), 1), answered('going', 2)])
+    expect(goal.map((t) => [t.prompt, t.reply])).toEqual([['/goal go', 'going']])
+  })
+
   it('trace blocks and turns keep one numbering', () => {
     const blocks = parseClaudeTrace(lines)
     expect(blocks.map((b) => [b.index, b.id])).toEqual(turns.map((t) => [t.index, t.uuid]))
@@ -109,6 +130,25 @@ describe('the turns a session file holds', () => {
     const kept = buildForkedSessionLinesAtTurn(lines, { newSessionId: 'fork', keepPrompts: 1 })
     expect(parseSessionTurns(kept).map((t) => t.prompt)).toEqual(['fix the login bug'])
     expect(kept.some((line) => line.includes('Working toward the goal'))).toBe(false)
+  })
+
+  it('a fork counts a prompt command written as a block array, as the turns do', () => {
+    const withArray = [said('first', 0), answered('one', 1), said([{ type: 'text', text: prompted('loop', '5m') }], 2), answered('looping', 3), said('third', 4), answered('three', 5)]
+    const turns = parseSessionTurns(withArray)
+    expect(turns.map((t) => t.prompt)).toEqual(['first', '/loop 5m', 'third'])
+    expect(parseSessionTurns(buildForkedSessionLinesAtTurn(withArray, { newSessionId: 'f', keepPrompts: 2 })).map((t) => t.prompt)).toEqual(['first', '/loop 5m'])
+    const atLoop = buildForkedSessionLinesAtUuid(withArray, { newSessionId: 'f', cutoffUuid: turns[1].uuid as string })
+    expect(parseSessionTurns(atLoop).map((t) => t.prompt)).toEqual(['first', '/loop 5m'])
+    const onlyLoop = buildForkedSessionLinesForUuids(withArray, { newSessionId: 'f', keepUuids: [turns[1].uuid as string] })
+    expect(parseSessionTurns(onlyLoop).map((t) => [t.prompt, t.reply])).toEqual([['/loop 5m', 'looping']])
+  })
+
+  it('a fork cut at a /goal turn keeps the goal\'s own records out of the turn before', () => {
+    const goalTurn = turns[1].uuid as string
+    const before = buildForkedSessionLinesForUuids(lines, { newSessionId: 'f', keepUuids: [turns[0].uuid as string] })
+    expect(before.some((line) => line.includes('Working toward the goal'))).toBe(false)
+    const only = buildForkedSessionLinesForUuids(lines, { newSessionId: 'f', keepUuids: [goalTurn] })
+    expect(parseSessionTurns(only).map((t) => t.reply)).toEqual(['Working toward the goal: drafting the notes.'])
   })
 })
 
@@ -247,10 +287,27 @@ describe('the row', () => {
     })
   }
 
+  it('a translation stays on the closing answer, not under a command run after it', () => {
+    const html = renderToStaticMarkup(
+      <TranscriptRow id={1} block={blocks[0]} active={false} placeholderHeight={undefined} titleMode="precise" translated={{ index: 1, prompt: null, reply: 'TRANSLATED' }} />
+    )
+    expect(html).toContain('TRANSLATED')
+    expect(html).not.toContain('Fixed: the token')
+    expect(html.indexOf('TRANSLATED')).toBeLessThan(html.indexOf('ctx-command-line'))
+  })
+
   it('draws commands that led a turn above its prompt', () => {
     const [block] = parseClaudeTrace([said(local('model', 'opus'), 0), said('hello', 1)])
     const html = render(block, 'chat')
     expect(html.indexOf('ctx-command-line')).toBeGreaterThan(-1)
     expect(html.indexOf('ctx-command-line')).toBeLessThan(html.indexOf('class="ctx-block-prompt"'))
+  })
+})
+
+describe('the saved stream state', () => {
+  it('a state written before commands were turns replays whole', () => {
+    expect(STREAM_STATE_VERSION).toBe(2)
+    const old = parseStreamState(JSON.stringify({ version: 1, cursor: { file: 'a.jsonl', byteOffset: 10, ordinal: 5 }, anomalies: {}, rolledBack: [], index: [] }))
+    expect(old.cursor.ordinal).toBe(0)
   })
 })

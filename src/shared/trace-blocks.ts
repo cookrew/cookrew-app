@@ -10,6 +10,7 @@ import {
   CheckpointAssigner,
   checkpointIdentity,
   commandLine,
+  commandRecordText,
   slashCommandOf,
   type HistoryDelta,
   type SessionTurnAccumulator,
@@ -222,22 +223,6 @@ function claudeResultText(content: unknown): string {
   return ''
 }
 
-/** The text of a record that can carry a local slash command or its output: a user record, or the `local_command` system record newer Claude Code writes. */
-function commandRecordText(entry: ClaudeEntry): string | null {
-  if (entry.isMeta === true) return null
-  if (entry.type === 'system') return entry.subtype === 'local_command' && typeof entry.content === 'string' ? entry.content : null
-  if (entry.type !== 'user') return null
-  const content = entry.message?.content
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return null
-  const blocks = content as ClaudeContentBlock[]
-  if (blocks.some((b) => b?.type === 'tool_result')) return null
-  return blocks
-    .filter((b) => b?.type === 'text' && typeof b.text === 'string')
-    .map((b) => b.text as string)
-    .join('\n')
-}
-
 // eslint-disable-next-line no-control-regex
 const ANSI_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]/g
 const COMMAND_OUTPUT_RE = /^\s*<local-command-(stdout|stderr)>([\s\S]*?)(?:<\/local-command-\1>\s*)?$/
@@ -386,6 +371,14 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
             // Claude writes the words and their pasted images as one more record of the same submission.
             if (images.length > 0) current.images = [...(current.images ?? []), ...images]
             continue
+          }
+          // A /goal that set a goal is this turn's prompt, not a line in the one before.
+          if (step.command === true && commandBefore !== null) {
+            if (current?.added?.includes(commandBefore) === true) {
+              const rest = current.added.filter((x) => x !== commandBefore)
+              if (rest.length > 0) current.added = rest
+              else delete current.added
+            } else lead = lead.filter((x) => x !== commandBefore)
           }
           // A new turn drains the queue. Whatever a dead session left in line
           // would otherwise wait on this turn for ever; a prompt really still
