@@ -36,8 +36,15 @@ export interface RtcOfferOptions {
   readonly decideMs?: number
 }
 
-/** A v2 pin is necessary; the request itself must still obtain a sealed route. */
-const mayGo = (url: string): boolean => sealOutcome(url) === 'sealed'
+/** The outcome of the last offer's seal check, for the badge's reason (path/companion.ts). */
+let lastOutcome: ReturnType<typeof sealOutcome> | null = null
+export const lastOfferSealOutcome = (): ReturnType<typeof sealOutcome> | null => lastOutcome
+
+/** sealOutcome, remembered: the check is the same one the offer waits on, never an extra probe. */
+const outcomeFor = (url: string): ReturnType<typeof sealOutcome> => {
+  lastOutcome = sealOutcome(url)
+  return lastOutcome
+}
 
 /**
  * Has the page an answer on whether this machine speaks sealed? At once when
@@ -45,7 +52,7 @@ const mayGo = (url: string): boolean => sealOutcome(url) === 'sealed'
  * `ms`, and asked again: a try that failed is no answer.
  */
 const sealDecided = async (url: string, ms: number): Promise<boolean> => {
-  if (mayGo(url)) return true
+  if (outcomeFor(url) === 'sealed') return true
   let timer: ReturnType<typeof setTimeout> | undefined
   const late = new Promise<void>((resolve) => void (timer = setTimeout(resolve, ms)))
   try {
@@ -53,12 +60,13 @@ const sealDecided = async (url: string, ms: number): Promise<boolean> => {
   } finally {
     clearTimeout(timer)
   }
-  return mayGo(url)
+  return outcomeFor(url) === 'sealed'
 }
 
 /** POST the offer to the machine in scope: its answer and binding, or null (no answer, or not sent this round). */
 export const postRtcOffer = async (sdp: string, options: RtcOfferOptions = {}): Promise<RtcAnswer | null> => {
   const url = apiPath('/api/rtc/offer')
+  lastOutcome = null
   const sameMachine = heldScope()
   if (!(await sealDecided(url, options.decideMs ?? SEAL_DECIDE_MS))) return null
   // Left while it waited: the offer was for a machine no longer in scope.

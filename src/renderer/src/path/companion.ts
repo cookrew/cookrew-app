@@ -8,7 +8,7 @@ import { currentBrowser } from '../browser-family'
 import { createPathReporter, postPathReport } from './report'
 import { adoptRtcLink, type RtcRow } from './rtc-adopt'
 import { RTC_EVERY_MS, RTC_QUICK_MS, RTC_REFUSED_EVERY_MS, boundKnock, heldAfter, knockGapAfter } from './rtc-trust'
-import { postRtcOffer } from './rtc-offer'
+import { lastOfferSealOutcome, postRtcOffer } from './rtc-offer'
 import { heldRtcLink, rtcLink, setRtcLink } from '../rtc-plane'
 import { isLanHostname, isTailnetHostname } from '../../../shared/path-badge'
 import { pageContext } from './page-context'
@@ -166,6 +166,16 @@ const rtcKnock = async (onEnd: () => void, live: () => boolean, retry: (delay: n
     const held = heldAfter(knock.verdict())
     if (held !== undefined) setDirectHeld(held)
     const verdict = knock.verdict()
+    // Answered, and the link never opened: the row's name carries the stage (rtc-link.ts).
+    if (!verdict.verified && verdict.refused === null) {
+      // Answered and never opened, or no offer at all: the page can say which.
+      if (probe !== null && /never opened/.test(probe.name)) setDirectHeld('ice')
+      else {
+        const seal = lastOfferSealOutcome()
+        if (seal === 'no-code' || seal === 'old-mac') setDirectHeld('unpaired')
+        else if (seal === 'undecided') setDirectHeld('sealing')
+      }
+    }
     quietKnocks = !verdict.verified && verdict.refused === null ? quietKnocks + 1 : 0
     rtcGapMs = knockGapAfter(verdict, rtcGapMs, quietKnocks)
     // The wait runs from the refusal: a push that landed while the knock was
