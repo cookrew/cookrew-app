@@ -7,6 +7,8 @@ import { RTC_NO_BINDING, RTC_NO_ED25519, RTC_NO_MACHINE, makeRtcBind } from '../
 import {
   RTC_ANSWER_MAX,
   RTC_EVERY_MS,
+  RTC_QUICK_MS,
+  RTC_QUICK_TRIES,
   RTC_REFUSED_EVERY_MS,
   boundKnock,
   heldAfter,
@@ -178,8 +180,20 @@ describe('what the badge and the next knock make of a verdict', () => {
     expect(knockGapAfter({ verified: false, refused: RTC_NO_BINDING }, RTC_EVERY_MS)).toBe(RTC_REFUSED_EVERY_MS)
     expect(knockGapAfter({ verified: false, refused: 'binding did not verify' }, RTC_EVERY_MS)).toBe(RTC_REFUSED_EVERY_MS)
     expect(knockGapAfter({ verified: true, refused: null }, RTC_REFUSED_EVERY_MS)).toBe(RTC_EVERY_MS)
-    // No answer proves nothing either way: the gap stays what it was (the relay can make an error answer at will).
-    expect(knockGapAfter({ verified: false, refused: null }, RTC_EVERY_MS)).toBe(RTC_EVERY_MS)
-    expect(knockGapAfter({ verified: false, refused: null }, RTC_REFUSED_EVERY_MS)).toBe(RTC_REFUSED_EVERY_MS)
+    // No answer proves nothing either way: refused in neither direction.
+    expect(knockGapAfter({ verified: false, refused: null }, RTC_REFUSED_EVERY_MS, 0)).toBe(RTC_REFUSED_EVERY_MS)
+  })
+
+  it('a Mac that answers nothing yet is knocked on again soon, then left at the full gap (11-24)', () => {
+    // The offer is answered only inside a sealed session, so a knock made before
+    // this page's sealing finished is silence: two minutes of relay for nothing.
+    expect(RTC_QUICK_MS).toBeLessThan(RTC_EVERY_MS / 4)
+    expect(knockGapAfter({ verified: false, refused: null }, RTC_EVERY_MS, 1)).toBe(RTC_QUICK_MS)
+    expect(knockGapAfter({ verified: false, refused: null }, RTC_EVERY_MS, RTC_QUICK_TRIES - 1)).toBe(RTC_QUICK_MS)
+    // Past the quick tries, a Mac that keeps saying nothing gets the gap back.
+    expect(knockGapAfter({ verified: false, refused: null }, RTC_QUICK_MS, RTC_QUICK_TRIES)).toBe(RTC_EVERY_MS)
+    // An answer, or a refusal, is a decision: the quick tries start over.
+    expect(knockGapAfter({ verified: true, refused: null }, RTC_QUICK_MS, 0)).toBe(RTC_EVERY_MS)
+    expect(knockGapAfter({ verified: false, refused: RTC_NO_BINDING }, RTC_QUICK_MS, 0)).toBe(RTC_REFUSED_EVERY_MS)
   })
 })

@@ -7,7 +7,7 @@ import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
 import { currentBrowser } from '../browser-family'
 import { createPathReporter, postPathReport } from './report'
 import { adoptRtcLink, type RtcRow } from './rtc-adopt'
-import { RTC_EVERY_MS, boundKnock, heldAfter, knockGapAfter } from './rtc-trust'
+import { RTC_EVERY_MS, RTC_REFUSED_EVERY_MS, boundKnock, heldAfter, knockGapAfter } from './rtc-trust'
 import { postRtcOffer } from './rtc-offer'
 import { heldRtcLink, rtcLink, setRtcLink } from '../rtc-plane'
 import { isLanHostname, isTailnetHostname } from '../../../shared/path-badge'
@@ -87,6 +87,8 @@ let lastRtcAt = 0
  * (RTC_EVERY_MS), and longer after a refused answer (path/rtc-trust.ts).
  */
 let rtcGapMs = RTC_EVERY_MS
+/** Knocks in a row that were answered by silence: the first few wait RTC_QUICK_MS (path/rtc-trust.ts). */
+let quietKnocks = 0
 
 /**
  * A reason to knock now rather than after the gap (the network moved, the Mac
@@ -95,7 +97,7 @@ let rtcGapMs = RTC_EVERY_MS
  * after a refusal short. A change of machine resets both (below).
  */
 const owedAKnock = (): void => {
-  if (rtcGapMs === RTC_EVERY_MS) lastRtcAt = 0
+  if (rtcGapMs !== RTC_REFUSED_EVERY_MS) lastRtcAt = 0
 }
 /** How the last adopted link ended, carried by the next report and then dropped. */
 let lastEnd: RtcRow | null = null
@@ -110,6 +112,7 @@ registerScopeState('path switch memory', () => {
   tellTheDesktop = pathReporter()
   lastRtcAt = 0
   rtcGapMs = RTC_EVERY_MS
+  quietKnocks = 0
   lastEnd = null
   quickKnocks = []
 })
@@ -162,7 +165,9 @@ const rtcKnock = async (onEnd: () => void, live: () => boolean): Promise<RtcRow[
   if (live()) {
     const held = heldAfter(knock.verdict())
     if (held !== undefined) setDirectHeld(held)
-    rtcGapMs = knockGapAfter(knock.verdict(), rtcGapMs)
+    const verdict = knock.verdict()
+    quietKnocks = !verdict.verified && verdict.refused === null ? quietKnocks + 1 : 0
+    rtcGapMs = knockGapAfter(verdict, rtcGapMs, quietKnocks)
     // The wait runs from the refusal: a push that landed while the knock was
     // out (the relay knows when one is) zeroed the clock it started on.
     if (knock.verdict().refused !== null) lastRtcAt = Date.now()

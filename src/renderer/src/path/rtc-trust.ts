@@ -26,6 +26,18 @@ export const RTC_ANSWER_MAX = 64_000
 /** The gap between knocks on a Mac that did not answer, or whose link did not open. */
 export const RTC_EVERY_MS = 2 * 60 * 1000
 /**
+ * THE FIRST KNOCKS COME CLOSE TOGETHER. A Mac that answers nothing yet is often
+ * only too early: the offer is answered only inside a sealed session
+ * (mobile-api.ts · /api/rtc/offer), so a knock made before this page's sealing
+ * finished gets the same silence as one to an absent Mac, and waiting two
+ * minutes for it left the phone on the relay the whole time (11-24). So a
+ * silence is tried again at this gap, up to RTC_QUICK_TRIES times; a Mac that
+ * keeps answering nothing gets the full gap back, since every knock hands the
+ * relay the addresses it would send (the refusal rule's reason, one step on).
+ */
+export const RTC_QUICK_MS = 15 * 1000
+export const RTC_QUICK_TRIES = 3
+/**
  * The gap after a refused answer. Every knock hands the relay the Mac's
  * addresses (the answer's candidates); a Mac that cannot prove itself (an
  * older one, or a relay in the middle) is asked far less often for nothing.
@@ -139,7 +151,14 @@ export const heldAfter = (verdict: KnockVerdict): DirectHeld | null | undefined 
  * answer proves nothing either way and leaves the gap as it was: the relay
  * can make an error answer whenever it likes.
  */
-export const knockGapAfter = (verdict: KnockVerdict, current: number): number => {
+/**
+ * `quiet`: how many knocks in a row have had no answer at all. Few, and the
+ * next waits RTC_QUICK_MS (a Mac too early is met soon); more, and it is what
+ * it was. Silence never SHORTENS a longer gap: one after a refusal keeps it.
+ */
+export const knockGapAfter = (verdict: KnockVerdict, current: number, quiet = Number.POSITIVE_INFINITY): number => {
   if (verdict.verified) return RTC_EVERY_MS
-  return verdict.refused === null ? current : RTC_REFUSED_EVERY_MS
+  if (verdict.refused !== null) return RTC_REFUSED_EVERY_MS
+  if (quiet >= RTC_QUICK_TRIES) return RTC_EVERY_MS
+  return current > RTC_EVERY_MS ? current : RTC_QUICK_MS
 }
