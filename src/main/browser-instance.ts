@@ -55,6 +55,14 @@ export interface BrowserInstance {
   /** May resolve when the device took it (a Chrome does); a pinch step paces on that. */
   dispatchInput(method: CdpInputCommand['method'], params: CdpInputCommand['params'], who?: ViewerWho): Promise<void> | void
 
+  /**
+   * The most device scale this instance's frames honour (headless-chrome.ts ·
+   * CAST_SCALE_CEILING). Absent = 1: a device screen's frames are its own size
+   * whatever a viewer asks, so no viewer is invited to ask.
+   */
+  readonly scaleCeiling?: number
+  /** The JPEG quality the frames now streaming were started with (cast-tuning.ts); absent where it is not Chrome's to say. */
+  readonly frameQualityInUse?: number
   readonly viewport: { width: number; height: number }
   readonly viewportState: BrowserViewportState
   readonly processId: number | null

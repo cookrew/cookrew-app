@@ -10,7 +10,10 @@
 import { randomUUID } from 'node:crypto'
 import { sanitizeInput, sanitizePaste, type CdpInputCommand, type MapContext } from '../shared/cast-input'
 import { fieldsInFrame, type FieldReport } from './page-fields'
-import { sanitizeViewportMessage } from '../shared/cast-viewport'
+import { capViewportScale, sanitizeViewportMessage } from '../shared/cast-viewport'
+import { CAST_STATS_TYPE, sanitizeCastStats } from '../shared/cast-stats'
+import { appendCastStats, type CastStatsEntry } from './cast-stats-log'
+import { castTuning } from './cast-tuning'
 import type { ViewerWho } from '../shared/remote-access'
 import type { UseStatus } from '../shared/use-signal'
 import { jpegSize } from './jpeg-size'
@@ -37,6 +40,8 @@ export interface OutboundFrame {
   base64: string
   /** The same JPEG decoded once and shared by every viewer of this frame. */
   bytes: Buffer
+  /** Its pixel size, read from the JPEG once. */
+  size?: { width: number; height: number }
   meta: OutboundFrameMeta
 }
 
@@ -77,6 +82,16 @@ export const PINCH_STEP_TIMEOUT_MS = 500
 export const PASTE_TIMEOUT_MS = 1000
 /** Input held behind a paste: a burst of typing, never a backlog. */
 const MAX_HELD_INPUT = 256
+
+/** A viewer's live-view report is written down at most this often; the phone sends one every 5 s. */
+export const STATS_MIN_INTERVAL_MS = 2000
+
+export interface CastViewerOptions {
+  /** This viewer came through the relay (socket-bridge.ts marks the socket it dials): its scale is the relay's. */
+  readonly relayed?: boolean
+  /** Where its live-view reports go; the real log by default (cast-stats-log.ts). */
+  readonly report?: (entry: CastStatsEntry) => void
+}
 
 /** A viewer no credential named: it can watch what it was let in to, and it can never hold control. */
 export const UNNAMED_VIEWER: ViewerWho = { key: 'unnamed', name: 'A paired device', here: false }
@@ -122,6 +137,11 @@ export class CastViewer {
   private leave: (() => void) | null = null
   /** When this viewer's own input last reached the page: a copy right after it is theirs (page-copy.ts). */
   private lastInputAt: number | null = null
+  /** What went to this viewer since its last report (cast-stats-log.ts · CastSent). */
+  private sentFrames = 0
+  private sentBytes = 0
+  private sentSize: { width: number; height: number } = { width: 0, height: 0 }
+  private reportedAt = 0
   /**
    * The page copied: this viewer's clipboard gets it only if this viewer just
    * acted on the page. A page copying on its own, or after another viewer's
@@ -138,8 +158,20 @@ export class CastViewer {
     private readonly sink: ViewerSink,
     private readonly onClosed: () => void,
     readonly browserId: string,
-    private readonly who: ViewerWho = UNNAMED_VIEWER
+    private readonly who: ViewerWho = UNNAMED_VIEWER,
+    private readonly options: CastViewerOptions = {}
   ) {}
+
+  /**
+   * The most device scale this viewer may have now: what the instance can
+   * stream, held to the tuning for its line. Read again for every ask, so a
+   * lowered tuning holds a viewer already watching too.
+   */
+  private allowedScale(): number {
+    const tuning = castTuning()
+    const ceiling = this.instance?.scaleCeiling ?? 1
+    return Math.min(ceiling, this.options.relayed ? tuning.relayScaleMax : tuning.scaleMax)
+  }
 
   get isClosed(): boolean {
     return this.closed
@@ -167,12 +199,15 @@ export class CastViewer {
     instance.frameListeners.add(this.frameListener)
     instance.statusListeners?.add(this.statusListener)
     instance.copyListeners?.add(this.copyListener)
+    this.reportedAt = Date.now()
     this.sink.sendControl({
       t: 'ready',
       w: viewport.width,
       h: viewport.height,
       mobile: viewport.mobile,
-      revision: viewport.revision
+      revision: viewport.revision,
+      // How sharp this viewer may ask to be; every ask is held to it again on arrival.
+      scaleMax: this.allowedScale()
     })
     this.pushViewportState(viewport)
     if (instance.status) this.statusListener(instance.status)
@@ -218,6 +253,7 @@ export class CastViewer {
       seq: (this.seq += 1),
       base64,
       bytes,
+      ...(size ? { size } : {}),
       meta: {
         deviceWidth,
         deviceHeight,
@@ -243,6 +279,9 @@ export class CastViewer {
   private deliver(frame: OutboundFrame, context: MapContext): void {
     this.sink.sendFrame(frame)
     if (this.closed) return
+    this.sentFrames += 1
+    this.sentBytes += frame.bytes.length
+    if (frame.size) this.sentSize = frame.size
     this.ctx = context
     this.deliveredRevision = frame.meta.revision
     this.rememberFrameContext(frame.seq, frame.meta.revision, context)
@@ -279,9 +318,12 @@ export class CastViewer {
     if (!instance || this.closed) return
     const viewportMessage = sanitizeViewportMessage(raw)
     if (viewportMessage) {
-      if (viewportMessage.type === 'offer') instance.offerViewport(this.id, viewportMessage.metrics)
-      else if (viewportMessage.type === 'claim') instance.claimViewport(this.id, viewportMessage.metrics)
-      else instance.releaseViewport(this.id)
+      if (viewportMessage.type === 'release') instance.releaseViewport(this.id)
+      else {
+        const metrics = capViewportScale(viewportMessage.metrics, this.allowedScale())
+        if (viewportMessage.type === 'offer') instance.offerViewport(this.id, metrics)
+        else instance.claimViewport(this.id, metrics)
+      }
       this.pushViewportState(instance.viewportState)
       return
     }
@@ -289,6 +331,10 @@ export class CastViewer {
     const input = raw as Record<string, unknown>
     if (input.t === 'visibility') {
       instance.viewerHidden?.(this.id, input.hidden === true)
+      return
+    }
+    if (input.t === CAST_STATS_TYPE) {
+      this.recordStats(raw)
       return
     }
     if (input.t === 'watch-fields') {
@@ -330,6 +376,38 @@ export class CastViewer {
     for (const command of commands) this.dispatch(instance, command)
     this.lastInputAt = Date.now()
     this.remember(raw as Record<string, unknown>, frameContext?.ctx ?? this.ctx)
+  }
+
+  /**
+   * The viewer's live-view numbers (shared/cast-stats.ts), written beside what
+   * was sent it over the same stretch. Numbers only; a malformed one, or one
+   * sooner than STATS_MIN_INTERVAL_MS after the last, is dropped.
+   */
+  private recordStats(raw: unknown): void {
+    const phone = sanitizeCastStats(raw)
+    const now = Date.now()
+    const elapsed = now - this.reportedAt
+    if (!phone || elapsed < STATS_MIN_INTERVAL_MS) return
+    const sent = {
+      frames: this.sentFrames,
+      kbps: Math.round((this.sentBytes / 1024 / (elapsed / 1000)) * 10) / 10,
+      width: this.sentSize.width,
+      height: this.sentSize.height
+    }
+    this.reportedAt = now
+    this.sentFrames = 0
+    this.sentBytes = 0
+    ;(this.options.report ?? appendCastStats)({
+      at: new Date(now).toISOString(),
+      browserId: this.browserId,
+      viewer: this.who.key,
+      relayed: this.options.relayed === true,
+      phone,
+      sent,
+      // What is in force, not what the file says now: a quality change waits
+      // for the next stream start, and a comparison must not be told otherwise.
+      inUse: { scaleMax: this.allowedScale(), quality: this.instance?.frameQualityInUse ?? 0 }
+    })
   }
 
   /** What is held down in Chrome on this viewer's behalf, for a viewer that leaves mid-press. */
