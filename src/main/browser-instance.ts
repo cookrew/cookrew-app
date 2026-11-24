@@ -63,6 +63,12 @@ export interface BrowserInstance {
   readonly scaleCeiling?: number
   /** The JPEG quality the frames now streaming were started with (cast-tuning.ts); absent where it is not Chrome's to say. */
   readonly frameQualityInUse?: number
+  /**
+   * A viewer wants the screencast at least this sharp (an H.264 viewer: the
+   * JPEG is the encoder's input), or no longer does (null). The stream runs at
+   * the highest any viewer asked. Absent where the frames' quality is not Chrome's.
+   */
+  preferSourceQuality?(viewerId: string, quality: number | null): void
   readonly viewport: { width: number; height: number }
   readonly viewportState: BrowserViewportState
   readonly processId: number | null
