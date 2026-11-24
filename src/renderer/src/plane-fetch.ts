@@ -5,6 +5,7 @@ import { linkBody, linkHeaders, linkPath, viaLink } from './rtc-plane'
 import { reviveStreams } from './plane-streams'
 import { heldScope, machineLeft, relayHeadersForUrl, relayRequestFor } from './machine-scope'
 import { machineBaseFor, probeSettled, refusedInTheClear, sealedFetchFor } from './path/seal-plane'
+import { directHeld, setDirectHeld } from './path-link'
 
 /**
  * ONE FETCH, ON WHICHEVER PLANE IS CARRYING THE SESSION.
@@ -124,7 +125,11 @@ async function fetchOnRelay(url: string, init: RequestInit): Promise<Response> {
  */
 async function fetchRelayed(url: string, init: RequestInit): Promise<Response> {
   const sealed = sealedFetchFor(url, init)
-  if (sealed !== null) return sealed
+  if (sealed !== null) {
+    // Talking again, sealed: a sealed-only refusal this page showed is over.
+    if (directHeld() === 'sealedOnly') setDirectHeld(null)
+    return sealed
+  }
   const sent = toRelay(url, init.headers)
   const response = await fetch(sent.url, { ...init, ...apiRequestInit(), ...(sent.headers ? { headers: sent.headers } : {}) })
   // Only a relayed call can be refused for going in the clear; any other 403 is the answer as it is.

@@ -14,7 +14,8 @@ import { heldScope, machineLeft, registerScopeState, relayRequestFor } from './m
 import { authHeaders, tokenParam } from './auth-gate'
 import { BridgeWebSocket } from './path/bridge-socket'
 import { planeFetch } from './plane-fetch'
-import { onSealPinned, sealedFetchFor } from './path/seal-plane'
+import { onSealPinned, refusedInTheClear, sealedFetchFor } from './path/seal-plane'
+import { setDirectHeld } from './path-link'
 import { dataPlane } from './data-plane'
 import { RtcEventSource, type RtcLink } from './path/rtc-link'
 import { socketUrl } from './browser-stream'
@@ -166,6 +167,10 @@ const headerStream = (url: string): Pick<RtcLink, 'request'> => {
       // On the sealed session when the machine is on v2 here (path/seal-plane.ts): an event stream is a body that has not ended.
       const sealed = sealedFetchFor(url, { method, signal, headers: { ...headers, ...authHeaders() } })
       const response = await (sealed ?? fetch(sent.url, { method, signal, ...apiRequestInit(), headers: sent.headers }))
+      // SEALED-ONLY, SAID ON THE BADGE (seal-marks.ts): every plain relayed
+      // request is refused while the Mac insists on a sealed code, and a stream
+      // that read it as a dead line would redial for ever. Only the answer is read.
+      if (response.status === 403 && (await refusedInTheClear(response))) setDirectHeld('sealedOnly')
       // A page where a stream was due is a failed connect, as EventSource holds it.
       const stream = response.headers.get('content-type')?.includes('text/event-stream') === true
       if (stream || !response.ok) return response

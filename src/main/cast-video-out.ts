@@ -36,26 +36,32 @@ import type { OutboundFrame } from './cast-viewer'
 /** Bytes in flight: where the window starts, and how small and large it may become. */
 export const VIDEO_WINDOW_START = 96 * 1024
 /**
- * Low enough to hold no queue worth feeling on a thin line: 48 KB was a second
- * of standing queue at 50 KB/s (review 11-24). One chunk always goes whatever
- * its size (pump), so a key frame larger than this is never stuck.
+ * THE WINDOW IS A DELAY BUDGET, NOT A CREDIT. Measured throughput times how
+ * long a chunk may be in flight: at least MIN_INFLIGHT_S, and otherwise one
+ * round trip with some slack, so a frame can be sent while the previous ones
+ * are still acknowledged (measured 11-24 on the relay: a shrinking window left
+ * 16-40 KB in flight, one to three 12-16 KB frames, which is 1-4 fps at a
+ * 0.7-1.3 s round trip, while the line carried 50-100 KB/s). The cost is about
+ * a round trip of standing latency — the scroll lead hides it — and not a
+ * pixel of sharpness.
  */
 export const VIDEO_WINDOW_MIN = 16 * 1024
 export const VIDEO_WINDOW_MAX = 512 * 1024
-/** Grown by at most this much per acknowledgement that shows no queue, and never by more than it acknowledged. */
-const WINDOW_GROW = 16 * 1024
-/** Measurements kept between reports, at most: a viewer whose reports never come must not grow them forever. */
-const MEASURED_MAX = 1000
-/** Given back to this share once acknowledgements show a queue, at most once per WINDOW_SHRINK_MS. */
-const WINDOW_SHRINK = 0.7
-const WINDOW_SHRINK_MS = 300
-/** Chunks in flight whatever their size: a run of tiny refreshes is no reason to send forty. */
-export const VIDEO_WINDOW_MAX_CHUNKS = 24
-/** How much slower than the fastest lately an acknowledgement may be and still be no queue. */
-const QUEUE_SLACK = 1.25
-const QUEUE_SLACK_MS = 60
+const MIN_INFLIGHT_S = 0.8
+const RTT_SHARE = 1.2
+/**
+ * The budget never grows past this. It is built from the FASTEST round trip
+ * lately, not the one just seen: a queue this window itself made would
+ * otherwise raise the next budget, which is how a delay-based loop runs away.
+ * The cap bounds even that.
+ */
+const MAX_INFLIGHT_S = 1.5
 /** The fastest acknowledgement is forgotten after this: a phone moves to a slower network. */
 const FASTEST_MEMORY_MS = 10_000
+/** Measurements kept between reports, at most: a viewer whose reports never come must not grow them forever. */
+const MEASURED_MAX = 1000
+/** Chunks in flight whatever their size: a run of tiny refreshes is no reason to send forty. */
+export const VIDEO_WINDOW_MAX_CHUNKS = 24
 /** An acknowledgement this late was lost: the chunk stops counting against the window. */
 export const VIDEO_ACK_TIMEOUT_MS = 2500
 /**
@@ -122,9 +128,11 @@ export class VideoOut {
   private readonly started: number
   /** Bytes the phone may have unacknowledged; learned from how long acknowledgements take. */
   private window = VIDEO_WINDOW_START
-  /** Recent acknowledgement round trips: the fastest of the last FASTEST_MEMORY_MS is the line's own. */
+  /** Recent acknowledgement round trips, for the report and the delay budget. */
   private samples: { at: number; took: number }[] = []
-  private shrunkAt = 0
+  /** Measured bytes per second the phone's acknowledgements show, smoothed; 0 until the first pair. */
+  private goodput = 0
+  private lastAckAt = 0
   /** When the newest picture began waiting to be encoded. */
   private pendingSince = 0
   /** What this stretch measured, for the viewer's report (cast-stats-log.ts). */
@@ -190,18 +198,28 @@ export class VideoOut {
     this.pump()
   }
 
-  /** The window, from one acknowledgement's round trip (see the head of this file). */
+  /**
+   * The delay budget, from one acknowledgement: the line's measured throughput
+   * times how long a chunk may be in flight (a round trip with slack, never
+   * under MIN_INFLIGHT_S). Sharpness is untouched; the standing latency it buys
+   * is what keeps frames flowing on a slow line.
+   */
   private learn(took: number, acked: number): void {
     const now = this.now()
     this.measure('ackMs', took)
     this.samples = [...this.samples.filter((s) => now - s.at < FASTEST_MEMORY_MS), { at: now, took }]
-    const fastest = Math.min(...this.samples.map((s) => s.took))
-    const queueing = took > fastest * QUEUE_SLACK + QUEUE_SLACK_MS
-    if (!queueing) {
-      this.window = Math.min(VIDEO_WINDOW_MAX, this.window + Math.min(WINDOW_GROW, Math.max(acked, 1)))
-    } else if (now - this.shrunkAt >= WINDOW_SHRINK_MS) {
-      this.window = Math.max(VIDEO_WINDOW_MIN, Math.round(this.window * WINDOW_SHRINK))
-      this.shrunkAt = now
+    if (this.lastAckAt > 0) {
+      const dt = now - this.lastAckAt
+      if (dt >= 20 && acked > 0) {
+        const sample = (acked * 1000) / dt
+        this.goodput = this.goodput > 0 ? this.goodput * 0.7 + sample * 0.3 : sample
+      }
+    }
+    this.lastAckAt = now
+    if (this.goodput > 0) {
+      const baseline = Math.min(...this.samples.map((s) => s.took))
+      const inflightS = Math.min(MAX_INFLIGHT_S, Math.max(MIN_INFLIGHT_S, (baseline / 1000) * RTT_SHARE))
+      this.window = Math.min(VIDEO_WINDOW_MAX, Math.max(VIDEO_WINDOW_MIN, Math.round(this.goodput * inflightS)))
     }
   }
 
@@ -214,6 +232,15 @@ export class VideoOut {
   /** The window now, in bytes (for tests and the viewer's report). */
   get windowBytes(): number {
     return this.window
+  }
+
+  /** The median acknowledgement round trip of the last ten seconds (0 before any): the line, for cast-profile.ts. */
+  ackP50(): number {
+    const now = this.now()
+    const recent = this.samples.filter((s) => now - s.at < FASTEST_MEMORY_MS).map((s) => s.took)
+    if (recent.length === 0) return 0
+    recent.sort((a, b) => a - b)
+    return Math.round(recent[Math.min(recent.length - 1, Math.floor(recent.length / 2))])
   }
 
   /** What this stretch measured, then a fresh one: encode time, how long a picture waited, acknowledgement round trips. */
@@ -254,17 +281,12 @@ export class VideoOut {
   private pump(): void {
     if (this.closed || this.encoding || !this.pending) return
     const now = this.now()
-    let lost = false
     for (const [n, sent] of this.inFlight) {
       if (now - sent.at < VIDEO_ACK_TIMEOUT_MS) continue
       this.inFlight.delete(n)
-      lost = true
     }
-    // An acknowledgement that never came: the line is slower than the window thought.
-    if (lost && now - this.shrunkAt >= WINDOW_SHRINK_MS) {
-      this.window = Math.max(VIDEO_WINDOW_MIN, Math.round(this.window * WINDOW_SHRINK))
-      this.shrunkAt = now
-    }
+    // An acknowledgement that never came is a slow line, not a queue: the next
+    // acknowledgement's throughput sample brings the window down on its own.
     const bytes = [...this.inFlight.values()].reduce((sum, sent) => sum + sent.bytes, 0)
     if (this.inFlight.size >= VIDEO_WINDOW_MAX_CHUNKS || (this.inFlight.size > 0 && bytes >= this.window)) {
       const oldest = Math.min(...[...this.inFlight.values()].map((sent) => sent.at))

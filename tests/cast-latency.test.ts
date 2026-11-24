@@ -1,7 +1,7 @@
 import http from 'node:http'
 import { Socket } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BRIDGE_UP_IN_FLIGHT, BridgeWebSocket, videoAckOf, type BridgeBody, type BridgeStream } from '../src/renderer/src/path/bridge-socket'
+import { BRIDGE_ACK_MIN_MS, BRIDGE_UP_IN_FLIGHT, BridgeWebSocket, videoAckOf, type BridgeBody, type BridgeStream } from '../src/renderer/src/path/bridge-socket'
 import { createSocketBridge } from '../src/main/socket-bridge'
 import type { LoopbackSocket, LoopbackSocketDeps } from '../src/main/ws-client'
 import { CastStatsMeter } from '../src/renderer/src/cast-stats-meter'
@@ -69,8 +69,26 @@ describe('an H.264 acknowledgement does not wait behind input on the relay', () 
     await vi.advanceTimersByTimeAsync(0)
     expect(posts).toHaveLength(BRIDGE_UP_IN_FLIGHT + 1)
     posts.at(-1)?.answer('ok')
-    await vi.advanceTimersByTimeAsync(0)
+    // The newest one stands for it, but no sooner than the acknowledgement gap.
+    await vi.advanceTimersByTimeAsync(BRIDGE_ACK_MIN_MS)
     expect(posts.at(-1)?.body).toEqual({ v: 10 })
+  })
+
+  it('says the newest once per gap, however many chunks arrive', async () => {
+    const { ws, posts } = bridgeSocket()
+    for (const n of [1, 2, 3, 4, 5, 6]) ws.send(JSON.stringify({ t: 'vack', n }))
+    await vi.advanceTimersByTimeAsync(0)
+    // At most one POST leaves, and it carries the newest number, not each one.
+    expect(posts.length).toBeLessThanOrEqual(1)
+    for (const post of posts) post.answer('ok')
+    const before = posts.length
+    for (const n of [7, 8, 9]) ws.send(JSON.stringify({ t: 'vack', n }))
+    await vi.advanceTimersByTimeAsync(0)
+    // Within the gap: nothing more goes up.
+    expect(posts).toHaveLength(before)
+    await vi.advanceTimersByTimeAsync(BRIDGE_ACK_MIN_MS)
+    expect(posts.at(-1)?.body).toEqual({ v: 9 })
+    expect(posts.length).toBeLessThanOrEqual(before + 1)
   })
 
   it('to a Mac that never said it reads `v`, goes as the message it always was', async () => {
