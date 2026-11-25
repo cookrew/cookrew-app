@@ -544,9 +544,9 @@ export function ProfileSheet({
               </div>
             )}
             {/* ONE ROW PER DEVICE (device-rows.ts). A device on the account
-                that this Mac also admits is the account's row: its REVOKE ends
-                the admission here too. Only a device this Mac knows and the
-                account does not keeps its own row, with the local FORGET. */}
+                that this machine also admits is the account's row: its REVOKE
+                ends the admission here too, FORGET HERE only that. A device
+                only this machine knows keeps its own row, with FORGET. */}
             <p className="cr-acct-devices-heading">Paired devices</p>
             <ul className="cr-acct-devices">
               {rows.map((row) => {
@@ -559,7 +559,7 @@ export function ProfileSheet({
                       <span className="cr-acct-secstate">LAST SEEN {ago(phone.lastSeenAt, now)}</span>
                       <button
                         className="gs-revoke"
-                        aria-label={`Forget ${phone.name ?? phone.deviceId} on this Mac`}
+                        aria-label={machineCopy(`Forget ${phone.name ?? phone.deviceId} on this Mac`, hostPlatform())}
                         onClick={() => forget(phone.deviceId)}
                       >
                         FORGET
