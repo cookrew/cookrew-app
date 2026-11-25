@@ -287,6 +287,33 @@
   font: 11px/1.3 var(--font-mono);
 }
 
+/* Yours too, but a command rather than words: a quiet outlined line on your
+   side, what it printed under it. */
+.lod-overlay .look-chat .ctx-block-command {
+  align-self: flex-end;
+  align-items: flex-end;
+  max-width: 80%;
+  margin-top: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--amber-soft);
+  border-radius: 12px;
+  color: var(--ink);
+  text-align: right;
+}
+
+.lod-overlay .look-chat .ctx-command-line::before {
+  content: none;
+}
+
+.lod-overlay .look-chat .ctx-command-output {
+  margin-left: 0;
+  color: var(--muted);
+}
+
+.lod-overlay .look-chat .ctx-command-output::before {
+  content: none;
+}
+
 /* Nobody's: a harness notice sits between the two sides, small and quiet. */
 .lod-overlay .look-chat .ctx-block-notice {
   align-self: center;

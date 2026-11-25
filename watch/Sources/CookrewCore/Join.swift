@@ -24,6 +24,8 @@ public enum JoinFailure: Error, Equatable, Sendable {
   /** The account refused this device: the next code goes in under a new one. */
   case newDevice
   case signedOut
+  /** The Mac refused the claim in the clear (sealed only): the code is still good once it lets the claim through. */
+  case sealedOnly
 }
 
 public enum JoinOutcome: Equatable, Sendable {
@@ -61,6 +63,8 @@ private func findMac(code: String, account: WatchAccount, api: RegistryAPI, devi
     }
   }
   if heard.contains(.slow) { return .failed(.slow) }
+  // Never "the code ended": the Mac did not read it, and it is still good once the claim gets through.
+  if heard.contains(.sealedOnly) { return .failed(.sealedOnly) }
   if heard.contains(.claim("wrong")) { return .failed(.wrongCode) }
   if heard.isEmpty || heard.contains(.unreachable) { return .failed(.macAway) }
   return .failed(.ended)

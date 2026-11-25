@@ -55,6 +55,7 @@ import { commandWithArgs, routeExports } from './tmux-multiplexer'
 import { promptViaHerdr, submitViaHerdr, waitForAgentState } from './herdr-agent-wait'
 import { isTransientHerdrError, runWithHerdrRetry } from './herdr-retry'
 import { herdrAgentName, planAgentNames, uniqueHerdrAgentName, type ListedAgent } from './herdr-agent-name'
+import { planTabLabels, type ListedTab } from './herdr-tab-label'
 import {
   sanitizeAgentEnv,
   type AttachSpawn,
@@ -1292,11 +1293,12 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * The pane's TAB wears the card's name too, when the pane has it to itself.
    *
    * The pane title follows a rename (reportPaneCard), but a tab is labelled
-   * once, when it is made — Alma's service gives every Cookrew pane its own
-   * tab named after the card's title at that moment — and kept that label
-   * through every rename after (measured: a card renamed from a Chinese
-   * prompt still sat in a tab labelled "Finch"). A tab holding several panes is
-   * shared, and names none of them. Display-only, best effort.
+   * once, when it is made — createInOwnTab names it after the card at that
+   * moment — and kept that label through every rename after (measured: a card
+   * renamed from a Chinese prompt still sat in a tab labelled "Finch"). A tab
+   * holding several panes is shared, and names none of them. Labels that
+   * drift without a rename are put back by reconcileTabLabels. Display-only,
+   * best effort.
    */
   renameTab(name: string, label: string): void {
     this.renameTabOf(this.paneFor(name), label)
@@ -1350,7 +1352,8 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * Cookrew. One async `agent list` per tick reads every Cookrew pane's name
    * against its card's (the title Cookrew reported), and only the panes that
    * drifted are renamed, async too. It is also what names the panes of
-   * workspaces nobody has opened since boot. Returns how many were renamed.
+   * workspaces nobody has opened since boot, and it puts drifted tab labels
+   * back (reconcileTabLabels). Returns how many agents were renamed.
    */
   async reconcileAgentNames(): Promise<number> {
     if (this.reconciling || !this.available()) return 0
@@ -1382,11 +1385,34 @@ export class HerdrHostMultiplexer implements Multiplexer {
           // Taken meanwhile, or the agent left: the next tick reads again.
         }
       }
+      await this.reconcileTabLabels(listed as ListedAgent[])
       return renamed
     } catch {
       return 0
     } finally {
       this.reconciling = false
+    }
+  }
+
+  /**
+   * The tab half of the same tick: a tab a card has to itself wears the
+   * card's name again (herdr-tab-label.ts). Labels drift without a rename:
+   * a pane moved out of a shared tab leaves its label on the pane that stays.
+   * Display-only, so a broken listing just waits for the next tick.
+   */
+  private async reconcileTabLabels(agents: readonly ListedAgent[]): Promise<void> {
+    try {
+      const tabs = parseEnvelope(await this.runAsync(['tab', 'list'], 3000))?.tabs
+      if (!Array.isArray(tabs)) return
+      for (const change of planTabLabels(agents, tabs as ListedTab[])) {
+        try {
+          await this.runAsync(['tab', 'rename', change.tabId, change.label], 3000)
+        } catch {
+          // The tab closed meanwhile: nothing to name.
+        }
+      }
+    } catch {
+      // herdr unreachable: the next tick reads again.
     }
   }
 
@@ -1872,10 +1898,51 @@ export class HerdrHostMultiplexer implements Multiplexer {
       return { pane: (created?.root_pane ?? null) as HerdrPane | null, origin: 'created' }
     }
 
+    const tabbed = this.createInOwnTab(spec, panes)
+    if (tabbed) return { pane: tabbed, origin: 'created' }
+
     const split = parseEnvelope(
       this.herdr(['pane', 'split', '--direction', 'right', '--cwd', spec.cwd, ...envArgs(spec)])
     )
     return { pane: (split?.pane ?? null) as HerdrPane | null, origin: 'created' }
+  }
+
+  /**
+   * A new pane in a tab of its own, labelled with the card's name and not
+   * focused, or null so the caller splits as before.
+   *
+   * A split lands in the FOCUSED pane's tab. The Alma service
+   * (~/.cookrew/alma-herdr/service.sh) then gives each crowded pane its own
+   * tab, but it moves the FIRST one, which is the old focused pane, into a tab
+   * named after that pane. The new card stayed behind in a tab wearing its
+   * neighbour's name. Measured 2026-11-25: four tabs said "Cookrew_dev" and
+   * three said "Relay", each holding a different card (herdr-tab-label.ts).
+   */
+  private createInOwnTab(spec: AttachSpec, panes: readonly HerdrPane[]): HerdrPane | null {
+    const workspace = panes.find((pane) => pane.label && pane.workspace_id)?.workspace_id
+      ?? panes.find((pane) => pane.workspace_id)?.workspace_id
+    const label = spec.card?.agent.trim() ?? ''
+    try {
+      const created = parseEnvelope(
+        this.herdr([
+          'tab', 'create',
+          ...(workspace ? ['--workspace', workspace] : []),
+          ...(label.length > 0 ? ['--label', label] : []),
+          '--cwd', spec.cwd,
+          '--no-focus',
+          ...envArgs(spec)
+        ])
+      )
+      const pane = created?.root_pane as HerdrPane | undefined
+      if (typeof pane?.pane_id === 'string' && pane.pane_id.length > 0) return pane
+      // A tab with no pane we can use would sit there as a stray shell once
+      // the caller splits instead.
+      const tabId = (created?.tab as { tab_id?: unknown } | undefined)?.tab_id
+      if (typeof tabId === 'string' && tabId.length > 0) this.quiet(['tab', 'close', tabId])
+      return null
+    } catch {
+      return null
+    }
   }
 
   /**

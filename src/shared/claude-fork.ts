@@ -8,7 +8,7 @@
 // file is only ever read, never modified.
 
 import type { TurnRecord } from './turn'
-import { isNoisePrompt } from './session-turns'
+import { CheckpointAssigner, checkpointIdentity, type CheckpointStep } from './session-turns'
 
 /**
  * Slack subtracted from the cutoff when matching session records against
@@ -30,7 +30,10 @@ export function claudeProjectSlug(cwd: string): string {
 
 interface SessionRecord {
   type?: string
+  subtype?: string
   isMeta?: boolean
+  parentUuid?: string
+  content?: unknown
   timestamp?: string
   sessionId?: string
   uuid?: string
@@ -44,6 +47,52 @@ function parseRecord(line: string): SessionRecord | null {
   } catch {
     return null
   }
+}
+
+interface SteppedLine {
+  line: string
+  record: SessionRecord | null
+  /** The checkpoint this record opens or rejoins (the SAME rule TurnRecord.index comes from). */
+  step: CheckpointStep | null
+}
+
+/**
+ * The session's records, each with the checkpoint it opens: a /goal or a skill
+ * is a turn, a /model is not. A /goal's turn opens on its "Goal set:" output,
+ * and the command record before it is handed out AS that opening, so no cut
+ * leaves the command in the turn before and its work in its own.
+ */
+function steppedLines(lines: readonly string[]): SteppedLine[] {
+  const assigner = new CheckpointAssigner()
+  const out: SteppedLine[] = []
+  let held: SteppedLine[] = []
+  for (const line of lines) {
+    if (line.trim().length === 0) continue
+    const record = parseRecord(line)
+    const step = record === null ? null : assigner.feed(record)
+    if (record !== null && step === null && assigner.awaitingGoal) {
+      out.push(...held)
+      held = [{ line, record, step: null }]
+      continue
+    }
+    if (held.length > 0 && step?.command === true) {
+      out.push({ ...held[0], step }, ...held.slice(1), { line, record, step: null })
+      held = []
+      continue
+    }
+    if (held.length > 0 && record === null) {
+      held.push({ line, record, step })
+      continue
+    }
+    out.push(...held, { line, record, step })
+    held = []
+  }
+  return [...out, ...held]
+}
+
+/** The line with its session id restamped for the fork. */
+function restamped({ line, record }: SteppedLine, sessionId: string): string {
+  return typeof record?.sessionId === 'string' ? JSON.stringify({ ...record, sessionId }) : line
 }
 
 /**
@@ -150,22 +199,13 @@ export function buildForkedSessionLinesAtTurn(
 ): string[] {
   const kept: string[] = []
   let prompts = 0
-  for (const line of lines) {
-    if (line.trim().length === 0) continue
-    const record = parseRecord(line)
-    if (record === null) {
-      kept.push(line)
-      continue
-    }
-    if (isPromptRecord(record) && !isNoisePrompt(record.message?.content as string)) {
+  // "After turn N" cuts where turn N+1 opens, by the rule TurnRecord.index has.
+  for (const stepped of steppedLines(lines)) {
+    if (stepped.step !== null && !stepped.step.sibling) {
       prompts += 1
       if (prompts > options.keepPrompts) break
     }
-    kept.push(
-      typeof record.sessionId === 'string'
-        ? JSON.stringify({ ...record, sessionId: options.newSessionId })
-        : line
-    )
+    kept.push(restamped(stepped, options.newSessionId))
   }
   return kept
 }
@@ -190,21 +230,11 @@ export function buildForkedSessionLinesAtUuid(
 ): string[] {
   const kept: string[] = []
   let seenCutoff = false
-  for (const line of lines) {
-    if (line.trim().length === 0) continue
-    const record = parseRecord(line)
-    if (record === null) {
-      kept.push(line)
-      continue
-    }
-    const isPrompt = isPromptRecord(record) && !isNoisePrompt(record.message?.content as string)
-    if (isPrompt && seenCutoff) break
-    if (isPrompt && record.uuid === options.cutoffUuid) seenCutoff = true
-    kept.push(
-      typeof record.sessionId === 'string'
-        ? JSON.stringify({ ...record, sessionId: options.newSessionId })
-        : line
-    )
+  for (const stepped of steppedLines(lines)) {
+    const { step } = stepped
+    if (step !== null && !step.sibling && seenCutoff) break
+    if (step !== null && checkpointIdentity(step.id) === options.cutoffUuid) seenCutoff = true
+    kept.push(restamped(stepped, options.newSessionId))
   }
   return kept
 }
@@ -230,22 +260,15 @@ export function buildForkedSessionLinesForUuids(
   const wanted = new Set(options.keepUuids)
   const kept: string[] = []
   let keeping = true // header region before the first prompt
-  for (const line of lines) {
-    if (line.trim().length === 0) continue
-    const record = parseRecord(line)
-    if (record === null) {
-      if (keeping) kept.push(line)
-      continue
+  for (const stepped of steppedLines(lines)) {
+    const { step } = stepped
+    if (step !== null) {
+      // A later record of the same submission carries the turn's uuid (Claude
+      // binds the checkpoint to it), so it can switch the turn on, never off.
+      const chosen = wanted.has(checkpointIdentity(step.id))
+      keeping = step.sibling ? keeping || chosen : chosen
     }
-    if (isPromptRecord(record) && !isNoisePrompt(record.message?.content as string)) {
-      keeping = record.uuid !== undefined && wanted.has(record.uuid)
-    }
-    if (!keeping) continue
-    kept.push(
-      typeof record.sessionId === 'string'
-        ? JSON.stringify({ ...record, sessionId: options.newSessionId })
-        : line
-    )
+    if (keeping) kept.push(restamped(stepped, options.newSessionId))
   }
   return kept
 }

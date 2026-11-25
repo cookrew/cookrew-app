@@ -9,6 +9,19 @@ public enum WatchError: Error, Equatable, Sendable {
   case unreachable
   /** The relay will not have this session any more, and it could not be renewed. */
   case signedOut
+  /**
+   * The Mac answers nothing in the clear on the relay ("Relay: sealed only", main/seal-marks.ts), and this
+   * watch is not sealed with it yet: its words are not confirmed there, or it was paired with no key to seal with.
+   */
+  case sealedOnly
+}
+
+/** The Mac's word for a plain request it refuses on the relay line (main/seal-marks.ts · SEALED_ONLY_ERROR). */
+let sealedOnlyError = "sealed-only"
+
+/** A 403 in the Mac's sealed-only words. */
+func isSealedOnly(_ data: Data, _ http: HTTPURLResponse) -> Bool {
+  http.statusCode == 403 && (try? JSONDecoder().decode(Refusal.self, from: data))?.error == sealedOnlyError
 }
 
 /** Which road the cards last came down. */
@@ -41,10 +54,13 @@ public protocol WatchAPI: Sendable {
   /** Tell the Mac to end this watch's token. */
   func unpair() async throws
   var line: WatchLine { get }
+  /** This watch holds the Mac's key and can seal with it once the owner confirms the words there. */
+  var seals: Bool { get }
 }
 
 public extension WatchAPI {
   var line: WatchLine { .direct }
+  var seals: Bool { false }
 
   func newAgent(_ text: String, in workspace: String?) async throws {
     try await newAgent(text)
@@ -152,6 +168,8 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   private var proven: [URL: Date] = [:]
 
   private let sealer: WatchSealer?
+  /** It holds the Mac's key: a sealed-only Mac lets it in once the owner confirms the words there. */
+  public var seals: Bool { sealer != nil }
 
   public init(
     bases: [URL],
@@ -418,6 +436,9 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
           continue
         }
         if relayed {
+          // Refused in the clear by a Mac that is sealed only: the owner may be confirming the words right now,
+          // so the sealed road is tried again soon, not after its long wait (WatchSealer · soon).
+          if let sealer, isSealedOnly(answer.0, answer.1) { await sealer.soon() }
           if answer.1.statusCode == 503 { continue }
           if answer.1.statusCode == 502 || answer.1.statusCode == 504 {
             if read { continue }
@@ -439,6 +460,7 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
 
   private func checked(_ data: Data, _ http: HTTPURLResponse) throws {
     if http.statusCode == 401 { throw WatchError.unpaired }
+    if isSealedOnly(data, http) { throw WatchError.sealedOnly }
     guard (200..<300).contains(http.statusCode) else {
       let words = (try? JSONDecoder().decode(Refusal.self, from: data))
       throw WatchError.refused(words?.error ?? words?.reason ?? "The computer said no.")

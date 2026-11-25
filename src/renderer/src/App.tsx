@@ -118,7 +118,6 @@ import { apiPath } from './api-base'
 import { planeFetch } from './plane-fetch'
 import { authHeaders } from './auth-gate'
 import { CrIcon } from './icons'
-import { CommandBox } from './CommandBox'
 import {
   canvasVisualModeOf,
   nextCanvasVisualMode,
@@ -836,38 +835,6 @@ function Canvas(): React.JSX.Element {
       stage.removeEventListener('click', onClick, true)
     }
   }, [])
-
-  // ⌘K is the one box (CommandBox): the command line to Sous and the inbox.
-  // Toggles anywhere but inside a terminal, where ⌘K is the terminal's.
-  // Same guard as ⌘A: never while typing somewhere else. Focus goes back to
-  // where it was when the box closes.
-  const [commandOpen, setCommandOpen] = useState(false)
-  const commandReturnFocus = useRef<HTMLElement | null>(null)
-  const closeCommand = useCallback(() => {
-    setCommandOpen(false)
-    const back = commandReturnFocus.current
-    commandReturnFocus.current = null
-    if (back && back.isConnected) back.focus()
-  }, [])
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'k') return
-      const target = e.target as HTMLElement | null
-      if (target?.closest('.cmd')) {
-        e.preventDefault()
-        closeCommand()
-        return
-      }
-      if (target?.closest('input, textarea, [contenteditable="true"], .xterm')) return
-      e.preventDefault()
-      setCommandOpen((v) => {
-        if (!v) commandReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-        return !v
-      })
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [closeCommand])
 
   // Open a card: on the stage, wherever it was asked for from.
   const zoomToNode = useCallback(
@@ -1807,8 +1774,6 @@ function Canvas(): React.JSX.Element {
         <DoorMovedNotice />
         {/* Terminals from an earlier macOS login cannot resolve names or open apps. */}
         <TerminalSessionNotice />
-        {/* R3 · the one box: ⌘K on the desktop, the bottom bar on the phone. */}
-        <CommandBox open={commandOpen} onClose={closeCommand} phone={isRemoteMode()} />
         {/* An artifact drawn on this device (bar item card · Open here, phone and console only). */}
         <ArtifactSheetHost />
         <FilesSheetHost />

@@ -63,6 +63,8 @@ function wears(name: string, base: string): boolean {
 /** An agent as `herdr agent list` reports it. Only the fields read here. */
 export interface ListedAgent {
   pane_id?: string
+  /** The tab the pane sits in (herdr-tab-label.ts). */
+  tab_id?: string | null
   name?: string | null
   /** The pane title: for a Cookrew pane, the card's name (reportPaneCard). */
   title?: string | null

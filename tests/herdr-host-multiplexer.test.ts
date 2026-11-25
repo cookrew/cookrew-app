@@ -242,6 +242,67 @@ describe('ensureSession — idempotence IS the persistence guarantee', () => {
     expect(runner.calls.some((c) => c.args[1] === 'split')).toBe(false)
   })
 
+  describe('a new pane gets a TAB of its own, named after its card', () => {
+    // Measured live 2026-11-25: panes split off the focused pane shared its
+    // tab, the Alma service moved the OLD pane out, and the new card stayed
+    // in a tab labelled with its neighbour's name ("Relay" held CI Speed).
+    const CARD = { terminalId: 'abc-123', title: '修复', agent: '修复', workspace: 'Cookrew Dev', cwd: '/work/repo' }
+    const LIVE = {
+      'pane process-info': JSON.stringify({
+        result: { process_info: { shell_pid: 7, foreground_processes: [{ argv: ['claude'], argv0: 'claude', name: 'claude', pid: 7 }] } }
+      }),
+      '-o args=': 'claude --permission-mode bypassPermissions'
+    }
+
+    it('creates a labelled, unfocused tab in the panes\' workspace instead of splitting', () => {
+      const runner = fakeRunner({
+        'pane list': PANE_LIST([{ pane_id: 'w2:p1', label: 'cookrew_other', workspace_id: 'w2', focused: true }]),
+        'tab create': JSON.stringify({ result: { tab: { tab_id: 'w2:t9' }, root_pane: { pane_id: 'w2:p9', tab_id: 'w2:t9' } } }),
+        ...LIVE
+      })
+      new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession({ ...SPEC, card: CARD })
+      const create = runner.calls.find((c) => c.args[0] === 'tab' && c.args[1] === 'create')!
+      const flag = (name: string): string | undefined => create.args[create.args.indexOf(name) + 1]
+      expect(flag('--workspace')).toBe('w2')
+      expect(flag('--label')).toBe('修复')
+      expect(flag('--cwd')).toBe('/work/repo')
+      expect(create.args).toContain('--no-focus')
+      expect(create.args).toContain('COOKREW_TERMINAL_ID=abc-123')
+      expect(runner.calls.some((c) => c.args[1] === 'split')).toBe(false)
+      expect(runner.calls.find((c) => c.args[0] === 'pane' && c.args[1] === 'rename')?.args).toEqual(['pane', 'rename', 'w2:p9', 'cookrew_abc'])
+    })
+
+    it('splits as before when herdr cannot create the tab', () => {
+      const runner = fakeRunner({
+        'pane list': PANE_LIST([{ pane_id: 'w2:p1', label: 'cookrew_other', workspace_id: 'w2' }]),
+        'tab create': 'not json',
+        'pane split': JSON.stringify({ result: { pane: { pane_id: 'w2:p9' } } }),
+        ...LIVE
+      })
+      new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession({ ...SPEC, card: CARD })
+      expect(runner.calls.find((c) => c.args[0] === 'pane' && c.args[1] === 'rename')?.args).toEqual(['pane', 'rename', 'w2:p9', 'cookrew_abc'])
+    })
+
+    it('closes a tab that came back without a pane, then splits', () => {
+      const runner = fakeRunner({
+        'pane list': PANE_LIST([{ pane_id: 'w2:p1', label: 'cookrew_other', workspace_id: 'w2' }]),
+        'tab create': JSON.stringify({ result: { tab: { tab_id: 'w2:t9' } } }),
+        'pane split': JSON.stringify({ result: { pane: { pane_id: 'w2:p9' } } }),
+        ...LIVE
+      })
+      new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession({ ...SPEC, card: CARD })
+      const verbs = runner.calls.map((c) => c.args.slice(0, 3).join(' '))
+      expect(verbs.indexOf('tab close w2:t9')).toBeGreaterThan(-1)
+      expect(verbs.indexOf('tab close w2:t9')).toBeLessThan(verbs.findIndex((v) => v.startsWith('pane split')))
+    })
+
+    it('still adopts the server\'s idle starter pane before making a tab', () => {
+      const runner = fakeRunner({ 'pane list': PANE_LIST([{ pane_id: 'w2:p1', label: null, workspace_id: 'w2' }]), ...LIVE })
+      new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession({ ...SPEC, card: CARD })
+      expect(runner.calls.some((c) => c.args[0] === 'tab' && c.args[1] === 'create')).toBe(false)
+    })
+  })
+
   it('REPORTS the agent — without it `agent attach` fails with agent_not_found', () => {
     // Measured: attaching to a pane that merely runs an agent is rejected;
     // herdr resolves attach targets through its agent registry. This is also
@@ -1517,5 +1578,47 @@ describe('reconcileAgentNames — names that dropped are put back, off the main 
       asyncRunner: async () => 'not json'
     })
     await expect(broken.reconcileAgentNames()).resolves.toBe(0)
+  })
+
+  it('puts a drifted tab label back to its card\'s name, async, on the same tick', async () => {
+    const agents = [
+      { ...(AGENT('w2:p19D', 'CI Speed', 'ci-speed') as object), tab_id: 'w2:tHZ' },
+      { ...(AGENT('w2:p1B3', '修复', 'xiufu') as object), tab_id: 'w2:tJM' },
+      { ...(AGENT('w2:p1A9', 'Cookrew_dev', 'cookrew-dev') as object), tab_id: 'w2:tJP' }
+    ]
+    const tabs = [
+      { tab_id: 'w2:tHZ', label: 'Relay', pane_count: 1 },
+      { tab_id: 'w2:tJM', label: 'Cookrew_dev', pane_count: 1 },
+      { tab_id: 'w2:tJP', label: 'Cookrew_dev', pane_count: 1 }
+    ]
+    const asyncCalls: string[][] = []
+    const sync = fakeRunner({})
+    const mux = new HerdrHostMultiplexer({
+      session: 'cookrewtest', configPath: '/c', runner: sync,
+      asyncRunner: async (args) => {
+        asyncCalls.push(args)
+        if (args.join(' ') === 'agent list') return JSON.stringify({ result: { agents } })
+        if (args.join(' ') === 'tab list') return JSON.stringify({ result: { tabs } })
+        return '{"result":{}}'
+      }
+    })
+    expect(await mux.reconcileAgentNames()).toBe(0)
+    expect(asyncCalls.filter((a) => a[0] === 'tab' && a[1] === 'rename')).toEqual([
+      ['tab', 'rename', 'w2:tHZ', 'CI Speed'],
+      ['tab', 'rename', 'w2:tJM', '修复']
+    ])
+    expect(sync.calls.filter((c) => c.args[0] === 'tab')).toEqual([])
+  })
+
+  it('a broken tab listing costs the agent names nothing', async () => {
+    const mux = new HerdrHostMultiplexer({
+      session: 'cookrewtest', configPath: '/c', runner: fakeRunner({}),
+      asyncRunner: async (args) => {
+        if (args.join(' ') === 'agent list') return JSON.stringify({ result: { agents: [AGENT('w1:p1', 'Reviewer')] } })
+        if (args.join(' ') === 'tab list') throw new Error('herdr gone')
+        return '{"result":{}}'
+      }
+    })
+    expect(await mux.reconcileAgentNames()).toBe(1)
   })
 })

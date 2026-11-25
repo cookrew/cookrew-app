@@ -1,9 +1,9 @@
 // LANE E2E-PANEL (design §5 and §9, renderer side): the Add menu's auto-group
 // item is feature-detected off the setup lines, the dial reads `auto` for the
-// local tier and its this-turn line is routePath, and the model reaches the
-// echo and the commit toast. Static markup, the house way (no DOM env).
+// local tier and its this-turn line is routePath. Static markup, the house
+// way (no DOM env).
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { AddMenu } from '../src/renderer/src/routing/RoutingSections'
 import { TuneRail, type RouteDialProps } from '../src/renderer/src/nodes/TuneRail'
@@ -11,7 +11,6 @@ import { tuneRailView, type AgentTuningState } from '../src/shared/agent-tuning'
 import { AUTO_GROUP, ROUTING_COPY, autoGroupExists, autoGroupItem, dialValue, routeChoices, routeDialLines, routePath } from '../src/shared/route-view'
 import { setupLineAllowed } from '../src/shared/route-lines'
 import { cardRouteFixture, routeFixture } from '../src/shared/route-fixture'
-import type { Decision } from '../src/main/sous-control'
 
 const AUTO_LINE = 'magpie group add auto models=ollama/qwen3:32b,ollama/qwen2.5:1.5b routing=smart stays=turn'
 
@@ -83,48 +82,5 @@ describe('2 · the dial for a card on the local tier', () => {
     const tier = { ...live, rule: null }
     expect(routeDialLines(cardRouteFixture({ route: AUTO_GROUP, live: tier, turn: null })).turn).toBe('this turn → group/auto → ollama/qwen3:32b')
     expect(routeDialLines(cardRouteFixture({ route: AUTO_GROUP, live: tier, turn: { model: 'ollama/qwen2.5:1.5b', inputTokens: null, outputTokens: null, cost: null, priced: false, at: T0 } })).turn).toBe('this turn → group/auto → ollama/qwen2.5:1.5b · local')
-  })
-})
-
-describe('3 · the model reaches the echo and the commit toast', () => {
-  const stubDesktop = (): void => {
-    const store = new Map<string, string>()
-    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) }
-    ;(globalThis as unknown as { window: Record<string, unknown> }).window = {
-      location: { origin: 'http://localhost', search: '', hash: '', href: 'http://localhost/' },
-      localStorage: storage,
-      sessionStorage: storage,
-      history: { replaceState: () => undefined },
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-      cookrew: {}
-    }
-    ;(globalThis as unknown as { localStorage: unknown }).localStorage = storage
-  }
-  const decision: Decision = {
-    kind: 'ask',
-    target: { id: 'forge', name: 'Forge' },
-    alternates: [],
-    reasons: ['idle', 'same repo', 'last touched README · 2h'],
-    recruit: { harness: 'Claude Code', name: 'Install Section', beside: null, direct: false },
-    token: 't1',
-    holdMs: 2500,
-    sentence: 'Make the install section of README English',
-    route: { route: AUTO_GROUP, effective: 'ollama/qwen3:32b' }
-  }
-
-  it('the echo names the effective model; the toast after commit appends it to what Sous said', async () => {
-    stubDesktop()
-    vi.resetModules()
-    const { CommandBox, echoLine, commitToast } = await import('../src/renderer/src/CommandBox')
-    expect(echoLine(decision)).toBe('→ Forge · ollama/qwen3:32b (idle · same repo · last touched README · 2h)')
-    const html = renderToStaticMarkup(<CommandBox open onClose={() => undefined} phone={false} rows={[]} initialDecision={decision} />)
-    expect(html).toContain('→ Forge · ollama/qwen3:32b (idle · same repo · last touched README · 2h)')
-    expect(commitToast('Sent to Forge', decision)).toBe('Sent to Forge · ollama/qwen3:32b')
-    expect(commitToast('Sent to Forge', { ...decision, route: { route: AUTO_GROUP, effective: null } })).toBe('Sent to Forge')
-    expect(commitToast('Sent to Forge', { ...decision, route: null })).toBe('Sent to Forge')
-    expect(commitToast('', decision)).toBe('')
-    const toast = renderToStaticMarkup(<CommandBox open onClose={() => undefined} phone={false} rows={[]} initialSaid={commitToast('Sent to Forge', decision)} />)
-    expect(toast).toContain('<span class="line">Sent to Forge · ollama/qwen3:32b</span>')
   })
 })

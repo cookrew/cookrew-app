@@ -34,6 +34,8 @@ export interface ChatFold {
 /** One stretch of a turn: the words you said to start it (null for the first, the prompt's own), and what the agent did. */
 export interface ChatLeg {
   words: string | null
+  /** The words are a slash command you ran (/compact, /model …), with what it printed. */
+  command?: { output?: string }
   fold: ChatFold
 }
 
@@ -96,10 +98,14 @@ export function chatLegsOf(block: Foldable & Pick<TraceBlock, 'added'>): ChatLeg
   if (added.length === 0) return [{ words: null, fold: chatFoldOf(block) }]
   const end: Place = { at: block.reply.length, calls: block.activity.length, thoughts: block.thoughts?.length ?? 0 }
   const starts: Place[] = [{ at: 0, calls: 0, thoughts: 0 }, ...added]
-  return starts.map((from, i) => ({
-    words: i === 0 ? null : added[i - 1].text,
-    fold: chatFoldOf(stretchOf(block, from, added[i] ?? end))
-  }))
+  return starts.map((from, i) => {
+    const said = i === 0 ? undefined : added[i - 1]
+    return {
+      words: said === undefined ? null : said.text,
+      ...(said?.command === true ? { command: said.output !== undefined ? { output: said.output } : {} } : {}),
+      fold: chatFoldOf(stretchOf(block, from, added[i] ?? end))
+    }
+  })
 }
 
 /** The closed line: what the agent did before answering ("Thought · 12 tool calls"). */

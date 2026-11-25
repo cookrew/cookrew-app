@@ -19,7 +19,7 @@ export function focusPlace(target: EventTarget | null): 'page' | 'box' | 'elsewh
   if (!el || (typeof document !== 'undefined' && (el === document.body || el === document.documentElement))) return 'page'
   // The reply box only: a card's name field (NameEdit.tsx) keeps its own Tab and arrows.
   if (el.closest(REPLY_BOX)) return 'box'
-  if (el.closest('input, textarea, select, [contenteditable="true"], .xterm, .cmd, .cr-board-search, .cr-board-pop, .cr-prompt, [role="menu"], [role="listbox"], .zv-bar-card')) return 'elsewhere'
+  if (el.closest('input, textarea, select, [contenteditable="true"], .xterm, .cr-board-search, .cr-board-pop, .cr-prompt, [role="menu"], [role="listbox"], .zv-bar-card')) return 'elsewhere'
   const dialog = el.closest('[role="dialog"]')
   if (dialog && !dialog.classList.contains('zv-pick-card')) return 'elsewhere'
   return 'page'

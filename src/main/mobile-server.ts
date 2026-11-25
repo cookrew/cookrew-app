@@ -1,5 +1,5 @@
 import { cameOverRelayLine, sealedV2Of } from './seal-proof'
-import { SEALED_ONLY_ERROR, type SealMarks } from './seal-marks'
+import { passesSealedOnly, SEALED_ONLY_ERROR, type SealMarks } from './seal-marks'
 import http from 'node:http'
 import https from 'node:https'
 import type net from 'node:net'
@@ -1279,8 +1279,9 @@ export async function handle(
 
   // A device that speaks cookrew-seal/2, or every device once the owner said so,
   // is answered nothing in the clear on the relay line (seal-marks.ts says what
-  // that does and does not stop). Sealed requests and the direct link are not this.
-  if (cameOverRelayLine(request) && deps.sealMarks?.()?.refuses(bridgeDevice?.deviceId ?? null)) {
+  // that does and does not stop). Sealed requests and the direct link are not this,
+  // and neither is a watch's claim, the one way it gets the key it seals with (passesSealedOnly).
+  if (cameOverRelayLine(request) && !passesSealedOnly(request.method, url.pathname) && deps.sealMarks?.()?.refuses(bridgeDevice?.deviceId ?? null)) {
     return respondJson(response, 403, { error: SEALED_ONLY_ERROR })
   }
 
