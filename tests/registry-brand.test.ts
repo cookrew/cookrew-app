@@ -28,10 +28,12 @@ describe('the brand: COOkrew in ink, one brush C round the first lens', () => {
     expect(BRAND_LOCKUP_CSS).toContain('prefers-reduced-motion')
   })
 
-  it('the home page carries the lockup and no script; the account page does not carry it', () => {
+  // The film took the lockup's place in the hero (2026-11-25); the lockup lives on in the share card (scripts/site-og.mjs).
+  it('the home page carries the film instead of the lockup, and no script; the account page carries neither', () => {
     const home = homeBody()
-    expect(home).toContain('class="brand"')
-    expect(home).toContain(BRAND_LOCKUP_HTML)
+    expect(home).not.toContain('class="brand"')
+    expect(home).not.toContain('cr-ink-lockup')
+    expect(home).toContain('class="tf-film"')
     expect(home).not.toMatch(/<script(?![^>]*application\/ld\+json)/)
     expect(accountBody()).not.toContain('class="brand"')
   })

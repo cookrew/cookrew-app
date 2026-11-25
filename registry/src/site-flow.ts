@@ -4,7 +4,8 @@ import { DEMO, figure } from './site-frames'
 
 /**
  * THE FRONT PAGE, "LET YOUR TOKENS FLOW" (owner 2026-11-18: 按这版本做官网并发布). The copy, the order and the look follow
- * docs/cookrew-intro-2026-11-18/index.html; its Chinese is final and used verbatim (智能体助手, 跨设备 / 跨智能体助手 / 跨模型).
+ * docs/cookrew-intro-2026-11-18/index.html; its Chinese is final and used verbatim, except that an agent is
+ * now 智能体 alone, never with a second noun after it (owner 2026-11-25: 跨设备 / 跨智能体 / 跨模型).
  * No status labels, roadmap or word of progress (owner 475f4a16). Every picture is the current UI on demo data, from
  * site-frames.ts DEMO at the pinned commit, and the page says so once, at its foot.
  *
@@ -147,8 +148,8 @@ export const FLOW_ZH: FlowCopy = {
   title: 'Cookrew · 让你的 token 自由流转',
   kicker: '开源 · MIT · Claude Code · Codex · OpenCode · Pi',
   h1: ['让你的 token\n', '自由流转', '。'],
-  sub: '一个账号，跨设备、跨智能体助手、跨模型流转。',
-  pills: ['跨设备', '跨智能体助手', '跨模型'],
+  sub: '一个账号，跨设备、跨智能体、跨模型流转。',
+  pills: ['跨设备', '跨智能体', '跨模型'],
   lede: 'Cookrew 是一个开源的桌面工作空间。把 Claude Code、Codex、OpenCode 和 Pi 放进同一张画布，在你的每台机器上运行；在桌面、任何浏览器或手机上跟进它们、回复它们。',
   download: '下载 Mac 版',
   console: '打开控制台',
@@ -156,84 +157,84 @@ export const FLOW_ZH: FlowCopy = {
   flows: {
     k: '三种流转',
     h2: '你的工作，不再被一台机器、一个工具、一家模型困住',
-    lede: '任务在哪台机器上跑、交给哪个智能体助手、用哪家的模型，都由你决定，也随时可以换。',
+    lede: '任务在哪台机器上跑、交给哪个智能体、用哪家的模型，都由你决定，也随时可以换。',
     cards: [
-      { title: '跨设备流转', text: '智能体助手在你的机器上干活，你在任何设备上跟进、回复。', go: '离开电脑也不断线 →' },
-      { title: '跨智能体助手流转', text: 'Claude Code、Codex、OpenCode、Pi 在一张画布上互相提问、交接工作。', go: '一队智能体助手，各用所长 →' },
+      { title: '跨设备流转', text: '智能体在你的机器上干活，你在任何设备上跟进、回复。', go: '离开电脑也不断线 →' },
+      { title: '跨智能体流转', text: 'Claude Code、Codex、OpenCode、Pi 在一张画布上互相提问、交接工作。', go: '一队智能体，各用所长 →' },
       { title: '跨模型流转', text: '订阅、API key、本地模型进同一个网关，按你的规则分配、自动接替。', go: '额度一分不浪费 →' }
     ],
-    aria: '设备驱动每台机器上的智能体助手，智能体助手经本机的网关使用你的订阅、API key 和本地模型'
+    aria: '设备驱动每台机器上的智能体，它们经本机的网关使用你的订阅、API key 和本地模型'
   },
   diagram: {
-    heads: ['跨设备', '跨智能体助手', '一个网关', '跨模型'],
+    heads: ['跨设备', '跨智能体', '一个网关', '跨模型'],
     devices: [['桌面 app', 'Mac · Windows'], ['任何浏览器', 'console.cookrew.dev'], ['手机', '控制台 · 提醒']],
-    hub: ['Magpie 网关', '本机 · 127.0.0.1:3425', '顺序 · 权重 · 备用', '按智能体助手计量', 'key 只留在这里'],
+    hub: ['Magpie 网关', '本机 · 127.0.0.1:3425', '顺序 · 权重 · 备用', '按智能体计量', 'key 只留在这里'],
     models: [['订阅', 'Claude · ChatGPT …'], ['API key', '任意服务商'], ['本地模型', 'Ollama …']],
     tallDevices: ['桌面 app', '任何浏览器', '手机'],
-    tallHub: ['Magpie 网关 · 本机', '顺序 · 权重 · 备用', '按智能体助手计量 · key 只留在这里']
+    tallHub: ['Magpie 网关 · 本机', '顺序 · 权重 · 备用', '按智能体计量 · key 只留在这里']
   },
   chapters: [
     {
       id: 'devices',
       k: '01 · 跨设备流转',
       h2: ['离开电脑，', '工作照常流转。'],
-      lede: '你账号下的每台机器都在同一张画布上：Mac、服务器，一眼看清每台在跑什么。哪个智能体助手需要你，手机会提醒你；打开任何浏览器，接着看、直接回。',
+      lede: '你账号下的每台机器都在同一张画布上：Mac、服务器，一眼看清每台在跑什么。哪个智能体需要你，手机会提醒你；打开任何浏览器，接着看、直接回。',
       points: [
-        ['一个账号，所有机器', '每台机器连同它的工作空间、智能体助手和负载，画在同一张画布上。'],
+        ['一个账号，所有机器', '每台机器连同它的工作空间、智能体和负载，画在同一张画布上。'],
         ['控制台，随处可开', 'console.cookrew.dev 在任何浏览器、任何手机上打开，不用装应用。'],
-        ['等你处理的事，一个栏', '所有工作空间、所有机器上等你的智能体助手汇成一栏，手机同时收到提醒。'],
+        ['等你处理的事，一个栏', '所有工作空间、所有机器上等你的智能体汇成一栏，手机同时收到提醒。'],
         ['需要时，接管屏幕', '在那台机器上打开远程控制，就能接管它的屏幕卡片，每次 15 分钟。']
       ]
     },
     {
       id: 'harness',
-      k: '02 · 跨智能体助手流转',
-      h2: ['一队智能体助手，', '各用所长。'],
+      k: '02 · 跨智能体流转',
+      h2: ['一队智能体，', '各用所长。'],
       lede: 'Claude Code 写方案，Codex 做审查，OpenCode 跑浏览器检查，Pi 整理笔记——它们在同一张画布上互相提问、交接工作，便签和浏览器全队共用。',
       points: [
-        ['四种智能体助手，一个团队', 'Claude Code、Codex、OpenCode、Pi，还有普通终端，混编在一个工作空间里。'],
-        ['智能体助手之间互相提问', '一条 cookrew ask，任何智能体助手都能把活交给另一个，再读回它的回复。'],
-        ['每个回合都是检查点', '在会话里来回拖动，从任意一步分叉出新智能体助手，原会话照常运行。'],
-        ['人和智能体助手，一套 CLI', '你能敲的命令，带队的智能体助手也能敲：招募、连接、提问、保存团队。']
+        ['四种智能体，一个团队', 'Claude Code、Codex、OpenCode、Pi，还有普通终端，混编在一个工作空间里。'],
+        ['智能体之间互相提问', '一条 cookrew ask，任何智能体都能把活交给另一个，再读回它的回复。'],
+        ['每个回合都是检查点', '在会话里来回拖动，从任意一步分叉出一个新智能体，原会话照常运行。'],
+        ['人和智能体，一套 CLI', '你能敲的命令，带队的智能体也能敲：招募、连接、提问、保存团队。']
       ]
     },
     {
       id: 'models',
       k: '03 · 跨模型流转',
       h2: ['模型随你挑，', '额度不浪费。'],
-      lede: '你的订阅、API key 和本地模型，放进本机的同一个网关。四种智能体助手都从这里拿模型：按你定的顺序或权重分配，一个额度用完或服务宕机，下一个自动接上。',
+      lede: '你的订阅、API key 和本地模型，放进本机的同一个网关。四种智能体都从这里拿模型：按你定的顺序或权重分配，一个额度用完或服务宕机，下一个自动接上。',
       points: [
-        ['一个网关，四种智能体助手', 'Claude Code、Codex、OpenCode、Pi 都可以走同一条路由。'],
+        ['一个网关，四种智能体', 'Claude Code、Codex、OpenCode、Pi 都可以走同一条路由。'],
         ['顺序、权重、备用', '几个模型组成一组，用完一个换下一个，或按权重分请求。'],
-        ['key 不进 Cookrew', '服务商的 key 只留在网关里，智能体助手只拿到本地网关的地址、网关 key 和一张卡片标签。'],
-        ['每个智能体助手，用量清楚', '每个请求都带着发出它的卡片，用量按智能体助手分开统计。']
+        ['key 不进 Cookrew', '服务商的 key 只留在网关里，智能体只拿到本地网关的地址、网关 key 和一张卡片标签。'],
+        ['每个智能体，用量清楚', '每个请求都带着发出它的卡片，用量按智能体分开统计。']
       ]
     }
   ],
   lead: {
     k: '像指挥一支队伍',
-    h3: '让一个智能体助手带队，其余交给它',
-    text: '把一个智能体助手设为编排者，告诉它你要什么：它会招募审查者、放一张写规格的便签、开一个文档浏览器。你只看结果，在需要你的地方点一下。',
-    comment: '# 带队的智能体助手运行的，就是你也能用的命令',
+    h3: '让一个智能体带队，其余交给它',
+    text: '把一个智能体设为编排者，告诉它你要什么：它会招募审查者、放一张写规格的便签、开一个文档浏览器。你只看结果，在需要你的地方点一下。',
+    comment: '# 带队的智能体运行的，就是你也能用的命令',
     ask: '这次改动有没有破坏兼容性？'
   },
   models: {
     comments: ['# 一个评审组：先用 Claude，答不了换 DeepSeek', '# 在 Cookrew 的 Routing 面板里选它做默认', '# 之后新开的每张卡片都走这条路由'],
     credit: '网关由 Magpie 提供 · yetone 的开源项目（MIT）· usemagpie.ai',
-    note: 'Magpie 单独安装在同一台机器上。不选默认模型时，每个智能体助手照常用它自己的登录直接运行。'
+    note: 'Magpie 单独安装在同一台机器上。不选默认模型时，每个智能体照常用它自己的登录直接运行。'
   },
   field: {
     k: '工作现场',
-    h2: ['智能体助手操作的，', '不只是终端。'],
-    lede: '浏览器、电脑屏幕、手机屏幕都是画布上的卡片。智能体助手能打开网页、点击、填写、读取；你在旁边看着，需要你的时候接手。',
+    h2: ['智能体操作的，', '不只是终端。'],
+    lede: '浏览器、电脑屏幕、手机屏幕都是画布上的卡片。智能体能打开网页、点击、填写、读取；你在旁边看着，需要你的时候接手。',
     opsCaption: '电脑和手机屏幕的控制，需要在那台机器上打开开关，每次授权 15 分钟。'
   },
   start: {
     k: '开始',
     h2: '三步，让 token 流转起来',
     steps: [
-      ['装上 Cookrew', '下载 Mac 版，再装一个智能体助手：Claude Code、Codex、OpenCode 或 Pi，用它自己的登录。'],
-      ['说出你要做的事', '在窗口底部的输入框写一句话，它就启动一个智能体助手并为它起名；设它为编排者，剩下的队伍它来招。'],
+      ['装上 Cookrew', '下载 Mac 版，再装一个智能体：Claude Code、Codex、OpenCode 或 Pi，用它自己的登录。'],
+      ['说出你要做的事', '在窗口底部的输入框写一句话，它就启动一个智能体并为它起名；设它为编排者，剩下的队伍它来招。'],
       ['随时随地接着管', '登录账号，在手机或任何浏览器里打开控制台，看进度、回问题；服务器上用 `cookrew login` 把它也加进账号。']
     ],
     loginComment: '# 服务器加入你的账号（密码只在隐藏提示里输入）',
@@ -389,7 +390,6 @@ export const FLOW_STYLE = `
 .tf-hero,.tf-band,.tf-ch,.tf-start,.tf-final{border:0}
 .tf-hero::before,.tf-band::before,.tf-ch::before,.tf-start::before,.tf-final::before{display:none}
 .tf-hero{padding:56px 0 30px;text-align:center}
-.tf-hero .cr-ink-lockup{width:min(78vw,330px);height:auto;margin:0 auto 22px}
 .tf-hero h1{font:600 clamp(40px,7vw,86px)/1.05 var(--font-serif);letter-spacing:-.02em;margin:18px 0 0;max-width:none}
 .tf-hero h1 em,.tf-final h2 em{font-style:normal;background:linear-gradient(transparent 62%,var(--amber) 62%,var(--amber) 92%,transparent 92%);padding:0 .05em}
 .tf-sub{font:500 clamp(17px,2.2vw,23px)/1.5 var(--font-serif);color:var(--ink-soft);margin:22px auto 0;max-width:30em}
