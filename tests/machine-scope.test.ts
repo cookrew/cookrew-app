@@ -3,6 +3,7 @@ import {
   SCOPE_PHASES,
   configureMachineScope,
   enterMachine,
+  heldRelay,
   heldScope,
   machineBaseOf,
   machineLeft,
@@ -174,6 +175,20 @@ describe('work that waits while the machine changes', () => {
     enterMachine(A)
     expect(stillA()).toBe(false)
     expect(heldScope()()).toBe(true)
+  })
+
+  it('work keyed by a machine’s own id (the fleet’s reads) holds whichever machine is in scope, and ends only with the relay it went through', () => {
+    console_()
+    enterMachine(A)
+    const fleet = heldRelay()
+    enterMachine(B)
+    expect(fleet()).toBe(true)
+    enterMachine(null)
+    expect(fleet()).toBe(true)
+    // The page told it is the console again (another relay, or the same said anew): what waited is nobody's.
+    console_()
+    expect(fleet()).toBe(false)
+    expect(heldRelay()()).toBe(true)
   })
 
   it('ends as an abort, which nothing counts against the path', () => {

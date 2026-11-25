@@ -76,6 +76,9 @@ export function machineWhyWords(machine: OffMachine & { readonly appVersion?: st
       return `Sign this browser in on the console, and ${name} opens here.`
     case 'refused':
       return `${name}: ${ctx.block.message}`
+    // The page's own sentence: whole, and not put in the machine's mouth.
+    case 'page':
+      return ctx.block.message
     case 'offline':
       return `${name} isn’t answering right now. Try again in a moment.`
     default:
@@ -110,6 +113,8 @@ export function machineSays(
       return 'Sign this browser in on the console to read it.'
     case 'refused':
       return `${machine.name} says: ${ctx.block.message.slice(0, 120)}`
+    case 'page':
+      return ctx.block.message
     default:
       return 'Not answering yet.'
   }

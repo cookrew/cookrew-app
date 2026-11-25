@@ -328,6 +328,13 @@ describe('inside a machine, with the Devices level off screen', () => {
 })
 
 describe('a machine that cannot be read says the one thing to do', () => {
+  it("the page's own sentence is said whole on the tile, not as the machine's", () => {
+    const long = `${'This page could not reach the machine sealed. '.repeat(6)}End.`
+    expect(standingOf(row(A, 'Studio Mac'), { open: true, read: false, block: { kind: 'page', message: long } })).toEqual({ standing: 'blocked', say: long })
+    // The machine's own words stay its own, and stay short.
+    expect(standingOf(row(A, 'Studio Mac'), { open: true, read: false, block: { kind: 'refused', message: long } }).say).toBe(DEVICES_COPY.says('Studio Mac', long))
+  })
+
   it('an older build: update it', () => {
     expect(standingOf(row(OLD, 'Old Mini', { appVersion: '0.5.10' }), { open: true, read: false, block: null })).toEqual({ standing: 'outdated', say: DEVICES_COPY.outdated('Old Mini') })
     expect(standingOf(row(OLD, 'Old Mini', { appVersion: null }), { open: true, read: false, block: null }).standing).toBe('outdated')

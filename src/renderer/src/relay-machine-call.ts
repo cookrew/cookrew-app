@@ -27,6 +27,8 @@ export type MachineBlock =
   | { readonly kind: 'needs-proof' }
   | { readonly kind: 'no-device' }
   | { readonly kind: 'refused'; readonly message: string }
+  /** This page's OWN sentence (why it could not get in, said in its words): shown whole, never as the machine's. */
+  | { readonly kind: 'page'; readonly message: string }
   | { readonly kind: 'offline' }
 
 export interface RelayMachineDeps {
@@ -106,8 +108,10 @@ const blockOf = (entered: EnterResult): MachineBlock => {
     case 'no-device':
       return { kind: 'no-device' }
     case 'refused':
-    case 'failed':
       return { kind: 'refused', message: entered.message }
+    // `failed` is the page's own sentence (account-pair-client.ts): it stays the page's.
+    case 'failed':
+      return { kind: 'page', message: entered.message }
     default:
       return { kind: 'offline' }
   }
@@ -261,7 +265,7 @@ let browserMachines: RelayMachines | null = null
 /** The page's own wiring, made on first use: this origin's storage, its fetch, its account key at each door. */
 export async function relayMachines(): Promise<RelayMachines> {
   if (browserMachines) return browserMachines
-  const [{ machineBaseOf, relayFetch, relayHeadersFor, scopeNeedsMachine }, { browserPairDeps, enterWithGrant }, { accountDevice }] = await Promise.all([
+  const [{ heldRelay, machineBaseOf, relayFetch, relayHeadersFor, scopeNeedsMachine }, { browserPairDeps, enterWithGrant }, { accountDevice }] = await Promise.all([
     import('./machine-scope'),
     import('./account-pair-client'),
     import('./account-device')
@@ -307,7 +311,8 @@ export async function relayMachines(): Promise<RelayMachines> {
     // One machine turning the pass away must not sign this browser out of all of them (security review L1):
     // the pass is cleared only by this page's own door (ReauthAccountEntry.tsx), or when it expires.
     enter: (target, machineId) => {
-      const pair = browserPairDeps(target, accountDevice)
+      // Keyed by the machine's own id, not the one in scope: entering another machine must not end it (heldRelay).
+      const pair = browserPairDeps(target, accountDevice, undefined, { held: heldRelay })
       return enterWithGrant({ ...pair, grants: { ...pair.grants, clear: () => undefined } }, machineId)
     }
   })

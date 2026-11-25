@@ -69,6 +69,8 @@ const ownPage = (): MachineScope => ({ machineId: null, relay: null, slug: injec
 
 let scope: MachineScope = ownPage()
 let epoch = 0
+/** Counts only the page being told its relay (configureMachineScope), not machines entered. */
+let relayEpoch = 0
 const listeners = new Set<(next: MachineScope) => void>()
 const states = new Map<string, { phase: ScopePhase; reset: () => void }>()
 
@@ -206,6 +208,17 @@ export function heldScope(): () => boolean {
   return () => epoch === at
 }
 
+/**
+ * IS THE RELAY THIS WENT THROUGH STILL THE ONE. For work keyed by a machine's
+ * own id rather than by the machine in scope (the console's fleet reads): a
+ * person entering or leaving a machine does not end it, only the page being
+ * told anew which relay it reaches machines through.
+ */
+export function heldRelay(): () => boolean {
+  const at = relayEpoch
+  return () => relayEpoch === at
+}
+
 /** What work that outlived its machine ends with: an abort, never a failure of the path. */
 export const machineLeft = (): DOMException => new DOMException('the machine this was asked of was left', 'AbortError')
 
@@ -254,6 +267,7 @@ function change(next: MachineScope): void {
  * the order of the boot's lines cannot leave it running.
  */
 export function configureMachineScope(next: { relay: RelayAccess }): void {
+  relayEpoch += 1
   change({ machineId: null, relay: { ...next.relay, origin: trimmed(next.relay.origin) }, slug: '' })
 }
 
@@ -273,6 +287,7 @@ export function enterMachine(machineId: string | null): void {
 export function resetMachineScopeForTests(): void {
   scope = ownPage()
   epoch = 0
+  relayEpoch = 0
   listeners.clear()
   states.clear()
 }

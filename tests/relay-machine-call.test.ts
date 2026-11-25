@@ -162,6 +162,13 @@ describe('createRelayMachines', () => {
     expect(fine.machines.why(SOLIS)).toBeNull()
   })
 
+  it("the page's own sentence (a door it could not get through sealed) is kept as the page's, whole", async () => {
+    const long = `${'This page could not reach the machine sealed. '.repeat(6)}End.`
+    const said = world({ enter: vi.fn(async () => ({ kind: 'failed' as const, message: long })) })
+    await said.machines.fleetOf(SOLIS)
+    expect(said.machines.why(SOLIS)).toEqual({ kind: 'page', message: long })
+  })
+
   // Security review 2026-11-10 (L2): the relay answers 401 itself when the account session has ended; that is not the machine forgetting this browser.
   it('a 401 from the relay (signed out) keeps this browser’s keys; only the machine’s own 401 drops one', async () => {
     const w = world()
@@ -197,5 +204,48 @@ describe('createRelayMachines', () => {
     const w = world()
     await Promise.all([w.machines.fleetOf(SOLIS), w.machines.fleetOf(SOLIS), w.machines.call(SOLIS, 'GET', 'api/watch/cards')])
     expect(w.deps.enter).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * THE PAGE'S OWN WIRING OF THOSE DOORS (relayMachines). A fleet read is keyed by
+ * the machine's id and does not follow the machine in scope, so its door must
+ * not be ended by a change of scope either: the console's own door (console-wiring.ts)
+ * is bound to the scope; the fleet's is bound to the relay it went through.
+ */
+describe('relayMachines, as the page wires it', () => {
+  const MAC = '11111111-1111-4111-8111-111111111111'
+  type DoorOptions = { readonly explicit?: boolean; readonly held?: () => () => boolean } | undefined
+
+  it('enters a machine’s door with a guard that holds whichever machine is in scope', async () => {
+    vi.resetModules()
+    const options: DoorOptions[] = []
+    vi.doMock('../src/renderer/src/account-pair-client', () => ({
+      browserPairDeps: (_base: string, _device: unknown, _scope: unknown, given?: DoorOptions) => {
+        options.push(given)
+        return { grants: { read: () => null, write: () => undefined, clear: () => undefined } }
+      },
+      enterWithGrant: async () => ({ kind: 'needs-proof' as const })
+    }))
+    try {
+      const { inConsole } = await import('./support/console-scope')
+      const scope = await inConsole(MAC)
+      const { relayMachines } = await import('../src/renderer/src/relay-machine-call')
+      const machines = await relayMachines()
+      await machines.fleetOf(SOLIS)
+      expect(options).toHaveLength(1)
+      // Not a person's ask: a fleet read waits its turn.
+      expect(options[0]?.explicit).not.toBe(true)
+      const held = options[0]?.held
+      expect(held).toBeTypeOf('function')
+      const guard = (held as () => () => boolean)()
+      scope.enterMachine(SOLIS)
+      expect(guard()).toBe(true)
+      scope.enterMachine(null)
+      expect(guard()).toBe(true)
+    } finally {
+      vi.doUnmock('../src/renderer/src/account-pair-client')
+      vi.resetModules()
+    }
   })
 })

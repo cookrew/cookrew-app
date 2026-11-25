@@ -9,8 +9,9 @@ import {
   type PairOffer
 } from '../../shared/account-pair'
 import type { AccountDevice } from './account-device'
+import type { CodeRefusal } from './path/seal-plane'
 import { CROSS_ORIGIN_NO_COOKIE, isAbsolute } from './data-plane'
-import { machineScope, relayFetch, relayHeadersForUrl, type MachineScope } from './machine-scope'
+import { heldScope, machineLeft, machineScope, relayFetch, relayHeadersForUrl, type MachineScope } from './machine-scope'
 
 /**
  * THE PHONE'S HALF OF ENTERING WITH THE ACCOUNT (shared/account-pair.ts).
@@ -96,6 +97,207 @@ const numberOf = (body: unknown, key: string): number | undefined =>
 const waits = (body: unknown): { retryAfterMs?: number } => {
   const ms = numberOf(body, 'retryAfterMs')
   return ms === undefined ? {} : { retryAfterMs: ms }
+}
+
+/** What a machine's relay line answers a plain request from a device it takes only sealed (main/seal-marks.ts · SEALED_ONLY_ERROR). */
+const SEALED_ONLY = 'sealed-only'
+
+const isSealedOnly = (body: unknown): boolean => isRecord(body) && body.error === SEALED_ONLY
+
+/**
+ * Why a refused request could not go again sealed, as far as this page knows:
+ *
+ *   no-code          it holds no connect code for the machine
+ *   code-replaced    the machine PROVED, with the held code, that it replaced it, and
+ *                    no successor it vouched for waits here (seal-client.ts · checkReplaced)
+ *   code-unverified  the held code was refused with no proof: a bare "no such code",
+ *                    which anybody on the line could have said; nothing is asserted
+ *   unopened         it holds one and no sealed session opened on it just now
+ *
+ * None of them takes, drops or unpins a code.
+ */
+export type SealUnavailable = 'no-code' | 'code-replaced' | 'code-unverified' | 'unopened'
+
+/**
+ * Said when a machine takes only sealed connections and the request could not
+ * go sealed: the code word means nothing to anyone, and "did not start an
+ * entry" hides the one thing that ends it. Each says only what the page knows.
+ */
+export const SEALED_ONLY_COPY = {
+  noCode:
+    'This machine takes only sealed connections, and this browser has none with it yet. Pair this browser with it once (on the machine: your avatar → Devices → Pair a phone), then try again.',
+  unopened:
+    'This machine takes only sealed connections, and the sealed connection to it could not be opened just now. Try again in a moment.',
+  // The Mac's own word, proved with the held code. Its new code, scanned, waits beside the held one, and the
+  // next refusal vouches for exactly that code (path/seal-next-code.ts): scanning is what ends this.
+  codeReplaced:
+    'This machine takes only sealed connections, and it proved it changed its connect code; this browser does not have the new one yet. Scan the code on the machine’s screen (your avatar → Devices → Pair a phone), then try again.',
+  // Not proved: it may not be the machine's word at all. So nothing is said about the machine, nothing this
+  // browser holds was taken, dropped or replaced on the strength of it, and nothing is promised of waiting:
+  // a code the machine really lost needs this machine set up again on this browser, by a person, on purpose.
+  codeUnverified:
+    'This machine takes only sealed connections, and the sealed connection turned down the connect code this browser holds, with no proof that the answer came from the machine. This browser changed nothing, and cannot replace that code on an unproven answer.',
+  unknown:
+    'This machine takes only sealed connections, and this browser could not reach it sealed. Try again in a moment; if this browser was never paired with it, pair it once (on the machine: your avatar → Devices → Pair a phone).'
+} as const
+
+const SENTENCES: Readonly<Record<SealUnavailable, string>> = {
+  'no-code': SEALED_ONLY_COPY.noCode,
+  'code-replaced': SEALED_ONLY_COPY.codeReplaced,
+  'code-unverified': SEALED_ONLY_COPY.codeUnverified,
+  unopened: SEALED_ONLY_COPY.unopened
+}
+
+/** The plane's word for how a held code was refused, as the reason this page gives. */
+const reasonOf = (refusal: CodeRefusal): SealUnavailable => (refusal === 'replaced' ? 'code-replaced' : 'code-unverified')
+
+/**
+ * A machine's refusal as this page reports it. A sealed-only one is said in the
+ * page's OWN words (`failed`: the page knows why, the machine said only a code
+ * word), so no caller puts it in the machine's mouth or cuts it to a machine's
+ * length; any other is the machine's (`refused`), or the fallback.
+ */
+const refusalOf = (
+  answer: { status: number; body: unknown },
+  fallback: string
+): { readonly kind: 'failed'; readonly message: string } | { readonly kind: 'refused'; readonly message: string; readonly retryAfterMs?: number } => {
+  if (answer.status === 403 && isRecord(answer.body) && isSealedOnly(answer.body)) {
+    const why = answer.body.seal
+    return { kind: 'failed', message: typeof why === 'string' && why in SENTENCES ? SENTENCES[why as SealUnavailable] : SEALED_ONLY_COPY.unknown }
+  }
+  return { kind: 'refused', message: messageOf(answer.body, fallback), ...waits(answer.body) }
+}
+
+type Send = (input: string, init: RequestInit) => Promise<Response>
+
+/**
+ * The refused request on this page's sealed session with its machine, or why
+ * there is none. `sameMachine` is the scope it was first asked in: false once
+ * the page has left it, and nothing more may be sent then.
+ */
+export type SealedAgain = (input: string, init: RequestInit, sameMachine: () => boolean) => Promise<Response | SealUnavailable>
+
+/** What the door asks of the sealed plane (path/seal-plane.ts), each part replaceable in tests. */
+export interface SealedWay {
+  /** Loaded before the first request leaves: until it is, relayFetch has no sealed route and would send a pinned machine's request plain. */
+  ready(): Promise<unknown>
+  /** A person asked: the machine's sealed session is tried now, not after a failed try's wait (seal-plane.ts · askNow, bounded there). */
+  askNow(input: string): Promise<void>
+  again: SealedAgain
+  /**
+   * Is this answer the plane's OWN re-pair answer, and for which refusal? Known
+   * by identity (seal-plane.ts · ownRefusalOf), never by status or words: a
+   * Mac's 401, a regrant, or a relay's look-alike is never taken for it.
+   */
+  planeRefusal(answer: Response): Promise<CodeRefusal | null>
+  /** The machine scope as it is now; the function it returns says whether that is still so. */
+  held(): () => boolean
+}
+
+const plane = (): Promise<typeof import('./path/seal-plane')> => import('./path/seal-plane')
+
+/**
+ * As plane-fetch.ts does for the page's own calls, with more. The try at the
+ * sealed session is STARTED before the wait (sealOutcome asks viaSeal, which
+ * starts one when due). Two rounds: a held code the Mac proved replaced is
+ * followed to the successor it vouched for, whose try starts as the first ends
+ * (seal-plane.ts · probe). After that, sealed or nothing. Why there is nothing
+ * is read from the plane's own handshakes and its own answers, never from what
+ * came back from the line.
+ */
+const sealedAgain: SealedAgain = async (input, init, sameMachine) => {
+  const loaded = await plane()
+  for (let round = 0; round < 2; round += 1) {
+    if (!sameMachine()) throw machineLeft()
+    if (loaded.sealOutcome(input) === 'no-code') return 'no-code'
+    await loaded.probeSettled(input)
+  }
+  if (!sameMachine()) throw machineLeft()
+  // sealedFetchFor never sends in the clear.
+  const sealed = await loaded.sealedFetchFor(input, init)
+  if (sealed === null) {
+    const refused = loaded.codeRefusal(input)
+    return refused === null ? 'unopened' : reasonOf(refused)
+  }
+  const own = loaded.ownRefusalOf(sealed)
+  return own === null ? sealed : reasonOf(own)
+}
+
+const PLANE_WAY: SealedWay = {
+  ready: plane,
+  askNow: async (input) => (await plane()).askNow(input),
+  again: sealedAgain,
+  planeRefusal: async (answer) => (await plane()).ownRefusalOf(answer),
+  held: heldScope
+}
+
+/** The refusal, saying why it stands; the page's own words, so no relay or machine can choose them. */
+const sealedOnlyAnswer = (seal: SealUnavailable): Response =>
+  new Response(JSON.stringify({ error: SEALED_ONLY, seal }), { status: 403, headers: { 'content-type': 'application/json' } })
+
+/**
+ * A PLAIN REQUEST REFUSED BECAUSE THE MACHINE TAKES THIS DEVICE ONLY SEALED
+ * goes again ONCE, on the sealed session, and never plain again. With no sealed
+ * session to go on, or one that failed, the refusal stands and says why
+ * (SEALED_ONLY_COPY). All of it is bound to the machine scope the request was
+ * asked in: once the page has left that machine nothing more is sent, and what
+ * comes back is nobody's (an abort, as plane-fetch.ts ends such work).
+ *
+ * WHAT THIS REPLAYS, AND WHY THAT IS SAFE HERE ONLY. It sends a POST a second
+ * time. The Mac refuses a sealed-only request before any route runs
+ * (main/mobile-server.ts), so on an honest line the first was never carried out.
+ * But the refusal travels the relay in the clear and carries no proof: a relay
+ * could forge it for a request the Mac did carry out, and the replay would then
+ * run twice. For the pair door that is harmless (a second begin is a second
+ * challenge; a replayed finish meets a spent challenge and is refused), and the
+ * relay saw the plain request whole anyway: sealing the replay does not take
+ * back what the first attempt exposed. So wrap only requests that may run twice.
+ *
+ * NEVER PLAIN TO A PINNED MACHINE: the plane is loaded before the first request
+ * leaves (it sets relayFetch's sealed route), and a plane that cannot load
+ * sends nothing at all.
+ *
+ * `explicit`: a person asked for this door (or a code they scanned has just
+ * landed), so a failed try's wait is cut short before the first request. Doors
+ * asked on their own (a fleet read, a re-ask after a refused key) wait their turn.
+ */
+export function sealedRetrying(send: Send, parts: Partial<SealedWay> & { readonly explicit?: boolean } = {}): Send {
+  const way: SealedWay = { ...PLANE_WAY, ...parts }
+  return async (input, init) => {
+    const sameMachine = way.held()
+    await way.ready()
+    if (!sameMachine()) throw machineLeft()
+    if (parts.explicit === true) await way.askNow(input)
+    if (!sameMachine()) throw machineLeft()
+    const response = await send(input, init)
+    // The plane's own re-pair answer (a pinned machine's held code refused): said in the page's words, as
+    // proven or not. Known by identity only, so the Mac's own 401 or regrant passes through as the Mac's.
+    const own = await way.planeRefusal(response)
+    if (own !== null) {
+      if (!sameMachine()) throw machineLeft()
+      void response.body?.cancel().catch(() => undefined)
+      return sealedOnlyAnswer(reasonOf(own))
+    }
+    if (response.status !== 403) return response
+    // Read from a copy, so the caller still has the whole answer.
+    const said: unknown = await response
+      .clone()
+      .json()
+      .catch(() => null)
+    if (!isSealedOnly(said)) return response
+    if (!sameMachine()) throw machineLeft()
+    let sealed: Response | SealUnavailable
+    try {
+      sealed = await way.again(input, init, sameMachine)
+    } catch {
+      if (!sameMachine()) throw machineLeft()
+      // Not a plain resend, ever: said as a sealed connection that could not open.
+      sealed = 'unopened'
+    }
+    if (!sameMachine()) throw machineLeft()
+    void response.body?.cancel().catch(() => undefined)
+    return typeof sealed === 'string' ? sealedOnlyAnswer(sealed) : sealed
+  }
 }
 
 /** May this machine be entered with the account. Null when it cannot say. */
@@ -223,7 +425,7 @@ export async function enterWithGrant(deps: PairClientDeps, desktopId: string): P
     return { kind: 'needs-proof' }
   }
   if (begun.status !== 200 || challenge === null || typeof challenge.challengeId !== 'string' || typeof challenge.nonce !== 'string') {
-    return { kind: 'refused', message: messageOf(begun.body, 'This machine did not start an entry. Try again.'), ...waits(begun.body) }
+    return refusalOf(begun, 'This machine did not start an entry. Try again.')
   }
   if (challenge.desktopId !== desktopId) return { kind: 'failed', message: 'This is not the machine this page was opened for.' }
   let sig: string
@@ -242,7 +444,9 @@ export async function enterWithGrant(deps: PairClientDeps, desktopId: string): P
     deps.grants.clear()
     return { kind: 'needs-proof' }
   }
-  return { kind: 'refused', message: messageOf(finished.body, 'This machine did not take that. Try again.') }
+  // The finish's refusal is the machine's sentence as before, with no wait: only a begin is told to wait.
+  const said = refusalOf(finished, 'This machine did not take that. Try again.')
+  return said.kind === 'failed' ? said : { kind: 'refused', message: said.message }
 }
 
 const GRANT_KEY = 'cr_grant'
@@ -322,7 +526,13 @@ const httpAt = (
 export function browserPairDeps(
   base: string,
   device: () => Promise<AccountDevice | null>,
-  scope: MachineScope = machineScope()
+  scope: MachineScope = machineScope(),
+  /**
+   * `explicit`: a person asked for this door (sealedRetrying). Left out, the door waits its turn like any automatic ask.
+   * `held`: what ends a sealed retry's wait. Left out, the machine in scope (heldScope); the fleet's reads, keyed by
+   * a machine's own id, pass the relay instead (heldRelay), so entering another machine does not end them.
+   */
+  options: { readonly explicit?: boolean; readonly held?: () => () => boolean } = {}
 ): PairClientDeps {
   const credentials = typeof navigator !== 'undefined' ? navigator.credentials : undefined
   let storage: Storage | null = null
@@ -333,8 +543,12 @@ export function browserPairDeps(
   }
   return {
     // The account session rides only an address under the relay's machine prefix (machine-scope.ts),
-    // and a relayed call leaves at the relay's one address (relayFetch).
-    machine: httpAt(base, () => relayHeadersForUrl(`${base}/`, scope), relayFetch(undefined, () => scope)),
+    // and a relayed call leaves at the relay's one address (relayFetch); one a sealed-only machine
+    // refused in the clear goes again sealed when this page has a session with it (sealedRetrying).
+    machine: httpAt(base, () => relayHeadersForUrl(`${base}/`, scope), sealedRetrying(relayFetch(undefined, () => scope), {
+      explicit: options.explicit === true,
+      ...(options.held ? { held: options.held } : {})
+    })),
     registry:
       scope.relay === null
         ? httpAt('')

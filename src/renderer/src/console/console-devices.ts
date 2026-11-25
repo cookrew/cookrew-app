@@ -128,6 +128,8 @@ export function standingOf(row: AccountMachine, at: { open: boolean; read: boole
   if (!at.open) return { standing: 'locked', say: null }
   if (at.read) return { standing: 'live', say: null }
   if (at.block?.kind === 'refused') return { standing: 'blocked', say: DEVICES_COPY.says(row.name, at.block.message) }
+  // The page's own sentence: whole, and not put in the machine's mouth.
+  if (at.block?.kind === 'page') return { standing: 'blocked', say: at.block.message }
   if (at.block?.kind === 'offline') return { standing: 'blocked', say: DEVICES_COPY.silent(row.name) }
   // One machine not taking the pass is about that machine: the gate, and the others, stand.
   if (at.block?.kind === 'needs-proof') return { standing: 'blocked', say: DEVICES_COPY.reproof(row.name) }
