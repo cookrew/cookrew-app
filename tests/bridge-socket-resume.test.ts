@@ -229,22 +229,20 @@ describe('input on a slow line', () => {
   beforeEach(() => void vi.useFakeTimers())
   afterEach(() => void vi.useRealTimers())
 
-  it('keeps two POSTs in flight, numbered, and folds what waits behind them', async () => {
+  it('keeps BRIDGE_UP_IN_FLIGHT POSTs in flight, numbered, and folds what waits behind them', async () => {
     const releases: (() => void)[] = []
     const { ws, posts } = setup(() => new Promise((r) => releases.push(() => r('ok'))))
     const move = (x: number): string => JSON.stringify({ t: 'touchmove', x, y: 0 })
-    ws.send(move(1))
-    ws.send(move(2))
-    ws.send(move(3))
-    ws.send(move(4))
+    const n = BRIDGE_UP_IN_FLIGHT
+    for (let x = 1; x <= n + 2; x += 1) ws.send(move(x))
     await flush()
-    expect(posts).toHaveLength(BRIDGE_UP_IN_FLIGHT)
-    expect(posts.map((p) => p.s)).toEqual([1, 2])
+    expect(posts).toHaveLength(n)
+    expect(posts.map((p) => p.s)).toEqual(Array.from({ length: n }, (_, i) => i + 1))
     releases.shift()?.()
     await flush()
-    expect(posts).toHaveLength(3)
-    expect(posts[2].s).toBe(3)
-    expect(posts[2].m).toEqual([move(4)])
+    expect(posts).toHaveLength(n + 1)
+    expect(posts[n].s).toBe(n + 1)
+    expect(posts[n].m).toEqual([move(n + 2)])
   })
 
   it('carries the paint receipt on the next POST, or alone', async () => {

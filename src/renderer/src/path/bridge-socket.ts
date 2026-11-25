@@ -34,7 +34,15 @@ const CLOSED = 3
 
 /** Messages per POST, matching what the Mac accepts (SOCKET_BRIDGE_POST_MESSAGES). */
 export const BRIDGE_POST_BATCH = 64
-export const BRIDGE_UP_IN_FLIGHT = 2
+/**
+ * POSTs up at once. Each holds a relay round trip, so with two the Mac heard
+ * the phone's acknowledgements about twice a round trip (~once a second on a
+ * 2 s line) and had to keep that much more in flight to keep the line busy,
+ * which stood as a queue in front of the finger (tests/cast-video-line.test.ts:
+ * the relay at 650 ms, 8.8 fps with two, 11.2 with four). The Mac holds 32 that
+ * overtake (socket-bridge-session.ts HELD_POSTS); acknowledgements are not numbered.
+ */
+export const BRIDGE_UP_IN_FLIGHT = 4
 /** The Mac beats every second and holds the session for thirty. */
 export const BRIDGE_SILENT_MS = 8000
 /** A POST on a dead path does not fail, it hangs; numbered, it can safely go again. */

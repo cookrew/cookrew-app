@@ -23,6 +23,43 @@ const UP_TRIES = 6
 const DOWN_TRIES = 8
 const TICK_MS = 5_000
 const UP_BATCH = 1024 * 1024
+/**
+ * POSTs on the line at once (owner 2026-11-25, "sealed之后整体反应变得卡顿"). One at a
+ * time, a record sealed a moment after a POST left waited for that POST's whole
+ * round trip: a request's last record left one round trip late, so a sealed
+ * request cost two relay round trips where a plain one costs one. The Mac holds
+ * records that arrive early and drops a resent one (canvas-seal-wire.ts · createInbox).
+ *
+ * Only a record a request or an answer waits for (the connection's `urgent`)
+ * opens a POST beside others. An ACK, a CREDIT or a PING rides the next POST
+ * out, or opens one when none is on the line: while an answer streams down the
+ * session acks every 20 ms, and each a POST of its own was ~5 relay exchanges
+ * per round trip, of the relay's 64 per Mac (v2-canvas-relay.ts · EXCHANGES_PER_LINK).
+ */
+export const UP_IN_FLIGHT = 8
+/**
+ * How far past the oldest record not yet answered a POST may reach, in
+ * sequence numbers. Everything below that record the Mac has taken (its POST
+ * was answered), so its inbox waits on no lower record, and holds up to
+ * SEAL_WINDOW (1024) past it: a POST that overtakes an earlier one is held
+ * there, never answered "ahead" and sent again. A span, not a count: POSTs
+ * answered out of order free count while the gap behind them stays open.
+ */
+export const UP_SEQ_SPAN = 768
+/**
+ * Bytes on the line at once, all POSTs together. The relay buffers each POST's
+ * body whole, from one budget all its Macs share (v2-canvas-relay.ts ·
+ * BODY_BUDGET, 64 MiB): eight POSTs of a megabyte would be an eighth of it for
+ * one upload. A batch larger than the room left still goes when it is alone.
+ */
+export const UP_BYTES_IN_FLIGHT = 2 * 1024 * 1024
+/**
+ * How long a record waits for the ones sealed with it. Sealing is async, so a
+ * page opening (eight requests) seals its records one by one over a few
+ * milliseconds; sent as they come, the first four took a POST each and the rest
+ * waited a round trip. A few milliseconds against a relay round trip of hundreds.
+ */
+export const UP_GATHER_MS = 4
 
 export interface HttpLinkDeps {
   /** Where a seal path lives: the relay's prefix for this machine, or the machine's own origin. */
@@ -79,15 +116,35 @@ export type LinkOptions = Omit<Seal2ConnectionOptions, 'session' | 'role' | 'sen
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+interface Queued {
+  readonly wire: Uint8Array
+  readonly seq: number
+  readonly urgent: boolean
+}
+
+/** One POST's records, from `first` on. */
+interface Batch {
+  readonly first: number
+  readonly body: Uint8Array
+}
+
 /** The session, carried: a down stream kept open and an up queue sent in order. */
 export function runSeal2Link(deps: HttpLinkDeps, session: Seal2Session, options: LinkOptions = {}): Seal2Link {
   const fetchFn = fetcher(deps)
   const retryMs = deps.retryMs ?? RETRY_MS
   const stop = new AbortController()
-  const outgoing: Uint8Array[] = []
+  /** Sealed, not yet on the line. */
+  const outgoing: Queued[] = []
+  /** Of those, the ones a request or an answer waits for. */
+  let urgentWaiting = 0
+  /** Every byte sealed and not yet taken by the far end: waiting and on the line alike (the session's backlog). */
   let outgoingBytes = 0
-  let posting = false
+  /** POSTs not yet answered, retries included. */
+  const inFlight = new Set<Batch>()
+  let bytesInFlight = 0
   let ended = false
+  /** The far end refused or is gone: what is still queued would only be refused too. */
+  let failed = false
   let ticker: ReturnType<typeof setInterval> | null = null
 
   const end = (): void => {
@@ -95,16 +152,19 @@ export function runSeal2Link(deps: HttpLinkDeps, session: Seal2Session, options:
     ended = true
     stop.abort()
     if (ticker !== null) clearInterval(ticker)
+    if (gathering !== null) clearTimeout(gathering)
   }
 
   const connection = createSeal2Connection({
     ...options,
     session,
     role: 'initiator',
-    send: (wire) => {
-      outgoing.push(wire)
+    send: (wire, { seq, urgent }) => {
+      outgoing.push({ wire, seq, urgent })
       outgoingBytes += wire.length
-      void flush()
+      if (urgent) urgentWaiting += 1
+      // A control record behind a POST on the line leaves when that POST is answered (flush, from carry's end).
+      if (urgent || inFlight.size === 0) gather()
     },
     backlog: () => outgoingBytes,
     onClose: (why, clean) => {
@@ -115,7 +175,11 @@ export function runSeal2Link(deps: HttpLinkDeps, session: Seal2Session, options:
   })
   const drainedOrLate = async (): Promise<void> => {
     const deadline = Date.now() + retryMs
-    while ((outgoing.length > 0 || posting) && Date.now() < deadline) await sleep(20)
+    while (!failed && (outgoing.length > 0 || inFlight.size > 0) && Date.now() < deadline) await sleep(20)
+  }
+  const fail = (why: string): void => {
+    failed = true
+    connection.close(why)
   }
   const at = (path: string): string => deps.url(`${path}${path.includes('?') ? '&' : '?'}s=${encodeURIComponent(connection.id)}`)
 
@@ -137,39 +201,80 @@ export function runSeal2Link(deps: HttpLinkDeps, session: Seal2Session, options:
     }
   }
 
-  const takeBatch = (): { count: number; body: Uint8Array } => {
+  /** The oldest record the far end may not have taken: its inbox waits on nothing lower. */
+  const oldestUnanswered = (): number => [...inFlight].reduce((oldest, batch) => Math.min(oldest, batch.first), outgoing[0]?.seq ?? Infinity)
+
+  /** How many records off the front of the queue go in the next POST: within its size, the bytes on the line, and the span. */
+  const batchLength = (): number => {
+    const alone = inFlight.size === 0
+    const bytesRoom = Math.min(UP_BATCH, UP_BYTES_IN_FLIGHT - bytesInFlight)
+    const spanEnd = oldestUnanswered() + UP_SEQ_SPAN
     let count = 0
     let size = 0
-    while (count < outgoing.length && (count === 0 || size + outgoing[count].length <= UP_BATCH)) size += outgoing[count++].length
-    const body = new Uint8Array(size)
-    outgoing.slice(0, count).reduce((offset, wire) => (body.set(wire, offset), offset + wire.length), 0)
-    return { count, body }
+    for (; count < outgoing.length; count += 1) {
+      const { wire, seq } = outgoing[count]
+      if (seq >= spanEnd) break
+      // The first record always goes on a line with nothing else on it, however large.
+      if (size + wire.length > bytesRoom && !(alone && count === 0)) break
+      size += wire.length
+    }
+    return count
   }
 
-  /** In order, one POST at a time; a failed one goes again as the same bytes. */
-  async function flush(): Promise<void> {
-    if (posting) return
-    posting = true
-    try {
-      for (let tries = 0; outgoing.length > 0 && !ended; ) {
-        const { count, body } = takeBatch()
-        const status = await postBatch(body)
-        if (status >= 200 && status < 300) {
-          outgoing.splice(0, count)
-          outgoingBytes -= body.length
-          tries = 0
-          connection.drained()
-          continue
-        }
-        if (status === 404) return connection.close('the far end has no such session')
-        if (status === 400 || status === 413) return connection.close(`the far end refused a record (${status})`)
-        // 409: ahead of what it can hold. 0, 5xx: the line. Both: the same bytes, a little later.
-        tries = status === 409 ? 0 : tries + 1
-        if (tries > UP_TRIES) return connection.close('the line up stopped answering')
-        await sleep(retryMs * Math.min(tries + 1, 5))
+  /** The next records off the queue, in order, as one body; null when none may go yet. */
+  const takeBatch = (): Batch | null => {
+    const count = batchLength()
+    if (count === 0) return null
+    const taken = outgoing.splice(0, count)
+    const body = new Uint8Array(taken.reduce((size, { wire }) => size + wire.length, 0))
+    taken.reduce((offset, { wire }) => (body.set(wire, offset), offset + wire.length), 0)
+    urgentWaiting -= taken.filter(({ urgent }) => urgent).length
+    return { first: taken[0].seq, body }
+  }
+
+  let gathering: ReturnType<typeof setTimeout> | null = null
+  /** The first record of a burst waits UP_GATHER_MS for the rest, then they leave together. */
+  function gather(): void {
+    if (gathering !== null) return
+    gathering = setTimeout(() => {
+      gathering = null
+      flush()
+    }, UP_GATHER_MS)
+  }
+
+  /** A new POST may open: always onto an empty line, beside others only for what a request or an answer waits for. */
+  const mayOpen = (): boolean => !ended && !failed && outgoing.length > 0 && (inFlight.size === 0 || (urgentWaiting > 0 && inFlight.size < UP_IN_FLIGHT))
+
+  /** Puts what is waiting on the line. Records leave in order; the far end puts them back in order. */
+  function flush(): void {
+    while (mayOpen()) {
+      const batch = takeBatch()
+      if (batch === null) return
+      inFlight.add(batch)
+      bytesInFlight += batch.body.length
+      void carry(batch).finally(() => {
+        inFlight.delete(batch)
+        bytesInFlight -= batch.body.length
+        flush()
+      })
+    }
+  }
+
+  /** One batch to the far end; a failed POST goes again as the same bytes. */
+  async function carry({ body }: Batch): Promise<void> {
+    for (let tries = 0; !ended && !failed; ) {
+      const status = await postBatch(body)
+      if (status >= 200 && status < 300) {
+        outgoingBytes -= body.length
+        connection.drained()
+        return
       }
-    } finally {
-      posting = false
+      if (status === 404) return fail('the far end has no such session')
+      if (status === 400 || status === 413) return fail(`the far end refused a record (${status})`)
+      // 409: ahead of what it can hold. 0, 5xx: the line. Both: the same bytes, a little later.
+      tries = status === 409 ? 0 : tries + 1
+      if (tries > UP_TRIES) return fail('the line up stopped answering')
+      await sleep(retryMs * Math.min(tries + 1, 5))
     }
   }
 
@@ -177,7 +282,7 @@ export function runSeal2Link(deps: HttpLinkDeps, session: Seal2Session, options:
   const readDown = async (): Promise<boolean> => {
     const down = await fetchFn(at(`/~seal/down?from=${connection.expecting()}`), { signal: stop.signal })
     if (down.status === 404) {
-      connection.close('the far end has no such session')
+      fail('the far end has no such session')
       return false
     }
     if (!down.ok || down.body === null) return false
