@@ -185,6 +185,15 @@ describe('the picker’s swatches', () => {
       expect(contrast(swatch.ink, swatch.card), id).toBeGreaterThanOrEqual(7)
     }
   })
+
+  // The swatch's parts are all absolute, so it has no width of its own. Newer
+  // Chrome stretches it across the flex <button>; the Mac's Electron 33
+  // (Chromium 130) left it 0 px wide, and overflow: hidden painted nothing.
+  it('take the pick’s width themselves, not from the button’s stretch', () => {
+    const css = bare(readFileSync(path.join(__dirname, '../src/renderer/src/skins/skin-sheet.css'), 'utf8'))
+    const rule = /\.skin-swatch\s*\{([^}]*)\}/.exec(css)?.[1] ?? ''
+    expect(rule).toMatch(/(^|;|\s)width:\s*100%/)
+  })
 })
 
 describe('the account’s pick, on this Mac', () => {
