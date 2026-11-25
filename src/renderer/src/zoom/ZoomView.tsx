@@ -586,16 +586,16 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       // The artifact and Files sheets handle their own Escape.
       if (artifactSheet.get() || filesSheet.get()) return
       // A bar group's card (BarGroups.tsx) closes first, before the box or the view.
-      if (barCard.get() && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop, .cr-name-input, .pf-who')) {
+      if (barCard.get() && !e.isComposing && !(e.target as Element | null)?.closest?.('.cr-board-search, .cr-board-pop, .cr-name-input, .pf-who')) {
         e.preventDefault()
         barCard.close()
         return
       }
       // An agent's card over the artifacts closes first, from its reply box too;
-      // an IME's Escape and the overlays over it (⌘K, the board) keep theirs.
+      // an IME's Escape and the overlays over it (the board) keep theirs.
       // A name's field (NameEdit.tsx) owns its Escape: it cancels the rename, not the card;
       // the who-picker's field (WhoPicker.tsx) closes the picker first.
-      if ((shelfCardOpen.current || pickOpen.current) && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop, .cr-name-input, .pf-who')) {
+      if ((shelfCardOpen.current || pickOpen.current) && !e.isComposing && !(e.target as Element | null)?.closest?.('.cr-board-search, .cr-board-pop, .cr-name-input, .pf-who')) {
         e.preventDefault()
         closeShelfCard()
         clearPick()

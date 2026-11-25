@@ -145,6 +145,6 @@ describe('the markup contract', () => {
     expect(listbox).toMatch(/aria-current="true"[^>]*>[\s\S]*?Conductor/)
   })
   it("the zoom's Esc lets the picker's field close the picker, over an open shelf card too", () => {
-    expect(read('zoom', 'ZoomView.tsx')).toMatch(/closest\?\.\('\.cmd, \.cr-board-search, \.cr-board-pop, \.cr-name-input, \.pf-who'\)/)
+    expect(read('zoom', 'ZoomView.tsx')).toMatch(/closest\?\.\('\.cr-board-search, \.cr-board-pop, \.cr-name-input, \.pf-who'\)/)
   })
 })

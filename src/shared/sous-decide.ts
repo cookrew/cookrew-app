@@ -76,7 +76,7 @@ export interface RecruitPath {
  * HP CONTRACT (LEDGER "HP contract", additive): how the box holds the
  * decision, how exposed the act is, and what the target runs on. Every
  * field is optional on the wire so a box in front of today's main still
- * works; the box's decision-hold.ts supplies the defaults. `decide()` sets
+ * works with defaults (the ⌘K box that read them was retired 2026-11-25). `decide()` sets
  * every one of them on this main.
  */
 export type DecisionMode = 'ticking' | 'paused' | 'question' | 'answer'
