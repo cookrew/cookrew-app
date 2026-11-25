@@ -121,6 +121,11 @@ export class WatchPairing {
     return this.token !== null
   }
 
+  /** The paired watch's account device id, so the Devices tab lists it once; null on a six-digit LAN claim. */
+  get accountDeviceId(): string | null {
+    return this.token === null ? null : this.deviceId
+  }
+
   /** Watches that have arrived since this app started: how a sheet tells one arrived from a code going away. */
   get claims(): number {
     return this.claimed

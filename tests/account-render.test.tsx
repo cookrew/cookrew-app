@@ -429,8 +429,9 @@ describe('the Devices tab knows which Mac it is on (v3, D12)', () => {
     expect(html).toContain('Mac Studio · studio')
   })
 
-  it('renders ADD A MAC and ADD A PHONE live now that cut 2 ships them (V3-10)', () => {
-    for (const verb of ['ADD A MAC', 'ADD A PHONE']) {
+  it('renders PAIR A NEW MAC and PAIR A PHONE live, in one row (V3-10 · owner 2026-11-25)', () => {
+    expect(html).not.toContain('ADD A PHONE')
+    for (const verb of ['PAIR A NEW MAC', 'PAIR A PHONE']) {
       const button = html.match(new RegExp(`<button[^>]*>${verb}</button>`))?.[0]
       expect(button, verb).toBeDefined()
       // They were disabled with "Coming in cut 2" while there was no route

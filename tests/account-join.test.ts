@@ -160,7 +160,7 @@ describe('a code that is gone says what to do next', () => {
   it('names the next step, and never a number', () => {
     const said = joinRefusalSentence('bad_credentials')
     expect(said).toBe(ACCOUNT_COPY.JOIN_CODE_SPENT)
-    expect(said).toContain('ADD A MAC')
+    expect(said).toContain('PAIR A NEW MAC')
     expect(said).not.toMatch(/40[0-9]|error|invalid/i)
     // The shared sentence for this reason is about a SESSION — a thing a Mac
     // joining for the first time has never had. That is the whole reason this

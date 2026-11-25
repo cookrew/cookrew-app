@@ -284,7 +284,7 @@ export const V3_COPY = machineTable({
   'm4.join-instead': 'Sign in with your password instead',
   /** M4, arrived with no code in the fragment — a bare /join, or a stripped link. */
   'm4.no-code':
-    'This link carries no code. Open Devices on a Mac you already use, choose ADD A PHONE, and scan the picture it shows.',
+    'This link carries no code. Open Devices on a Mac you already use, choose PAIR A PHONE, and scan the picture it shows.',
   /** W4, the line under the tabs. The other half of "sign in or create". */
   'w4.join-offer': 'Have a code from another device?',
   /** W4, the join panel. Says what is NOT asked for, which is the whole point. */

@@ -561,12 +561,16 @@ describe('configured', () => {
         factors: new Factors({ accounts: first.app, registry: origin }),
         envUsername: null,
         workspaces: () => [],
-        saveCodes: () => Promise.resolve({ ok: false })
+        saveCodes: () => Promise.resolve({ ok: false }),
+        admitted: { list: () => [], forget: (deviceId) => (forgotten.push(deviceId), true) }
       }
+      const forgotten: string[] = []
       const handlers = accountHandlers(deps)
       expect(await handlers['account:joinCode']('')).toMatchObject({ ok: true })
       const other = second.app.account()?.deviceId
       expect(await handlers['account:revoke']({ deviceId: other, password: '' })).toMatchObject({ ok: true })
+      // Its admission here ends with the revoke, not at the next revoked-list poll (owner 2026-11-25).
+      expect(forgotten).toEqual([other])
     })
   })
 
