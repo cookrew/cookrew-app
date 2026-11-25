@@ -137,6 +137,16 @@ private func pair(_ api: FakeRegistry, code: String = "K7QM2XPD", held: WatchAcc
     }
   }
 
+  @Test func testASealedOnlyMacKeepsTheCodeGood() async {
+    let api = FakeRegistry()
+    api.claims[macId] = .failure(.sealedOnly)
+    #expect(await pair(api, held: held) == .failed(.sealedOnly))
+    // Among Macs that did not hold the code, the one that refused it unread is the one that says.
+    let two = FakeRegistry()
+    two.claims[macId] = .failure(.sealedOnly)
+    #expect(await pair(two) == .failed(.sealedOnly))
+  }
+
   @Test func testWhatTheMacsSayDecidesTheWords() async {
     let cases: [(String, JoinFailure)] = [("wrong", .wrongCode), ("no-code", .ended), ("expired", .ended), ("burned", .ended)]
     for (reason, failure) in cases {
@@ -631,6 +641,23 @@ extension RelayLineTests {
     } catch {
       return error as? RegistryError
     }
+  }
+
+  // Owner 2026-11-25: a Mac that is sealed only refused the claim, and the watch said "That code ended".
+  @Test func testASealedOnlyMacIsNotAnEndedCode() async {
+    #expect(await claim(403, #"{"error":"sealed-only"}"#) == .sealedOnly)
+    #expect(await claim(403, #"{"ok":false,"reason":"wrong"}"#) == .claim("wrong"))
+  }
+
+  @Test func testACardsReadRefusedSealedOnlyIsSaidSo() async {
+    Scripted.seen = []
+    Scripted.strangers = []
+    Scripted.answers = [("cookrew.dev", 403, #"{"error":"sealed-only"}"#)]
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [Scripted.self]
+    let api = HTTPWatchAPI(bases: [relay], token: "mac-token", session: URLSession(configuration: config))
+    await #expect(throws: WatchError.sealedOnly) { _ = try await api.cards(tag: nil) }
+    #expect(!api.seals)
   }
 
   @Test func testOnlyTheRelaysOwn401IsADeadSession() async {

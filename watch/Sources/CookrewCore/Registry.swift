@@ -14,6 +14,8 @@ public enum RegistryError: Error, Equatable, Sendable {
   case claim(String)
   /** The account knows this watch as another kind of device. */
   case notWatch
+  /** The Mac refuses the claim in the clear: it is sealed only, and older than the claim's way through. */
+  case sealedOnly
 }
 
 public struct JoinReply: Decodable, Equatable, Sendable {
@@ -208,6 +210,8 @@ public final class HTTPRegistryAPI: RegistryAPI, @unchecked Sendable {
     // The relay's refusal of the session. A Mac too old to know this route says
     // 401 as well, and that one is only a Mac saying no: the next may say yes.
     case 401 where reason?.error == "unauthenticated": throw RegistryError.signedOut
+    // Not the code: a Mac that is sealed only and older than 0.6.40 answers every plain relayed call so.
+    case 403 where reason?.error == sealedOnlyError: throw RegistryError.sealedOnly
     case 429: throw RegistryError.slow
     case 502, 503, 504: throw RegistryError.unreachable
     default: throw RegistryError.claim(reason?.reason ?? "no-code")
