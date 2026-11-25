@@ -94,5 +94,22 @@ export function createSealMarks(file: string, now: () => number = Date.now): Sea
   }
 }
 
+/**
+ * THE ONE PLAIN CALL SEALED ONLY LETS THROUGH: a watch's claim (watch-routes.ts · handleWatchClaim).
+ *
+ * A watch seals in device mode, with the Mac's key, and that key reaches it only in the claim's
+ * answer. Refused in the clear, a watch could never pair through the relay while the switch is on,
+ * and could never be sealed at all (owner 2026-11-25). Nothing it hands out stays open to the relay:
+ *   the code      minted on this Mac, spent by the claim, single use;
+ *   the token     refused in the clear on the relay line while sealed only is on, and traded inside
+ *                 the watch's own sealed session for one the relay never saw (handleWatchRekey);
+ *   the key       believed only once the owner sees the same six words on the watch and here, so a
+ *                 key swapped on its way gives other words and is dropped.
+ * Every other route stays refused; a GET, or any other path, is not the claim.
+ */
+export function passesSealedOnly(method: string | undefined, pathname: string): boolean {
+  return method === 'POST' && pathname === '/api/watch/claim'
+}
+
 /** What the page reads in a refusal: the registry passes back no header of ours, so it is in the body. */
 export const SEALED_ONLY_ERROR = 'sealed-only'

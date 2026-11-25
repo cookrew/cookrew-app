@@ -24,7 +24,7 @@ import { checkpointTitle, type TitleMode } from './checkpoint-sync'
 import { MarkdownText } from './MarkdownText'
 import type { CheckpointTranslation } from './TranscriptView'
 import { isHarnessNotice, noticeLine } from '../../shared/harness-notice'
-import type { TraceBlock } from '../../shared/trace-blocks'
+import type { TraceAddedPrompt, TraceBlock } from '../../shared/trace-blocks'
 import { TranscriptFaceContext } from './transcript-face'
 import { TranscriptLookContext } from './transcript-look'
 import { chatFoldLabel, chatLegsOf, latestStepLine, type ChatFold, type ChatStep } from './chat-fold'
@@ -55,6 +55,9 @@ export const TranscriptRow = memo(
     ref
   ) {
     const legs = useMemo(() => (block ? chatLegsOf(block) : []), [block])
+    // The translation is of the closing answer: the last stretch that has one,
+    // not an empty one a /model after the reply left at the end.
+    const closingLeg = useMemo(() => closingLegOf(legs), [legs])
     // The prompt's screenshots, drawn under its words (CHAT and LOG; LIVE keeps "[Image #N]").
     const pictures = useMemo(() => (block ? picturesOfTurn(block, terminalId) : []), [block, terminalId])
     return (
@@ -72,6 +75,10 @@ export const TranscriptRow = memo(
               <span className="ctx-block-idx">T{id}</span>
               <span className="ctx-block-title">{checkpointTitle(block, titleMode)}</span>
             </div>
+            {/* Commands you ran before this turn's words, where the file opened on them. */}
+            {block.lead?.map((ran, i) => (
+              <CommandLine key={i} text={ran.text} output={ran.output} />
+            ))}
             {/* Prompt stays VERBATIM (pre-wrap) — the human's exact words,
                 unless the reader asked for this checkpoint translated, in
                 which case the words shown are the translation's. Marked, so
@@ -94,10 +101,15 @@ export const TranscriptRow = memo(
                 covers the whole reply: it is the closing answer, the rest stay
                 as they ran. */}
             {legs.map((leg, i) => {
-              const closing = translated !== null && i === legs.length - 1
+              const closing = translated !== null && i === closingLeg
               return (
                 <Fragment key={i}>
-                  {leg.words !== null && <div className="ctx-block-prompt">{leg.words}</div>}
+                  {leg.words !== null &&
+                    (leg.command !== undefined ? (
+                      <CommandLine text={leg.words} output={leg.command.output} />
+                    ) : (
+                      <div className="ctx-block-prompt">{leg.words}</div>
+                    ))}
                   <AgentLeg fold={leg.fold} answer={(closing ? translated.reply : null) ?? leg.fold.answer} translated={closing} />
                 </Fragment>
               )
@@ -117,6 +129,22 @@ export const TranscriptRow = memo(
     )
   })
 )
+
+/** The stretch holding the turn's closing answer: the last with words, else the last. */
+function closingLegOf(legs: readonly { fold: ChatFold }[]): number {
+  for (let i = legs.length - 1; i >= 0; i--) if (legs[i].fold.answer.length > 0) return i
+  return legs.length - 1
+}
+
+/** A slash command you ran, on your side of the chat, and what it printed under it. */
+function CommandLine({ text, output }: Pick<TraceAddedPrompt, 'text' | 'output'>): React.JSX.Element {
+  return (
+    <div className="ctx-block-command" role="note">
+      <span className="ctx-command-line">{text}</span>
+      {output && <span className="ctx-command-output">{output}</span>}
+    </div>
+  )
+}
 
 /** THE AGENT'S SIDE OF THE CHAT: its face, and one bubble with what it ran and what it said (transcript-face.ts). */
 function AgentLeg({ fold, answer, translated }: { fold: ChatFold; answer: string; translated: boolean }): React.JSX.Element | null {

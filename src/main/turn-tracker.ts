@@ -3465,7 +3465,8 @@ export class TurnTracker extends EventEmitter {
     // A typed slash command (/rewind, /clear …) is a UI action, not an
     // exchange — the session file records it as a command, not a user
     // message, so a scrape checkpoint here would break the 1:1 with the
-    // session list. Discard it; a real '/…' prompt is re-added on reconcile.
+    // session list. Discard it; a real '/…' prompt, and a command that ran a
+    // turn (session-turns.ts · slashCommandOf), are re-added on reconcile.
     if (t.prompt !== null && isCommandPrompt(t.prompt)) {
       // A command that ran a model turn (a skill) printed a finished-turn
       // line: its reply is real and unread. Anything else rests.

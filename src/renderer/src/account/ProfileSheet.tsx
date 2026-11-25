@@ -20,7 +20,8 @@ import { qrMatrix } from '../../../shared/qr'
 import { RequestsTab } from './RequestsTab'
 import { DOING, problemSentence } from './problem'
 import { DeleteAccountRow } from './DeleteAccountRow'
-import { PairPhoneSheet } from './PairPhoneSheet'
+import { DevicePairing, useWatchHere } from './DevicePairing'
+import { deviceRows } from './device-rows'
 import { ResumeSession } from './ResumeSession'
 import { SecurityCard } from './SecurityCard'
 import { PROVIDER_COPY } from './provider-store'
@@ -62,6 +63,7 @@ const KIND_LABEL: Record<string, string> = {
   desktop: 'DESKTOP',
   phone: 'PHONE',
   browser: 'BROWSER',
+  watch: 'WATCH',
   // The key this name held before passwords (phase 6). It is listed like any
   // other device because that is what it now is — and revoking it is how the
   // pre-password world ends on this account.
@@ -123,12 +125,16 @@ export function ProfileSheet({
    * on the rows above: two codes on screen would be two live codes, and the
    * registry keeps one.
    */
-  const [adding, setAdding] = useState<'mac' | 'phone' | null>(null)
+  const [adding, setAdding] = useState<'mac' | null>(null)
   const [minted, setMinted] = useState<{ code: string; expiresAt: number; url: string } | null>(
     null,
   )
   const [admitted, setAdmitted] = useState<readonly AdmittedPhone[]>([])
-  const [pairing, setPairing] = useState(false)
+  /** Bumped when a pairing sheet closes: the lists are read again. */
+  const [paired, setPaired] = useState(0)
+  const watch = useWatchHere(paired)
+  /** The watch row's FORGET takes a second tap: it means pairing again on the wrist. */
+  const [forgettingWatch, setForgettingWatch] = useState(false)
   /** The display name while it is being edited; null when it is not. */
   const [editing, setEditing] = useState<string | null>(null)
   /** A failure from the security card's own actions (lock, codes file). */
@@ -165,7 +171,8 @@ export function ProfileSheet({
         else setError(refusalSentence(result.reason, result.message, username))
       })
       .catch((err: unknown) => setError(problemSentence(DOING.PROFILE, err)))
-  }, [username, key, status.sessionExpired])
+    // `paired`: a device paired from this tab joins the account a moment later.
+  }, [username, key, status.sessionExpired, paired])
 
   useEffect(() => {
     const call = cookrew().accountAdmittedDevices
@@ -173,7 +180,7 @@ export function ProfileSheet({
     void call()
       .then(setAdmitted)
       .catch(() => undefined)
-  }, [pairing])
+  }, [paired])
 
   /**
    * FORGET, and why it is not REVOKE. This drops the admission on this Mac —
@@ -191,9 +198,18 @@ export function ProfileSheet({
     void call(deviceId)
       .then((forgotten) => {
         if (forgotten) setAdmitted((prior) => prior.filter((p) => p.deviceId !== deviceId))
-        else setError('That phone could not be forgotten. Try again.')
+        else setError('That device could not be forgotten. Try again.')
       })
       .catch((err: unknown) => setError(problemSentence(DOING.FORGET, err)))
+  }
+
+  /** The watch paired with this Mac, forgotten on a second tap. */
+  const forgetWatch = (): void => {
+    if (!forgettingWatch) return setForgettingWatch(true)
+    setForgettingWatch(false)
+    void watch.forget().then((forgotten) => {
+      if (!forgotten) setError('The watch could not be forgotten. Try again.')
+    })
   }
 
   /** A passwordless account has no field to fill: the provider is asked in main. */
@@ -205,7 +221,7 @@ export function ProfileSheet({
   }, [acting, status.passwordless, trip])
 
   /**
-   * ADD A MAC / ADD A PHONE (D12) — the code is minted under step-up.
+   * PAIR A NEW MAC (D12) — the code is minted under step-up.
    *
    * The registry asks for the password again on this route and so does this
    * sheet: minting a join code widens what the account can be opened from,
@@ -270,6 +286,9 @@ export function ProfileSheet({
         setProfile((prior) =>
           prior ? { ...prior, devices: prior.devices.filter((d) => d.id !== id) } : prior,
         )
+        // Main ended its admission with the revoke (account-ipc.ts): it must not
+        // come back as a row of this Mac's own.
+        setAdmitted((prior) => prior.filter((p) => p.deviceId !== id))
       })
       .catch((err: unknown) => {
         setActing(false)
@@ -331,6 +350,7 @@ export function ProfileSheet({
   }
 
   const now = Date.now()
+  const rows = deviceRows(profile?.devices ?? [], admitted, watch)
   return (
     <div
       className="gs-scrim cr-sheet cr-acct-layer"
@@ -456,133 +476,17 @@ export function ProfileSheet({
 
         {tab === 'DEVICES' && (
           <section className="cr-acct-pane" aria-label="Devices">
-            {/* RESTORED IN INTEGRATION, and by the lane that took it away.
-                V3-12 dropped this button because its own ADD A PHONE reached
-                the same popout; V3-10's app half then made ADD A PHONE mint a
-                JOIN code — the account ceremony (M4) — which is a different
-                thing from the pairing URL that admits a phone at THIS Mac on
-                Wi-Fi. Two ceremonies, so two ways in, until the two lanes that
-                own them agree on one. */}
-            <button className="gs-revoke cr-acct-act" onClick={() => setPairing(true)}>
-              PAIR A PHONE
-            </button>
-            <ul className="cr-acct-devices">
-              {(profile?.devices ?? []).map((device) => {
-                // THIS MAC has one verb and the others have the other. The
-                // confirmation is the same shape for both: the sentence that
-                // says everything the act does, the password, and a way to
-                // keep things as they are.
-                const key = device.current ? 'self' : device.id
-                const open = confirming === key
-                return (
-                  <li key={device.id} className="cr-acct-device">
-                    <span className="cr-acct-kind">{KIND_LABEL[device.kind] ?? 'DEVICE'}</span>
-                    <span className="cr-acct-seclabel">{deviceName(device.name)}</span>
-                    {device.current ? (
-                      <>
-                        <span className="cr-acct-secstate cr-acct-thismac">{machineCopy('THIS MAC', hostPlatform())}</span>
-                        <button
-                          className="gs-revoke"
-                          disabled={acting}
-                          onClick={() => {
-                            setStepUp('')
-                            setConfirming(open ? null : 'self')
-                          }}
-                        >
-                          {machineCopy('SIGN OUT ON THIS MAC', hostPlatform())}
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <span className="cr-acct-secstate">
-                          LAST SEEN {ago(device.lastSeenAt, now)}
-                        </span>
-                        <button
-                          className="gs-revoke"
-                          disabled={acting}
-                          onClick={() => {
-                            setStepUp('')
-                            setConfirming(open ? null : device.id)
-                          }}
-                        >
-                          REVOKE
-                        </button>
-                      </>
-                    )}
-                    {open && (
-                      <div className="cr-acct-stepup">
-                        <p className="gs-consequence">
-                          {device.current
-                            ? signOutSentence(username)
-                            : revokeSentence(deviceName(device.name))}
-                        </p>
-                        {/* THE PASSWORD, HERE. Both verbs step up (D12): a
-                            sheet left open on an unlocked Mac is not enough
-                            to sign it out or to take another device's key. */}
-                        {status.passwordless && <p className="gs-hint">{PROVIDER_COPY.STEP_UP}</p>}
-                        <div className="cr-acct-row">
-                          {!status.passwordless && (
-                          <input
-                            type="password"
-                            className="gs-input"
-                            aria-label="Password"
-                            placeholder="password"
-                            autoComplete="current-password"
-                            value={stepUp}
-                            onChange={(e) => setStepUp(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') device.current ? signOut() : revoke(device.id)
-                              if (e.key === 'Escape') settled()
-                            }}
-                          />
-                          )}
-                          <button
-                            className="gs-revoke"
-                            disabled={acting || !proofReady}
-                            onClick={() => (device.current ? signOut() : revoke(device.id))}
-                          >
-                            {device.current ? 'SIGN OUT' : 'REVOKE'}
-                          </button>
-                          <button className="gs-ghost" disabled={acting} onClick={settled}>
-                            KEEP
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </li>
-                )
-              })}
-              {profile !== null && profile.devices.length === 0 && (
-                <li className="gs-dim">No devices listed yet.</li>
-              )}
-            </ul>
-            {/* THE TWO VERBS THAT ADD A MACHINE (D12 · V3-10). Both mint the
-                SAME kind of code — one live per account — and differ only in
-                what a person does with it: a Mac types the eight characters,
-                a phone scans the link. So the ceremony is one panel and the
-                sentence is the thing that changes. */}
-            <div className="cr-acct-row cr-acct-add">
-              <button
-                className="gs-ghost"
-                disabled={acting}
-                onClick={() => {
-                  closeAdd()
-                  setAdding(adding === 'mac' ? null : 'mac')
-                }}
-              >
-                {machineCopy('ADD A MAC', hostPlatform())}
-              </button>
-              <button
-                className="gs-ghost"
-                disabled={acting}
-                onClick={() => {
-                  closeAdd()
-                  setAdding(adding === 'phone' ? null : 'phone')
-                }}
-              >
-                ADD A PHONE
-              </button>
-            </div>
+            {/* EVERY WAY IN, FIRST (owner 2026-11-25): a watch, a phone, a new
+                Mac — one row, each opening the ceremony that device has. */}
+            <DevicePairing
+              disabled={acting}
+              addingMac={adding === 'mac'}
+              onAddMac={() => {
+                closeAdd()
+                setAdding(adding === 'mac' ? null : 'mac')
+              }}
+              onChanged={() => setPaired((n) => n + 1)}
+            />
             {adding !== null && (
               <div className="cr-acct-addmac">
                 {minted === null ? (
@@ -639,36 +543,155 @@ export function ProfileSheet({
                 )}
               </div>
             )}
-            {/* ADMITTED PHONES ARE A DIFFERENT KIND OF FACT and get their own
-                heading rather than being mixed in. The list above is the
-                ACCOUNT's devices, known to cookrew.dev and revocable there;
-                this list is local — phones THIS Mac opens for. FORGET drops
-                the admission here and nothing else, which is why it is not
-                called REVOKE. */}
-            {admitted.length > 0 && (
-              <>
-                <p className="cr-acct-devices-heading">{machineCopy('Admitted on this Mac', hostPlatform())}</p>
-                <ul className="cr-acct-devices">
-                  {admitted.map((phone) => (
-                    <li key={phone.deviceId} className="cr-acct-device cr-acct-local">
-                      <span className="cr-acct-kind">PHONE</span>
+            {/* ONE ROW PER DEVICE (device-rows.ts). A device on the account
+                that this machine also admits is the account's row: its REVOKE
+                ends the admission here too, FORGET HERE only that. A device
+                only this machine knows keeps its own row, with FORGET. */}
+            <p className="cr-acct-devices-heading">Paired devices</p>
+            <ul className="cr-acct-devices">
+              {rows.map((row) => {
+                if (row.source === 'admitted') {
+                  const phone = row.admitted
+                  return (
+                    <li key={`here-${phone.deviceId}`} className="cr-acct-device cr-acct-local">
+                      <span className="cr-acct-kind">DEVICE</span>
                       <span className="cr-acct-seclabel">{phone.name ?? phone.deviceId}</span>
-                      <span className="cr-acct-secstate">
-                        LAST SEEN {ago(phone.lastSeenAt, now)}
-                      </span>
-                      <button className="gs-revoke" onClick={() => forget(phone.deviceId)}>
+                      <span className="cr-acct-secstate">LAST SEEN {ago(phone.lastSeenAt, now)}</span>
+                      <button
+                        className="gs-revoke"
+                        aria-label={machineCopy(`Forget ${phone.name ?? phone.deviceId} on this Mac`, hostPlatform())}
+                        onClick={() => forget(phone.deviceId)}
+                      >
                         FORGET
                       </button>
                     </li>
-                  ))}
-                </ul>
-                <p className="gs-hint">
-                  Forgetting is local: the phone stays on the account and has to be admitted
-                  here again.
-                </p>
-              </>
+                  )
+                }
+                if (row.source === 'watch') {
+                  return (
+                    <li key="watch-here" className="cr-acct-device cr-acct-local">
+                      <span className="cr-acct-kind">WATCH</span>
+                      <span className="cr-acct-seclabel">Apple Watch</span>
+                      <span className="cr-acct-secstate">{machineCopy('PAIRED WITH THIS MAC', hostPlatform())}</span>
+                      <button
+                        className="gs-revoke"
+                        aria-label={forgettingWatch ? 'Press again to forget the Apple Watch' : 'Forget the Apple Watch'}
+                        onClick={forgetWatch}
+                        onBlur={() => setForgettingWatch(false)}
+                      >
+                        {forgettingWatch ? 'TAP AGAIN TO FORGET' : 'FORGET'}
+                      </button>
+                    </li>
+                  )
+                }
+                const device = row.device
+                // THIS MAC has one verb and the others have the other. The
+                // confirmation is the same shape for both: the sentence that
+                // says everything the act does, the password, and a way to
+                // keep things as they are.
+                const key = device.current ? 'self' : device.id
+                const open = confirming === key
+                return (
+                  <li key={device.id} className="cr-acct-device">
+                    <span className="cr-acct-kind">{KIND_LABEL[device.kind] ?? 'DEVICE'}</span>
+                    <span className="cr-acct-seclabel">{deviceName(device.name)}</span>
+                    {device.current ? (
+                      <>
+                        <span className="cr-acct-secstate cr-acct-thismac">{machineCopy('THIS MAC', hostPlatform())}</span>
+                        <button
+                          className="gs-revoke"
+                          disabled={acting}
+                          onClick={() => {
+                            setStepUp('')
+                            setConfirming(open ? null : 'self')
+                          }}
+                        >
+                          {machineCopy('SIGN OUT ON THIS MAC', hostPlatform())}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="cr-acct-secstate">
+                          LAST SEEN {ago(device.lastSeenAt, now)}
+                        </span>
+                        {/* THE LIGHTER VERB, ON THE SAME ROW: ends only what this
+                            Mac lets in, and leaves the device on the account. */}
+                        {row.admittedHere && (
+                          <button
+                            className="gs-ghost"
+                            disabled={acting}
+                            aria-label={machineCopy(`Forget ${deviceName(device.name)} on this Mac only`, hostPlatform())}
+                            title={machineCopy('Stops it opening this Mac; it stays on the account', hostPlatform())}
+                            onClick={() => forget(device.id)}
+                          >
+                            FORGET HERE
+                          </button>
+                        )}
+                        <button
+                          className="gs-revoke"
+                          disabled={acting}
+                          aria-label={`Revoke ${deviceName(device.name)}`}
+                          onClick={() => {
+                            setStepUp('')
+                            setConfirming(open ? null : device.id)
+                          }}
+                        >
+                          REVOKE
+                        </button>
+                      </>
+                    )}
+                    {open && (
+                      <div className="cr-acct-stepup">
+                        <p className="gs-consequence">
+                          {device.current
+                            ? signOutSentence(username)
+                            : revokeSentence(deviceName(device.name))}
+                        </p>
+                        {/* THE PASSWORD, HERE. Both verbs step up (D12): a
+                            sheet left open on an unlocked Mac is not enough
+                            to sign it out or to take another device's key. */}
+                        {status.passwordless && <p className="gs-hint">{PROVIDER_COPY.STEP_UP}</p>}
+                        <div className="cr-acct-row">
+                          {!status.passwordless && (
+                          <input
+                            type="password"
+                            className="gs-input"
+                            aria-label="Password"
+                            placeholder="password"
+                            autoComplete="current-password"
+                            value={stepUp}
+                            onChange={(e) => setStepUp(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') device.current ? signOut() : revoke(device.id)
+                              if (e.key === 'Escape') settled()
+                            }}
+                          />
+                          )}
+                          <button
+                            className="gs-revoke"
+                            disabled={acting || !proofReady}
+                            onClick={() => (device.current ? signOut() : revoke(device.id))}
+                          >
+                            {device.current ? 'SIGN OUT' : 'REVOKE'}
+                          </button>
+                          <button className="gs-ghost" disabled={acting} onClick={settled}>
+                            KEEP
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </li>
+                )
+              })}
+              {profile !== null && rows.length === 0 && (
+                <li className="gs-dim">No devices listed yet.</li>
+              )}
+            </ul>
+            {rows.some((row) => row.source !== 'account') && (
+              <p className="gs-hint">
+                {machineCopy('FORGET only ends what this Mac lets in; the account is not touched.', hostPlatform())}
+              </p>
             )}
-            {pairing && <PairPhoneSheet onClose={() => setPairing(false)} />}
           </section>
         )}
 

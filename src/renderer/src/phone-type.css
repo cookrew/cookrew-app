@@ -215,7 +215,7 @@
   :root:root .zv-fullview .lod-overlay .look-log .ctx-block {
     font-size: var(--ph-body);
   }
-  :root:root .zv-fullview .lod-overlay :is(.ctx-block-tool, .ctx-block-thought, .ctx-block-notice),
+  :root:root .zv-fullview .lod-overlay :is(.ctx-block-tool, .ctx-block-thought, .ctx-block-notice, .ctx-block-command),
   :root:root .zv-fullview .lod-overlay .look-chat .ctx-chat-bubble .ctx-block-tool {
     font-size: var(--ph-control);
   }

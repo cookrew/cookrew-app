@@ -13,6 +13,9 @@ import Foundation
 //
 // The direct roads (the Mac's own address at home) are not this file's.
 
+/** How soon a sealed-only refusal brings the next try at the sealed road. */
+public let soonSeconds: TimeInterval = 15
+
 /** The sealed road would not open, so nothing of this call reached the Mac: any road may be tried next, a write's too. */
 public struct SealRoadClosed: Error, Equatable {}
 
@@ -153,6 +156,16 @@ public actor WatchSealer {
       }
       throw WatchError.unreachable
     }
+  }
+
+  /**
+   * The Mac refused this watch in the clear because it is sealed only: the owner is likely at the Mac,
+   * confirming the words. The next try comes within `soonSeconds`, however long the wait had grown.
+   */
+  public func soon() {
+    let by = Date().addingTimeInterval(soonSeconds)
+    if refusedUntil > by { refusedUntil = by }
+    refusedFor = min(refusedFor, soonSeconds)
   }
 
   public func close() async {

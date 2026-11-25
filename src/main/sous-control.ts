@@ -149,7 +149,8 @@ export interface SousCommandInput {
   surface: Surface
   /**
    * The sentence came from A BOX — a surface that will show the decision
-   * echo and commit or cancel it (CommandBox on the desktop, the phone bar).
+   * echo and commit or cancel it. None ships since the ⌘K box was retired
+   * (2026-11-25); the decide path stays for a future one.
    * Push-to-talk, the CLI and the gateway only speak what comes back, so a
    * decision minted for them would be held by nobody; they send false (or
    * nothing) and keep the regex core exactly as before.

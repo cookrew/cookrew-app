@@ -217,7 +217,8 @@ function DigitsPane({
  * needs no address and can do it from anywhere. Six digits stay for a Mac with no
  * account, on its own network.
  */
-export function WatchPairSheet({ onClose }: { onClose: () => void }): React.JSX.Element {
+/** `over`: opened from the account sheet, so it stands above that layer (the sheet portals to body). */
+export function WatchPairSheet({ onClose, over = false }: { onClose: () => void; over?: boolean }): React.JSX.Element {
   const api = cookrew()
   const [stage, setStage] = useState<Stage>({ name: 'ask' })
   const [opened, setOpened] = useState<WatchState | null>(null)
@@ -245,7 +246,7 @@ export function WatchPairSheet({ onClose }: { onClose: () => void }): React.JSX.
   const again = (): void => setStage({ name: 'ask' })
 
   return createPortal(
-    <div className="gs-scrim cr-sheet" role="dialog" aria-modal="true" aria-label="Pair an Apple Watch">
+    <div className={`gs-scrim cr-sheet${over ? ' cr-acct-over' : ''}`} role="dialog" aria-modal="true" aria-label="Pair an Apple Watch">
       <div
         className="gs-sheet gs-small cr-sheet"
         onKeyDown={(event) => {

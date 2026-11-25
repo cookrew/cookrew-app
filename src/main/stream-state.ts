@@ -2,7 +2,7 @@
 //
 //   ~/.cookrew/stream/<terminalId>.json      0600 in a 0700 dir
 //   {
-//     "version": 1,
+//     "version": 2,
 //     "cursor":     { "file": "…/s3.jsonl", "byteOffset": 91234567, "ordinal": 1232 },
 //     "anomalies":  { "UnknownLine": 3 },
 //     "rolledBack": [ { "fromOrdinal": 1187, "at": 1757222400000 } ],
@@ -56,7 +56,10 @@ import {
 } from '../shared/stream-projection'
 
 export const STREAM_STATE_DIR_NAME = 'stream'
-export const STREAM_STATE_VERSION = 1
+// 2 (2026-11-24): a /goal, a skill and a codex /goal became checkpoints of
+// their own. A cursor written before numbers them past everything it holds,
+// so the state a version-1 build wrote reads as empty and replays whole.
+export const STREAM_STATE_VERSION = 2
 
 /** One rewind, as an APPENDED fact. `fromOrdinal` is the first checkpoint the
  *  truncation took beyond the file; `at` is when this process noticed. */

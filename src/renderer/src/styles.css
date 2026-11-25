@@ -1575,6 +1575,7 @@ a.cr-btn {
 .ctx-block,
 .ctx-block-prompt,
 .ctx-block-notice,
+.ctx-block-command,
 .ctx-block-tool,
 .ctx-tool-call,
 .ctx-tool-name,
@@ -1603,6 +1604,38 @@ a.cr-btn {
 .ctx-block-notice::before {
   content: 'TASK · ';
   letter-spacing: 0.08em;
+}
+
+/* A slash command you ran that started no turn (/compact, /model …), as the
+   terminal echoes it: ❯ the command, ⎿ what it printed (trace-blocks.ts ·
+   TraceAddedPrompt.command). A command that started a turn is that turn's
+   prompt instead. */
+.ctx-block-command {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  font: 12px/1.45 var(--font-mono);
+  word-break: break-word;
+}
+
+.ctx-command-line::before {
+  content: '❯ ';
+  color: var(--amber);
+}
+
+.ctx-command-output {
+  display: flex;
+  gap: 6px;
+  margin-left: 5px;
+  color: var(--phos-dim);
+  white-space: pre-wrap;
+}
+
+.ctx-command-output::before {
+  content: '⎿';
+  flex: 0 0 auto;
+  opacity: 0.75;
 }
 
 /* tool_call lines between prompt and reply — rendered like the real TUI

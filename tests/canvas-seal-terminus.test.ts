@@ -25,6 +25,7 @@ import {
 import { connectCodeId, newConnectCode, startHandshake, checkReplaced, replacedKeyOf } from '../src/shared/canvas-seal'
 import { createRecordReader, encodeRecord, type SealFrame } from '../src/shared/canvas-seal-wire'
 import { SealPhone as Phone, until } from './support/seal-phone'
+import { SEALED_ATTACH_BUDGET } from '../src/main/attachments'
 
 interface Inner {
   readonly input: { method: string; path: string; headers: Record<string, string> }
@@ -374,6 +375,49 @@ describe('getting there exactly once', () => {
     expect((await fetch(`${origin}/~seal/up?s=${phone.session?.id}`, { method: 'POST', body: Buffer.concat(junk) })).status).toBe(400)
     expect(performance.now() - started).toBeLessThan(500)
   })
+
+  /** `bytes` of body for a stream, in records a v1 session takes (128 KB), sixteen to a POST. */
+  const pour = async (phone: Phone, stream: number, bytes: number): Promise<void> => {
+    const piece = Buffer.alloc(128 * 1024, 0x76)
+    const frames: SealFrame[] = Array.from({ length: Math.ceil(bytes / piece.length) }, () => ({ kind: 'data', stream, data: piece }))
+    for (let at = 0; at < frames.length; at += 16) await phone.send(...frames.slice(at, at + 16))
+  }
+
+  it('an attachment may pass the relay ceiling inside the session; any other body may not', async () => {
+    const { phone: start, calls } = await bed()
+    const phone = await start()
+    await phone.listen()
+    await phone.send(open(1, '/api/attachments?name=clip.mp4', {}, 'POST'))
+    await pour(phone, 1, 5 * 1024 * 1024)
+    await phone.send(end(1))
+    await until(() => calls[0]?.ended === true, 'the attachment')
+    expect(Buffer.concat(calls[0].written).length).toBe(5 * 1024 * 1024)
+    await phone.send(open(3, '/api/upload', {}, 'POST'))
+    await pour(phone, 3, 5 * 1024 * 1024)
+    await until(() => phone.of(3).some((f) => f.kind === 'abort'), 'the refusal')
+    expect(phone.of(3).find((f) => f.kind === 'abort')).toMatchObject({ reason: 'body-too-large' })
+  }, 60_000)
+
+  it('a session holds no more attachment bytes arriving at once than its budget', async () => {
+    const { phone: start } = await bed({ auto: false })
+    const phone = await start()
+    await phone.listen()
+    // Two attachments of half the budget each, neither finished: the budget is spent.
+    for (const stream of [1, 3]) {
+      await phone.send(open(stream, '/api/attachments?name=a.mp4', {}, 'POST'))
+      await pour(phone, stream, SEALED_ATTACH_BUDGET / 2)
+    }
+    await phone.send(open(5, '/api/attachments?name=b.mp4', {}, 'POST'))
+    await pour(phone, 5, 128 * 1024)
+    await until(() => phone.of(5).some((f) => f.kind === 'abort'), 'the third turned away')
+    expect(phone.of(5).find((f) => f.kind === 'abort')).toMatchObject({ reason: 'busy' })
+    expect(phone.of(1).some((f) => f.kind === 'abort')).toBe(false)
+    // One finishes arriving: its bytes are the session's again.
+    await phone.send(end(1), open(7, '/api/attachments?name=c.mp4', {}, 'POST'))
+    await pour(phone, 7, 128 * 1024)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(phone.of(7).some((f) => f.kind === 'abort')).toBe(false)
+  }, 120_000)
 
   it('a body too large gets an answer, not a hang-up', async () => {
     const { origin, phone: start } = await bed()

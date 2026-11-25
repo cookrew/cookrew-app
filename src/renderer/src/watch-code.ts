@@ -12,6 +12,8 @@ export interface WatchCode {
 /** What a sheet has to ask for, and whether a code on offer is still standing. */
 export interface WatchState {
   paired: boolean
+  /** The paired watch's account device id; null on a six-digit LAN claim. Older machines leave it out. */
+  deviceId?: string | null
   pending: { expiresAt: number } | null
   account: 'none' | 'password' | 'passwordless'
   /** False on a plain-HTTP page: no password may be typed here, let alone sent. */

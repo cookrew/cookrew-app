@@ -132,4 +132,11 @@ describe('under a machine’s name on the devices stop', () => {
     expect(machineSays(m(), { surface: 'page', trusted: null, block: { kind: 'refused', message: 'Remote access is off on this Mac.' } })).toBe('Solis-Core says: Remote access is off on this Mac.')
     expect(machineSays(m(), { surface: 'page', trusted: null, block: { kind: 'offline' } })).toBe('Not answering yet.')
   })
+
+  it("the page's own sentence is said whole, and not put in the machine's mouth", () => {
+    const long = `${'This page could not reach the machine sealed. '.repeat(6)}End.`
+    const block = { kind: 'page' as const, message: long }
+    expect(machineSays(m(), { surface: 'page', trusted: null, block })).toBe(long)
+    expect(machineWhyWords({ name: 'Solis-Core', online: true }, { surface: 'page', trusted: null, block })).toBe(long)
+  })
 })

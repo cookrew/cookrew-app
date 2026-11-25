@@ -104,7 +104,7 @@ describe('the relay line proof', () => {
   it('the companion refuses a marked caller before any route reads the request', () => {
     const source = readFileSync('src/main/mobile-server.ts', 'utf8')
     const taken = source.indexOf('const bridgeDevice = takeRelayDevice(request)')
-    const gate = source.indexOf('if (cameOverRelayLine(request) && deps.sealMarks?.()?.refuses(bridgeDevice?.deviceId ?? null))')
+    const gate = source.indexOf('if (cameOverRelayLine(request) && !passesSealedOnly(request.method, url.pathname) && deps.sealMarks?.()?.refuses(bridgeDevice?.deviceId ?? null))')
     const firstRoute = source.indexOf('const route = deps.multiInstance()')
     expect(taken).toBeGreaterThan(0)
     expect(gate).toBeGreaterThan(taken)

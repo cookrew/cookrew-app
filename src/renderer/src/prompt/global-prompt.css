@@ -1051,3 +1051,14 @@
     --cr-float-h: calc(56px + var(--cr-tray-h) + 8px + max(8px, env(safe-area-inset-bottom, 0px)));
   }
 }
+
+/* Stops a phone's video or photo compressing before it goes up (use-prompt-attach.ts). */
+.cr-prompt-note-stop {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}

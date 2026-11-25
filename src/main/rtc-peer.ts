@@ -26,7 +26,7 @@
  */
 
 import { RTCPeerConnection, type RTCDataChannel } from 'werift'
-import { createCanvasBridge, loopbackDialer, RELAY_MARKER, type BridgeDialer } from './canvas-bridge'
+import { BRIDGE_BODY_MAX, createCanvasBridge, loopbackDialer, RELAY_MARKER, type BridgeDialer } from './canvas-bridge'
 import { dialLoopbackSocket, type LoopbackSocket, type LoopbackSocketDeps } from './ws-client'
 import { createJoiner, socketPathOf, splitMessage } from '../shared/rtc-socket-chunks'
 import { RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER } from './relay-device'
@@ -34,6 +34,7 @@ import { decodeFrame, encodeFrame } from '../shared/relay-frame'
 import { createRtcOutbox, type RtcOutbox } from './rtc-outbox'
 import { isBrowserFrame } from './socket-bridge'
 import { makeRtcBind, type RtcBind, type RtcBindSigner } from '../shared/rtc-bind'
+import { ATTACH_UPLOAD_MAX, isAttachUpload } from './attachments'
 
 export const RTC_PROBE_LABEL = 'cookrew-probe'
 /**
@@ -45,6 +46,24 @@ export const RTC_PROBE_LABEL = 'cookrew-probe'
 export const RTC_BRIDGE_LABEL = 'cookrew-bridge'
 /** Raw bytes per chunk frame: 16 KB is the message size every browser takes. */
 export const RTC_CHUNK = 16 * 1024
+/**
+ * The largest ATTACHMENT the direct link takes. No registry stands in the
+ * way here, so the relay's 4 MB is not this link's to keep for an upload
+ * (2026-11-24, a 10 MB video from the owner's phone was refused
+ * `body-too-large`). Every other route keeps the relay's ceiling.
+ */
+export const RTC_BODY_MAX = ATTACH_UPLOAD_MAX
+/**
+ * Request bodies one link may hold at once while they arrive: two attachments
+ * at the largest, and a bound on what one link can make the main process hold
+ * (the attach route reads its own copy as well). A prompt box sends a phone's
+ * files one at a time (use-prompt-attach.ts), so two is a second box at once.
+ */
+export const RTC_BODY_BUDGET = 2 * RTC_BODY_MAX
+
+/** How large a body this request may have on the direct link. */
+export const rtcBodyMaxFor = (method: string, path: string): number =>
+  isAttachUpload(method, path) ? RTC_BODY_MAX : BRIDGE_BODY_MAX
 /**
  * A socket holding this many bytes not yet sent stops reading the companion
  * until it is down to the low mark. A browser card's frames never get there
@@ -194,7 +213,9 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
     const link = createCanvasBridge({
       send: (line, frame) => outbox.send(channel, 'id' in frame ? `x${frame.id}` : 'link', line),
       dial,
-      chunk: RTC_CHUNK
+      chunk: RTC_CHUNK,
+      bodyMaxFor: rtcBodyMaxFor,
+      bodyBudget: RTC_BODY_BUDGET
     })
     channel.bufferedAmountLow.subscribe(() => outbox.pump())
     const greet = (): void => {

@@ -4,8 +4,9 @@
 // any browser, with the headers only the registry may set dropped on the way.
 import { describe, expect, it } from 'vitest'
 import { RTCPeerConnection, type RTCDataChannel } from 'werift'
-import { candidatesOn, createRtcHost, RTC_BRIDGE_LABEL, RTC_CHUNK } from '../src/main/rtc-peer'
-import { loggedPath, type BridgeDialer } from '../src/main/canvas-bridge'
+import { candidatesOn, createRtcHost, RTC_BODY_BUDGET, RTC_BODY_MAX, RTC_BRIDGE_LABEL, RTC_CHUNK, rtcBodyMaxFor } from '../src/main/rtc-peer'
+import { MAX_ATTACHMENT_BYTES } from '../src/main/attachments'
+import { BRIDGE_BODY_MAX, loggedPath, type BridgeDialer } from '../src/main/canvas-bridge'
 import { decodeFrame, encodeFrame, type RelayFrame } from '../src/shared/relay-frame'
 
 interface Dialed {
@@ -103,6 +104,37 @@ describe('the bridge channel', () => {
     expect(sizes).toEqual([RTC_CHUNK, RTC_CHUNK, 40 * 1024 - 2 * RTC_CHUNK])
     await link.close()
   }, 20000)
+
+  it('takes an attachment past the relay ceiling — the Mac saves up to its own cap, so the link does too', async () => {
+    // 2026-11-24, the owner's phone: a 10 MB video went up the direct link
+    // and the Mac's bridge said `body-too-large` at the relay's 4 MB.
+    expect(RTC_BODY_MAX).toBeGreaterThanOrEqual(MAX_ATTACHMENT_BYTES)
+    const dialed: Dialed[] = []
+    const link = await connect(fakeDial(dialed, 3))
+    const size = 6 * 1024 * 1024
+    link.channel.send(encodeFrame({ t: 'open', id: 'v1', method: 'POST', path: '/api/attachments', headers: {} }))
+    const piece = Buffer.alloc(RTC_CHUNK, 'v').toString('base64')
+    for (let at = 0; at < size; at += RTC_CHUNK) {
+      link.channel.send(encodeFrame({ t: 'body', id: 'v1', data: piece, done: at + RTC_CHUNK >= size }))
+    }
+    // Both ends are werift's SCTP in this one process: on a loaded machine 6 MB takes most of a minute.
+    await until(() => link.frames.some((f) => 'id' in f && f.id === 'v1' && (f.t === 'end' || f.t === 'abort')), 75000)
+    expect(link.frames.filter((f) => f.t === 'abort')).toEqual([])
+    expect(dialed.map((d) => [d.path, d.body.length])).toEqual([['/api/attachments', size]])
+    await link.close()
+  }, 90000)
+
+  it('gives the attachment route that room and no other — the rest keep the relay ceiling', () => {
+    expect(rtcBodyMaxFor('POST', '/api/attachments?name=clip.mp4')).toBe(RTC_BODY_MAX)
+    expect(rtcBodyMaxFor('post', '/work/api/attachments?name=a.png')).toBe(RTC_BODY_MAX)
+    expect(rtcBodyMaxFor('POST', '/api/attachments')).toBe(RTC_BODY_MAX)
+    expect(rtcBodyMaxFor('PUT', '/api/attachments')).toBe(BRIDGE_BODY_MAX)
+    expect(rtcBodyMaxFor('POST', '/api/attachmentsx')).toBe(BRIDGE_BODY_MAX)
+    expect(rtcBodyMaxFor('POST', '/api/terminal/t1/input')).toBe(BRIDGE_BODY_MAX)
+    expect(rtcBodyMaxFor('POST', '/a/b/api/attachments')).toBe(BRIDGE_BODY_MAX)
+    // Two attachments at the largest at once, and not unbounded.
+    expect(RTC_BODY_BUDGET).toBe(2 * RTC_BODY_MAX)
+  })
 
   it('is kept past the TTL a probe gets — the session lives on it', async () => {
     const dialed: Dialed[] = []

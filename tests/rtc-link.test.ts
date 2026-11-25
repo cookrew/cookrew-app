@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest'
 import {
   connectRtcLink,
   RTC_BODY_CHUNK,
+  RTC_BODY_HIGH,
+  RTC_BODY_LOW,
   RtcEventSource,
   type RtcLink
 } from '../src/renderer/src/path/rtc-link'
@@ -18,6 +20,8 @@ type Answer =(frame: RelayFrame, reply: (frame: RelayFrame) => void) => void
 
 class FakeChannel extends EventTarget {
   readyState: RTCDataChannelState = 'connecting'
+  bufferedAmount = 0
+  bufferedAmountLowThreshold = 0
   readonly sent: RelayFrame[] = []
   constructor(private readonly mac: Answer) {
     super()
@@ -239,6 +243,118 @@ describe('a request', () => {
     const bodies = r.channel().sent.filter((f): f is Extract<RelayFrame, { t: 'body' }> => f.t === 'body')
     expect(bodies.map((f) => Buffer.from(f.data, 'base64').byteLength)).toEqual([RTC_BODY_CHUNK, RTC_BODY_CHUNK, 10])
     expect(bodies.map((f) => f.done === true)).toEqual([false, false, true])
+  })
+
+  it('waits for room in the channel instead of queueing a whole attachment at once', async () => {
+    // A 20 MB file is 27 MB of frames; queued in one go it is past what
+    // Chrome's data channel takes (send throws), and every ping waits behind it.
+    const { link, rig: r } = await open(answering(200, []))
+    const channel = r.channel()
+    expect(channel.bufferedAmountLowThreshold).toBe(RTC_BODY_LOW)
+    channel.bufferedAmount = RTC_BODY_HIGH + 1
+    const body = new Uint8Array(RTC_BODY_CHUNK * 3).fill(66)
+    const answered = link.request({ method: 'POST', path: '/api/attachments', headers: {}, body })
+    const bodies = (): Extract<RelayFrame, { t: 'body' }>[] =>
+      channel.sent.filter((f): f is Extract<RelayFrame, { t: 'body' }> => f.t === 'body')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(channel.sent.map((f) => f.t)).toEqual(['open'])
+    channel.bufferedAmount = 0
+    channel.dispatchEvent(new Event('bufferedamountlow'))
+    expect((await answered).status).toBe(200)
+    expect(bodies().map((f) => f.done === true)).toEqual([false, false, true])
+  })
+
+  it('goes on at the low-water event, without waiting for the poll', async () => {
+    const { link, rig: r } = await open(answering(200, []))
+    const channel = r.channel()
+    channel.bufferedAmount = RTC_BODY_HIGH + 1
+    const answered = link.request({ method: 'POST', path: '/api/attachments', headers: {}, body: new Uint8Array(10) })
+    channel.bufferedAmount = 0
+    channel.dispatchEvent(new Event('bufferedamountlow'))
+    // Well inside the 100 ms poll: only the event can have moved it.
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(channel.sent.map((f) => f.t)).toEqual(['open', 'body'])
+    await answered
+  })
+
+  it('goes on by the poll when a browser never fires the low-water event', async () => {
+    const { link, rig: r } = await open(answering(200, []))
+    const channel = r.channel()
+    channel.bufferedAmount = RTC_BODY_HIGH + 1
+    const answered = link.request({ method: 'POST', path: '/api/attachments', headers: {}, body: new Uint8Array(10) })
+    channel.bufferedAmount = 0
+    expect((await answered).status).toBe(200)
+    expect(channel.sent.map((f) => f.t)).toEqual(['open', 'body'])
+  })
+
+  it('stops sending an upload the caller gave up on while it waited, on a link still open', async () => {
+    const { link, rig: r } = await open(answering(200, []))
+    const channel = r.channel()
+    channel.bufferedAmount = RTC_BODY_HIGH + 1
+    const abort = new AbortController()
+    const answered = link.request({
+      method: 'POST',
+      path: '/api/attachments',
+      headers: {},
+      body: new Uint8Array(RTC_BODY_CHUNK * 2),
+      signal: abort.signal
+    })
+    abort.abort()
+    await expect(answered).rejects.toThrow()
+    channel.bufferedAmount = 0
+    channel.dispatchEvent(new Event('bufferedamountlow'))
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(link.isOpen()).toBe(true)
+    expect(channel.sent.map((f) => f.t)).toEqual(['open', 'end'])
+  })
+
+  it('stops sending when the Mac gives up mid-body, and says why', async () => {
+    const { link, rig: r } = await open((frame, reply) => {
+      if (frame.t === 'body') reply({ t: 'abort', id: frame.id, reason: 'body-too-large' })
+    })
+    const channel = r.channel()
+    const answered = link.request({
+      method: 'POST',
+      path: '/api/attachments',
+      headers: {},
+      body: new Uint8Array(RTC_BODY_CHUNK * 4)
+    })
+    await expect(answered).rejects.toThrow(/body-too-large/)
+    expect(channel.sent.map((f) => f.t)).toEqual(['open', 'body'])
+  })
+
+  it('tells the Mac to let go of a body it could not finish sending', async () => {
+    const { link, rig: r } = await open(answering(200, []))
+    const channel = r.channel()
+    const send = channel.send.bind(channel)
+    let bodies = 0
+    channel.send = (data: string): void => {
+      if (data.includes('"t":"body"') && (bodies += 1) === 2) throw new Error('send queue is full')
+      send(data)
+    }
+    const answered = link.request({
+      method: 'POST',
+      path: '/api/attachments',
+      headers: {},
+      body: new Uint8Array(RTC_BODY_CHUNK * 3)
+    })
+    await expect(answered).rejects.toThrow(/send queue is full/)
+    expect(channel.sent.map((f) => f.t)).toEqual(['open', 'body', 'end'])
+  })
+
+  it('fails an upload still waiting for room when the link closes, and sends no more of it', async () => {
+    const { link, rig: r } = await open(answering(200, []))
+    const channel = r.channel()
+    channel.bufferedAmount = RTC_BODY_HIGH + 1
+    const answered = link.request({
+      method: 'POST',
+      path: '/api/attachments',
+      headers: {},
+      body: new Uint8Array(RTC_BODY_CHUNK * 2)
+    })
+    link.close('test')
+    await expect(answered).rejects.toThrow(/closed/)
+    expect(channel.sent.map((f) => f.t)).toEqual(['open'])
   })
 
   it('sends one empty, finished body for a request with none', async () => {

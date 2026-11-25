@@ -111,6 +111,26 @@ struct StoreTests {
     #expect(!store.signedOut)
   }
 
+  @Test("a Mac that is sealed only says so, and once it lets the watch in the word goes")
+  func sealedOnly() async {
+    let (store, api, _, _) = await harness([[card("a", .idle)]])
+    api.failure = .sealedOnly
+    await store.refresh()
+    #expect(store.sealedOnly)
+    #expect(store.link == .lost)
+    #expect(!store.unpaired)
+    api.failure = nil
+    await store.refresh()
+    #expect(!store.sealedOnly)
+    #expect(store.link == .live)
+  }
+
+  @Test("the words say what to do: confirm on the Mac when the watch holds its key, else pair again")
+  func sealedOnlyWordsSay() {
+    #expect(sealedOnlyWords(seals: true, machine: "Mac").contains("Confirm this watch's six words"))
+    #expect(sealedOnlyWords(seals: false, machine: "Mac").contains("Pair this watch again"))
+  }
+
   @Test("a first read that fails says the Mac is offline, and the read that works buzzes nothing")
   func firstReadFails() async {
     let api = FakeAPI()

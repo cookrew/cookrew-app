@@ -83,6 +83,16 @@ public func eventsElsewhere(_ old: [WorkspaceTile], _ new: [WorkspaceTile], insi
   }
 }
 
+/**
+ * What the wrist says when the Mac is sealed only and this watch is not sealed with it yet: a watch that
+ * holds the Mac's key waits for the owner to confirm the words there; one paired with none must pair again.
+ */
+public func sealedOnlyWords(seals: Bool, machine: String) -> String {
+  seals
+    ? "The \(machine) takes sealed connections only. Confirm this watch's six words there: ⋯ → Apple Watch."
+    : "The \(machine) takes sealed connections only. Pair this watch again to seal it."
+}
+
 /** The new agent's box's draft key: the bar's ＋ (HitlBar.swift), on every stop. */
 public let newAgentPage = "__new_agent__"
 
@@ -113,6 +123,8 @@ public final class WatchStore {
   public private(set) var unpaired = false
   /** The relay refused the session and no road answered: a new code is what brings it back. */
   public private(set) var signedOut = false
+  /** The Mac is sealed only and this watch is not sealed with it yet (WatchError.sealedOnly). */
+  public private(set) var sealedOnly = false
 
   @ObservationIgnored private let api: WatchAPI
   @ObservationIgnored private let now: () -> Date
@@ -207,8 +219,13 @@ public final class WatchStore {
         adopt(reply, readFor: asked)
       }
       if signedOut { signedOut = false }
+      if sealedOnly { sealedOnly = false }
     } catch WatchError.unpaired {
       unpaired = true
+    } catch WatchError.sealedOnly {
+      guard current else { return }
+      if !sealedOnly { sealedOnly = true }
+      link = .lost
     } catch WatchError.signedOut {
       guard current else { return }
       signedOut = true
@@ -278,7 +295,7 @@ public final class WatchStore {
 
   private func refused(_ error: Error) {
     feel(.refused)
-    if case WatchError.refused(let words) = error { notice = words } else if case WatchError.unpaired = error { unpaired = true } else { notice = "The \(machine) is not answering" }
+    if case WatchError.refused(let words) = error { notice = words } else if case WatchError.unpaired = error { unpaired = true } else if case WatchError.sealedOnly = error { notice = sealedOnlyWords(seals: api.seals, machine: machine) } else { notice = "The \(machine) is not answering" }
   }
 
   /** The box's words, where boxTarget says they go. The draft comes back if the Mac will not take them. */

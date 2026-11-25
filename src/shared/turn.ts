@@ -288,9 +288,11 @@ export const RECOVERED_PROMPT_LABEL = '(recovered turn)'
 /**
  * A raw typed slash command (`/rewind`, `/clear`, `/model opus`) — a UI
  * action, not a conversational prompt. The session file records these as
- * commands (isNoisePrompt filters them), so a scrape turn must not mint a
- * checkpoint for one either, or the checkpoint list drifts from the session
- * 1:1. Excludes filesystem paths (`/tmp/x` has a second slash), uppercase
+ * commands (isNoisePrompt filters them; the chat shows them as command lines),
+ * so a scrape turn must not mint a checkpoint for one either, or the checkpoint
+ * list drifts from the session 1:1. A command that asks the model for a turn
+ * (/goal <objective>, a skill) IS a checkpoint in the file, and the reconcile
+ * adds it. Excludes filesystem paths (`/tmp/x` has a second slash), uppercase
  * roots (`/Users`) and mid-line slashes. A false positive on a real prompt
  * that opens `/word …` is self-corrected on reconcile — the session keeps it
  * (with a uuid) and it is re-added.

@@ -34,7 +34,8 @@ import { bodiless } from './http-compress'
  * what makes that name believable, and relay-device.ts is the other half.
  *
  * WHAT IT REFUSES: more than `maxOpen` exchanges at once, a request body over
- * the registry's own ceiling, and nothing else. Both refusals are `abort`
+ * its ceiling (the registry's own, unless the line is not the relay's), and
+ * nothing else. Both refusals are `abort`
  * frames rather than dropped lines — a caller must learn its exchange is over.
  */
 
@@ -54,7 +55,7 @@ export const RELAY_MARKER = 'x-cookrew-relay'
  */
 export const BRIDGE_CHUNK = 384 * 1024
 
-/** The registry will not send more than this, and neither will this accept it. */
+/** The registry will not send more than this, and neither will this accept it (unless told otherwise: `bodyMaxFor`). */
 export const BRIDGE_BODY_MAX = 4 * 1024 * 1024
 
 /** Exchanges in flight at once. Beyond it, `abort{reason:'busy'}`. */
@@ -102,6 +103,19 @@ export interface CanvasBridgeDeps {
   readonly send: (line: string, frame: RelayFrame) => void
   readonly dial?: BridgeDialer
   readonly maxOpen?: number
+  /**
+   * The largest body one request may have, in raw bytes, by its method and
+   * path. Absent, BRIDGE_BODY_MAX for every request: the relay's line carries
+   * no more (the registry refuses it first). The direct link has no registry
+   * in the way and takes a whole attachment, on the attachment route only.
+   */
+  readonly bodyMaxFor?: (method: string, path: string) => number
+  /**
+   * Raw bytes of request bodies held at once, across every exchange still
+   * arriving. Past it, `abort{reason:'busy'}`. Absent, no budget beyond
+   * `maxOpen` × the largest body.
+   */
+  readonly bodyBudget?: number
   readonly log?: (message: string) => void
   /**
    * Raw bytes per `chunk` frame. The relay's line takes 384 KB; a WebRTC data
@@ -201,6 +215,16 @@ export const loopbackDialer =
     }
   }
 
+/** A body as it arrives, newest first. Immutable, and O(1) to add to. */
+type BodyPieces = { readonly last: Buffer; readonly before: BodyPieces } | null
+
+/** The pieces in the order they arrived. */
+const inOrder = (pieces: BodyPieces): Buffer[] => {
+  const out: Buffer[] = []
+  for (let at = pieces; at !== null; at = at.before) out.push(at.last)
+  return out.reverse()
+}
+
 /** Every exchange this desktop is answering right now. */
 interface Exchange {
   readonly method: string
@@ -208,18 +232,29 @@ interface Exchange {
   readonly headers: Record<string, string>
   /** The reserved seal, carried and never read. Absent when nobody sealed. */
   readonly sealed?: string
-  readonly body: readonly Buffer[]
+  /** The body so far, newest piece first: adding one costs the same at the 6,400th piece as at the first. */
+  readonly body: BodyPieces
   readonly bytes: number
+  /** The largest body this one may have (`bodyMaxFor`). */
+  readonly max: number
 }
 
 export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
   const dial = deps.dial ?? loopbackDialer(8639)
   const maxOpen = deps.maxOpen ?? BRIDGE_MAX_OPEN
+  const bodyMaxFor = deps.bodyMaxFor ?? ((): number => BRIDGE_BODY_MAX)
+  const bodyBudget = deps.bodyBudget ?? Number.POSITIVE_INFINITY
   const chunkBytes = deps.chunk ?? BRIDGE_CHUNK
   const log = deps.log ?? ((): void => undefined)
 
   /** Requests whose body is still arriving. */
   const arriving = new Map<string, Exchange>()
+  /** Raw body bytes held across every exchange still arriving. */
+  const holding = (): number => {
+    let total = 0
+    for (const held of arriving.values()) total += held.bytes
+    return total
+  }
   /** Local calls in flight, so the caller hanging up stops the desktop working. */
   const calls = new Map<string, BridgeCall>()
 
@@ -316,7 +351,8 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
     // books; a call that is over is not in flight.
     call = dialed
     if (!ended) calls.set(id, dialed)
-    if (exchange.bytes > 0) dialed.write(Buffer.concat(exchange.body as Buffer[]))
+    // Piece by piece: a 100 MB attachment joined first would be held twice.
+    if (exchange.bytes > 0) for (const piece of inOrder(exchange.body)) dialed.write(piece)
     dialed.end()
     if (discard) dialed.destroy()
   }
@@ -347,8 +383,9 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
             path: frame.path,
             headers: frame.headers,
             ...(frame.sealed === undefined ? {} : { sealed: frame.sealed }),
-            body: [],
-            bytes: 0
+            body: null,
+            bytes: 0,
+            max: bodyMaxFor(frame.method, frame.path)
           })
           return
         }
@@ -359,11 +396,16 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
           if (!held) return
           const bytes = Buffer.from(frame.data, 'base64')
           const size = held.bytes + bytes.byteLength
-          if (size > BRIDGE_BODY_MAX) {
+          if (size > held.max) {
             abort(frame.id, 'body-too-large')
             return
           }
-          const next: Exchange = { ...held, body: [...held.body, bytes], bytes: size }
+          if (holding() + bytes.byteLength > bodyBudget) {
+            log(`canvas bridge: refused ${loggedPath(held.path)}, ${bodyBudget} bytes of bodies already held`)
+            abort(frame.id, 'busy')
+            return
+          }
+          const next: Exchange = { ...held, body: { last: bytes, before: held.body }, bytes: size }
           if (frame.done !== true) {
             arriving.set(frame.id, next)
             return

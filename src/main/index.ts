@@ -10234,6 +10234,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     'watch:state',
     ownerOnly(() => ({
       paired: watchPairing.paired,
+      deviceId: watchPairing.accountDeviceId,
       pending: watchPairing.pending(),
       account: watchHost.accountKind(),
       sealed: true,

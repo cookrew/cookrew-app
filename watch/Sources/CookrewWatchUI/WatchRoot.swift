@@ -33,6 +33,7 @@ enum PairStage: Equatable {
 /** What stopped the pairing, or ended it. */
 enum PairNotice: Equatable {
   case ended
+  case sealedOnly
   case slow
   case macAway
   case noNetwork
@@ -298,6 +299,7 @@ final class WatchApp {
       stage = .pad
       padError = "Wrong or expired code"
     case .ended: stage = .notice(.ended)
+    case .sealedOnly: stage = .notice(.sealedOnly)
     case .newDevice:
       // The code is spent, so this one cannot try again; the next goes in as a new device.
       vault.newDevice()
@@ -620,6 +622,8 @@ private struct PairingView: View {
     switch notice {
     case .ended:
       NoticeView(title: "That code ended", words: "A code lasts ten minutes. Get a new one from ⋯ → Apple Watch.", action: "Enter a new code", status: .waiting, onAction: app.enterCode)
+    case .sealedOnly:
+      NoticeView(title: "Sealed only", words: "Your computer refuses unencrypted relay traffic and can't take this watch yet. Update Cookrew on it, or turn off ⋯ → Relay: sealed only while you pair. The code still works.", action: "Try again", onAction: { Task { await app.submit() } }, onStartOver: app.home)
     case .slow:
       NoticeView(title: "Too many tries", words: "Wait a minute, then try again.", action: "Back", onAction: app.enterCode)
     case .macAway:
@@ -655,6 +659,13 @@ struct LinkChip: View {
       }
       .buttonStyle(.plain)
       .padding(.bottom, 48)
+    } else if store.sealedOnly {
+      // The Mac is there; it takes this watch only sealed (Store · sealedOnly).
+      if store.client.seals {
+        chip("CONFIRM WORDS ON \(store.machine.uppercased())")
+      } else {
+        Button(action: onSignIn) { chip("PAIR AGAIN TO SEAL") }.buttonStyle(.plain)
+      }
     } else if store.link == .lost {
       Text("\(store.machine.uppercased()) OFFLINE")
         .font(InkType.word(9.5))
@@ -665,6 +676,19 @@ struct LinkChip: View {
         .background(Capsule().fill(ink.wait))
         .padding(.bottom, 48)
     }
+  }
+
+  private func chip(_ words: String) -> some View {
+    Text(words)
+      .font(InkType.word(9.5))
+      .tracking(1)
+      .foregroundStyle(ink.onSeal)
+      .lineLimit(1)
+      .minimumScaleFactor(0.7)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 3)
+      .background(Capsule().fill(ink.wait))
+      .padding(.bottom, 48)
   }
 }
 

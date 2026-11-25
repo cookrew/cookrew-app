@@ -1936,11 +1936,22 @@
 /* A screenshot on its way into the reply (prompt/prompt-attach.ts), or why
    it did not go: in the same place as "sent ✓", held while it saves. */
 .zv-attach-note {
-  max-width: 150px;
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   animation: none;
+}
+
+/* Stops a phone's video or photo compressing before it goes up (use-prompt-attach.ts). */
+.zv-attach-stop {
+  margin-left: 4px;
+  padding: 0 3px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 
 .zv-attach-note.failed {

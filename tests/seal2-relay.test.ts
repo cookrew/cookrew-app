@@ -190,6 +190,21 @@ describe('code mode (phone and console) through the real relay', () => {
     expect(seen.at(-1)?.body).toBe(`${upload.length} bytes`)
   })
 
+  it('carries an attachment past the relay ceiling, sealed — every other route keeps it', async () => {
+    // 2026-11-24, the owner's phone on 0.6.38: a video went up sealed and the
+    // Mac said `body-too-large` at 4 MB. The relay carries a sealed body as
+    // many small POSTs; only the attach route takes a whole attachment.
+    const link = await phone()
+    const video = new Uint8Array(10 * 1024 * 1024).fill(0x76)
+    const posted = await sealedFetch(link.connection, { method: 'POST', path: '/api/attachments?name=clip.mp4', headers: { authorization: BEARER }, body: video })
+    expect(text(await readBody(posted.body))).toBe(REPLY)
+    expect(seen.at(-1)).toMatchObject({ path: '/api/attachments?name=clip.mp4', body: `${video.length} bytes` })
+    const other = new Uint8Array(5 * 1024 * 1024).fill(0x61)
+    await expect(
+      sealedFetch(link.connection, { method: 'POST', path: '/api/upload', headers: { authorization: BEARER }, body: other }).then((answer) => readBody(answer.body))
+    ).rejects.toThrow(/body-too-large/)
+  }, 60_000)
+
   it('runs more exchanges at once than a relay line carries', async () => {
     const link = await phone()
     const many = EXCHANGES_PER_LINK * 2
