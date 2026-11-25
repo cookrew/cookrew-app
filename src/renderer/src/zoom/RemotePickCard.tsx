@@ -17,9 +17,10 @@ import './devices-agents.css'
  * the agent the keys stand on pops its card for a quick reply, across devices).
  * The card that machine's own stage draws (RemoteCardView: its latest reply
  * whole, the menu it waits on, its browsers and notes), read for as long as it
- * is up, and under it a reply box that sends as the bar's box does inside that
- * machine (prompt/RemotePrompt.tsx): the words to the agent, or into the
- * menu's row for words; with a menu that has none, the rows on the card answer.
+ * is up, and under it a reply box that sends as that machine's own box does:
+ * the words to the agent, or into the menu's row for words; with a menu that
+ * has none, the rows on the card answer. Its full view is that machine's own
+ * (MachineGuestView.tsx).
  * The words are that machine's draft for this agent, kept when the card goes.
  */
 

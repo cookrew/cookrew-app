@@ -41,37 +41,27 @@ describe('the agent step', () => {
 })
 
 // INSIDE ANOTHER MACHINE THE TITLE IS ITS (owner 2026-11-12): Solis-Core where this Mac's name was,
-// its workspace where this Mac's was, and no amber line of its own over the stage.
+// then its workspace and agent as that machine's own app names them (owner 2026-11-25: the guest,
+// drawn as the console draws it, says; this window draws the line).
 describe('the route inside another machine', () => {
-  it('names that machine, its workspace and its agent; outside, nothing', async () => {
+  const machine = { id: '0f8c7b1e-1234-4abc-9def-0123456789ab', name: 'Solis-Core', os: 'linux' }
+  const at = (crumbs: { workspace: string | null; agent: string | null } | null) => ({ machine, entry: { workspace: null, agent: null, item: null, side: 'agents' as const }, crumbs, visit: 1, left: null })
+
+  it('names that machine, then its workspace and agent once the guest has said; outside, nothing', async () => {
     const { remoteRoute } = await import('../src/renderer/src/HeaderRoute')
-    expect(remoteRoute({ machine: null, workspace: null, agent: null, item: null, side: 'agents' })).toBeNull()
-    const machine = { id: 'm', name: 'Solis-Core', os: 'linux' }
-    expect(remoteRoute({ machine, workspace: null, agent: null, item: null, side: 'agents' })).toEqual({ device: 'Solis-Core', workspace: null, agent: null, item: null })
-    expect(remoteRoute({ machine, workspace: { id: 'w', name: 'My Workspace' }, agent: { id: 'a', name: 'Herdr Env' }, item: null, side: 'agents' })).toEqual({ device: 'Solis-Core', workspace: 'My Workspace', agent: 'Herdr Env', item: null })
-    // A browser open on that agent's card is the last step, as the stage's own line named it.
-    const deep = { machine, workspace: { id: 'w', name: 'My Workspace' }, agent: { id: 'a', name: 'Herdr Env' }, item: { id: 'b', title: 'Grafana', kind: 'browser' as const }, side: 'agents' as const }
-    expect(remoteRoute(deep)).toEqual({ device: 'Solis-Core', workspace: 'My Workspace', agent: 'Herdr Env', item: 'Grafana' })
+    expect(remoteRoute({ ...at(null), machine: null })).toBeNull()
+    expect(remoteRoute(at(null))).toEqual({ device: 'Solis-Core', workspace: null, agent: null })
+    expect(remoteRoute(at({ workspace: 'My Workspace', agent: 'Herdr Env' }))).toEqual({ device: 'Solis-Core', workspace: 'My Workspace', agent: 'Herdr Env' })
   })
 
-  it('its device step goes back to its workspaces, and from them out to every device: never a dead button', async () => {
-    const { remoteDeviceStep, remoteRoute } = await import('../src/renderer/src/HeaderRoute')
-    const { remotePlace } = await import('../src/renderer/src/zoom/remote-machine-store')
-    const step = (): void => {
-      const inside = remoteRoute(remotePlace.get())
-      if (!inside) throw new Error('not inside a machine')
-      remoteDeviceStep(inside)()
-    }
-    remotePlace.enter({ id: 'm', name: 'Solis-Core', os: 'linux' })
-    remotePlace.workspace({ id: 'w', name: 'My Workspace' })
-    remotePlace.agent({ id: 'a', name: 'Herdr Env' })
-    step()
-    expect(remotePlace.get()).toMatchObject({ machine: { id: 'm' }, workspace: null, agent: null })
-    step()
-    expect(remotePlace.get().machine).toBeNull()
+  it('its steps are the guest’s own, sent on to it: never a dead button', () => {
+    const source = readFileSync('src/renderer/src/HeaderRoute.tsx', 'utf8')
+    expect(source).toContain("remotePlace.command({ kind: 'device' })")
+    expect(source).toContain("remotePlace.command({ kind: 'workspace' })")
   })
 
-  it('the stage draws no line of its own saying whose it is: the title says it', () => {
-    expect(readFileSync('src/renderer/src/zoom/RemoteMachineView.tsx', 'utf8')).not.toContain('rm-where')
+  it('a guest says what its own line would, and the window draws it (guest/guest-bridge.ts)', () => {
+    expect(readFileSync('src/renderer/src/HeaderRoute.tsx', 'utf8')).toContain('reportGuestRoute(workspace.name, agent)')
+    expect(readFileSync('src/renderer/src/guest/guest.css', 'utf8')).toMatch(/body\.cr-guest \.cr-header\s*\{\s*display: none/)
   })
 })

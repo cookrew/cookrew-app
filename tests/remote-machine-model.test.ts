@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { artifactsOf, crumbsOf, menuCall, parseRemoteCards, remoteAgentView, replyCall, sendRefusal, stopCall, tileView } from '../src/renderer/src/zoom/remote-machine'
+import { menuCall, parseRemoteCards, remoteAgentView, replyCall, sendRefusal, stopCall } from '../src/renderer/src/zoom/remote-machine'
 
 /**
  * ANOTHER MACHINE INSIDE THIS ONE'S ZOOM VIEW (owner 2026-11-10, design B): the
@@ -88,28 +88,6 @@ describe('remoteAgentView', () => {
   })
 })
 
-describe('tileView', () => {
-  it('uses the remote workspace avatar when the machine provides it', () => {
-    const read = parseRemoteCards(answer({ workspaces: [{ id: 'w-1', name: 'Box Lab', presets: ['Codex'], artifacts: [{ id: 'b-1', kind: 'browser', title: 'Box', host: 'example.com', tint: '#456', initial: 'B' }] }] }))!
-    expect(tileView(read.workspaces[0])).toMatchObject({ presets: ['Codex'], browsers: 1, notes: 0, deck: [{ id: 'b-1', owners: [] }] })
-  })
-  it('a workspace tile in the zoom’s own form, faces for its agents', () => {
-    const tile = parseRemoteCards(answer())!.workspaces[0]!
-    expect(tileView(tile)).toMatchObject({ id: 'w-1', name: 'Box Lab', waiting: true, waitingCount: 1, browsers: null, notes: null, deck: [] })
-    expect(tileView(tile).presets).toHaveLength(3)
-  })
-})
-
-describe('crumbsOf', () => {
-  it('always says whose it is', () => {
-    expect(crumbsOf({ name: 'Solis-Core' }, null, null, null).map((c) => c.label)).toEqual(['Devices', 'Solis-Core'])
-    const deep = crumbsOf({ name: 'Solis-Core' }, { id: 'w-1', name: 'Box Lab' }, { id: 't-1', name: 'Herdr Env' }, { id: 'b-1', title: 'Box' })
-    expect(deep.map((c) => c.label)).toEqual(['Devices', 'Solis-Core', 'Box Lab', 'Herdr Env', 'Box'])
-    expect(deep.map((c) => c.depth)).toEqual([0, 1, 2, 3, 4])
-    expect(deep.filter((c) => c.remote).map((c) => c.label)).toEqual(['Solis-Core', 'Box Lab', 'Herdr Env', 'Box'])
-  })
-})
-
 describe('sendRefusal', () => {
   it('says why words did not go, in the machine’s name; null when they went', () => {
     expect(sendRefusal({ status: 200, body: { ok: true } }, 'Solis-Core')).toBeNull()
@@ -140,15 +118,5 @@ describe('what a card sends', () => {
     const shown = menu([{ key: '1', label: 'Yes', detail: null }])
     expect(menuCall(shown, shown.choice!, { kind: 'row', index: 0 })).toEqual({ route: 'api/terminal/t-1/menu', body: { menu: 'm-1', brief: '', act: { kind: 'row', index: 0 } } })
     expect(stopCall({ id: 'a/b' })).toEqual({ route: 'api/watch/card/a%2Fb/stop' })
-  })
-})
-
-// ARTIFACTS ON THE BAR, INSIDE ANOTHER MACHINE (owner 2026-11-11): a workspace's browsers and notes,
-// each once, with the agent it is opened under.
-describe('artifactsOf', () => {
-  it('each item once, the first agent that wears it, in crew order', () => {
-    const read = parseRemoteCards(answer({ cards: [card(), card({ id: 't-2', name: 'Box Test', items: [{ id: 'b-1', kind: 'browser', title: 'Box', host: 'h', tint: '#456', initial: 'B' }, { id: 'n-1', kind: 'note', title: 'plan' }] })] }))!
-    expect(artifactsOf(read.cards).map((a) => [a.item.id, a.card.id])).toEqual([['b-1', 't-1'], ['n-1', 't-2']])
-    expect(artifactsOf([])).toEqual([])
   })
 })

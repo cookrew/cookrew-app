@@ -64,7 +64,8 @@ describe('ViewTools', () => {
 
   it('stands at every stop of this machine, and the agent’s full view carries the same button', () => {
     const view = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
-    expect(view).toContain('{!zoom.full && inside === null && <ViewTools perRow={perRowAt} tileSize={tileSizeAt} />}')
+    // Inside another machine its own app has its own (MachineGuestView.tsx).
+    expect(view).toContain('{!zoom.full && !inside && <ViewTools perRow={perRowAt} tileSize={tileSizeAt} />}')
     expect(view).not.toContain('PerRowPill')
     const stage = readFileSync('src/renderer/src/stage/StageView.tsx', 'utf8')
     expect(stage).toMatch(/<span className="zv-fv-tools">[\s\S]*?<RemoteDeskButton \/>\s*<\/span>/)

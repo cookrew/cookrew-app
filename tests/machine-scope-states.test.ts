@@ -60,8 +60,6 @@ const REGISTERED: Record<string, readonly string[]> = {
   // What the HITL bar read of the account's other machines (phase 6): through the machine in scope's keys.
   'zoom/remote-hitl.ts': ['hitl machines'],
   'zoom/remote-machine-store.ts': ['inside another machine'],
-  // A face of another machine opened from the bar, waiting for that machine's read (phase 6).
-  'zoom/remote-open.ts': ['remote open'],
   'zoom/simple-fix.ts': ['simple fixes'],
   'zoom/use-zoom-fleet.ts': ['zoom fleet'],
   'zoom/zoom-store.ts': ['zoom focus']
@@ -74,7 +72,7 @@ const REGISTERED: Record<string, readonly string[]> = {
  * stand, it gets the ones it always had, not ones made anew for a machine
  * that is being left.
  */
-const STOPPED_FIRST = ['data plane', 'hitl artifacts', 'hitl machines', 'machine api', 'machine gauges', 'machine session', 'remote open', 'reply voice', 'rtc link', 'zoom fleet']
+const STOPPED_FIRST = ['data plane', 'hitl artifacts', 'hitl machines', 'machine api', 'machine gauges', 'machine session', 'reply voice', 'rtc link', 'zoom fleet']
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
@@ -294,14 +292,6 @@ describe('entering another machine lets go of', () => {
     scope.enterMachine(B)
     expect(hitl.remoteArtifactFeedNow()).not.toBe(before)
     expect(before.get().size).toBe(0)
-  })
-
-  it('a face of another machine still waiting to be opened', async () => {
-    const open = await import('../src/renderer/src/zoom/remote-open')
-    open.remoteOpen.request({ machineId: B, workspaceId: 'w1', kind: 'agent', id: 'a', name: 'a', at: 0 })
-    expect(open.remoteOpen.pending()).not.toBeNull()
-    scope.enterMachine(B)
-    expect(open.remoteOpen.pending()).toBeNull()
   })
 
   it('a fix in progress, the presets asked for and the pictures read', async () => {

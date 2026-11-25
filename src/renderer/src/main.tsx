@@ -1,3 +1,9 @@
+// FIRST, before anything else on the page is evaluated: in a guest machine's
+// <webview> this is what makes the page a console page with that one machine in
+// scope (guest/guest-wiring.ts), as console-wiring.ts does for the console. Every
+// module after it that asks which kind of page it is gets that answer. Anywhere
+// else it makes nothing.
+import { guestParts } from './guest/guest-wiring'
 import React, { Suspense, lazy } from 'react'
 import ReactDOM from 'react-dom/client'
 import './styles.css'
@@ -7,30 +13,39 @@ import './zoom/ink-theme.css'
 import './zoom/root-theme.css'
 // Last: the phone's one sheet of type sizes (it outranks the sheets above by its selectors, not its place).
 import './phone-type.css'
+// A guest machine's own sheet: only its title line goes (its window draws that).
+import './guest/guest.css'
 import { authStore } from './auth-gate'
 import { startPhoneBeacon } from './phone-beacon'
 import { startMachineSession } from './machine-session'
 import { isRemoteMode } from './api'
 import { reloadForNewBuildNow } from './crash-report'
 import { scheduleWebglWarmup } from './gpu-warmup'
-import { applyColorScheme, applyTheme, storedTheme } from './color-scheme'
+import { applyColorScheme, applyTheme, storedTheme, themeFrom } from './color-scheme'
 import { watchUserInput } from './user-input'
 import { startInstalledCover } from './fullscreen'
 
+/** A browser's page: a phone's, or the console's. Not the desktop's window, nor a guest machine inside it. */
+const browserPage = isRemoteMode() && guestParts === null
+
 // Light or dark before the first paint: a browser follows the system, the
-// desktop app stays paper (color-scheme.ts).
-applyColorScheme(isRemoteMode())
-if (isRemoteMode()) startInstalledCover()
-// The theme too (ink or root), so a root page never paints one paper frame.
-applyTheme(storedTheme())
+// desktop app stays paper (color-scheme.ts), and so does a guest machine in it.
+applyColorScheme(browserPage)
+if (browserPage) startInstalledCover()
+// The theme too (ink or root), so a root page never paints one paper frame. A
+// guest wears the one its window wore when it opened it.
+applyTheme(guestParts?.theme ? themeFrom(guestParts.theme) : storedTheme())
 // The ink theme before the first paint: a passive effect in App would flash the
 // old tokens for a frame on every boot.
 document.body.classList.add('cr-ink')
+// A guest's title line is its window's (HeaderRoute.tsx · the inside route): guest/guest.css.
+if (guestParts !== null) document.body.classList.add('cr-guest')
 // THE CANVAS APP IS A CHUNK OF ITS OWN (it was most of the 1.7 MB index). Asked
 // for on this very line, before anything below runs, so its fetch overlaps the
-// rest of the boot.
-const appModule = import('./App')
-const App = lazy(() => appModule)
+// rest of the boot. A guest asks for the app inside its machine's view.
+const appModule = guestParts === null ? import('./App') : null
+const App = lazy(() => appModule ?? import('./App'))
+const GuestMachine = lazy(() => import('./guest/GuestMachine'))
 
 // PAIRING, FIRST — before anything on this page can make a request.
 //
@@ -45,14 +60,17 @@ authStore()
 
 // The phone's black box: self-reported vitals every 3 s, because no Apple
 // inspection channel survives contact with this device (see phone-beacon.ts).
-startPhoneBeacon()
+// A guest machine is no phone: its desktop reports for itself.
+if (guestParts === null) startPhoneBeacon()
 
 // For as long as one machine is in scope (machine-session.ts): a companion on
 // the relay or the tailnet keeps looking for the Mac on the nearer network and
 // moves the session there without asking, and a resident Home Screen app
 // reloads itself when the Mac serves another build, at the next switch away
-// or back — never under a finger. A no-op on the desktop.
-startMachineSession()
+// or back — never under a finger. A no-op on the desktop. NOT in a guest
+// machine: its every call goes through its window's door (main/machine-guest.ts),
+// which the owner's lock closes; a direct link would go round it.
+if (guestParts === null) startMachineSession()
 
 // Before anything can be clicked: a terminal opened by a click takes its pane's size (pane-size.ts · openedAt).
 watchUserInput()
@@ -60,7 +78,7 @@ watchUserInput()
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <Suspense fallback={null}>
-      <App />
+      {guestParts === null ? <App /> : <GuestMachine parts={guestParts} />}
     </Suspense>
   </React.StrictMode>
 )

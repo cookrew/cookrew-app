@@ -144,6 +144,7 @@ import { FirstRunHints } from './first-run/FirstRunHints'
 import { FirstRunScreens } from './first-run/FirstRunScreens'
 import { useZoomFull } from './zoom/zoom-store'
 import { zoomStore } from './zoom/zoom-store'
+import { remotePlace } from './zoom/remote-machine-store'
 import { importTeam, makeAgent, makeItem, type Made } from './zoom/make-card'
 import { attachView } from './attach-view'
 import { installStatusChime } from './chime-sound'
@@ -1494,6 +1495,11 @@ function Canvas(): React.JSX.Element {
   //     drop back to the canvas
   //   • otherwise → close the selected card(s)
   cmdWRef.current = () => {
+    // Inside another machine (zoom/MachineGuestView.tsx) the topmost thing is that machine: ⌘W leaves it.
+    if (remotePlace.get().machine) {
+      remotePlace.leave()
+      return
+    }
     const zoomedId = zoomedNodeIdRef.current
     if (zoomedId) {
       const browser = browsers.find((p) => p.id === zoomedId)

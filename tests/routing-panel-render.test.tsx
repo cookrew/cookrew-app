@@ -263,9 +263,10 @@ describe('the setup card and the entry', () => {
     const naming = (word: RegExp): string[] => files.filter((file) => word.test(read(file)))
     expect(naming(/shouldAutoOpen|cr-routing-seen/)).toEqual([])
     expect(naming(/<RoutingPanel\b/)).toEqual(['renderer/src/App.tsx'])
-    // The app is mounted in two places and no third: the app's own entry, and the console's
-    // machine level (0.6.0), which mounts the same App for the machine in scope.
-    expect(naming(/<App\b/).sort()).toEqual(['renderer/src/console/ConsoleMachine.tsx', 'renderer/src/main.tsx'])
+    // The app is mounted in three places and no fourth: the app's own entry, the console's machine
+    // level (0.6.0), and a guest machine in the desktop's window (2026-11-25), which both mount the
+    // same App for the machine in scope.
+    expect(naming(/<App\b/).sort()).toEqual(['renderer/src/console/ConsoleMachine.tsx', 'renderer/src/guest/GuestMachine.tsx', 'renderer/src/main.tsx'])
     expect(read('renderer/src/main.tsx').match(/createRoot\(/g)).toHaveLength(1)
     expect(read('renderer/src/console-main.tsx').match(/createRoot\(/g)).toHaveLength(1)
     expect(read('main/mobile-server.ts')).toContain("const index = path.join(deps.rendererDir, 'index.html')")

@@ -1,15 +1,19 @@
 /**
- * THE CALLS ONE MACHINE MAKES ON ANOTHER OF THE ACCOUNT, FROM ITS ZOOM VIEW
- * (owner 2026-11-10, design B). The other machine is entered with the full key
- * this one holds for it (main/machine-keys.ts), and there that key is an owner's
- * pairing: the account's machines trust each other with full control (owner,
- * 2026-11-09). So these are not a sandbox. Words to a terminal reach a shell as
- * they would from this machine's own card; the watch's refusals of shells and of
- * words into a menu are a wrist's, not an owner's. What this list does is keep
- * the relay to what a card does (read cards, answer, stop, start, look at and
- * touch an item, take a screen's control) and nothing else: no raw keys, no
- * workspace edits, no settings, no unlock. Checked here, once, in main, before
- * anything leaves.
+ * THE CALLS ONE MACHINE MAKES ON ANOTHER OF THE ACCOUNT FROM ITS OWN VIEW,
+ * OUTSIDE THAT MACHINE (owner 2026-11-10, design B): the devices stop's
+ * quick-reply card (zoom/RemotePickCard.tsx) and the HITL bar's read. INSIDE
+ * that machine its own app is drawn as the console draws it (owner 2026-11-25,
+ * main/machine-guest.ts), and asks it what the console asks.
+ *
+ * The other machine is entered with the full key this one holds for it
+ * (main/machine-keys.ts), and there that key is an owner's pairing: the
+ * account's machines trust each other with full control (owner, 2026-11-09).
+ * So these are not a sandbox. Words to a terminal reach a shell as they would
+ * from this machine's own card; the watch's refusals of shells and of words
+ * into a menu are a wrist's, not an owner's. What this list does is keep this
+ * relay to what that card does (read cards, answer, stop, see an item's
+ * picture) and nothing else: no raw keys, no workspace edits, no settings, no
+ * unlock. Checked here, once, in main, before anything leaves.
  */
 
 export interface RemoteMachineCall {
@@ -39,12 +43,7 @@ const ALLOWED: readonly { method: 'GET' | 'POST'; pattern: RegExp; binary?: true
   { method: 'GET', pattern: new RegExp(`^api/watch/cards(\\?cards=0|\\?workspace=${ID}(&full=${ID})?)?$`) },
   { method: 'POST', pattern: new RegExp(`^api/terminal/${ID}/(input|menu|seen)$`) },
   { method: 'POST', pattern: new RegExp(`^api/watch/card/${ID}/stop$`) },
-  { method: 'POST', pattern: new RegExp(`^api/watch/new(\\?seat=${ID})?$`) },
   { method: 'GET', pattern: new RegExp(`^api/watch/item/${ID}/frame\\?w=\\d{1,4}(&peek=1)?$`), binary: true },
-  { method: 'GET', pattern: new RegExp(`^api/watch/item/${ID}$`) },
-  { method: 'POST', pattern: new RegExp(`^api/watch/item/${ID}/input$`) },
-  // Control of a screen card on it, taken and given back as a phone does (use-source-routes.ts), in the workspace it is in.
-  { method: 'POST', pattern: new RegExp(`^api/use/sources/control\\?seat=${ID}$`) },
   // Its activity log: the HITL bar's one read (above), exactly.
   { method: 'GET', pattern: new RegExp(`^${literal(HITL_EVENTS_ROUTE)}$`) }
 ]

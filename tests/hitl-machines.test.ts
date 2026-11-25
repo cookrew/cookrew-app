@@ -27,8 +27,6 @@ import {
   type RemoteMachineRead
 } from '../src/renderer/src/zoom/remote-hitl'
 import { createHitlWant } from '../src/renderer/src/zoom/remote-hitl-want'
-import { cardsFor, resolveRemoteTarget, type RemoteCardsRead, type RemoteTarget } from '../src/renderer/src/zoom/remote-open'
-import type { RemoteCard } from '../src/renderer/src/zoom/remote-machine'
 import { buildFleet, type FleetInput } from '../src/main/fleet/build'
 import type { WorkspaceMeta } from '../src/shared/model'
 
@@ -300,74 +298,55 @@ describe("the bar's want", () => {
   })
 })
 
-describe('opening a remote face: the machine first, the agent once its view has it', () => {
-  const card = (id: string, workspace: string, items: string[] = []): RemoteCard => ({
-    id, name: `agent ${id}`, preset: 'claude', orch: false, workspace: { id: workspace, name: workspace }, status: 'waiting', word: 'needs you',
-    words: null, about: null, choice: null, items: items.map((one) => ({ id: one, kind: 'note', title: one })) as unknown as RemoteCard['items'], browsers: 0, notes: items.length
-  })
-  const target = (over: Partial<RemoteTarget> = {}): RemoteTarget => ({
-    machineId: MINI, workspaceId: 'w1', kind: 'agent', id: 'a', name: 'agent a', at: 1000, ...over
-  })
-  const place = { machineId: MINI, workspaceId: 'w1' }
+// OPENING A REMOTE FACE (owner 2026-11-25): into that machine's own app, straight at the face. Where the
+// machine no longer holds it, its own app says so, as it would for one of its own.
+describe('opening a remote face from the bar', () => {
+  const face = { machineId: MINI, machineName: 'Mac mini', machineOs: null, workspaceId: 'w1', workspaceName: 'w1', name: 'agent a' }
+  const desktop = (): void => void ((globalThis as { window?: unknown }).window = { cookrew: {} })
+  afterEach(() => void delete (globalThis as { window?: unknown }).window)
 
-  it('waits while nothing is read, goes to the agent once the read has it', () => {
-    expect(resolveRemoteTarget(target(), place, null, 1100)).toEqual({ step: 'wait' })
-    expect(resolveRemoteTarget(target(), place, [card('b', 'w1')], 1100)).toEqual({ step: 'wait' })
-    expect(resolveRemoteTarget(target(), place, [card('a', 'w1')], 1100)).toEqual({ step: 'agent', agent: { id: 'a', name: 'agent a' } })
-  })
-
-  it('the owner moved on inside that machine first: their place stands', () => {
-    expect(resolveRemoteTarget(target(), { ...place, agentId: 'b' }, [card('a', 'w1')], 1100)).toEqual({ step: 'drop' })
-  })
-
-  it('never a wrong target: another machine, another workspace, a card of another workspace', () => {
-    expect(resolveRemoteTarget(target(), { ...place, machineId: ATTIC }, [card('a', 'w1')], 1100)).toEqual({ step: 'drop' })
-    expect(resolveRemoteTarget(target(), { ...place, workspaceId: 'w2' }, [card('a', 'w1')], 1100)).toEqual({ step: 'drop' })
-    expect(resolveRemoteTarget(target(), place, [card('a', 'w9')], 1100)).toEqual({ step: 'wait' })
-  })
-
-  it('an artifact opens on the card that holds it; loose or gone, the workspace artifacts once the wait is over', () => {
-    const item = target({ kind: 'item', id: 'n1', name: 'Plan', itemKind: 'note' })
-    expect(resolveRemoteTarget(item, place, [card('a', 'w1', ['n1'])], 1100)).toEqual({
-      // As that machine names it now.
-      step: 'item', agent: { id: 'a', name: 'agent a' }, item: { id: 'n1', title: 'n1', kind: 'note' }
-    })
-    expect(resolveRemoteTarget(item, place, [card('a', 'w1')], 1100)).toEqual({ step: 'wait' })
-    expect(resolveRemoteTarget(item, place, [card('a', 'w1')], 1000 + 60_000)).toEqual({ step: 'items' })
-  })
-
-  it("only a read of the target's own machine and workspace, landed after it was asked for, can settle it", () => {
-    const cards = [card('a', 'w1')]
-    const read = (over: Partial<RemoteCardsRead> = {}): RemoteCardsRead => ({ machineId: MINI, workspaceId: 'w1', at: 1100, cards, ...over })
-    expect(cardsFor(target(), read())).toBe(cards)
-    // The last key's state, or the cache of an earlier visit: not this read.
-    expect(cardsFor(target(), read({ at: 999 }))).toBeNull()
-    expect(cardsFor(target(), read({ workspaceId: 'w2' }))).toBeNull()
-    expect(cardsFor(target(), read({ machineId: ATTIC }))).toBeNull()
-    expect(cardsFor(target(), read({ workspaceId: null }))).toBeNull()
-    expect(cardsFor(target(), null)).toBeNull()
-  })
-
-  it('times out on the machine: an agent never found is no target', () => {
-    expect(resolveRemoteTarget(target(), place, [card('b', 'w1')], 1000 + 60_000)).toEqual({ step: 'drop' })
-  })
-})
-
-describe('a pending open goes with its machine', () => {
-  it('left, or another machine entered, nothing is opened there later', async () => {
+  it('on the desktop, an agent: that machine, opened at the agent in the workspace its fleet named', async () => {
+    desktop()
     const { remotePlace } = await import('../src/renderer/src/zoom/remote-machine-store')
-    const { remoteOpen } = await import('../src/renderer/src/zoom/remote-open')
-    const ask = { machineId: MINI, workspaceId: 'w1', kind: 'agent' as const, id: 'a', name: 'a', at: 0 }
-    remotePlace.enter({ id: MINI, name: 'Mac mini', os: null })
-    remoteOpen.request(ask)
-    remotePlace.workspace({ id: 'w1', name: 'w1' })
-    expect(remoteOpen.pending()).not.toBeNull()
+    const { openRemoteFace } = await import('../src/renderer/src/zoom/remote-open')
+    openRemoteFace({ ...face, kind: 'agent', id: 'a' })
+    expect(remotePlace.get()).toMatchObject({ machine: { id: MINI, name: 'Mac mini' }, entry: { workspace: 'w1', agent: 'a', item: null, side: 'agents' } })
     remotePlace.leave()
-    expect(remoteOpen.pending()).toBeNull()
-    remotePlace.enter({ id: MINI, name: 'Mac mini', os: null })
-    remoteOpen.request(ask)
+  })
+
+  it('on the desktop, an artifact: that machine, at the artifact in its workspace’s artifacts', async () => {
+    desktop()
+    const { remotePlace } = await import('../src/renderer/src/zoom/remote-machine-store')
+    const { openRemoteFace } = await import('../src/renderer/src/zoom/remote-open')
+    openRemoteFace({ ...face, kind: 'item', id: 'n1', name: 'Plan', itemKind: 'note' })
+    expect(remotePlace.get().entry).toEqual({ workspace: 'w1', agent: null, item: 'n1', side: 'items' })
+    remotePlace.leave()
+  })
+
+  it('on the console, the console’s own way there: never a guest a browser cannot draw', async () => {
+    // A browser's page: no bridge to a main process, so no <webview> to draw a guest in.
+    ;(globalThis as { window?: unknown }).window = {}
+    const { remotePlace } = await import('../src/renderer/src/zoom/remote-machine-store')
+    const { setMachineOpener } = await import('../src/renderer/src/zoom/machine-opener')
+    const { openRemoteFace } = await import('../src/renderer/src/zoom/remote-open')
+    const opened = vi.fn()
+    setMachineOpener(opened)
+    openRemoteFace({ ...face, kind: 'agent', id: 'a' })
+    expect(opened).toHaveBeenCalledWith({ machine: { id: MINI, name: 'Mac mini', os: null }, entry: { workspace: 'w1', agent: 'a' } })
+    expect(remotePlace.get().machine).toBeNull()
+    setMachineOpener(null)
+    // A page with no way there (a phone's page of one machine) goes nowhere.
+    openRemoteFace({ ...face, kind: 'agent', id: 'a' })
+    expect(remotePlace.get().machine).toBeNull()
+  })
+
+  it('another machine entered meanwhile is a visit of its own: nothing of the first is carried', async () => {
+    desktop()
+    const { remotePlace } = await import('../src/renderer/src/zoom/remote-machine-store')
+    const { openRemoteFace } = await import('../src/renderer/src/zoom/remote-open')
+    openRemoteFace({ ...face, kind: 'agent', id: 'a' })
     remotePlace.enter({ id: ATTIC, name: 'Attic', os: null })
-    expect(remoteOpen.pending()).toBeNull()
+    expect(remotePlace.get()).toMatchObject({ machine: { id: ATTIC }, entry: { workspace: null, agent: null } })
     remotePlace.leave()
   })
 })
@@ -382,9 +361,10 @@ describe('the source contract', () => {
     expect(groups).toContain('useRemoteHitl()')
     expect(groups).toMatch(/kind: 'agent', id: [\s\S]{0,40}away: true/)
   })
-  it("the remote view settles a pending open from its own read, named by the key it was read for", () => {
-    expect(read('renderer/src/zoom/RemoteMachineView.tsx')).toContain('remoteOpen.settle(')
-    expect(read('renderer/src/zoom/RemoteMachineView.tsx')).toContain('readFor')
+  it("a face opened on another machine opens that machine's own app at it (machine-opener.ts)", () => {
+    expect(read('renderer/src/zoom/remote-open.ts')).toContain('openMachine(')
+    expect(read('renderer/src/console/ConsoleMachine.tsx')).toContain('setMachineOpener(')
+    expect(read('renderer/src/zoom/ZoomView.tsx')).toContain('<MachineGuestView />')
   })
 })
 

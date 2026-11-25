@@ -1,0 +1,7 @@
+/* ── A GUEST MACHINE IN THIS DESKTOP'S WINDOW (guest/guest-wiring.ts) ──
+   Its title line is the window's own (HeaderRoute.tsx · the inside route), drawn
+   above the guest: the guest's would be a second bar under it. Everything else
+   is the app as the console draws it. */
+body.cr-guest .cr-header {
+  display: none;
+}

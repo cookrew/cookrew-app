@@ -20,6 +20,7 @@ import { useZoomFull, zoomStore } from './zoom/zoom-store'
 import { placeWords } from './zoom/full-return'
 import { setFullRouteSlot } from './route-slot'
 import { remotePlace, type RemotePlace } from './zoom/remote-machine-store'
+import { reportGuestRoute } from './guest/guest-bridge'
 
 /** "drej-mbp.local" → "drej-mbp": the `.local` is mDNS plumbing, not a name. */
 export function deviceLabel(name: string | null): string {
@@ -56,27 +57,17 @@ export interface RemoteRoute {
   readonly device: string
   readonly workspace: string | null
   readonly agent: string | null
-  /** The browser, screen or note open on that agent's card. */
-  readonly item: string | null
 }
 
 /**
  * INSIDE ANOTHER MACHINE THE TITLE IS ITS (owner 2026-11-12): that machine where
- * this one's name was, its workspace, agent and open item after it
- * (zoom/RemoteMachineView.tsx draws no line of its own); null outside every machine.
+ * this one's name was, then its workspace and agent as the machine's own app
+ * names them (zoom/MachineGuestView.tsx: the guest says, and draws no title line
+ * of its own); null outside every machine.
  */
 export function remoteRoute(place: RemotePlace): RemoteRoute | null {
   if (!place.machine) return null
-  return { device: place.machine.name, workspace: place.workspace?.name ?? null, agent: place.agent?.name ?? null, item: place.item?.title ?? null }
-}
-
-/**
- * Its device step: from deeper in, back to that machine's workspaces; at them,
- * out of it to the devices, as this machine's device step and the bar's
- * DEVICES do (ZoomView · the remote stops).
- */
-export function remoteDeviceStep(inside: RemoteRoute): () => void {
-  return inside.workspace === null ? () => remotePlace.leave() : () => remotePlace.backTo(1)
+  return { device: place.machine.name, workspace: place.crumbs?.workspace ?? null, agent: place.crumbs?.agent ?? null }
 }
 
 const readPlace = (): RemotePlace => remotePlace.get()
@@ -123,13 +114,16 @@ export function HeaderRoute({ view, workspaceName, dir, path, zoomedAgent, stage
   }
   // The agent's own name is beside it on this bar: a full view is named by its kind here.
   const backTitle = useSyncExternalStore(zoomStore.subscribe, backTitleNow, backTitleNow)
+  // A guest machine's line is drawn by the window holding it: what this one would say is said to it
+  // (guest/guest-bridge.ts). Nothing anywhere else.
+  useEffect(() => reportGuestRoute(workspace.name, agent), [workspace.name, agent])
 
   if (inside) {
-    // Its steps go back to its own stops (remote-machine-store.ts), in its colour.
+    // Its steps are the guest's own (guest/GuestMachine.tsx · runGuestCommand), in its colour.
     return (
       <nav className="cr-route cr-route-remote" aria-label="Route">
         <span className="cr-route-step cr-route-device">
-          <button type="button" className="cr-route-here" title={inside.workspace === null ? 'Back to every device' : `${inside.device}: its workspaces`} onClick={remoteDeviceStep(inside)}>
+          <button type="button" className="cr-route-here" title={`${inside.device}: its workspaces, and again every device`} onClick={() => remotePlace.command({ kind: 'device' })}>
             {remote && <PathDot view={path} />}
             <CrIcon name="device" />
             <span className="cr-route-label">{inside.device}</span>
@@ -138,7 +132,7 @@ export function HeaderRoute({ view, workspaceName, dir, path, zoomedAgent, stage
         {inside.workspace !== null && (
           <span className="cr-route-step cr-route-workspace">
             <span className="cr-route-sep" aria-hidden="true">/</span>
-            <button type="button" className="cr-route-btn" aria-current={inside.agent === null ? 'page' : undefined} onClick={() => remotePlace.backTo(2)}>
+            <button type="button" className="cr-route-btn" title="back to the workspace" aria-current={inside.agent === null ? 'page' : undefined} onClick={() => remotePlace.command({ kind: 'workspace' })}>
               <span className="cr-route-emoji">🗂</span>
               <span className="cr-route-label">{inside.workspace}</span>
             </button>
@@ -147,24 +141,9 @@ export function HeaderRoute({ view, workspaceName, dir, path, zoomedAgent, stage
         {inside.agent !== null && (
           <span className="cr-route-step cr-route-agent">
             <span className="cr-route-sep" aria-hidden="true">/</span>
-            {inside.item === null ? (
-              <span className="cr-route-here" aria-current="page" title={inside.agent}>
-                <CrIcon name="agent" />
-                <span className="cr-route-label">{inside.agent}</span>
-              </span>
-            ) : (
-              <button type="button" className="cr-route-btn" title={`Back to ${inside.agent}’s card`} onClick={() => remotePlace.backTo(3)}>
-                <CrIcon name="agent" />
-                <span className="cr-route-label">{inside.agent}</span>
-              </button>
-            )}
-          </span>
-        )}
-        {inside.item !== null && (
-          <span className="cr-route-step cr-route-item">
-            <span className="cr-route-sep" aria-hidden="true">/</span>
-            <span className="cr-route-here" aria-current="page" title={inside.item}>
-              <span className="cr-route-label">{inside.item}</span>
+            <span className="cr-route-here" aria-current="page" title={inside.agent}>
+              <CrIcon name="agent" />
+              <span className="cr-route-label">{inside.agent}</span>
             </span>
           </span>
         )}
