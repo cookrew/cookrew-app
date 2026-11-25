@@ -25,6 +25,39 @@ export const CANVAS_CLIP = {
 } as const
 
 /**
+ * THE FILM (2026-11-25). The 60-second promo with music, in the front page's hero in place of the ink lockup, under
+ * the buttons so the headline and the download stay in the first screen: 1920×1080 H.264 + AAC, faststart, encoded
+ * down from the master for the web. It opens muted and loops; the controls let a reader turn the sound on and scrub.
+ */
+export const HERO_FILM = {
+  file: 'cookrew-film.mp4',
+  poster: 'cookrew-film-poster.jpg',
+  width: 1920,
+  height: 1080,
+  label: 'Cookrew: let your tokens flow freely (60-second film)',
+  labelZh: 'Cookrew：让你的 token 自由流转（60 秒宣传片）'
+} as const
+
+/**
+ * The film, script-free. Reduced motion cannot strip an autoplay attribute without a script, so there are two players
+ * and CSS shows one: the autoplaying one names its source only for no-preference (under reduce it loads nothing), and
+ * the still one (poster and controls, preload none, sound on when played) is shown only under reduce.
+ */
+export function heroFilm(): string {
+  const film = HERO_FILM
+  const label = esc(tr(film.label, film.labelZh))
+  const src = `${SITE_FRAMES}${film.file}`
+  const common = `playsinline controls poster="${esc(`${SITE_FRAMES}${film.poster}`)}" width="${film.width}" height="${film.height}" aria-label="${label}" title="${label}"`
+  return `<div class="tf-film"><video class="f-auto" autoplay muted loop preload="metadata" ${common}><source src="${src}" type="video/mp4" media="(prefers-reduced-motion: no-preference)"></video><video class="f-still" preload="none" ${common}><source src="${src}" type="video/mp4"></video></div>`
+}
+
+export const HERO_FILM_STYLE =
+  '.tf-film{width:min(92vw,960px);aspect-ratio:16/9;margin:44px auto 0;border:1px solid var(--hair);border-radius:16px;box-shadow:var(--lift);background:var(--phos-bg);overflow:hidden}' +
+  '.tf-film video{display:block;width:100%;height:100%;object-fit:cover;background:var(--phos-bg)}' +
+  '.tf-film .f-still{display:none}' +
+  '@media (prefers-reduced-motion:reduce){.tf-film .f-auto{display:none}.tf-film .f-still{display:block}}'
+
+/**
  * The clip as a figure. No script: <video autoplay muted loop playsinline> needs none, and a reader whose browser
  * refuses autoplay sees the poster (the browser-card beat). A phone is not shown it: a 1024 px movie is unreadable at
  * 390, the source's media keeps the file from loading there, and CSS hides the figure (.feature-shots figure.clip).

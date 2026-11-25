@@ -41,7 +41,7 @@ export const ZH_FAQ = [
 ]
 
 export const ZH_COMPARE = [
-  { question: '同时有几个 agent 在工作？', chat: '一个助手', singleAgent: '每个终端一个 CLI agent', cookrew: '一个团队在同一张画布上，彼此连接' },
+  { question: '同时有几个 agent 在工作？', chat: '一个智能体', singleAgent: '每个终端一个 CLI agent', cookrew: '一个团队在同一张画布上，彼此连接' },
   { question: 'agent 之间能交接工作吗？', chat: '不能', singleAgent: '一个 harness 内部的子 agent', cookrew: '任何 harness 都能通过同一套 CLI 派活给其他 harness' },
   { question: '能回到之前的回合吗？', chat: '往上翻', singleAgent: '部分 harness 能回退', cookrew: '每个回合都是检查点；可从任意一个分叉出 agent' },
   { question: '能看到整个团队的状态吗？', chat: '不能', singleAgent: '一次一个终端', cookrew: '每个 agent 的状态写在它名字下面，跨机器' },

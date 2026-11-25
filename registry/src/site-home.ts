@@ -4,12 +4,12 @@ import { RELEASES_PAGE, pickAsset, type Release } from './releases'
 import { definition, FACTS, GITHUB_REPO } from './site-content'
 import { currentLang, local, tr } from './site-lang'
 import { organization, softwareApplication, webPage } from './site-seo'
-import { BRAND_LOCKUP_CSS, BRAND_LOCKUP_HTML } from './site-brand'
 import { flow, flowHero, flowSections, FLOW_STYLE, type FlowLinks } from './site-flow'
+import { heroFilm, HERO_FILM_STYLE } from './site-motion'
 
 /**
  * THE FRONT PAGE OF THE STATIC SITE: "let your tokens flow" (owner 2026-11-18, site-flow.ts). Top to bottom: the hero
- * (lockup, headline, the three flows, the download, the console, the three-device picture), the three flows with the
+ * (headline, the three flows, the download, the console, the 60-second film, the three-device picture), the three flows with the
  * diagram, a chapter each for across devices, across agents and across models, the agents in the field, three steps to
  * start, and a last call to act. The features grid, the comparison, the questions and the roadmap left the front page;
  * each feature keeps its own page (/features/<slug>). No status label or word of progress anywhere (owner 475f4a16).
@@ -66,8 +66,8 @@ export function staticHomePage(input: StaticHomeInput): Page {
       ]
     },
     `<div class="tf-home">
-<style>${BRAND_LOCKUP_CSS}${FLOW_STYLE}.tf-hero .brand{justify-content:center;padding:0 0 4px}</style>
-${flowHero(l).replace('<p class="tf-k">', `${BRAND_LOCKUP_HTML}\n<p class="tf-k">`)}
+<style>${FLOW_STYLE}${HERO_FILM_STYLE}</style>
+${flowHero(l).replace('<div class="tf-hero-shot">', `${heroFilm()}\n<div class="tf-hero-shot">`)}
 ${flowSections(l)}
 </div>`
   )
