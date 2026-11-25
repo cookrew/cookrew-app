@@ -10,7 +10,10 @@ import { concat, SEAL_RECORD_MAX, type SealRecord, type SealSession } from './ca
  *   relay and can be forged.
  *   RESEND THE SAME BYTES. A resealed record has a new number, and the old one
  *   stays a gap the inbox waits on for ever.
- *   KEEP IN-FLIGHT RECORDS UNDER THE WINDOW, and treat `ahead` as slow down.
+ *   KEEP IN-FLIGHT RECORDS UNDER THE WINDOW, and treat `ahead` as slow down. The
+ *   window is SEAL_WINDOW sequence numbers past the oldest record not yet taken,
+ *   not a count: records may arrive in any order inside it (several POSTs at
+ *   once overtake each other, seal2/http-link.ts · UP_SEQ_SPAN), never past it.
  *   SEND A SEALED `ping` on a clock, both ways. Silence is otherwise all a truncation
  *   looks like, and a phone that only reads is ended for going quiet.
  *   NEVER REPLAY a non-idempotent request by itself after a new handshake.
