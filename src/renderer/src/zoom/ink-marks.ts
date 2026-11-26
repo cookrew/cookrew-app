@@ -7,6 +7,8 @@
  * No DOM here: InkAvatar.tsx draws the paths.
  */
 
+import { harnessOfPreset, type HarnessId } from '../../../shared/harness-catalog'
+
 type Pt = [number, number, number?]
 type Line = [number, number, number][]
 interface Mark {
@@ -188,16 +190,11 @@ const zee = (): Mark => ({
 
 export const MARKS = { claude, codex, opencode, pi, shell, enso, ensoClosed, tie, ringWorking, ringWaiting, tick, zee }
 export type MarkName = keyof typeof MARKS
-export type HarnessMark = 'claude' | 'codex' | 'opencode' | 'pi' | 'shell'
+export type HarnessMark = HarnessId | 'shell'
 
-/** Which mark a preset draws: by its name, else the shell prompt. */
+/** Which mark a preset draws: by its name (harness-catalog presetPattern), else the shell prompt. */
 export function harnessMark(preset: string | null | undefined): HarnessMark {
-  const p = (preset ?? '').toLowerCase()
-  if (p.includes('claude')) return 'claude'
-  if (p.includes('codex')) return 'codex'
-  if (p.includes('opencode')) return 'opencode'
-  if (p === 'pi' || p.startsWith('pi ') || p.includes('pi agent') || p === 'pi-agent') return 'pi'
-  return 'shell'
+  return harnessOfPreset(preset) ?? 'shell'
 }
 
 const cache = new Map<MarkName, Line>()

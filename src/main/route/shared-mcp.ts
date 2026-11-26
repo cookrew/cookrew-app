@@ -1,4 +1,5 @@
 import type { HarnessId } from '../harness'
+import { supportFor, unsupported, type PerHarness } from '../../shared/harness-support'
 
 /**
  * ONE MCP HUB FOR THE WHOLE FLEET (route program, shared MCP).
@@ -35,13 +36,14 @@ export function hubUrl(gatewayUrl: string, harness: HarnessId): string {
 
 /** The args appended to a harness command so its process reaches the hub; [] where none are needed. */
 export function sharedMcpArgs(harness: HarnessId, gatewayUrl: string): string[] {
-  const url = hubUrl(gatewayUrl, harness)
-  switch (harness) {
-    case 'claude':
-      return ['--mcp-config', JSON.stringify({ mcpServers: { [HUB_SERVER]: { type: 'http', url } } })]
-    case 'codex':
-      return ['-c', `mcp_servers.${HUB_SERVER}.url="${url}"`]
-    default:
-      return []
-  }
+  const args = supportFor(SHARED_MCP_ARGS, harness)
+  return args ? args(hubUrl(gatewayUrl, harness)) : []
+}
+
+/** How each harness's process is handed the hub; unsupported ones say how they get it instead. */
+export const SHARED_MCP_ARGS: PerHarness<(url: string) => string[]> = {
+  claude: (url) => ['--mcp-config', JSON.stringify({ mcpServers: { [HUB_SERVER]: { type: 'http', url } } })],
+  codex: (url) => ['-c', `mcp_servers.${HUB_SERVER}.url="${url}"`],
+  opencode: unsupported('no per-process MCP flag proven; magpie writes the hub into its config file'),
+  pi: unsupported('no per-process MCP flag proven; magpie writes the hub into its config file')
 }

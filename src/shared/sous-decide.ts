@@ -11,10 +11,11 @@
 // systemone) is a refinement main may add behind a flag, not a dependency.
 
 import type { BoardPhase } from './board'
+import type { HarnessName } from './harness-catalog'
 import { contentWords, hasGenericVerb, isRepoTask, saidWords, STOP_WORDS } from './sous-words'
 import { boundaries, exposure, type Exposure } from './sous-exposure'
 
-export type Harness = 'Claude Code' | 'Codex' | 'OpenCode' | 'Pi'
+export type Harness = HarnessName
 
 export interface DecideCandidate {
   id: string

@@ -15,8 +15,6 @@ import {
   TraceIndexRequest,
   TracePage,
   TracePageRequest,
-  createClaudeTraceAccumulator,
-  createPiTraceAccumulator,
   pageTraceBlocks,
   traceIndexOf,
   type ClaudeTraceAccumulator,
@@ -26,18 +24,18 @@ import { locateClaudeSessionFile } from './claude-fork'
 import { sessionChain } from './session-lineage-walk'
 import { reachableLineage } from './lineage-spill'
 import { isClaudeCommand } from '../shared/claude-fork'
-import { isCodexCommand, rolloutIdFromRolloutPath, validCodexSessionRef } from './codex-bind'
-import { codexBaseChain, codexTraceAccumulatorFor } from './codex-lineage'
-import { harnessFor , type TurnFinality } from './harness'
-import { isPiCommand, piSessionHome } from './pi-bind'
+import { rolloutIdFromRolloutPath } from './codex-bind'
+import { codexBaseChain } from './codex-lineage'
+import { harnessHas } from './harness-features'
+import { HARNESS_BY_ID, harnessFor, type HarnessId, type HarnessWatchOptions, type TurnFinality } from './harness'
 import type { SessionTurnParser } from './session-sync'
 import type { TurnRecord } from '../shared/turn'
 import type { WorkspaceStore } from './store'
 
-export type TraceSource = 'claude' | 'codex' | 'pi' | null
+export type TraceSource = TraceKind | null
 
 /** Which parser a transcript is read with. */
-export type TraceKind = 'claude' | 'codex' | 'pi'
+export type TraceKind = HarnessId
 
 /**
  * ONE FILE, parsed — the seam the one-stream reader walks a lineage through
@@ -329,12 +327,9 @@ export class TraceReader {
     const hit = this.store.nodeAcrossWorkspaces(terminalId)
     if (!hit || hit.node.kind !== 'terminal') return []
     const node = hit.node
-    const claude = this.claudeFile(node)
-    const codex = this.codexFile(node)
-    const pi = this.piFile(node)
-    const file = claude ?? codex ?? pi
-    if (!file) return []
-    const kind = claude ? 'claude' : codex ? 'codex' : 'pi'
+    const transcript = this.transcriptOf(node)
+    if (!transcript) return []
+    const { file, kind } = transcript
     const blocks = await this.blocksOf(file, kind)
     // GROWTH IS A CHANGE IN BYTES, NOT IN ARRAY IDENTITY (2026-10-04). An
     // append now extends the cached block array in place — the resumable
@@ -374,19 +369,16 @@ export class TraceReader {
     const hit = this.store.nodeAcrossWorkspaces(terminalId)
     if (!hit || hit.node.kind !== 'terminal') return []
     const node = hit.node
-    const claude = this.claudeFile(node)
-    const codex = this.codexFile(node)
-    const pi = this.piFile(node)
-    const file = claude ?? codex ?? pi
-    if (!file) return []
-    const kind = claude ? 'claude' : codex ? 'codex' : 'pi'
+    const transcript = this.transcriptOf(node)
+    if (!transcript) return []
+    const { file, kind } = transcript
     const blocks = await this.blocksOf(file, kind)
     const current = blocks.map((b) => ({
       index: b.index,
       id: b.id,
       sessionId: node.claudeSessionId ?? undefined
     }))
-    if (options.includeLineage !== true || !claude) return current
+    if (options.includeLineage !== true || !harnessHas('sessionLineage', node.command)) return current
     const segments = await this.lineageSegments(terminalId)
     const earlier = segments.flatMap((segment) =>
       segment.entries.flatMap((entry) =>
@@ -615,11 +607,7 @@ export class TraceReader {
     const node = hit.node
     const harness = harnessFor(node.command)
     if (!harness?.parseTurns || !harness.watchFile) return null
-    const options = {
-      ...this.options,
-      piSessionsRoot: this.options.piSessionsRootFor?.(node) ?? this.options.piSessionsRoot,
-      piAgentDir: this.options.piAgentDirFor?.(node) ?? this.options.piAgentDir
-    }
+    const options = this.watchOptionsFor(node)
     const file = harness.watchFile(node, options)
     if (!file) return null
     const parse = harness.parseTurnsFor?.(file, options) ?? harness.parseTurns
@@ -746,22 +734,31 @@ export class TraceReader {
     const hit = this.store.nodeAcrossWorkspaces(terminalId)
     if (!hit || hit.node.kind !== 'terminal') return { blocks: [], total: 0, source: null }
     const node = hit.node
-    const claude = this.claudeFile(node)
-    if (claude) {
-      const blocks = await this.blocksOf(claude, 'claude')
-      return { ...pageTraceBlocks(blocks, request), source: 'claude' }
+    const transcript = this.transcriptOf(node)
+    if (!transcript) return { blocks: [], total: 0, source: null }
+    const blocks = await this.blocksOf(transcript.file, transcript.kind)
+    return { ...pageTraceBlocks(blocks, request), source: transcript.kind }
+  }
+
+  /**
+   * The session file this card's trace is read from, and whose parser reads
+   * it — straight off the registry (watchFile + traceParser), the same
+   * resolver the turn rail polls, so the drawer and the rail can never name
+   * different files. Unbound, scrape-only, plain shell, or not on disk: null.
+   */
+  transcriptOf(node: TerminalNodeData): { file: string; kind: TraceKind } | null {
+    const harness = harnessFor(node.command)
+    if (!harness?.watchFile || !harness.traceParser) return null
+    const file = harness.watchFile(node, this.watchOptionsFor(node))
+    return file && existsSync(file) ? { file, kind: harness.id } : null
+  }
+
+  private watchOptionsFor(node: TerminalNodeData): HarnessWatchOptions {
+    return {
+      ...this.options,
+      piSessionsRoot: this.options.piSessionsRootFor?.(node) ?? this.options.piSessionsRoot,
+      piAgentDir: this.options.piAgentDirFor?.(node) ?? this.options.piAgentDir
     }
-    const codex = this.codexFile(node)
-    if (codex) {
-      const blocks = await this.blocksOf(codex, 'codex')
-      return { ...pageTraceBlocks(blocks, request), source: 'codex' }
-    }
-    const pi = this.piFile(node)
-    if (pi) {
-      const blocks = await this.blocksOf(pi, 'pi')
-      return { ...pageTraceBlocks(blocks, request), source: 'pi' }
-    }
-    return { blocks: [], total: 0, source: null }
   }
 
   private claudeFile(node: TerminalNodeData): string | null {
@@ -770,32 +767,9 @@ export class TraceReader {
     return existsSync(file) ? file : null
   }
 
-  private codexFile(node: TerminalNodeData): string | null {
-    if (!isCodexCommand(node.command)) return null
-    // Use ONLY the authoritative bound ref (set deterministically at spawn by
-    // lsof of the codex process), validated inside the sessions tree. No
-    // mtime rebind here — that was a stray-grab / cross-wiring source
-    // (EXACT-CONTEXT gate). Unbound → no trace, honest.
-    const bound = validCodexSessionRef(node.codexSessionRef, this.options.codexSessionsDir)
-    return bound && existsSync(bound) ? bound : null
-  }
-
-  private piFile(node: TerminalNodeData): string | null {
-    if (!isPiCommand(node.command) || !node.piSessionId) return null
-    // Same home as the watch/resume paths: a session adopted from a legacy
-    // pane lives in pi's own cwd dir, and the trace drawer must not go blank
-    // for exactly the terminals whose rail works.
-    return (
-      piSessionHome(node.cwd, node.piSessionId, node.id, {
-        sessionsRoot: this.options.piSessionsRootFor?.(node) ?? this.options.piSessionsRoot,
-        agentDir: this.options.piAgentDirFor?.(node) ?? this.options.piAgentDir
-      })?.file ?? null
-    )
-  }
-
   private async blocksOf(
     file: string,
-    kind: 'claude' | 'codex' | 'pi'
+    kind: TraceKind
   ): Promise<TraceBlock[]> {
     const pending = this.blockReads.get(file)
     if (pending) return pending
@@ -808,7 +782,7 @@ export class TraceReader {
 
   private async readBlocksOf(
     file: string,
-    kind: 'claude' | 'codex' | 'pi'
+    kind: TraceKind
   ): Promise<TraceBlock[]> {
     try {
       const info = await stat(file)
@@ -867,7 +841,7 @@ export class TraceReader {
    */
   private ingest(
     file: string,
-    kind: 'claude' | 'codex' | 'pi',
+    kind: TraceKind,
     fresh: string[],
     remainder: Buffer,
     bytesRead: number,
@@ -906,10 +880,10 @@ export class TraceReader {
    * from (codex-lineage.ts), so its blocks number on from the conversation
    * rather than from 1 — and keep the identities the base gave them.
    */
-  private parserFor(kind: 'claude' | 'codex' | 'pi', file: string): TraceBlockAccumulator {
-    if (kind === 'claude') return createClaudeTraceAccumulator()
-    if (kind === 'pi') return createPiTraceAccumulator()
-    return codexTraceAccumulatorFor(file, { sessionsDir: this.options.codexSessionsDir })
+  private parserFor(kind: TraceKind, file: string): TraceBlockAccumulator {
+    const make = HARNESS_BY_ID[kind].traceParser
+    if (!make) throw new Error(`${kind} declares no trace parser`)
+    return make(file, this.options)
   }
 }
 

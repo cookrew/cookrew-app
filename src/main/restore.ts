@@ -8,6 +8,7 @@ import type { CanvasNode, RestoreResult, TerminalNodeData } from '../shared/mode
 import { restorePointIndex } from '../shared/model'
 import { buildForkedSessionLinesAtUuid } from '../shared/claude-fork'
 import { harnessFor } from './harness'
+import { lacksBecause } from './harness-features'
 import { planCheckpointRestore, pushRestorePoint } from './restore-plan'
 import { withSessionLineage } from './session-lineage'
 import { claudeSessionFile, isSessionUuid, locateClaudeSessionFile } from './claude-fork'
@@ -139,7 +140,7 @@ async function restoreCheckpoint(
   }
   const node = hit.node as TerminalNodeData
   const harness = harnessFor(node.command)
-  if (!harness || harness.id !== 'claude') {
+  if (!harness || lacksBecause('restore', harness.id) !== null) {
     return fail(id, node.name, checkpointIndex, planCheckpointRestore({
       command: node.command,
       sessionId: node.claudeSessionId,

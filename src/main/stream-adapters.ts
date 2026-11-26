@@ -45,6 +45,7 @@
 // and the field was already optional in the contract because door cards send
 // it. Nothing else changes shape.
 
+import type { HarnessId } from '../shared/harness-catalog'
 import type http from 'node:http'
 import { respondJson } from './mobile-http'
 import {
@@ -198,7 +199,7 @@ function serveTracePage(
   response: http.ServerResponse,
   url: URL,
   view: StreamView,
-  source: 'claude' | 'codex' | 'pi' | null
+  source: HarnessId | null
 ): void {
   const page = pageTraceBlocks(view.blocks.map(traceBlockOf), {
     beforeIndex: num(url, 'beforeIndex'),

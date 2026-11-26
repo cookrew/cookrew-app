@@ -2,7 +2,7 @@ import { paneInputs, SEALED_REFUSAL } from './pane-input'
 import { feedPromptBuffer } from '../shared/turn'
 import { multiplexer, type PtySession } from './pty'
 import type { Multiplexer } from './multiplexer'
-import { isPiCommand } from './pi-bind'
+import { inputFor } from './harness-input'
 import {
   CONTAMINATED_REFUSAL,
   DISPATCH_RESIDUE_REFUSAL,
@@ -669,7 +669,7 @@ export async function ownerSubmit(
     const body = trailing ? bytes.slice(0, trailing.index) : bytes
     if (trailing !== null && body.length > 0) {
       const submitBytes =
-        session.hostBacked === false && isPiCommand(session.command) ? '\n' : '\r'
+        session.hostBacked === false ? (inputFor(session.command ?? '')?.directSubmit ?? '\r') : '\r'
       const confirmation = submitBytes === '\n'
         ? { bytes: '\r', delayMs: DIRECT_PI_CONFIRM_DELAY_MS }
         : undefined

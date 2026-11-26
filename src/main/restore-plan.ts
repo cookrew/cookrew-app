@@ -13,6 +13,7 @@
 //
 // Pure so the decision unit-tests without Electron or the filesystem.
 
+import { lacksBecause } from './harness-features'
 import { harnessFor, type HarnessId } from './harness'
 import type { RestorePoint } from '../shared/model'
 
@@ -64,11 +65,12 @@ export function planCheckpointRestore(input: {
 }): RestorePlan {
   const harness = harnessFor(input.command)
   if (!harness) return { ok: false, reason: 'This is a plain shell — there is no session to restore.' }
-  if (harness.id !== 'claude') {
+  const lacks = lacksBecause('restore', harness.id)
+  if (lacks !== null) {
     return {
       ok: false,
       harness: harness.id,
-      reason: `Endpoint restore isn't supported for ${harness.id} yet — its rollout format has no truncation path.`
+      reason: `Endpoint restore isn't supported for ${harness.id} yet — ${lacks}.`
     }
   }
   if (!input.sessionId) {

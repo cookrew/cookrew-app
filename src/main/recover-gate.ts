@@ -13,9 +13,10 @@
 import { existsSync } from 'node:fs'
 import type { TerminalNodeData } from '../shared/model'
 import type { TurnRecord } from '../shared/turn'
-import type { SessionField } from './harness'
-import { harnessFor } from './harness'
-import { resolveExistingClaudeSession, type ResolveSessionOptions } from './claude-fork'
+import type { HarnessId, SessionField } from './harness'
+import { HARNESS_BY_ID, harnessFor } from './harness'
+import { claudeSessionFile, resolveExistingClaudeSession, type ResolveSessionOptions } from './claude-fork'
+import { supportFor, unsupported, type PerHarness } from '../shared/harness-support'
 import { opencodeSessionFileExists } from './opencode-bind'
 import { piSessionHome } from './pi-bind'
 
@@ -54,10 +55,22 @@ export interface ExactGateDeps {
 export function canRestoreExact(node: TerminalNodeData, deps: ExactGateDeps): boolean {
   const harness = harnessFor(node.command)
   if (!harness) return true
-  const fileExists = deps.fileExists ?? existsSync
-  const opencodeExists = deps.opencodeExists ?? opencodeSessionFileExists
-  const claudeResolver = deps.claudeResolver ?? resolveExistingClaudeSession
-  if (harness.id === 'claude') {
+  return EXACT_RESTORE[harness.id](node, deps)
+}
+
+type ExactCheck = (node: TerminalNodeData, deps: ExactGateDeps) => boolean
+
+/**
+ * One exact-context check per harness, keyed by every HarnessId — no harness
+ * can fall through into another's branch (2026-11-25: every id that was not
+ * claude, codex or pi was judged by OPENCODE's rule, so a new harness could
+ * never be recovered at all). A harness that cannot prove its prior session
+ * exists must still declare a check: one that answers false refuses
+ * honestly; there is no default that boots a fresh session in its place.
+ */
+export const EXACT_RESTORE: Readonly<Record<HarnessId, ExactCheck>> = {
+  claude: (node, deps) => {
+    const claudeResolver = deps.claudeResolver ?? resolveExistingClaudeSession
     return (
       claudeResolver({
         command: node.command,
@@ -66,15 +79,16 @@ export function canRestoreExact(node: TerminalNodeData, deps: ExactGateDeps): bo
         turns: deps.turnsHistory(node.id)
       }) !== null
     )
-  }
-  if (harness.id === 'codex') {
+  },
+  codex: (node, deps) => {
+    const fileExists = deps.fileExists ?? existsSync
     return typeof node.codexSessionRef === 'string' && fileExists(node.codexSessionRef)
-  }
-  if (harness.id === 'pi') {
+  },
+  pi: (node, deps) => {
     // An unbound node is restorable when there IS something for it to adopt —
     // asked before the id lookup, because there is no id to look up.
     const adopted = node.piSessionId ? null : deps.piAdoptable?.(node.id, node.cwd) ?? null
-    const key = harness.resumeKey(node.piSessionId ?? adopted ?? '')
+    const key = HARNESS_BY_ID.pi.resumeKey(node.piSessionId ?? adopted ?? '')
     // Exclusive dir OR the legacy pane's own cwd dir (piSessionHome): a
     // session adopted from a reattached pane is just as exactly-restorable,
     // and gating it on the exclusive dir alone made those nodes permanently
@@ -82,12 +96,34 @@ export function canRestoreExact(node: TerminalNodeData, deps: ExactGateDeps): bo
     const piExists = deps.piExists ?? ((nodeId, cwd, id) =>
       piSessionHome(cwd, id, nodeId) !== null)
     return key !== null && piExists(node.id, node.cwd, key)
-  }
+  },
   // opencode: format-valid ses_ id AND its session file still on disk. A
   // deleted session must NOT pass the gate (else recover fresh-boots — the
   // exact stray outcome this gate exists to prevent).
-  const key = harness.resumeKey(node.opencodeSessionId ?? '')
-  return key !== null && opencodeExists(key)
+  opencode: (node, deps) => {
+    const opencodeExists = deps.opencodeExists ?? opencodeSessionFileExists
+    const key = HARNESS_BY_ID.opencode.resumeKey(node.opencodeSessionId ?? '')
+    return key !== null && opencodeExists(key)
+  }
+}
+
+/**
+ * The session file a node names is on disk, whatever the lazy turn tracker
+ * has verified so far: the harness resumes it itself, so a respawn (a route
+ * change) loses nothing. Claude and Codex name a file outright; the others
+ * are answered by the exact-context gate above and declare so.
+ */
+export const SESSION_ON_DISK: PerHarness<(node: TerminalNodeData, exists: (file: string) => boolean) => boolean> = {
+  claude: (node, exists) =>
+    Boolean(node.claudeSessionId) && exists(claudeSessionFile(node.cwd, node.claudeSessionId as string)),
+  codex: (node, exists) => typeof node.codexSessionRef === 'string' && exists(node.codexSessionRef),
+  opencode: unsupported('the exact-context gate already proves the session file'),
+  pi: unsupported('the exact-context gate already proves the session file')
+}
+
+export function sessionOnDisk(node: TerminalNodeData, exists: (file: string) => boolean = existsSync): boolean {
+  const check = supportFor(SESSION_ON_DISK, harnessFor(node.command)?.id)
+  return check ? check(node, exists) : false
 }
 
 /**

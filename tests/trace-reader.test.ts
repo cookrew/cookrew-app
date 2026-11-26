@@ -104,8 +104,8 @@ describe('TraceReader (paged trace API over agent files)', () => {
         message: { role: 'assistant', content: [{ type: 'text', text: `reply ${i}` }] }
       })
     ])
-    writeFileSync(path.join(dir, 'sess.jsonl'), lines.join('\n') + '\n')
-    const node = store.addNode(terminal({ claudeSessionId: 'sess' })) as TerminalNodeData
+    writeFileSync(path.join(dir, '5e55a0de-0000-4000-8000-000000000001.jsonl'), lines.join('\n') + '\n')
+    const node = store.addNode(terminal({ claudeSessionId: '5e55a0de-0000-4000-8000-000000000001' })) as TerminalNodeData
 
     const reader = new TraceReader(store, { projectsDir })
     const page = await reader.page(node.id, { beforeIndex: 3, limit: 5 })
@@ -238,14 +238,14 @@ describe('TraceReader security + disambiguation (integration takeover)', () => {
     const projectsDir = mkdtempSync(path.join(tmpdir(), 'trace-incr-proj-'))
     const dir = path.join(projectsDir, claudeProjectSlug('/work/repo'))
     mkdirSync(dir, { recursive: true })
-    const file = path.join(dir, 'sess.jsonl')
+    const file = path.join(dir, '5e55a0de-0000-4000-8000-000000000001.jsonl')
     const entry = (i: number): string =>
       JSON.stringify({
         type: 'user', uuid: `u${i}`, timestamp: iso(T0 + i * 1000),
         message: { role: 'user', content: `ask ${i}` }
       })
     writeFileSync(file, entry(1) + '\n')
-    const node = store.addNode(terminal({ claudeSessionId: 'sess' })) as TerminalNodeData
+    const node = store.addNode(terminal({ claudeSessionId: '5e55a0de-0000-4000-8000-000000000001' })) as TerminalNodeData
     const reader = new TraceReader(store, { projectsDir })
 
     expect((await reader.page(node.id, {})).total).toBe(1)
@@ -271,9 +271,9 @@ describe('TraceReader.index (fan listing — the missing producer)', () => {
         type: 'user', uuid: `u${i}`, timestamp: iso(T0 + i * 1000),
         message: { role: 'user', content: `ask number ${i}` }
       })
-    const file = path.join(dir, 'sess.jsonl')
+    const file = path.join(dir, '5e55a0de-0000-4000-8000-000000000001.jsonl')
     writeFileSync(file, [1, 2, 3, 4, 5, 6, 7].map(entry).join('\n') + '\n')
-    const node = store.addNode(terminal({ claudeSessionId: 'sess' })) as TerminalNodeData
+    const node = store.addNode(terminal({ claudeSessionId: '5e55a0de-0000-4000-8000-000000000001' })) as TerminalNodeData
 
     const reader = new TraceReader(store, { projectsDir })
     const index = await reader.index(node.id)
@@ -325,52 +325,52 @@ describe('TraceReader checkpointRefs ∪ boundaryMarkers (lineage union)', () =>
   it('checkpointRefs is current-file-only (indices never drift from the rail)', async () => {
     const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-store-')))
     const projectsDir = mkdtempSync(path.join(tmpdir(), 'trace-proj-'))
-    writeClaude(projectsDir, '/work/repo', 'old-sess', ['a1', 'a2', 'a3'])
-    writeClaude(projectsDir, '/work/repo', 'new-sess', ['b1', 'b2'])
+    writeClaude(projectsDir, '/work/repo', '5e55a0de-0000-4000-8000-000000000003', ['a1', 'a2', 'a3'])
+    writeClaude(projectsDir, '/work/repo', '5e55a0de-0000-4000-8000-000000000002', ['b1', 'b2'])
     const node = store.addNode(
-      terminal({ claudeSessionId: 'new-sess', sessionLineage: ['old-sess'] })
+      terminal({ claudeSessionId: '5e55a0de-0000-4000-8000-000000000002', sessionLineage: ['5e55a0de-0000-4000-8000-000000000003'] })
     ) as TerminalNodeData
 
     const refs = await new TraceReader(store, { projectsDir }).checkpointRefs(node.id)
     expect(refs.map((r) => r.index)).toEqual([1, 2]) // only new-sess
-    expect(refs.map((r) => r.sessionId)).toEqual(['new-sess', 'new-sess'])
-    expect(refs[0].id).toBe('new-sess-u1')
+    expect(refs.map((r) => r.sessionId)).toEqual(['5e55a0de-0000-4000-8000-000000000002', '5e55a0de-0000-4000-8000-000000000002'])
+    expect(refs[0].id).toBe('5e55a0de-0000-4000-8000-000000000002-u1')
   })
 
   it('emits a ⇥ clear marker at the root of a post-/clear session', async () => {
     const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-store-')))
     const projectsDir = mkdtempSync(path.join(tmpdir(), 'trace-proj-'))
-    writeClaude(projectsDir, '/work/repo', 'old-sess', ['a1', 'a2', 'a3'], true)
-    writeClaude(projectsDir, '/work/repo', 'new-sess', ['b1', 'b2'])
+    writeClaude(projectsDir, '/work/repo', '5e55a0de-0000-4000-8000-000000000003', ['a1', 'a2', 'a3'], true)
+    writeClaude(projectsDir, '/work/repo', '5e55a0de-0000-4000-8000-000000000002', ['b1', 'b2'])
     const node = store.addNode(
-      terminal({ claudeSessionId: 'new-sess', sessionLineage: ['old-sess'] })
+      terminal({ claudeSessionId: '5e55a0de-0000-4000-8000-000000000002', sessionLineage: ['5e55a0de-0000-4000-8000-000000000003'] })
     ) as TerminalNodeData
 
     const markers = await new TraceReader(store, { projectsDir }).boundaryMarkers(node.id)
     // boundaryMarkers is current-file-only; the clear marker sits at the root
     // of the fresh session file created by /clear.
     expect(markers).toEqual([
-      { kind: 'clear', afterIndex: 0, previousSessionId: 'old-sess' }
+      { kind: 'clear', afterIndex: 0, previousSessionId: '5e55a0de-0000-4000-8000-000000000003' }
     ])
   })
 
   it('a node without lineage behaves exactly as before (single segment)', async () => {
     const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-store-')))
     const projectsDir = mkdtempSync(path.join(tmpdir(), 'trace-proj-'))
-    writeClaude(projectsDir, '/work/repo', 'solo', ['a1', 'a2'])
-    const node = store.addNode(terminal({ claudeSessionId: 'solo' })) as TerminalNodeData
+    writeClaude(projectsDir, '/work/repo', '5e55a0de-0000-4000-8000-000000000004', ['a1', 'a2'])
+    const node = store.addNode(terminal({ claudeSessionId: '5e55a0de-0000-4000-8000-000000000004' })) as TerminalNodeData
 
     const refs = await new TraceReader(store, { projectsDir }).checkpointRefs(node.id)
     expect(refs.map((r) => r.index)).toEqual([1, 2])
-    expect(refs.map((r) => r.sessionId)).toEqual(['solo', 'solo'])
+    expect(refs.map((r) => r.sessionId)).toEqual(['5e55a0de-0000-4000-8000-000000000004', '5e55a0de-0000-4000-8000-000000000004'])
     expect(await new TraceReader(store, { projectsDir }).boundaryMarkers(node.id)).toEqual([])
   })
 
   it('H6: one reader polling a GROWING file sees new refs/markers (incremental path, no full re-read)', async () => {
     const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-store-')))
     const projectsDir = mkdtempSync(path.join(tmpdir(), 'trace-proj-'))
-    writeClaude(projectsDir, '/work/repo', 'live', ['a1', 'a2'])
-    const node = store.addNode(terminal({ claudeSessionId: 'live' })) as TerminalNodeData
+    writeClaude(projectsDir, '/work/repo', '5e55a0de-0000-4000-8000-000000000005', ['a1', 'a2'])
+    const node = store.addNode(terminal({ claudeSessionId: '5e55a0de-0000-4000-8000-000000000005' })) as TerminalNodeData
     const reader = new TraceReader(store, { projectsDir })
 
     expect((await reader.checkpointRefs(node.id)).map((r) => r.index)).toEqual([1, 2])
@@ -378,14 +378,14 @@ describe('TraceReader checkpointRefs ∪ boundaryMarkers (lineage union)', () =>
 
     // The session grows: another turn plus a compact boundary. The SAME
     // reader must observe both through the incremental ingest.
-    const file = path.join(projectsDir, claudeProjectSlug('/work/repo'), 'live.jsonl')
+    const file = path.join(projectsDir, claudeProjectSlug('/work/repo'), '5e55a0de-0000-4000-8000-000000000005.jsonl')
     const appended = [
       JSON.stringify({
         type: 'system', subtype: 'compact_boundary',
         compactMetadata: { trigger: 'auto', preTokens: 50000, postTokens: 2000 }
       }),
-      prompt('live-u3', 'a3', T0 + 2000, 'live'),
-      reply(T0 + 2500, 'live')
+      prompt('live-u3', 'a3', T0 + 2000, '5e55a0de-0000-4000-8000-000000000005'),
+      reply(T0 + 2500, '5e55a0de-0000-4000-8000-000000000005')
     ]
     appendFileSync(file, appended.join('\n') + '\n')
 
@@ -399,13 +399,13 @@ describe('TraceReader checkpointRefs ∪ boundaryMarkers (lineage union)', () =>
   it('H6: a SHRINK (/rewind truncation) resets the cache instead of serving stale refs', async () => {
     const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-store-')))
     const projectsDir = mkdtempSync(path.join(tmpdir(), 'trace-proj-'))
-    writeClaude(projectsDir, '/work/repo', 'live', ['a1', 'a2', 'a3'])
-    const node = store.addNode(terminal({ claudeSessionId: 'live' })) as TerminalNodeData
+    writeClaude(projectsDir, '/work/repo', '5e55a0de-0000-4000-8000-000000000005', ['a1', 'a2', 'a3'])
+    const node = store.addNode(terminal({ claudeSessionId: '5e55a0de-0000-4000-8000-000000000005' })) as TerminalNodeData
     const reader = new TraceReader(store, { projectsDir })
 
     expect((await reader.checkpointRefs(node.id)).map((r) => r.index)).toEqual([1, 2, 3])
 
-    writeClaude(projectsDir, '/work/repo', 'live', ['a1']) // truncated
+    writeClaude(projectsDir, '/work/repo', '5e55a0de-0000-4000-8000-000000000005', ['a1']) // truncated
     expect((await reader.checkpointRefs(node.id)).map((r) => r.index)).toEqual([1])
   })
 })

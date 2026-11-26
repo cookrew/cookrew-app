@@ -67,7 +67,7 @@ function fixture(): { dir: string; projectsDir: string; store: WorkspaceStore } 
 describe('the trace reader streams its window', () => {
   it('reads past a chunk boundary with a multibyte character sitting ON it', async () => {
     const { dir, projectsDir, store } = fixture()
-    const file = path.join(dir, 'sess.jsonl')
+    const file = path.join(dir, '5e55a0de-0000-4000-8000-000000000001.jsonl')
     const cactus = Buffer.from('🌵', 'utf8')
 
     // Build once to find where a cactus lands, then rebuild with the padding
@@ -101,7 +101,7 @@ describe('the trace reader streams its window', () => {
     expect(raw[CHUNK]).toBeLessThan(0xc0)
     expect(statSync(file).size).toBeGreaterThan(CHUNK)
 
-    const node = store.addNode(terminal({ claudeSessionId: 'sess' })) as TerminalNodeData
+    const node = store.addNode(terminal({ claudeSessionId: '5e55a0de-0000-4000-8000-000000000001' })) as TerminalNodeData
     const reader = new TraceReader(store, { projectsDir })
     const page = await reader.page(node.id, { limit: 1000 })
 
@@ -115,7 +115,7 @@ describe('the trace reader streams its window', () => {
 
   it('an append rejoins a line whose previous read stopped INSIDE a character', async () => {
     const { dir, projectsDir, store } = fixture()
-    const file = path.join(dir, 'sess.jsonl')
+    const file = path.join(dir, '5e55a0de-0000-4000-8000-000000000001.jsonl')
     const first = turn(1, 'first 🌵')
     const second = turn(2, 'second 🌵')
 
@@ -134,7 +134,7 @@ describe('the trace reader streams its window', () => {
     expect(whole[cut]).toBeLessThan(0xc0)
     writeFileSync(file, whole.subarray(0, cut))
 
-    const node = store.addNode(terminal({ claudeSessionId: 'sess' })) as TerminalNodeData
+    const node = store.addNode(terminal({ claudeSessionId: '5e55a0de-0000-4000-8000-000000000001' })) as TerminalNodeData
     const reader = new TraceReader(store, { projectsDir })
     expect((await reader.page(node.id, { limit: 10 })).total).toBe(1)
 
@@ -151,11 +151,11 @@ describe('the trace reader streams its window', () => {
     // 80MB line cost 3.1GB and 10s. 3MB lines already exist in real
     // transcripts (a pasted build log), so this spans several chunks.
     const { dir, projectsDir, store } = fixture()
-    const file = path.join(dir, 'sess.jsonl')
+    const file = path.join(dir, '5e55a0de-0000-4000-8000-000000000001.jsonl')
     const long = `${'y'.repeat(CHUNK * 3)} 🌵`
     writeFileSync(file, `${turn(1, long).join('\n')}\n`)
 
-    const node = store.addNode(terminal({ claudeSessionId: 'sess' })) as TerminalNodeData
+    const node = store.addNode(terminal({ claudeSessionId: '5e55a0de-0000-4000-8000-000000000001' })) as TerminalNodeData
     const reader = new TraceReader(store, { projectsDir })
     const started = Date.now()
     const page = await reader.page(node.id, { limit: 10 })
@@ -167,11 +167,11 @@ describe('the trace reader streams its window', () => {
 
   it('a last line with no trailing newline waits, then completes on append', async () => {
     const { dir, projectsDir, store } = fixture()
-    const file = path.join(dir, 'sess.jsonl')
+    const file = path.join(dir, '5e55a0de-0000-4000-8000-000000000001.jsonl')
     const pair = turn(1, 'only 🌵')
     writeFileSync(file, pair.join('\n'))
 
-    const node = store.addNode(terminal({ claudeSessionId: 'sess' })) as TerminalNodeData
+    const node = store.addNode(terminal({ claudeSessionId: '5e55a0de-0000-4000-8000-000000000001' })) as TerminalNodeData
     const reader = new TraceReader(store, { projectsDir })
     // The unterminated last line is not a line yet — the prompt is, its
     // reply is not, so the turn exists with an empty reply.

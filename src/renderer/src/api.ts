@@ -1,3 +1,4 @@
+import type { HarnessId } from "../../shared/harness-catalog";
 import type { LaunchSaveResult, LaunchStatus, LaunchValues, LiveValues } from '../../shared/launch-settings'
 import type { MenuAct } from '../../shared/wait-choice'
 import type { FirstRunStage, FirstTask } from '../../shared/first-run'
@@ -814,7 +815,7 @@ export interface CookrewApi {
   ) => Promise<{
     blocks: unknown[];
     total: number;
-    source: "claude" | "codex" | "pi" | null;
+    source: HarnessId | null;
   }>;
   /**
    * Cheap identity+title listing of the FULL trace (unified-scroll item 3): one

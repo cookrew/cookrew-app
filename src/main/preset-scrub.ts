@@ -2,8 +2,7 @@ import { homedir } from 'node:os'
 import type { CanvasNode } from '../shared/model'
 import type { ScrubReport, SecretFinding } from '../shared/preset-manifest'
 import type { TeamSnapshot } from './teams'
-import { stripSessionFlags } from '../shared/claude-fork'
-import { isPiCommand, stripPiSessionFlags } from './pi-bind'
+import { withoutSessionFlags } from './harness'
 
 /**
  * EXPORT SCRUBBER (marketplace §5). The team snapshot was designed for LOCAL
@@ -210,9 +209,7 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
     // masking and the resume flags, which would point a buyer's copy at the
     // AUTHOR's live session file.
     scanSecrets(`nodes[${node.id}].command`, node.command, findings)
-    const stripped = isPiCommand(node.command)
-      ? stripPiSessionFlags(node.command)
-      : stripSessionFlags(node.command)
+    const stripped = withoutSessionFlags(node.command)
     return {
       ...node,
       name: mask(node.name),

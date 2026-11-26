@@ -1,3 +1,4 @@
+import { isHarnessId } from '../shared/harness-catalog'
 import { SERVED_TRANSCRIPT_PATHS, type ServedTracePage } from '../shared/served-transcript'
 import type {
   TraceBoundaryMarker,
@@ -85,7 +86,7 @@ const isTracePage = (value: unknown): value is ServedTracePage =>
   Array.isArray(value.blocks) &&
   value.blocks.every(isTraceBlock) &&
   typeof value.total === 'number' &&
-  (value.source === null || value.source === 'claude' || value.source === 'codex' || value.source === 'pi')
+  (value.source === null || isHarnessId(value.source))
 
 const isTurnPage = (value: unknown): value is TurnPage =>
   isRecord(value) &&

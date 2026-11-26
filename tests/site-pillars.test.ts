@@ -161,14 +161,14 @@ describe('the pictures say what they are (2026-11-17)', () => {
 
   it('the hero plays the 60-second film under the buttons: muted autoplay with controls, and none for reduced motion', () => {
     const files = site()
-    for (const [name, label] of [['index.html', HERO_FILM.label], ['zh/index.html', HERO_FILM.labelZh]] as const) {
+    for (const [name, label, file] of [['index.html', HERO_FILM.label, HERO_FILM.file], ['zh/index.html', HERO_FILM.labelZh, HERO_FILM.fileZh]] as const) {
       const body = files.get(name) as string
       const hero = /<section class="tf-hero">[\s\S]*?<\/section>/.exec(body)?.[0] ?? ''
       expect(hero, name).not.toContain('cr-ink-lockup')
       const film = /<div class="tf-film">[\s\S]*?<\/div>/.exec(hero)?.[0] ?? ''
       const [auto, still] = [...film.matchAll(/<video [^>]*>[\s\S]*?<\/video>/g)].map((m) => m[0])
       expect(auto, name).toMatch(/^<video class="f-auto" autoplay muted loop preload="metadata" playsinline controls /)
-      expect(auto, name).toContain(`<source src="${SITE_FRAMES}${HERO_FILM.file}" type="video/mp4" media="(prefers-reduced-motion: no-preference)">`)
+      expect(auto, name).toContain(`<source src="${SITE_FRAMES}${file}" type="video/mp4" media="(prefers-reduced-motion: no-preference)">`)
       expect(still, name).toMatch(/^<video class="f-still" preload="none" playsinline controls /)
       expect(still, name).not.toContain('autoplay')
       for (const v of [auto, still]) {
@@ -179,7 +179,7 @@ describe('the pictures say what they are (2026-11-17)', () => {
       expect(hero.indexOf('class="tf-film"'), name).toBeLessThan(hero.indexOf('class="tf-hero-shot"'))
       expect(body, name).toContain('@media (prefers-reduced-motion:reduce){.tf-film .f-auto{display:none}.tf-film .f-still{display:block}}')
     }
-    for (const file of [HERO_FILM.file, HERO_FILM.poster]) expect(existsSync(path.join(__dirname, '..', 'registry/assets/site', file)), file).toBe(true)
+    for (const file of [HERO_FILM.file, HERO_FILM.fileZh, HERO_FILM.poster]) expect(existsSync(path.join(__dirname, '..', 'registry/assets/site', file)), file).toBe(true)
   })
 
   it('the Chinese pages call an agent 智能体, never 助手', () => {

@@ -35,7 +35,7 @@ import {
   isSessionUuid,
   resolveExistingClaudeSession
 } from './claude-fork'
-import { harnessFor, type SessionField } from './harness'
+import { harnessFor, type HarnessId, type SessionField } from './harness'
 import { piNodeSessionDir, piSessionHome, validPiSessionId } from './pi-bind'
 
 /** The node fields a carry reads: identity, harness, and session bindings. */
@@ -89,14 +89,24 @@ export function carrySessionToCwd(options: SessionMoveOptions): SessionMoveOutco
   if (!harness) return { kind: 'not-needed' }
   const ref = options.node[harness.sessionField] ?? null
   try {
-    if (harness.id === 'claude') return carryClaudeSession(options, ref)
-    if (harness.id === 'pi') return carryPiSession(options, ref)
+    return SESSION_CARRY[harness.id](options, ref)
   } catch (error) {
     console.error('Carrying the session to the new directory failed:', error)
     return { kind: 'unavailable' }
   }
-  // codex / opencode: the ref IS the address, independent of any directory.
-  return { kind: 'not-needed' }
+}
+
+/**
+ * How each harness's session follows its card to a new directory. Keyed by
+ * every harness: one whose session address does not depend on the directory
+ * says so, rather than being assumed to.
+ */
+export const SESSION_CARRY: Readonly<Record<HarnessId, (options: SessionMoveOptions, ref: string | null) => SessionMoveOutcome>> = {
+  claude: (options, ref) => carryClaudeSession(options, ref),
+  pi: (options, ref) => carryPiSession(options, ref),
+  // The ref IS the address (a rollout path, a ses_ id), independent of any directory.
+  codex: () => ({ kind: 'not-needed' }),
+  opencode: () => ({ kind: 'not-needed' })
 }
 
 /**

@@ -1,3 +1,4 @@
+import { HARNESS_IDS } from '../../shared/harness-catalog'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { HarnessId } from '../harness'
@@ -21,7 +22,7 @@ import type { HarnessId } from '../harness'
 export const ROUTE_KEYS_FILE = 'route-keys.json'
 export type RouteKeys = Partial<Record<HarnessId, string>>
 
-const HARNESSES: readonly HarnessId[] = ['claude', 'codex', 'opencode', 'pi']
+const HARNESSES: readonly HarnessId[] = HARNESS_IDS
 /** A key name as magpie takes it: the characters a shell would not mangle. */
 const KEY_RE = /^[A-Za-z0-9._-]{1,64}$/
 

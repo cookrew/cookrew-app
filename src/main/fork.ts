@@ -11,15 +11,17 @@
 import { randomUUID } from 'node:crypto'
 import { ownerSubmit } from './ask'
 import { dialogOnScreen, waitChoiceOfScreen } from '../shared/wait-choice'
-import { harnessFor } from './harness'
+import { inputFor } from './harness-input'
 import { DEFAULT_TERMINAL_SIZE, TerminalNodeData, uniqueName } from '../shared/model'
 import { buildForkPreamble, buildResumeForkNotice } from '../shared/fork'
-import { isClaudeCommand, stripSessionFlags } from '../shared/claude-fork'
+import { withoutSessionFlags } from './harness'
+import { harnessHas } from './harness-features'
 import { forkClaudeSession } from './claude-fork'
-import { isPiCommand, stripPiSessionFlags } from './pi-bind'
 import type { WorkspaceStore } from './store'
 import type { PtyManager, PtySession } from './pty'
 import type { TurnTracker } from './turn-tracker'
+
+export { claudeComposerDrawn, codexComposerDrawn, piComposerDrawn } from './harness-input'
 
 export interface ForkDeps {
   store: WorkspaceStore
@@ -48,20 +50,6 @@ const BOOT_TIMEOUT_MS = 25000
  */
 export const FIRST_TASK_WAIT_MS = 6 * 60 * 60_000
 
-/**
- * HAS CLAUDE DRAWN ITS INPUT BOX? (2026-11-01: a prompt made from the global
- * box arrived as "gent prompt inputbox…".) The pane runs `clear; exec claude`,
- * and node can sit silent for longer than BOOT_QUIET_MS before Claude draws
- * anything: the quiet came before the TUI read its input, and the paste's
- * first character went with the terminal's mode switch. So a Claude session
- * also waits for its composer — the prompt mark between the box's two rules,
- * or the hint line under it.
- */
-export function claudeComposerDrawn(screen: string): boolean {
-  const lines = screen.split('\n')
-  if (lines.some((line) => /\? for shortcuts|bypass(?:ing)? permissions|shift\+tab to cycle/i.test(line))) return true
-  return lines.some((line) => /^\s*[─━]{10,}\s*$/.test(line)) && lines.some((line) => /^\s*(?:│\s*)?[❯>]\s?/.test(line))
-}
 
 /**
  * HAS THE AGENT TUI BOOTED FAR ENOUGH TO TAKE TYPED INPUT? Output seen, then
@@ -76,7 +64,8 @@ export function harnessReadyForInput(
 ): boolean {
   const idle = session.idleFor()
   if (!Number.isFinite(idle) || idle < BOOT_QUIET_MS) return false
-  return !isClaudeCommand(command) || claudeComposerDrawn(session.viewportText())
+  const input = inputFor(command)
+  return !input?.gatesEveryInput || input.drawn(session.viewportText())
 }
 /**
  * Create the fork node (placed beside its source, wired to it with an edge)
@@ -109,15 +98,18 @@ export function forkTerminal(
   }
 
   // Prefer a native session fork (truncated session copy under a fresh id);
-  // null means not Claude / session file not found, so replay a preamble.
-  // The source's stored session id resolves its file deterministically.
-  const native = forkClaudeSession({
-    command: source.command,
-    cwd: source.cwd,
-    sessionId: source.claudeSessionId,
-    turns: history,
-    turnIndex: index
-  })
+  // null means no native fork for this harness (harness-features.ts) or the
+  // session file not found, so replay a preamble. The source's stored
+  // session id resolves its file deterministically.
+  const native = harnessHas('nativeFork', source.command)
+    ? forkClaudeSession({
+        command: source.command,
+        cwd: source.cwd,
+        sessionId: source.claudeSessionId,
+        turns: history,
+        turnIndex: index
+      })
+    : null
 
   const fork: TerminalNodeData = {
     kind: 'terminal',
@@ -127,9 +119,7 @@ export function forkTerminal(
     preset: source.preset,
     // Session bindings live on node fields, not in the command. The spawn
     // path reconstructs the correct harness flags for the new node.
-    command: isPiCommand(source.command)
-      ? stripPiSessionFlags(source.command)
-      : stripSessionFlags(source.command),
+    command: withoutSessionFlags(source.command),
     cwd: source.cwd,
     orch: false,
     role: source.role,
@@ -216,36 +206,6 @@ export function forkContextReady(nodeId: string): Promise<void> {
  * Shared with the team-fork engine (teams.ts), which injects per-terminal
  * context the same way after a workspace switch boots the forked agents.
  */
-/**
- * HAS CODEX DRAWN ITS INPUT LINE? Quiet proves nothing for it: 1.5 s of silence
- * can be a blank screen, and keys queued there answer the trust or sign-in row
- * when it appears. Read off a real 0.166 boot: `› Ask Codex…`, `? for shortcuts`.
- */
-export function codexComposerDrawn(screen: string): boolean {
-  return screen.split('\n').some((line) => /^\s*›\s+\D/.test(line) || /\? for shortcuts/.test(line))
-}
-
-/** Pi's footer, read off a real 1.4 boot: `0.0%/128k (auto)`. It asks nothing first. */
-export function piComposerDrawn(screen: string): boolean {
-  return /\d(?:\.\d+)?%\/\d+k\b/.test(screen)
-}
-
-/**
- * Is this harness's input drawn? OpenCode's could not be read here (its one
- * service per machine was in use), so that is only "past its server start".
- */
-function composerUp(command: string, screen: string): boolean {
-  switch (harnessFor(command)?.id) {
-    case 'codex':
-      return codexComposerDrawn(screen)
-    case 'pi':
-      return piComposerDrawn(screen)
-    case 'opencode':
-      return screen.trim() !== '' && !/starting background server/i.test(screen)
-    default:
-      return true
-  }
-}
 
 /**
  * Ready, and asking nothing. A dialog can pass for a composer: the folder-trust
@@ -256,7 +216,7 @@ function composerUp(command: string, screen: string): boolean {
 function freeForFirstTask(session: PtySession): boolean {
   if (!harnessReadyForInput(session)) return false
   const screen = session.viewportText()
-  if (!composerUp(session.command ?? '', screen)) return false
+  if (!(inputFor(session.command ?? '')?.drawn(screen) ?? true)) return false
   return waitChoiceOfScreen(screen) === null && !dialogOnScreen(screen)
 }
 

@@ -1,3 +1,4 @@
+import type { HarnessId } from './harness-catalog'
 /**
  * THE ROUTE CONTRACT — Cookrew × Magpie (route program, 2026-10-11).
  *
@@ -156,7 +157,7 @@ export interface RouteTurnFacts {
 }
 
 export interface HarnessRow {
-  id: 'claude' | 'codex' | 'opencode' | 'pi'
+  id: HarnessId
   name: string
   installed: boolean
   signedIn: boolean | null

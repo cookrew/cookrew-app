@@ -1,5 +1,6 @@
 import type { FirstRunStage } from './first-run'
 import type { RouteModel, RouteState } from './route'
+import { supportFor, unsupported, type PerHarness } from './harness-support'
 
 /**
  * HAS THIS PERSON AN AI ACCOUNT AN AGENT CAN RUN ON? One answer for the first
@@ -83,10 +84,17 @@ export function subscriptionLines(route: AccountRoute | null): readonly Subscrip
   if (route.status !== 'absent') return MAGPIE_SIGN_INS
   return route.harnesses.flatMap((h): SubscriptionLine[] => {
     if (!h.installed || h.loginLine === null) return []
-    if (h.id === 'claude') return [{ id: 'claude', label: 'Claude', line: h.loginLine }]
-    if (h.id === 'codex') return [{ id: 'chatgpt', label: 'ChatGPT', line: h.loginLine }]
-    return []
+    const subscription = supportFor(OWN_SUBSCRIPTION, h.id)
+    return subscription ? [{ ...subscription, line: h.loginLine }] : []
   })
+}
+
+/** The subscription each harness signs itself in to when Magpie is not here. */
+export const OWN_SUBSCRIPTION: PerHarness<Omit<SubscriptionLine, 'line'>> = {
+  claude: { id: 'claude', label: 'Claude' },
+  codex: { id: 'chatgpt', label: 'ChatGPT' },
+  opencode: unsupported('signs in to many providers, none of them a subscription first-run offers'),
+  pi: unsupported('has no sign-in of its own')
 }
 
 export interface GuideFacts {
