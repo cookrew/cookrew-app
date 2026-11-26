@@ -199,6 +199,47 @@ describe('a phone’s live-view report is written down beside what the Mac sent'
   })
 })
 
+describe('a report says what the phone asked for (11-26: one card’s view flipped size on a phone)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('counts the window’s offers and claims and keeps the last asked size and scale, as the phone sent it', () => {
+    vi.useFakeTimers()
+    const { cast, entries } = viewer({ scaleCeiling: 3, relayed: true })
+    cast.handleMessage({ t: 'viewport-offer', width: 384, height: 793, mobile: true, scale: 2 })
+    cast.handleMessage({ t: 'viewport-offer', width: 384, height: 790, mobile: true, scale: 2 })
+    cast.handleMessage({ t: 'viewport-claim', width: 261, height: 537, mobile: true, scale: 2 })
+    vi.advanceTimersByTime(5000)
+    cast.handleMessage(report)
+    // The relay holds this viewer at 1x; the row still says it asked 2 (and inUse says what it got).
+    expect(entries[0].asks).toEqual({ offers: 2, claims: 1, width: 320, height: 537, scale: 2 })
+    expect(entries[0].inUse.scaleMax).toBe(1)
+  })
+
+  it('starts the counts over each window and keeps the last size', () => {
+    vi.useFakeTimers()
+    const { cast, entries } = viewer({ scaleCeiling: 3 })
+    cast.handleMessage({ t: 'viewport-offer', width: 390, height: 700, mobile: true })
+    vi.advanceTimersByTime(5000)
+    cast.handleMessage(report)
+    vi.advanceTimersByTime(5000)
+    cast.handleMessage(report)
+    expect(entries[0].asks).toEqual({ offers: 1, claims: 0, width: 390, height: 700, scale: 1 })
+    expect(entries[1].asks).toEqual({ offers: 0, claims: 0, width: 390, height: 700, scale: 1 })
+  })
+
+  it('leaves the field out for a viewer that never asked, and does not count a release or a malformed ask', () => {
+    vi.useFakeTimers()
+    const { cast, entries } = viewer({ scaleCeiling: 3 })
+    cast.handleMessage({ t: 'viewport-release' })
+    cast.handleMessage({ t: 'viewport-offer', width: 'wide', height: 700, mobile: true })
+    vi.advanceTimersByTime(5000)
+    cast.handleMessage(report)
+    expect(entries[0]).not.toHaveProperty('asks')
+  })
+})
+
 describe('a stats message carries numbers only, bounded', () => {
   it('keeps a well-formed report and drops extra fields', () => {
     const clean = sanitizeCastStats({ ...report, url: 'https://secret.test', text: 'typed' })

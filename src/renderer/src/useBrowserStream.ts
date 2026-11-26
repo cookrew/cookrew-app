@@ -166,7 +166,8 @@ export interface BrowserStreamOptions {
   watchFields?: boolean
 }
 
-function currentClient(): StreamClient {
+/** Which surface this renderer is: the phone/console, the desktop app, or the demo. */
+export function currentClient(): StreamClient {
   if (isRemoteMode()) return 'remote'
   if (hasNativeWebview()) return 'desktop'
   return 'demo'

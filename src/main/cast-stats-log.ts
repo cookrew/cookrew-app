@@ -54,6 +54,20 @@ export interface CastVideoTimings {
   readonly gain?: number
 }
 
+/**
+ * The viewport this viewer asked for (absent until it first asks; from 0.6.48):
+ * the window's offers and claims, and its last ask's CSS size and scale as it
+ * arrived (sanitized, before this Mac held the scale to inUse.scaleMax). A
+ * phone whose view flips size shows here whether it was the phone that asked.
+ */
+export interface CastAsks {
+  readonly offers: number
+  readonly claims: number
+  readonly width: number
+  readonly height: number
+  readonly scale: number
+}
+
 export interface CastStatsEntry {
   readonly at: string
   readonly browserId: string
@@ -63,6 +77,7 @@ export interface CastStatsEntry {
   readonly sent: CastSent
   readonly inUse: CastInUse
   readonly video?: CastVideoTimings
+  readonly asks?: CastAsks
 }
 
 export function castStatsFile(): string {

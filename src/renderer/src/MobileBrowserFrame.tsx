@@ -33,7 +33,9 @@ import {
   type StreamSurfaceState,
   type StreamTouchPointer
 } from './browser-stream'
-import { useBrowserStream } from './useBrowserStream'
+import { currentClient, useBrowserStream } from './useBrowserStream'
+import { useSteadyAsk } from './use-steady-ask'
+import { askMode } from './viewport-steady'
 import { NO_ZOOM, panZoom, pinchZoom, type FrameZoom } from './frame-zoom'
 import { hitArea, pictureFit, remoteLayout, ROW_HEIGHT_GUESS } from './use/remote-layout'
 import { FRAME_CONTROLS } from './use/RemotePanel'
@@ -136,14 +138,20 @@ export function MobileBrowserFrame({
   // follow each ask; a phone asks its own pixel ratio, held to what the Mac
   // allows it (useBrowserStream.ts · viewportAsk). The desktop stays at 1x.
   const scale = 1
+  // THE ASK IS NOT THE BOX on a phone (viewport-steady.ts, 11-26): the page's width at the box's
+  // shape, and a height within ASK_HEIGHT_SLACK_PX of the last ask is not asked again, so hosts of
+  // nearly the same shape share one page size and moving between them does not restart its encoder.
+  // A host of another shape (a half panel against the full view) is still one resize. The box fits
+  // the picture, below.
+  const ask = useSteadyAsk(boxRef, view, askMode(currentClient(), coarsePointer))
   const stream = useBrowserStream(
     browserId,
     open,
     streamEnabled,
     desktopStreamToken,
     {
-      width: view.w,
-      height: view.h,
+      width: ask.width,
+      height: ask.height,
       mobile: mobilePreference,
       ...(scale > 1 ? { scale } : {})
     },
@@ -940,8 +948,8 @@ export function MobileBrowserFrame({
       data-agent-held={stream.agentHeld ? 'true' : 'false'}
       data-viewport-transitioning={stream.transitioning ? 'true' : 'false'}
       data-control-available={stream.controlAvailable ? 'true' : 'false'}
-      data-offer-width={view.w || 'none'}
-      data-offer-height={view.h || 'none'}
+      data-offer-width={ask.width || 'none'}
+      data-offer-height={ask.height || 'none'}
       data-offer-mobile={mobilePreference ? 'true' : 'false'}
       // Interactive drive ONLY while frames are actively flowing (not merely WS
       // open); the tabIndex lets it take keys.
