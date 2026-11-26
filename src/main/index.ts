@@ -286,7 +286,7 @@ import type { UpdateStatus } from '../shared/update-check'
 import { commandRun, createSessionReader, linuxSession, remoteBuild, remoteSettingsFile } from './remote-probe'
 import { createRemoteTray } from './remote-tray'
 import { claudeSettingsGateway, launchPick, newAgentPlan, withGatewayModel } from './claude-model-route'
-import { harnessFor, type Harness as HarnessEntry } from './harness'
+import { harnessFor, settlesFromFile, type Harness as HarnessEntry } from './harness'
 import { harnessHas } from './harness-features'
 import { inputFor } from './harness-input'
 import { HARNESS_CARDS, HARNESS_NAMES } from '../shared/harness-catalog'
@@ -5183,7 +5183,7 @@ const dispatchService = new DispatchService({
     // change, because false promises acceptance left nothing behind.
     const spec = traces.watchSpec(agentId)
     const grade =
-      spec !== null && spec.finality === 'native'
+      spec !== null && settlesFromFile(spec.finality)
         ? ('native-file' as const)
         : turns.isTracked(agentId)
           ? ('scrape' as const)

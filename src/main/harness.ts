@@ -82,8 +82,28 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *              dispatch for such a harness (the conductor reads this off the
  *              watchSpec). Scrape-only harnesses declare 'boundary' too:
  *              with no file there is no tail to prove anything.
+ *
+ * 'structural' — the harness writes NO end-of-turn record, but its file's
+ *              own SHAPE proves the end: the tail step is an assistant reply
+ *              carrying no tool call, which is the condition its agent loop
+ *              stops on. A step that still holds a tool call — one running,
+ *              or one waiting for the person's approval — keeps the tail
+ *              open. Found 2026-11-26 on real Devin (`--export` ATIF) and
+ *              Antigravity (`transcript.jsonl`) sessions, neither of which
+ *              marks a turn's end; the live status cannot stand in for it
+ *              under herdr, which strips OSC 7501 and reported a Devin
+ *              approval wait as `done`. A structural claim must be proven
+ *              like a native one AND show its approval-wait shape stays
+ *              open (tests/harness-finality.test.ts). Declared limitation: a
+ *              reply that ends while the harness waits on background work it
+ *              started reads as final.
  */
-export type TurnFinality = 'native' | 'boundary'
+export type TurnFinality = 'native' | 'structural' | 'boundary'
+
+/** Can a file observer close a background dispatch's turn for this harness? */
+export function settlesFromFile(finality: TurnFinality): boolean {
+  return finality === 'native' || finality === 'structural'
+}
 
 /**
  * Golden-save cloning contract (Sol r3 P1; S7, see

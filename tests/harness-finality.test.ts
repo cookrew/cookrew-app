@@ -8,7 +8,7 @@
 // strands commissioned work until the sweep.
 
 import { describe, expect, it } from 'vitest'
-import { HARNESSES } from '../src/main/harness'
+import { HARNESSES, settlesFromFile } from '../src/main/harness'
 
 const T0 = Date.parse('2026-08-05T10:00:00.000Z')
 
@@ -88,18 +88,18 @@ const IN_FLIGHT: Record<string, string[]> = {
 }
 
 describe('harness turn-finality capability', () => {
-  it("every harness declares turnFinality: 'native' | 'boundary'", () => {
+  it("every harness declares turnFinality: 'native' | 'structural' | 'boundary'", () => {
     for (const harness of HARNESSES) {
       expect(
-        ['native', 'boundary'],
+        ['native', 'structural', 'boundary'],
         `${harness.id} must declare its end-of-turn proof`
       ).toContain(harness.turnFinality)
     }
   })
 
-  it("'native' requires turns: 'file' — a scrape cannot prove a tail", () => {
+  it("a file proof ('native' or 'structural') requires turns: 'file' — a scrape cannot prove a tail", () => {
     for (const harness of HARNESSES) {
-      if (harness.turnFinality === 'native') {
+      if (settlesFromFile(harness.turnFinality)) {
         expect(harness.turns, `${harness.id} claims a file proof with no file`).toBe('file')
       }
     }
@@ -110,7 +110,20 @@ describe('harness turn-finality capability', () => {
     expect(native).toEqual(['claude', 'codex', 'pi'])
   })
 
-  for (const harness of HARNESSES.filter((h) => h.turnFinality === 'native')) {
+  it('only a file proof lets a background dispatch settle from the file', () => {
+    expect(settlesFromFile('native')).toBe(true)
+    expect(settlesFromFile('structural')).toBe(true)
+    expect(settlesFromFile('boundary')).toBe(false)
+  })
+
+  it('no harness claims structural finality yet (agy and devin bring theirs with real-session fixtures)', () => {
+    // When one does, it must add its COMPLETED and IN_FLIGHT fixtures here AND
+    // an APPROVAL_WAIT fixture: a tail step holding a tool call that waits for
+    // the person must stay open (herdr reported exactly that state as done).
+    expect(HARNESSES.filter((h) => h.turnFinality === 'structural').map((h) => h.id)).toEqual([])
+  })
+
+  for (const harness of HARNESSES.filter((h) => settlesFromFile(h.turnFinality))) {
     it(`${harness.id}: the parser DELIVERS the claimed proof on the tail record`, () => {
       const turns = harness.parseTurns!(COMPLETED[harness.id])
       expect(turns).toHaveLength(1)
