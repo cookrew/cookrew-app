@@ -101,6 +101,8 @@ export class LineEstimate {
   private tooks: Sample[] = []
   private gaps: Sample[] = []
   private lastAck = 0
+  /** Times this estimate forgot its line (a new network): for the viewer's report. */
+  private forgotten = 0
   /** When a chunk last went alone (the first send counts as one: nothing was ahead of it). */
   private lastAloneAt = 0
   /** A round ends when a chunk sent after it began is acknowledged (BBR's next_round_delivered). */
@@ -196,6 +198,7 @@ export class LineEstimate {
 
   /** Another line: its speed, round trip and startup are learned again; the report's round trips stay. */
   private forgetLine(): void {
+    this.forgotten += 1
     this.rates = []
     this.speed = 0
     this.rtts = []
@@ -271,6 +274,11 @@ export class LineEstimate {
   /** Bytes the line delivered in the last whole round the window limited; 0 before one. */
   get lastRoundBytes(): number {
     return this.lastRound
+  }
+
+  /** How many times this estimate forgot its line since it was made. */
+  get forgets(): number {
+    return this.forgotten
   }
 
   /** When the newest acknowledgement came; 0 before any. */

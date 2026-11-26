@@ -524,7 +524,14 @@ export class CastViewer {
               waitP50: percentile(measured.waitMs, 50),
               waitP95: percentile(measured.waitMs, 95),
               ackP50: percentile(measured.ackMs, 50),
-              ackP95: percentile(measured.ackMs, 95)
+              ackP95: percentile(measured.ackMs, 95),
+              keyAsks: measured.keyAsks,
+              keyFrames: measured.keyFrames,
+              writeOffs: measured.writeOffs,
+              lineResets: measured.lineResets,
+              speedKBps: measured.speedKBps,
+              rttMs: measured.rttMs,
+              gain: measured.gain
             }
           }
         : {}),

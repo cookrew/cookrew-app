@@ -103,6 +103,22 @@ export const VIDEO_FIRST_ENCODE_TIMEOUT_MS = 10_000
 /** Within one revision a picture this much larger or smaller is a new size, not jitter. */
 const SIZE_JITTER_PX = 4
 
+/** One stretch of the sender's measurements and counts (cast-viewer.ts writes them into the report). */
+export interface VideoMeasured {
+  readonly encodeMs: number[]
+  readonly waitMs: number[]
+  readonly ackMs: number[]
+  readonly windowKB: number
+  readonly keyAsks: number
+  readonly keyFrames: number
+  readonly writeOffs: number
+  readonly lineResets: number
+  /** The line estimate as it stood at the report: 0 while nothing is known. */
+  readonly speedKBps: number
+  readonly rttMs: number
+  readonly gain: number
+}
+
 export interface VideoOutDeps {
   readonly session: CastEncoderSession
   readonly codec: string
@@ -144,6 +160,13 @@ export class VideoOut {
   private window = VIDEO_WINDOW_START
   /** The line's speed and round trip, from the phone's acknowledgements. */
   private line = new LineEstimate()
+  /**
+   * What the pacing did this stretch, for the viewer's report (owner 2026-11-26: a desktop-sized page fell
+   * to the window floor on the phone, and the simulation did not show why). Counts only, no addresses.
+   */
+  private counted = { keyAsks: 0, keyFrames: 0, writeOffs: 0, lineResets: 0 }
+  /** The current estimate's forgets already counted. */
+  private forgetsCounted = 0
   /** When the newest picture began waiting to be encoded. */
   private pendingSince = 0
   /** What this stretch measured, for the viewer's report (cast-stats-log.ts). */
@@ -271,15 +294,33 @@ export class VideoOut {
   }
 
   /** What this stretch measured, then a fresh one: encode time, how long a picture waited, acknowledgement round trips. */
-  takeMeasured(): { encodeMs: number[]; waitMs: number[]; ackMs: number[]; windowKB: number } {
-    const out = { ...this.measured, windowKB: Math.round(this.window / 1024) }
+  takeMeasured(): VideoMeasured {
+    this.countForgets()
+    const out = {
+      ...this.measured,
+      ...this.counted,
+      windowKB: Math.round(this.window / 1024),
+      speedKBps: Math.round(this.line.bytesPerSecond / 1024),
+      rttMs: Math.round(this.line.roundTripMs),
+      gain: this.line.gain
+    }
     this.measured = { encodeMs: [], waitMs: [], ackMs: [] }
+    this.counted = { keyAsks: 0, keyFrames: 0, writeOffs: 0, lineResets: 0 }
     return out
+  }
+
+  /** The estimate's own line forgets (a new network) since last counted, into this stretch's resets. */
+  private countForgets(): void {
+    this.counted = { ...this.counted, lineResets: this.counted.lineResets + this.line.forgets - this.forgetsCounted }
+    this.forgetsCounted = this.line.forgets
   }
 
   /** The phone's chain broke: the next chunk starts it again. */
   keyAsked(): void {
     this.needKey = true
+    this.countForgets()
+    this.counted = { ...this.counted, keyAsks: this.counted.keyAsks + 1, lineResets: this.counted.lineResets + 1 }
+    this.forgetsCounted = 0
     this.inFlight.clear()
     // Very likely another line (the phone came back on a new network): what was learned of the old one is no
     // guide to this one, and the chunks just cleared are still crossing. Kept, the estimate went on pouring a
@@ -318,6 +359,7 @@ export class VideoOut {
     for (const [n, sent] of this.inFlight) {
       if (now - heard(sent) < lostAfter) continue
       this.inFlight.delete(n)
+      this.counted = { ...this.counted, writeOffs: this.counted.writeOffs + 1 }
     }
     const bytes = [...this.inFlight.values()].reduce((sum, sent) => sum + sent.bytes, 0)
     // PROBE THE ROUND TRIP (BBR's ProbeRTT): with no chunk sent alone for a while, the next waits until the
@@ -400,6 +442,7 @@ export class VideoOut {
           const limit = { chunks: this.inFlight.size, maxChunks: this.maxChunks() }
           this.inFlight.set(n, this.line.sent(this.now(), bytes, unacknowledged, this.window, { ...limit, key: chunk.key === true }))
           if (chunk.key) {
+            this.counted = { ...this.counted, keyFrames: this.counted.keyFrames + 1 }
             this.needKey = false
             this.lastKeyAt = this.now()
           }
