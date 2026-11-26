@@ -36,7 +36,7 @@ export const HERO_FILM = {
   poster: 'cookrew-film-poster.jpg',
   width: 1920,
   height: 1080,
-  label: 'Cookrew: let your tokens flow freely (60-second film)',
+  label: 'Cookrew: Let your tokens flow (60-second film)',
   labelZh: 'Cookrew：让你的 token 自由流转（60 秒宣传片）'
 } as const
 
