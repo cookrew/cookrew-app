@@ -32,7 +32,8 @@
  *           round at DRAIN_GAIN lets the queue startup left behind go, as BBR's drain does.
  *   PROBE   a page that never pauses sends nothing alone; after ten round trips without (10-25 s), the sender waits for
  *           the line to empty and sends one (cast-video-out.ts), as BBR's ProbeRTT does.
- *   NEW     a chunk sent alone whose round trip is several times the line's known one: the phone is on
+ *   NEW     two chunks in a row sent alone whose round trip is several times the line's known one (one is a
+ *           stall, measured on the owner's phone 2026-11-26): the phone is on
  *   LINE    another network. What was known goes, and startup begins again (as a key frame asked for does,
  *           cast-video-out.ts keyAsked). Kept, a fast line's speed outlived a quiet spell on a slow one
  *           and the next scroll poured a full window onto it.
@@ -67,6 +68,10 @@ const QUEUE_RTT_SHARE = 1.25
 /** A lone chunk's round trip past both of these, against the line's known one, is another line. */
 const NEW_LINE_TIMES = 3
 const NEW_LINE_EXTRA_MS = 1000
+/** Lone chunks in a row that must be that slow before the line is another one. */
+const NEW_LINE_SLOW_LONE = 2
+/** The confirming probe after a first slow lone chunk waits at least this long. */
+const CONFIRM_MIN_MS = 1000
 
 /** What a chunk carries from its sending to its acknowledgement. */
 export interface SentChunk {
@@ -103,6 +108,9 @@ export class LineEstimate {
   private lastAck = 0
   /** Times this estimate forgot its line (a new network): for the viewer's report. */
   private forgotten = 0
+  /** Lone chunks in a row past the new-line bound. */
+  private slowLone = 0
+  private slowLoneAt = 0
   /** When a chunk last went alone (the first send counts as one: nothing was ahead of it). */
   private lastAloneAt = 0
   /** A round ends when a chunk sent after it began is acknowledged (BBR's next_round_delivered). */
@@ -156,7 +164,17 @@ export class LineEstimate {
   /** The phone has `newest` and everything before it; `acked` bytes were taken off the line by it. */
   acked(now: number, newest: SentChunk, acked: number): void {
     const tookNow = now - newest.at
-    if (newest.alone && this.rtt > 0 && tookNow > Math.max(this.rtt * NEW_LINE_TIMES, this.rtt + NEW_LINE_EXTRA_MS)) this.forgetLine()
+    // ANOTHER NETWORK MAKES EVERY LONE CHUNK SLOW; A STALL MAKES ONE (owner's phone on 0.6.43: one acknowledgement
+    // 5.9 s late on the relay was read as a new network, and the estimate fell from 122 to 6 KB/s with a 3.5 s
+    // round trip, the window to its floor). So two in a row, and one fast lone chunk in between starts over.
+    // A first slow one older than RTT_MEMORY_MS is no longer "in a row" with this one.
+    if (this.slowLone > 0 && now - this.slowLoneAt > RTT_MEMORY_MS) this.slowLone = 0
+    if (newest.alone && this.rtt > 0) {
+      const slow = tookNow > Math.max(this.rtt * NEW_LINE_TIMES, this.rtt + NEW_LINE_EXTRA_MS)
+      this.slowLone = slow ? this.slowLone + 1 : 0
+      if (slow) this.slowLoneAt = now
+      if (this.slowLone >= NEW_LINE_SLOW_LONE) this.forgetLine()
+    }
     this.delivered += acked
     this.deliveredAt = now
     const took = now - newest.at
@@ -203,6 +221,9 @@ export class LineEstimate {
     this.speed = 0
     this.rtts = []
     this.rtt = 0
+    // The old line's acknowledgement times go too: kept, the fastest of them stood in for the new round trip.
+    this.tooks = []
+    this.slowLone = 0
     this.gaps = []
     this.lastAck = 0
     this.roundEndsAt = this.delivered
@@ -262,7 +283,10 @@ export class LineEstimate {
 
   /** No chunk has gone alone for PROBE_EVERY_MS: the next should wait for the line to empty. */
   probeDue(now: number): boolean {
-    const every = Math.min(PROBE_EVERY_MAX_MS, Math.max(PROBE_EVERY_MS, this.rtt * PROBE_EVERY_RTTS))
+    // One lone chunk was slow: confirm it soon (two round trips, at least a second), not at the next regular
+    // probe. Then the second is judged against the same line as the first, and a new network is learned in
+    // seconds (review 2026-11-26: waiting ~18 s, the old round trip had aged out and the change was never seen).
+    const every = this.slowLone > 0 ? Math.max(2 * this.rtt, CONFIRM_MIN_MS) : Math.min(PROBE_EVERY_MAX_MS, Math.max(PROBE_EVERY_MS, this.rtt * PROBE_EVERY_RTTS))
     return this.lastAloneAt > 0 && now - this.lastAloneAt >= every
   }
 
