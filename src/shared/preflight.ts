@@ -1,6 +1,8 @@
 import { FIX_LABELS, TOOL_COPY, TOOL_NOTES } from './first-run-copy'
 import { XDOTOOL_INSTALL } from './remote-access'
 import { codexInstallLine, piInstallLine } from './route-lines'
+import type { HarnessId } from './harness-catalog'
+import { supportFor, unsupported, type PerHarness } from './harness-support'
 
 /**
  * WHAT THIS MACHINE HAS, AS ROWS. Main answers the facts (main/preflight.ts);
@@ -15,7 +17,18 @@ import { codexInstallLine, piInstallLine } from './route-lines'
 
 export type ToolState = 'found' | 'missing' | 'unknown'
 
-export interface ToolFacts {
+/**
+ * Every harness, in the order a first agent would take it. A permutation of
+ * HARNESS_IDS (tests/harness-matrix.test.ts), and each one a ToolId, so a new
+ * harness needs its first-run copy before it compiles.
+ */
+export const FIRST_RUN_AGENTS: readonly (ToolId & HarnessId)[] = ['claude', 'codex', 'pi', 'opencode']
+
+/**
+ * Every harness has a state here (the Record makes a new catalog id fail to
+ * compile until main reports it and UNKNOWN_FACTS names it).
+ */
+export interface ToolFacts extends Record<HarnessId, ToolState> {
   claude: ToolState
   /** Null when the state above is not `found`, or nothing can be read. */
   claudeSignedIn: boolean | null
@@ -106,22 +119,27 @@ function brewOrPage(facts: ToolFacts, line: string, page: string): ToolFix | nul
   return onMac(facts) ? { label: FIX_LABELS.GET, line: `open ${page}` } : null
 }
 
+/** How each harness is installed on this machine: chosen from what it really has. */
+export const HARNESS_INSTALL_FIX: Readonly<Record<HarnessId, (facts: ToolFacts) => ToolFix | null>> = {
+  claude: () => ({ label: FIX_LABELS.INSTALL, line: CLAUDE_INSTALL }),
+  codex: (facts) => {
+    if (facts.npm === 'found') return { label: FIX_LABELS.INSTALL, line: CODEX_NPM }
+    if (hasBrew(facts)) return { label: FIX_LABELS.INSTALL, line: 'brew install codex' }
+    const line = codexInstallLine(facts.platform, facts.arch)
+    return line === null ? null : { label: FIX_LABELS.INSTALL, line }
+  },
+  pi: (facts) => {
+    const line = piInstallLine(facts.platform, facts.arch)
+    return line === null ? null : { label: FIX_LABELS.INSTALL, line }
+  },
+  opencode: () => ({ label: FIX_LABELS.INSTALL, line: OPENCODE_INSTALL })
+}
+
+const isHarnessTool = (id: ToolId): id is ToolId & HarnessId => (FIRST_RUN_AGENTS as readonly string[]).includes(id)
+
 function installFix(id: ToolId, facts: ToolFacts): ToolFix | null {
+  if (isHarnessTool(id)) return HARNESS_INSTALL_FIX[id](facts)
   switch (id) {
-    case 'claude':
-      return { label: FIX_LABELS.INSTALL, line: CLAUDE_INSTALL }
-    case 'codex': {
-      if (facts.npm === 'found') return { label: FIX_LABELS.INSTALL, line: CODEX_NPM }
-      if (hasBrew(facts)) return { label: FIX_LABELS.INSTALL, line: 'brew install codex' }
-      const line = codexInstallLine(facts.platform, facts.arch)
-      return line === null ? null : { label: FIX_LABELS.INSTALL, line }
-    }
-    case 'pi': {
-      const line = piInstallLine(facts.platform, facts.arch)
-      return line === null ? null : { label: FIX_LABELS.INSTALL, line }
-    }
-    case 'opencode':
-      return { label: FIX_LABELS.INSTALL, line: OPENCODE_INSTALL }
     case 'multiplexer':
       return throughBrew(facts, { label: FIX_LABELS.INSTALL_TMUX, line: 'brew install tmux' })
     case 'chrome':
@@ -179,7 +197,25 @@ function claudeRow(facts: ToolFacts): PreflightRow {
   return { ...base, note: base.note === null ? consent : `${base.note} ${consent}` }
 }
 
-function agentRow(id: 'claude' | 'codex', state: ToolState, signedIn: boolean | null, loginLine: string, facts: ToolFacts): PreflightRow {
+/**
+ * What the first run knows of each harness's sign-in, and the line that signs
+ * it in. A harness first run does not ask about says why.
+ */
+export const FIRST_RUN_SIGN_IN: PerHarness<{ signedIn: (facts: ToolFacts) => boolean | null; loginLine: string }> = {
+  claude: { signedIn: (facts) => facts.claudeSignedIn, loginLine: 'claude' },
+  codex: { signedIn: (facts) => facts.codexSignedIn, loginLine: 'codex login' },
+  opencode: unsupported('it signs in to many providers, none of them one first run offers'),
+  pi: unsupported('it has no sign-in of its own; a model key or the gateway is enough')
+}
+
+/** A harness's row: its state, and a sign-in fix where first run reads one. */
+function harnessRow(id: HarnessId, facts: ToolFacts): PreflightRow {
+  if (id === 'claude') return claudeRow(facts)
+  const sign = supportFor(FIRST_RUN_SIGN_IN, id)
+  return sign ? agentRow(id, facts[id], sign.signedIn(facts), sign.loginLine, facts) : row(id, facts[id], facts)
+}
+
+function agentRow(id: ToolId & HarnessId, state: ToolState, signedIn: boolean | null, loginLine: string, facts: ToolFacts): PreflightRow {
   if (state !== 'found' || signedIn !== false) return row(id, state, facts)
   if (facts.endpointTools?.includes(TOOL_COPY[id].name)) return row(id, state, facts, { note: TOOL_NOTES.USES_ENDPOINT })
   return row(id, state, facts, { note: TOOL_NOTES.NOT_SIGNED_IN, fix: { label: FIX_LABELS.SIGN_IN, line: loginLine } })
@@ -194,10 +230,7 @@ function keeperRow(facts: ToolFacts): PreflightRow {
 
 export function preflightRows(facts: ToolFacts): PreflightRow[] {
   return [
-    claudeRow(facts),
-    agentRow('codex', facts.codex, facts.codexSignedIn, 'codex login', facts),
-    row('pi', facts.pi, facts),
-    row('opencode', facts.opencode, facts),
+    ...FIRST_RUN_AGENTS.map((id) => harnessRow(id, facts)),
     keeperRow(facts),
     row('chrome', facts.chrome, facts),
     row('magpie', facts.magpie, facts),
@@ -208,7 +241,7 @@ export function preflightRows(facts: ToolFacts): PreflightRow[] {
 }
 
 /** The rows that run agents, in the order a first agent would take them. */
-export const AGENT_TOOLS: readonly ToolId[] = ['claude', 'codex', 'pi', 'opencode']
+export const AGENT_TOOLS: readonly ToolId[] = FIRST_RUN_AGENTS
 
 /** One agent tool is the whole requirement, and a failed check never counts as absent. */
 export function mayContinue(rows: readonly PreflightRow[]): boolean {

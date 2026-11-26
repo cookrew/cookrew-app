@@ -24,6 +24,7 @@ import { ROUTABLE } from '../src/main/route-env'
 import { NOT_ROUTABLE_REASON } from '../src/shared/route-view'
 import { ROUTE_OVERRIDES } from '../src/shared/launch-tune'
 import { OWN_SUBSCRIPTION } from '../src/shared/ai-account'
+import { FIRST_RUN_AGENTS, FIRST_RUN_SIGN_IN, HARNESS_INSTALL_FIX, UNKNOWN_FACTS } from '../src/shared/preflight'
 
 const TABLES: Record<string, Readonly<Record<string, unknown>>> = {
   'registry (harness.ts)': HARNESS_BY_ID,
@@ -41,6 +42,8 @@ const TABLES: Record<string, Readonly<Record<string, unknown>>> = {
   'route overrides (launch-tune.ts)': ROUTE_OVERRIDES,
   'own subscription (ai-account.ts)': OWN_SUBSCRIPTION,
   'line rebuilt on send (harness-ui.ts)': LINE_REBUILT_ON_SEND,
+  'first-run install fix (preflight.ts)': HARNESS_INSTALL_FIX,
+  'first-run sign-in (preflight.ts)': FIRST_RUN_SIGN_IN,
   'gateway models in the tune dial (harness-ui.ts)': GATEWAY_MODELS_IN_TUNE,
   ...Object.fromEntries(Object.entries(OPTIONAL_FEATURES).map(([feature, table]) => [`optional: ${feature}`, table]))
 }
@@ -74,6 +77,11 @@ describe('G8 · every feature table declares every harness', () => {
     expect(() => unsupported('  ')).toThrow()
   })
 
+  it('first run lists every harness exactly once, and knows nothing of each until asked', () => {
+    expect([...FIRST_RUN_AGENTS].sort()).toEqual([...HARNESS_IDS].sort())
+    for (const id of HARNESS_IDS) expect(UNKNOWN_FACTS[id]).toBe('unknown')
+  })
+
   it('wire values are checked against the catalog', () => {
     for (const id of HARNESS_IDS) expect(isHarnessId(id)).toBe(true)
     for (const bad of ['', 'shell', 'Claude Code', '../claude', null, 3]) expect(isHarnessId(bad)).toBe(false)
@@ -104,6 +112,7 @@ describe('G9 · the support matrix changes only on purpose', () => {
     expect(ids(OWN_ENDPOINT)).toEqual(['claude', 'codex', 'pi'])
     expect(ids(SESSION_ON_DISK)).toEqual(['claude', 'codex'])
     expect(ids(OWN_SUBSCRIPTION)).toEqual(['claude', 'codex'])
+    expect(ids(FIRST_RUN_SIGN_IN)).toEqual(['claude', 'codex'])
   })
 
   it('Claude keeps every optional feature (the baseline never regresses, like G2)', () => {
