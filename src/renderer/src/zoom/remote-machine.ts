@@ -2,17 +2,18 @@ import type { RemoteMachineAnswer } from '../../../shared/remote-machine-calls'
 import { briefId, type WaitAbout } from '../../../shared/wait-about'
 import { hasWordsRow, type MenuAct, type WaitChoice, type WaitOption, type WaitRole } from '../../../shared/wait-choice'
 import { statusWord, type InkStatus } from './ink-status'
-import type { AgentView, MarkView } from './zoom-model'
+import type { AgentView } from './zoom-model'
 
 /**
- * ANOTHER MACHINE INSIDE THIS ONE'S ZOOM VIEW (owner 2026-11-10, design B).
+ * AN AGENT OF ANOTHER MACHINE, ON THIS ONE'S DEVICES STOP (RemotePickCard.tsx:
+ * the quick-reply card the keys pop; owner 2026-11-17). Inside that machine
+ * its own app draws everything (MachineGuestView.tsx); this is only the card.
  *
  * The other machine answers with the compact cards its watch reads
  * (main/watch-routes.ts · cards): a tile per workspace, then a workspace's
  * whole crew, each card with its latest words, its menu and its items. This
- * turns that answer into the zoom's own views (zoom-model.ts), so the faces,
- * the words and the menu are drawn by the same parts as this machine's own,
- * and says, in every crumb past "Devices", whose they are.
+ * turns that answer into the zoom's own views (zoom-model.ts), so the face,
+ * the words and the menu are drawn by the same parts as this machine's own.
  *
  * Nothing here trusts the other machine's shape: a card or a tile it cannot
  * use is left out, and an answer that is not one is null.
@@ -208,59 +209,6 @@ export function remoteAgentView(card: RemoteCard): AgentView {
     notes: card.notes,
     turn: { title: card.about, ask: null, tools: [], latest: card.words, pendingInput: null, tail: null }
   }
-}
-
-/** The faces a tile fans: one per agent, at most the tile's six. */
-const TILE_FACES = 6
-
-/** A workspace tile in the zoom's own form (WorkspaceTile.tsx); its items are not counted from here. */
-export function tileView(tile: RemoteTile): MarkView {
-  return {
-    id: tile.id,
-    name: tile.name,
-    presets: tile.presets?.length ? [...tile.presets] : Array.from({ length: Math.min(tile.agents, TILE_FACES) }, () => 'claude'),
-    waiting: tile.waiting > 0,
-    waitingCount: tile.waiting,
-    browsers: tile.artifacts && tile.artifacts.length < 24 ? tile.artifacts.filter((item) => item.kind === 'browser').length : null,
-    notes: tile.artifacts && tile.artifacts.length < 24 ? tile.artifacts.filter((item) => item.kind === 'note').length : null,
-    deck: (tile.artifacts ?? []).map((item) => ({ ...item, line: '', owners: [] }))
-  }
-}
-
-export interface Crumb {
-  readonly label: string
-  /** How deep it steps back to: 0 is the devices, 1 the machine, 2 a workspace, 3 an agent. */
-  readonly depth: number
-  /** Inside the other machine: drawn in its colour, so nothing is sent to the wrong one. */
-  readonly remote: boolean
-}
-
-/** A workspace's browsers and notes on that machine, each once, under the first agent that wears it. */
-export function artifactsOf(cards: readonly RemoteCard[]): { item: RemoteItem; card: RemoteCard }[] {
-  const seen = new Set<string>()
-  return cards.flatMap((card) =>
-    card.items.flatMap((item) => {
-      if (seen.has(item.id)) return []
-      seen.add(item.id)
-      return [{ item, card }]
-    })
-  )
-}
-
-/** The breadcrumb: Devices, then the machine, then each stop inside it. */
-export function crumbsOf(
-  machine: { readonly name: string },
-  workspace: { readonly id: string; readonly name: string } | null,
-  agent: { readonly id: string; readonly name: string } | null,
-  item: { readonly id: string; readonly title: string } | null
-): Crumb[] {
-  const inside = [machine.name, workspace?.name, agent?.name, item?.title]
-  const crumbs: Crumb[] = [{ label: 'Devices', depth: 0, remote: false }]
-  for (const [i, label] of inside.entries()) {
-    if (label === undefined) break
-    crumbs.push({ label, depth: i + 1, remote: true })
-  }
-  return crumbs
 }
 
 /** Did it answer at all: anything but "nothing came back" and the relay's own failures. */

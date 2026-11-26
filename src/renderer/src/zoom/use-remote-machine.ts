@@ -4,8 +4,10 @@ import type { RemoteMachineAnswer } from '../../../shared/remote-machine-calls'
 import { answered, parseRemoteCards, type RemoteCards } from './remote-machine'
 
 /**
- * ANOTHER MACHINE, READ WHILE THE ZOOM VIEW IS INSIDE IT (owner 2026-11-10,
- * design B). Every call goes through this machine's main process
+ * ANOTHER MACHINE'S AGENT, READ FOR ITS QUICK-REPLY CARD ON THE DEVICES STOP
+ * (RemotePickCard.tsx), and the HITL bar's reads of it (remote-hitl.ts). Inside
+ * that machine its own app reads for itself (MachineGuestView.tsx). Every call
+ * goes through this machine's main process
  * (main/zoom-fleet.ts · callMachine), which holds the key and checks the call;
  * a surface with no such call (the phone's page) reads nothing.
  *
@@ -17,8 +19,6 @@ import { answered, parseRemoteCards, type RemoteCards } from './remote-machine'
 export const REMOTE_CARDS_MS = 3000
 /** A thumbnail's picture: a peek at what that machine already has. */
 export const REMOTE_PEEK_MS = 10_000
-/** The page open in front: as often as that machine photographs it after a touch. */
-export const REMOTE_PAGE_MS = 1200
 
 const NOTHING: RemoteMachineAnswer = { status: 0, body: null }
 
@@ -155,16 +155,3 @@ export function useRemotePicture(machineId: string, itemId: string | null, width
   return { src, refresh }
 }
 
-/** A note on the other machine: its name and words, or null until read. */
-export function useRemoteNote(machineId: string, noteId: string | null): { name: string; content: string } | null {
-  const [note, setNote] = useState<{ name: string; content: string } | null>(null)
-  useEffect(() => setNote(null), [machineId, noteId])
-  const read = useCallback(async (): Promise<void> => {
-    if (!noteId) return
-    const answer = await callRemote(machineId, 'GET', `api/watch/item/${encodeURIComponent(noteId)}`)
-    const body = 'body' in answer ? (answer.body as { name?: unknown; content?: unknown } | null) : null
-    if (answer.status === 200 && typeof body?.name === 'string' && typeof body.content === 'string') setNote({ name: body.name, content: body.content })
-  }, [machineId, noteId])
-  usePoll(noteId ? read : null, REMOTE_CARDS_MS * 2)
-  return note
-}

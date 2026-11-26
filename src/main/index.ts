@@ -71,6 +71,7 @@ import {
 } from './board-index'
 import { createBoardHolds } from './board-hold'
 import { answerOf, callMachine, NO_ANSWER, registerZoomFleetIpc, type RemoteAnswer, type RemoteRead } from './zoom-fleet'
+import { guardGuestWebviews, guestAssets, installMachineGuest, isMachineGuest, registerMachineGuestScheme } from './machine-guest-install'
 import { createRemoteRevalidation } from './remote-revalidate'
 import type { RemoteMachineCall } from '../shared/remote-machine-calls'
 import { setShellObserver } from './multiplexer'
@@ -1998,6 +1999,8 @@ const sealTerminus = createSealTerminus({
  * The idle lock covers the OWNER'S RENDERER and nothing else: agents keep
  * running, doors keep answering, the phone keeps its session.
  */
+/** The guest machines' door (machine-guest.ts), set at `ready`: the lock cuts what it still carries. */
+let cutGuestCalls: (() => void) | null = null
 const ownerLock = new IdleLock({
   lockAfterMs: accounts.account()?.lockAfterMs ?? DEFAULT_LOCK_AFTER_MS,
   verify: (password) => accounts.verifyUnlock(password),
@@ -2008,6 +2011,8 @@ const ownerLock = new IdleLock({
   onChange: (locked) => {
     // A provider trip in flight belongs to whoever just walked away.
     if (locked) accounts.providerCancel()
+    // Another machine worked from here: what is still open to it is cut, and nothing new goes (machine-guest.ts).
+    if (locked) cutGuestCalls?.()
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('account:locked', locked)
     }
@@ -7815,8 +7820,11 @@ function createWindow(): void {
   // Browser webviews: window.open / target=_blank must become a tab in the
   // same browser, never a detached native window. The renderer maps the
   // webContents id back to the owning browser and appends a tab.
+  // A guest machine's <webview> gets its own preload, set here, never by the page (machine-guest-install.ts).
+  guardGuestWebviews(mainWindow.webContents, path.join(dirname, '../preload/machine-guest.cjs'), () => ownerLock.activity())
   mainWindow.webContents.on('did-attach-webview', (_event, contents) => {
-    contents.setWindowOpenHandler(({ url }) => {
+    // A guest machine's page opens its links outside itself (machine-guest-install.ts); it is no browser card.
+    if (!isMachineGuest(contents)) contents.setWindowOpenHandler(({ url }) => {
       if (/^https?:/.test(url) && mainWindow && !mainWindow.webContents.isDestroyed()) {
         mainWindow.webContents.send('browser:open-tab', { webContentsId: contents.id, url })
       }
@@ -7841,6 +7849,10 @@ function createWindow(): void {
 // abort), which took the whole app down at launch on 2026-08-08 — see the
 // Electron-*-172115.ips crash report. The lock turns "two instances slowly
 // corrupt each other" into "the second instance exits immediately".
+// Another machine of the account, drawn here as the console draws it (machine-guest.ts): its page
+// origin is registered before `ready`, as Electron requires.
+registerMachineGuestScheme()
+
 if (!app.requestSingleInstanceLock()) {
   console.error('Another Cookrew instance is already running — exiting.')
   app.exit(1)
@@ -10000,6 +10012,25 @@ function registerIpc(handlers: RestoreHandlers): void {
     deviceId: () => accounts.account()?.deviceId ?? null,
     readOf: readAccountMachine
   })
+  // ANOTHER MACHINE, DRAWN AS THE CONSOLE DRAWS IT (owner 2026-11-25; machine-guest.ts): its page from this
+  // app's own build, its `/api/m` down the account's relay with the session added here, never in a renderer.
+  const guestDoor = installMachineGuest({
+    relayed: (machineId, route, init) => accounts.relayed(machineId, route, init),
+    keyOf: (machineId) => {
+      const key = machineKeys.token(machineId)
+      // No key yet (a machine added since the last round): one is asked for, and the guest says it has none.
+      if (key === null) askForMachineKey(machineId)
+      return key
+    },
+    asset: guestAssets(path.join(dirname, '../renderer'), process.env.ELECTRON_RENDERER_URL),
+    locked: () => ownerLock.locked,
+    // That machine no longer takes the key: dropped, and a new one asked for, as a fleet read does.
+    refused: (machineId) => {
+      keyRefused(machineId)
+      askForMachineKey(machineId)
+    }
+  })
+  cutGuestCalls = guestDoor.cutAll
   // Owner acts, gated as the account's are: work in another machine from here, and this machine's one proof.
   // Full control of another machine is never handed out behind a locked screen.
   ipcMain.handle('zoom-fleet:call', ownerOnly((machineId: unknown, method: unknown, route: unknown, body: unknown) =>

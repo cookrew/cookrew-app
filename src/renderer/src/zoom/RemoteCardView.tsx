@@ -11,12 +11,13 @@ import '../prompt/wait-choices.css'
 import './agent-card.css'
 
 /**
- * AN AGENT'S CARD ON ANOTHER MACHINE (owner 2026-11-10, design B): the face,
- * the name and state, its latest reply whole, the menu it waits on with the
- * same rows as this machine's own (prompt/WaitChoices.tsx), its browsers and
- * notes. Words to it are typed in the bar's box, as on this machine
- * (prompt/RemotePrompt.tsx; owner 2026-11-12). What the card sends goes the
- * way a phone's would on that machine: the checked menu answer, Esc for a stop.
+ * AN AGENT'S CARD ON ANOTHER MACHINE, popped on this machine's devices stop
+ * (RemotePickCard.tsx): the face, the name and state, its latest reply whole,
+ * the menu it waits on with the same rows as this machine's own
+ * (prompt/WaitChoices.tsx), its browsers and notes. Words to it are typed in
+ * the pick card's box. What the card sends goes the way a phone's would on
+ * that machine: the checked menu answer, Esc for a stop. Inside that machine
+ * its own app draws its cards (MachineGuestView.tsx).
  */
 
 /** How long a picked row stands filled before the next read shows what the agent did. */

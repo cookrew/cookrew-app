@@ -1,5 +1,5 @@
 /**
- * ANOTHER MACHINE IS ENTERED IN PLACE (0.6.0). Its view (RemoteMachineView.tsx)
+ * ANOTHER MACHINE IS ENTERED IN PLACE (0.6.0). Its view (MachineGuestView.tsx)
  * grows out of its own frame on the devices stop: the first thing drawn is the
  * view seen through a window where that frame stands, and the window opens
  * to the whole view. Pure: the two boxes in, the two clip paths out.

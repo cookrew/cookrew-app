@@ -22,23 +22,30 @@ describe('the calls one machine may make on another', () => {
     }
   })
 
-  it('answers, replies, stops and starts agents on it', () => {
-    for (const route of ['api/terminal/abc-1/input', 'api/terminal/abc-1/menu', 'api/terminal/abc-1/seen', 'api/watch/card/abc-1/stop', 'api/watch/new', 'api/watch/new?seat=w-1', 'api/watch/item/b1/input']) {
+  it('answers, replies to and stops agents on it, from the card on the devices stop', () => {
+    for (const route of ['api/terminal/abc-1/input', 'api/terminal/abc-1/menu', 'api/terminal/abc-1/seen', 'api/watch/card/abc-1/stop']) {
       expect(remoteMachineCall('POST', route), route).not.toBeNull()
     }
   })
 
-  it('takes and gives back control of a screen on it, in a workspace', () => {
-    expect(remoteMachineCall('POST', 'api/use/sources/control?seat=w-1')).toMatchObject({ method: 'POST' })
-    for (const route of ['api/use/sources/control', 'api/use/sources/unlock?seat=w-1', 'api/use/sources/open?seat=w-1', 'api/use/sources?seat=w-1']) {
-      expect(remoteMachineCall('POST', route), route).toBeNull()
+  // Inside that machine its own app works it, as the console does (main/machine-guest.ts): what only
+  // the old in-window stops asked (a new agent, an item's words and input, a screen's control) is gone.
+  it('starts no agent, reads or touches no item, takes no screen: that is the machine’s own app now', () => {
+    for (const [method, route] of [
+      ['POST', 'api/watch/new'],
+      ['POST', 'api/watch/new?seat=w-1'],
+      ['POST', 'api/watch/item/b1/input'],
+      ['GET', 'api/watch/item/n1'],
+      ['POST', 'api/use/sources/control?seat=w-1'],
+      ['POST', 'api/use/sources/unlock?seat=w-1']
+    ] as const) {
+      expect(remoteMachineCall(method, route), `${method} ${route}`).toBeNull()
     }
   })
 
-  it('reads its pictures as bytes, and its notes', () => {
+  it('reads its pictures as bytes', () => {
     expect(remoteMachineCall('GET', 'api/watch/item/b1/frame?w=640')).toMatchObject({ binary: true })
     expect(remoteMachineCall('GET', 'api/watch/item/b1/frame?w=180&peek=1')).toMatchObject({ binary: true })
-    expect(remoteMachineCall('GET', 'api/watch/item/n1')).toMatchObject({ binary: false })
   })
 
   it('nothing else: no raw terminal input, no other route, no way out of the path, no other method', () => {

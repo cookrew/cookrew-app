@@ -43,6 +43,11 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
+        // The window's bridge, and the one a guest machine's <webview> gets (shared/machine-guest.ts).
+        input: {
+          index: path.join(root, 'src/preload/index.ts'),
+          'machine-guest': path.join(root, 'src/preload/machine-guest.ts')
+        },
         output: { format: 'cjs' }
       }
     }

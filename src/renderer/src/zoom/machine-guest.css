@@ -1,0 +1,55 @@
+/* ── ANOTHER MACHINE INSIDE THIS WINDOW (MachineGuestView.tsx; owner 2026-11-25) ──
+   That machine's whole app, as the console draws it, over this window's stage,
+   its bar and its errors: the guest has a bar of its own. The title line above
+   stays this window's. */
+
+.mg-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 46;
+  background-color: var(--zv-paper);
+  background-image: radial-gradient(var(--zv-grain) 1px, transparent 1px);
+  background-size: 3px 3px;
+}
+
+.mg-view {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  transition: opacity 0.18s ease;
+}
+
+/* Until its page is up, the paper and a line; never a blank white frame. */
+.mg-stage[data-state='opening'] .mg-view,
+.mg-stage[data-state='failed'] .mg-view {
+  opacity: 0;
+}
+
+.mg-note {
+  position: absolute;
+  left: 50%;
+  top: 38%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--zv-seal);
+  border-radius: 0 8px 8px 0;
+  background: var(--zv-card);
+  color: var(--zv-ink-soft);
+  font: 12px/1.4 var(--zv-mono);
+}
+
+.mg-note button {
+  font: inherit;
+  color: var(--zv-ink);
+  background: transparent;
+  border: 1px solid var(--zv-line, currentColor);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+}

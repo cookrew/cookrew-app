@@ -109,8 +109,8 @@ describe('createRelayMachines', () => {
     w.store.set(`cr_token:${SOLIS}`, 'second')
     await w.machines.fleetOf(SOLIS)
     expect(w.calls[1]?.url).toBe(`${SOLIS_BASE}/api/fleet`)
-    await w.machines.call(SOLIS, 'POST', 'api/watch/new', { text: 'go' })
-    expect(w.calls.at(-1)?.url).toBe(`${SOLIS_BASE}/api/watch/new`)
+    await w.machines.call(SOLIS, 'POST', 'api/terminal/t-1/input', { text: 'go' })
+    expect(w.calls.at(-1)?.url).toBe(`${SOLIS_BASE}/api/terminal/t-1/input`)
   })
 
   it('a key that machine no longer takes is dropped and the door asked again, once', async () => {

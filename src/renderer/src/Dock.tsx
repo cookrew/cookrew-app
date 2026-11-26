@@ -5,7 +5,6 @@ import { GlobalPrompt, type PromptAgent } from './prompt/GlobalPrompt'
 import { noteLineAgents } from './prompt/live-line'
 import { isCodexCommand } from '../../shared/codex-command'
 import { sharedZoomFleet } from './zoom/use-zoom-fleet'
-import { RemotePrompt } from './prompt/RemotePrompt'
 import { SHELL_PRESET } from './prompt/harness-pref'
 import type { PromptArtifact } from './prompt/artifact-refs'
 import { useKeyboardInset } from './keyboard-inset'
@@ -158,7 +157,7 @@ export function Dock({
   const hint = tool === 'connect' ? connectHint : (HINTS[tool] ?? null)
   /** The board's toggle parks the canvas tools; a full view no longer does. */
   const slidIn = boardFor !== null
-  // Inside another machine the bar's box is that machine's (owner 2026-11-12): RemotePrompt.tsx sends there.
+  // Inside another machine its own app has the box and the bar (zoom/MachineGuestView.tsx): this one steps aside.
   const insideMachine = useInsideMachine()
   // Which agents' lines a send rebuilds whole: Codex's (live-line.ts · noteLineAgents).
   // This workspace's cards, and every workspace of this machine (a tile's reply box sends there too).
@@ -198,7 +197,7 @@ export function Dock({
   // the page would be covering — so the bar leaves entirely and gives its
   // height back to the page. The browser's own controls float over the frame.
   // (After every hook: an early return above one breaks the Rules of Hooks.)
-  if (browserFor) return <></>
+  if (browserFor || insideMachine) return <></>
   return (
     <footer className={`cr-dock${slidIn ? ' zoomed' : ''}`}>
       <div className="dock-pane dock-canvas" aria-hidden={slidIn}>
@@ -235,8 +234,7 @@ export function Dock({
             ))}
           </div>
         )}
-        {!slidIn && insideMachine && <RemotePrompt />}
-        {!slidIn && !insideMachine && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} artifacts={artifacts} acts={acts} workspaceName={workspaceName} />}
+        {!slidIn && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} artifacts={artifacts} acts={acts} workspaceName={workspaceName} />}
         {!slidIn && tool === 'terminal' && (
           <div className="cr-dock-presets">
             {/* FAMILIES, SAID OUT LOUD.

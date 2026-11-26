@@ -1,6 +1,7 @@
-// ANOTHER MACHINE INSIDE THE ZOOM VIEW, RENDERED (owner 2026-11-10, design B):
-// the stops as static markup, the house way (no jsdom; a stubbed window, and
-// a dynamic import because api.ts reads module-scope globals once).
+// ANOTHER MACHINE, RENDERED: its agent's quick-reply card on the devices stop,
+// and the window's view inside it (owner 2026-11-25: that machine's own app, as
+// the console draws it), as static markup, the house way (no jsdom; a stubbed
+// window, and a dynamic import because api.ts reads module-scope globals once).
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createElement } from 'react'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
@@ -39,27 +40,7 @@ const card = (over: Record<string, unknown> = {}) => ({
   ...over
 })
 
-describe('the other machine’s stops', () => {
-  it('its workspaces are the zoom’s own tiles; its crew a face each, the waiting one in red', async () => {
-    const { RemoteWorkspaces, RemoteCrew } = await import('../src/renderer/src/zoom/RemoteStops')
-    const tiles = renderToStaticMarkup(createElement(RemoteWorkspaces, { tiles: [{ id: 'w-1', name: 'Box Lab', active: true, agents: 3, waiting: 1, working: 1, done: 0 }], onOpen: () => undefined }))
-    expect(tiles).toContain('zv-mark')
-    expect(tiles).toContain('Box Lab')
-    const crew = renderToStaticMarkup(createElement(RemoteCrew, { cards: [card(), card({ id: 't-2', name: 'Fan Curve', status: 'idle', word: 'resting', choice: null })], onOpen: () => undefined }))
-    expect(crew).toContain('Herdr Env')
-    expect(crew).toContain('zv-st waiting')
-    expect(crew).toContain('Fan Curve')
-    expect(renderToStaticMarkup(createElement(RemoteCrew, { cards: [], onOpen: () => undefined }))).toContain('No agents here yet.')
-  })
-
-  // Owner 2026-11-12: the box goes back to the bar (prompt/RemotePrompt.tsx); the stops draw none.
-  it('the crew stop draws no box of its own: a new agent there is the bar’s box’s', async () => {
-    const stops = await import('../src/renderer/src/zoom/RemoteStops')
-    expect('RemoteNewAgent' in stops).toBe(false)
-    const crew = renderToStaticMarkup(createElement(stops.RemoteCrew, { cards: [card()], onOpen: () => undefined }))
-    expect(crew).not.toContain('<input')
-  })
-
+describe('an agent’s card on another machine', () => {
   it('a card: its words, its menu with the same rows, its items, and no box of its own', async () => {
     const { RemoteCardView } = await import('../src/renderer/src/zoom/RemoteCardView')
     const html = renderToStaticMarkup(createElement(RemoteCardView, { machine: SOLIS, card: card(), onItem: () => undefined, onSent: () => undefined }))
@@ -68,7 +49,7 @@ describe('the other machine’s stops', () => {
     expect(html).toContain('Allow this edit to herdr/config.toml?')
     expect(html).toContain('wc-row')
     expect(html).toContain('localhost:8643')
-    // Words to it are typed in the bar's box (RemotePrompt.tsx), not on the card.
+    // Words to it are typed in the pick card's box (RemotePickCard.tsx), not on the card.
     expect(html).not.toContain('<input')
     expect(html).not.toContain('rm-box')
     const free = renderToStaticMarkup(createElement(RemoteCardView, { machine: SOLIS, card: card({ status: 'working', word: 'working', choice: null }), onItem: () => undefined, onSent: () => undefined }))
@@ -77,17 +58,24 @@ describe('the other machine’s stops', () => {
   })
 })
 
-describe('the stage', () => {
-  // The bar at the foot moves through its stops (owner 2026-11-11); the title says whose it is (2026-11-12).
-  it('nothing outside a machine; inside, its stop with no line or strip of its own', async () => {
-    const { RemoteMachineView } = await import('../src/renderer/src/zoom/RemoteMachineView')
+describe('inside another machine: its own app, as the console draws it', () => {
+  it('nothing outside a machine', async () => {
+    const { MachineGuestView } = await import('../src/renderer/src/zoom/MachineGuestView')
+    expect(renderToStaticMarkup(createElement(MachineGuestView))).toBe('')
+  })
+
+  it('inside, a webview in the guest’s own session at that machine’s page, opened where it was asked', async () => {
+    const { MachineGuestView } = await import('../src/renderer/src/zoom/MachineGuestView')
     const { remotePlace } = await import('../src/renderer/src/zoom/remote-machine-store')
-    expect(renderToStaticMarkup(createElement(RemoteMachineView))).toBe('')
-    remotePlace.enter(SOLIS)
-    const html = renderToStaticMarkup(createElement(RemoteMachineView))
-    expect(html).not.toContain('rm-where')
-    expect(html).not.toContain('rm-crumb')
-    expect(html).toContain('Asking Solis-Core')
+    remotePlace.enter(SOLIS, { workspace: 'w-1', agent: 't-1' })
+    const html = renderToStaticMarkup(createElement(MachineGuestView))
+    expect(html).toContain('<webview')
+    expect(html).toContain('partition="cookrew-machine"')
+    expect(html).toContain(`src="cookrew-machine://${SOLIS.id}/?w=w-1&amp;a=t-1`)
+    expect(html).toContain('Opening Solis-Core')
+    // None of the tiles, crew or card this window used to draw of it from the watch's routes.
+    expect(html).not.toContain('rm-card')
+    expect(html).not.toContain('zv-mark')
     remotePlace.leave()
   })
 })

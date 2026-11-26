@@ -47,9 +47,11 @@ import { backHolder } from '../prompt/back-guard'
 import { useZoomFleetView } from './use-zoom-fleet'
 import { MachineGaugeLine } from './MachineGauges'
 import { gaugedMachines } from './gauged-machines'
-import { RemoteMachineView } from './RemoteMachineView'
+import { MachineGuestView } from './MachineGuestView'
+import { openMachine } from './machine-opener'
+import { leftWords } from './machine-guest-words'
 import type { TilePick } from './WorkspaceTile'
-import { remotePlace, remoteStop } from './remote-machine-store'
+import { remotePlace, useInsideMachine } from './remote-machine-store'
 import { canEnterMachines } from './use-remote-machine'
 import './zoom.css'
 // The full view's head, for the crisp ghost the way in arrives at (zv-fv-ghost).
@@ -565,8 +567,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
    * nowhere further. `by` is what asked, for the counts (nav-events.ts).
    */
   const stepBack = useCallback((by: BackInput): boolean => {
-    // Inside another machine (RemoteMachineView.tsx): out of its stops first, one a press.
-    if (remotePlace.stepOut()) return true
+    // Inside another machine (MachineGuestView.tsx): its own stops first, as its own ‹ would go; its
+    // outermost is out of it, and the guest says so.
+    if (remotePlace.get().machine) {
+      remotePlace.command({ kind: 'back' })
+      return true
+    }
     return zoomStore.back(by)
   }, [])
   // A zoom that moves on (a stop on the bar, a jump to an agent) leaves the other machine: the stage stood on the devices stop.
@@ -755,11 +761,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const stops = BAR_STOPS[zoom.dir].slice(0, -1)
   const names = BAR_NAMES[zoom.dir]
   const selectedStop = barStop(zoom.dir, zoom.v)
-  // Inside another machine the bar moves through its stops, not this one's (owner 2026-11-11).
-  const inside = remoteStop(useSyncExternalStore(remotePlace.subscribe, remotePlace.get, remotePlace.get))
+  // Inside another machine its own app has the stage, the bar and the box (MachineGuestView.tsx).
+  const inside = useInsideMachine()
+  const visit = useSyncExternalStore(remotePlace.subscribe, remotePlace.get, remotePlace.get)
   // ── THE KEYS, AGENT BY AGENT (agent-keys.ts; owner, 2026-11-17) ──
   // At rest on the devices or the workspaces stop, never in a full view or inside another machine.
-  const stopNow: KeysStop | null = zoom.full !== null || inside !== null ? null : Math.abs(zoom.v + 2) < 0.1 ? 'devices' : Math.abs(zoom.v + 1) < 0.1 ? 'workspaces' : null
+  const stopNow: KeysStop | null = zoom.full !== null || inside ? null : Math.abs(zoom.v + 2) < 0.1 ? 'devices' : Math.abs(zoom.v + 1) < 0.1 ? 'workspaces' : null
   // This machine's workspaces in the grid's order, the open one in its slot: its screen at the devices stop and its tiles.
   const localMarks = useMemo(() => model.frame.workspaces.flatMap((id) => (id === model.frame.active ? [model.openMark] : (markOf.get(id) ?? []))), [model.frame.workspaces, model.frame.active, model.openMark, markOf])
   // The account's other machines, and what stands in the way of reading each (machine-why.ts).
@@ -812,15 +819,16 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     const tileK = (deviceCam(grid, size.w, size.h, narrow).S * SWS * TILE.w) / TILE_DRAWN_W
     return tileK / fitScale(layout.devicesBox, size.w, size.h)
   }, [frame, narrow, size, layout.devicesBox])
-  /** Into another machine, in place (RemoteMachineView.tsx): at a workspace, or an agent in it. */
+  /** Into another machine, in place (MachineGuestView.tsx): at its workspaces, a workspace, or an agent in it. */
   const enterMachine = (m: MachineView, workspace: { id: string; name: string } | null, agent: { id: string; name: string } | null = null): void => {
     const enter = (): void => {
       setWhy(null)
       // Entered in place: its view opens from where its frame stands (remote-entry.ts).
       const box = registry.current.get(`machinecard:${m.id}`)?.getBoundingClientRect()
-      remotePlace.enter({ id: m.id, name: m.name, os: m.os ?? null, ...(box ? { from: { x: box.left, y: box.top, w: box.width, h: box.height } } : {}) })
-      if (workspace) remotePlace.workspace(workspace)
-      if (workspace && agent) remotePlace.agent(agent)
+      openMachine({
+        machine: { id: m.id, name: m.name, os: m.os ?? null, ...(box ? { from: { x: box.left, y: box.top, w: box.width, h: box.height } } : {}) },
+        entry: { workspace: workspace?.id ?? null, agent: workspace && agent ? agent.id : null }
+      })
     }
     if (m.online && m.detail !== 'listed' && canEnterMachines()) enter()
     // Asked over the network: a view gone elsewhere meanwhile neither hears the answer nor is carried into the machine.
@@ -1106,7 +1114,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       {/* THE VIEW'S TOOLBAR (ViewTools.tsx; owner 2026-11-12): top right at every stop of this machine,
           per row where a row is seen (the crew's agents, the device's workspaces; owner 2026-11-01)
           beside this machine's remote desktop. Inside another machine its stops are that machine's. */}
-      {!zoom.full && inside === null && <ViewTools perRow={perRowAt} tileSize={tileSizeAt} />}
+      {!zoom.full && !inside && <ViewTools perRow={perRowAt} tileSize={tileSizeAt} />}
       {!zoom.full && Math.abs(zoom.v + 1) < 0.25 && onNewWorkspace && (
         <button type="button" className="zv-new-workspace" onClick={onNewWorkspace}>
           <span aria-hidden="true">＋</span> New workspace
@@ -1115,27 +1123,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       <nav className="zv-controls" aria-label="Semantic zoom">
         <button type="button" className="zv-back" onClick={() => stepBack('button')} aria-label={backWords ? `Back to ${backWords}` : 'Zoom out'} title={backWords ? `Back to ${backWords}` : undefined}>‹</button>
         <div className="zv-zoom-control">
-          {inside !== null ? (
-            <div className="zv-stops" data-machine="other">
-              <button type="button" aria-label={names[0]} onClick={() => remotePlace.leave()}>
-                <CrIcon name="device" className="zv-stop-ic" />
-                <span className="zv-stop-word">{names[0]}</span>
-              </button>
-              <button type="button" aria-current={inside === 'workspaces' ? 'step' : undefined} aria-label={names[1]} onClick={() => remotePlace.backTo(1)}>
-                <CrIcon name="canvas" className="zv-stop-ic" />
-                <span className="zv-stop-word">{names[1]}</span>
-              </button>
-              <div className="zv-groups" role="group" aria-label="Artifacts or agents">
-                {(['items', 'agents'] as const).map((one) => (
-                  <div key={one} className={`zv-group ${one}${inside === one ? ' lit' : ''} empty`}>
-                    <button type="button" className="zv-group-stop" aria-current={inside === one ? 'step' : undefined} aria-label={one === 'items' ? 'artifacts' : 'agents'} onClick={() => remotePlace.side(one)}>
-                      <span className="zv-group-word">{one === 'items' ? 'artifacts' : 'agents'}</span>
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
           <div className="zv-stops">
             {/* Narrow, the stops you are not on wear the header's own marks and give the face its room (zoom.css). */}
             {stops.map((v, i) => (
@@ -1163,7 +1150,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
               onOutside={pressedOutside}
             />
           </div>
-          )}
         </div>
         {/* At a full view it names where the ‹ goes; at a stop, the side the view is on. */}
         <span className="zv-location">{backWords ?? (zoom.dir === 'agents' ? 'agents' : 'artifacts')}</span>
@@ -1193,7 +1179,9 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         />
       )}
       {pickCard()}
-      <RemoteMachineView />
+      <MachineGuestView />
+      {/* Why the last machine was left, when it was not by a step out (machine-guest-words.ts). */}
+      {visit.left && !error && <div role="status" className="zv-error">{leftWords(visit.left.name, visit.left.why)}<button type="button" onClick={() => remotePlace.dismiss()} aria-label="Dismiss">×</button></div>}
       {error && <div role="alert" className="zv-error">{error}<button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
       {/* This machine's one proof, at the foot of the devices stop and outside the camera: inside it the
           button lay under this machine's own frame, where it could be neither seen nor pressed. */}

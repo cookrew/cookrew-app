@@ -612,8 +612,12 @@ export class MessageChannelMain {
   }
 }
 
-const emptySession = (): unknown => loud('session.instance', {})
+// A session's own protocol: the guest machine's scheme (machine-guest-install.ts) has no window to be
+// served to here, so handling it is nothing.
+const emptySession = (): unknown => loud('session.instance', { protocol: loud('session.protocol', { handle: (): void => undefined }) })
 export const session = loud('session', { defaultSession: emptySession(), fromPartition: emptySession })
+/** Schemes registered before `ready` are for pages, and the daemon draws none. */
+export const protocol = loud('protocol', { registerSchemesAsPrivileged: (): void => undefined })
 export const webUtils = loud('webUtils', {})
 
 export default {
@@ -636,5 +640,6 @@ export default {
   net,
   MessageChannelMain,
   session,
+  protocol,
   webUtils
 }

@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import App from '../App'
-import { cookrew } from '../api'
 import { authStore } from '../auth-gate'
-import { deviceSeat } from '../device-seat'
 import { startMachineSession } from '../machine-session'
 import { zoomStore } from '../zoom/zoom-store'
+import { setMachineOpener } from '../zoom/machine-opener'
 import type { ConsoleParts } from './console-wiring'
 import { applyRouteToZoom, followZoom, type ZoomSyncDeps } from './zoom-sync'
+import { workspaceWatch } from './workspace-watch'
 
 /**
  * ONE MACHINE, ON THE CONSOLE: the whole app, exactly as a phone has always
@@ -26,31 +26,6 @@ import { applyRouteToZoom, followZoom, type ZoomSyncDeps } from './zoom-sync'
  * for. With no machine in scope it starts nothing.
  */
 startMachineSession()
-
-/** Which of this machine's workspaces the view is on, as the machine says it. */
-function workspaceWatch(): ZoomSyncDeps['workspace'] & { start(): () => void } {
-  let current: string | null = deviceSeat()
-  const listeners = new Set<() => void>()
-  const take = (list: { activeId?: string; seat?: string } | null | undefined): void => {
-    const next = deviceSeat() ?? list?.seat ?? list?.activeId ?? null
-    if (next === current || next === null || next === '') return
-    current = next
-    for (const listener of listeners) listener()
-  }
-  return {
-    current: () => current,
-    subscribe: (listener) => {
-      listeners.add(listener)
-      return () => void listeners.delete(listener)
-    },
-    start: () => {
-      const api = cookrew()
-      const off = api.onWorkspaceList(take)
-      void api.listWorkspaces().then(take, () => undefined)
-      return off
-    }
-  }
-}
 
 export default function ConsoleMachine({ machine, parts }: { machine: string; parts: ConsoleParts }): React.JSX.Element {
   // Before the app's first render: the view starts on the level the address names.
@@ -78,6 +53,14 @@ export default function ConsoleMachine({ machine, parts }: { machine: string; pa
     refused(store.blocked())
     return store.subscribe(refused)
   }, [machine, parts.runtime])
+
+  // Another machine opened from inside this one (a face on the bar): the console's own address for it.
+  useEffect(() => {
+    setMachineOpener(({ machine: other, entry }) =>
+      parts.router.go({ kind: 'machine', machine: other.id, workspace: entry.workspace ?? null, agent: entry.workspace ? (entry.agent ?? null) : null, side: entry.side ?? (entry.item ? 'items' : 'agents') })
+    )
+    return () => setMachineOpener(null)
+  }, [parts.router])
 
   return <App />
 }
