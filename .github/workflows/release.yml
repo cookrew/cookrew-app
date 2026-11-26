@@ -77,11 +77,34 @@ jobs:
       - if: matrix.task != 'typecheck'
         run: npm test -- --shard=${{ matrix.task }}/6
 
-  build:
+  # ONE DRAFT PER TAG, MADE BEFORE ANY BUILD. Left to the builds, the Mac and
+  # the Windows legs each asked GitHub for this tag's release in the same
+  # second, each found none and each made one: two drafts, each holding half
+  # the assets, and `publish` stopped on "missing latest-mac.yml" (0.6.43, and
+  # 0.6.19's draft left behind). electron-builder uploads into a draft that
+  # already exists for the tag. No checkout: nothing of the repository runs
+  # here, beside the one token that may write releases.
+  draft:
     needs: verify
-    # A dispatch or a pull request skips verify, and still has to build.
-    # A tag must pass every matrix member, not just reach a skipped result.
-    if: ${{ !cancelled() && (needs.verify.result == 'success' || (!startsWith(github.ref, 'refs/tags/') && needs.verify.result == 'skipped')) }}
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Make this tag's draft release, once
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "$TAG already has a release"
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --draft --verify-tag --title "${TAG#v}" --notes ""
+          fi
+
+  build:
+    needs: [verify, draft]
+    # A dispatch or a pull request skips verify and the draft, and still has to build.
+    # A tag must pass every matrix member, not just reach a skipped result, and have its one draft.
+    if: ${{ !cancelled() && ((needs.verify.result == 'success' && needs.draft.result == 'success') || (!startsWith(github.ref, 'refs/tags/') && needs.verify.result == 'skipped' && needs.draft.result == 'skipped')) }}
     strategy:
       fail-fast: false
       matrix:
