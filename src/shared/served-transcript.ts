@@ -1,3 +1,4 @@
+import type { HarnessId } from './harness-catalog'
 import type { TracePage } from './trace-blocks'
 import type { TurnPage, TurnRecord } from './turn'
 
@@ -20,6 +21,6 @@ export const SERVED_SESSION_END_PATH = '/session/end'
 export type ServedTranscriptPath =
   (typeof SERVED_TRANSCRIPT_PATHS)[keyof typeof SERVED_TRANSCRIPT_PATHS]
 
-export type ServedTraceSource = 'claude' | 'codex' | 'pi' | null
+export type ServedTraceSource = HarnessId | null
 export type ServedTracePage = TracePage & { source: ServedTraceSource }
 export type ServedTurnsWireResponse = TurnRecord[] | TurnPage

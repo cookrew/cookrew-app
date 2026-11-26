@@ -213,7 +213,7 @@ describe('TraceReader parses only what was appended', () => {
     const cwd = '/work/repo'
     const dir = path.join(root, claudeProjectSlug(cwd))
     mkdirSync(dir, { recursive: true })
-    const file = path.join(dir, 'sess.jsonl')
+    const file = path.join(dir, '5e55a0de-0000-4000-8000-000000000001.jsonl')
     writeFileSync(file, `${session().join('\n')}\n`)
     const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'ingest-memo-ws-')))
     const node = store.addNode({
@@ -227,7 +227,7 @@ describe('TraceReader parses only what was appended', () => {
       role: null,
       position: { x: 0, y: 0 },
       size: { width: 400, height: 300 },
-      claudeSessionId: 'sess'
+      claudeSessionId: '5e55a0de-0000-4000-8000-000000000001'
     } as TerminalNodeData) as TerminalNodeData
     const reader = new TraceReader(store, { projectsDir: root })
     expect((await reader.index(node.id)).map((e) => e.index)).toEqual([1, 2, 3, 4])

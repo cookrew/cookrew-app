@@ -21,9 +21,7 @@
 
 import { existsSync } from 'node:fs'
 import path from 'node:path'
-import { isClaudeCommand } from '../shared/claude-fork'
-import { isCodexCommand } from './codex-bind'
-import { isPiCommand } from './pi-bind'
+import { harnessFor } from './harness'
 import { restorePointIndex } from '../shared/model'
 import type { TerminalNodeData } from '../shared/model'
 import { claudeStreamChain, type ChainOptions, type StreamChain } from './stream-chain'
@@ -129,23 +127,23 @@ export interface StreamServiceDeps {
 /**
  * Which files are a card's stream, for every harness.
  *
- * Claude walks a lineage (stream-chain.ts). Codex and Pi rotate nothing —
- * one rollout is one stream — so their chain is the single file the registry
- * resolves, present or honestly missing. Anything else has no file-derived
- * stream at all, which `sourceOf` has already reported as 'scrape'.
+ * Claude walks a lineage (stream-chain.ts). Every other harness with a
+ * trace parser rotates nothing — one session file is one stream — so its
+ * chain is the single file the registry resolves, present or honestly
+ * missing. A harness without one has no file-derived stream at all, which
+ * `sourceOf` has already reported as 'scrape'. Registry-driven: a new
+ * harness's CHAT/LOG needs no edit here (contract rule 4).
  */
 export async function streamChainOf(
   node: TerminalNodeData,
   deps: StreamServiceDeps
 ): Promise<StreamChain> {
-  if (isClaudeCommand(node.command)) return claudeStreamChain(node, deps.chainOptions ?? {})
-  const kind: TraceKind | null = isCodexCommand(node.command)
-    ? 'codex'
-    : isPiCommand(node.command)
-      ? 'pi'
-      : null
-  const file = kind === null ? null : (deps.fileOf?.(node) ?? null)
-  if (kind === null || file === null) return { files: [], missing: [] }
+  const harness = harnessFor(node.command)
+  if (!harness?.traceParser) return { files: [], missing: [] }
+  if (harness.id === 'claude') return claudeStreamChain(node, deps.chainOptions ?? {})
+  const kind: TraceKind = harness.id
+  const file = deps.fileOf?.(node) ?? null
+  if (file === null) return { files: [], missing: [] }
   const exists = deps.exists ?? existsSync
   return exists(file)
     ? { files: [{ sessionId: node.id, file, kind }], missing: [] }

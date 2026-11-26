@@ -16,7 +16,7 @@ import {
   type RouteState,
   type RouteTurnFacts
 } from '../../shared/route'
-import type { HarnessId } from '../harness'
+import { HARNESSES, type HarnessId } from '../harness'
 import { withoutRoutedPick } from '../../shared/launch-tune'
 import { ROUTABLE, routeEnv, type RouteEnv } from '../route-env'
 import { fetchCatalog, fetchQuotas, providersOf, withLocalRows, type CatalogFetch } from './catalog'
@@ -409,7 +409,7 @@ export class RouteService extends EventEmitter {
    * exact-context gate would refuse for want of anything to restore.
    */
   private fresh(node: TerminalNodeData): boolean {
-    const hasSession = Boolean(node.claudeSessionId || node.codexSessionRef || node.opencodeSessionId || node.piSessionId)
+    const hasSession = HARNESSES.some((harness) => Boolean(node[harness.sessionField]))
     return !hasSession && !(this.deps.hasTurns?.(node.id) ?? false)
   }
 

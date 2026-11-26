@@ -258,8 +258,7 @@ import {
 import { isCodexCommand, resolveCodexRolloutByPid, validCodexSessionRef } from './codex-bind'
 import { codexRolloutToFollow } from './codex-lineage'
 import { codexInlineLine } from './codex-inline'
-import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
-import { isPiCommand, piAdoptableSession, piLaunchBinding, resolvePiSessionByPane } from './pi-bind'
+import { piAdoptableSession, piLaunchBinding, resolvePiSessionByPane } from './pi-bind'
 import {
   applyTuning,
   subjectOf,
@@ -287,8 +286,10 @@ import type { UpdateStatus } from '../shared/update-check'
 import { commandRun, createSessionReader, linuxSession, remoteBuild, remoteSettingsFile } from './remote-probe'
 import { createRemoteTray } from './remote-tray'
 import { claudeSettingsGateway, launchPick, newAgentPlan, withGatewayModel } from './claude-model-route'
-import { harnessFor } from './harness'
-import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
+import { harnessFor, type Harness as HarnessEntry } from './harness'
+import { HARNESS_CARDS } from '../shared/harness-catalog'
+import { supportFor, unsupported, type PerHarness } from '../shared/harness-support'
+import { canRestoreExact as exactGate, isRefOwned, sessionOnDisk } from './recover-gate'
 import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
 import {
   liveSessionOfPane,
@@ -1071,12 +1072,7 @@ const routeService = new RouteService({
   // The session file the node names, on disk: the harness resumes it itself,
   // whatever the lazy tracker has verified so far (claude and codex; the
   // other two keep the gate's answer).
-  sessionOnDisk: (node) => {
-    const harness = harnessFor(node.command)?.id
-    if (harness === 'claude') return Boolean(node.claudeSessionId) && existsSync(claudeSessionFile(node.cwd, node.claudeSessionId as string))
-    if (harness === 'codex') return typeof node.codexSessionRef === 'string' && existsSync(node.codexSessionRef)
-    return false
-  },
+  sessionOnDisk: (node) => sessionOnDisk(node),
   terminalsAcross: () => store.terminalsAcross()
 })
 const remoteCatalogRefresh = createCatalogRefresh(() => routeService.refresh())
@@ -4068,104 +4064,11 @@ function spawnTracked(t: {
     }
     if (!servedCtx && isClaudeCommand(command)) prepareClaudeCard(command, t.cwd)
   }
-  let effective = command
-  if (isClaudeCommand(command)) {
-    // Bind every Claude terminal to a known session id (adopting one already
-    // baked into an older fork command) so session-file features — native
-    // fork, resume after a dead tmux session — never guess which session
-    // file is this terminal's. tmux reuses live sessions, so the effective
-    // command only matters when the terminal actually (re)boots.
-    // Resolve against what claude is REALLY running: a stored id whose file is
-    // gone (minted for an already-live session tmux reattach never rebooted,
-    // or orphaned by a cold reboot) is recovered from turn history rather than
-    // resumed blind — otherwise the agent boots an empty conversation. Invalid
-    // stored ids (e.g. planted via the unauthenticated node-update endpoint)
-    // are dropped inside the resolver before reaching any path/command.
-    // NOTE: a still-live tmux session is reattached by `new-session -A`, which
-    // ignores this command — so resume only takes on a session that was killed
-    // and recreated, never on one that merely detached.
-    const resolved = resolveClaudeSessionId({
-      command,
-      cwd: t.cwd,
-      storedId: t.claudeSessionId,
-      turns: turns.history(t.id),
-      // The pane's own process is the authority over any file (the 2026-09-06
-      // adoption defect, claude-session-adoption.ts) — but ONLY from the warm
-      // cache: a cold pane-pid lookup is a synchronous herdr child process,
-      // and a fleet respawning at once would pay for one each. A card with no
-      // cached pid resolves exactly as before and the oracle's boot retries
-      // land the live answer seconds later.
-      live: { panePid: panePids.isWarm(t.id) ? panePids.pidOf(t.id) : null }
-    })
-    const sessionId = dampedSpawnSession(t, resolved)
-    if (t.claudeSessionId !== sessionId) {
-      // Re-resolve = a transition (e.g. the stored id's file vanished after a
-      // /clear): record the old binding on the lineage so the rail keeps the
-      // earlier segment visible and rewind can still cut into it.
-      if (t.claudeSessionId) rebinds.left(t.id, t.claudeSessionId)
-      store.updateNodeUnsafe(t.id, withSessionLineage(t, sessionId))
-    }
-    // A session another LIVE claude process still holds cannot be resumed —
-    // claude prints "currently running as a background agent … add
-    // --fork-session" and exits. Nothing here noticed, so the pty booted, died
-    // instantly, and the card reported READY over a black void (observed on
-    // Forge, held by a leftover `claude bg-spare`). Forking branches off a copy
-    // of the whole transcript, so the agent returns knowing what it knew; the
-    // new id is picked up by the spawn-time rotation probe below, which records
-    // the old one on the lineage so the rail keeps its history.
-    const fork = planHeldSessionFork(
-      claudeSpawnCommand(command, t.cwd, sessionId),
-      sessionId,
-      liveSessionHolders(),
-      randomUUID
-    )
-    effective = fork.command
-    // Bind the copy only once it EXISTS. Naming it ourselves is what makes the
-    // binding possible at all, but a still-live tmux session is reattached by
-    // `new-session -A`, which ignores this command entirely — so the fork may
-    // never run. Binding on intent pointed a node at a session file that was
-    // never written, which is worse than the bug it was fixing: the rail had
-    // nothing to read and the exact-context gate could no longer pass.
-    if (fork.forkedTo) bindForkWhenWritten(t.id, sessionId, fork.forkedTo, t.cwd)
-  } else if (isCodexCommand(command) && t.codexSessionRef) {
-    // Resume the bound Codex rollout as-is (Tinker: `codex resume <uuid>`,
-    // uuid from the rollout filename; global opts kept before the subcommand).
-    // Route through resumeKey so the ref is validated, not shelled raw (HIGH-2).
-    const harness = harnessFor(command)
-    const key = harness?.resumeKey(t.codexSessionRef) ?? null
-    if (harness && key) effective = harness.resumeCommand(command, key, { terminalId: t.id, cwd: t.cwd })
-  } else if (isOpenCodeCommand(command) && t.opencodeSessionId) {
-    const harness = harnessFor(command)
-    const key = harness?.resumeKey(t.opencodeSessionId) ?? null
-    if (harness && key) effective = harness.resumeCommand(command, key, { terminalId: t.id, cwd: t.cwd })
-  } else if (isPiCommand(command)) {
-    // H4: wire the pi-bind machinery so the Pi preset actually uses it.
-    // Every terminal gets an EXCLUSIVE session dir, so two Pi terminals in
-    // the same cwd never share one session tree (the cross-agent race
-    // pi-bind exists to eliminate). A node with a prior session in its dir
-    // resumes it; otherwise a fresh session boots scoped to that dir.
-    const binding = piLaunchBinding({
-      command,
-      cwd: t.cwd,
-      terminalId: t.id,
-      ...(servedCtx
-        ? {
-            sessionsRoot: path.join(servedCtx.sandbox, '.cookrew', 'pi-sessions'),
-            agentDir: path.join(servedCtx.sandbox, '.pi', 'agent')
-          }
-        : {}),
-      // An unbound node adopts an UNOWNED session from its own cwd scope
-      // rather than booting fresh beside it. Ownership is checked here, not
-      // in pi-bind, because only the store knows what every other node claims
-      // — and that check is the whole reason this is not the most-recent
-      // guess the exclusive-dir design exists to forbid.
-      storedSessionId: t.piSessionId ?? (servedCtx ? null : adoptablePiSession(t.id, t.cwd))
-    })
-    effective = binding.command
-    if (t.piSessionId !== binding.sessionId) {
-      store.updateNodeUnsafe(t.id, { piSessionId: binding.sessionId })
-    }
-  }
+  // Bound and resumed by the harness's declared strategy (harness.ts
+  // BindStrategy), never by its name: a harness that picks a strategy gets
+  // binding and resume with no new branch here (contract rule 4).
+  const harness = harnessFor(command)
+  const effective = harness ? launchLineFor(harness, t, command, servedCtx) : command
   // The herdr pane wears the card's display info (no-op elsewhere). Resolved
   // from the store rather than threaded through every caller — the node is
   // always persisted before it spawns, so the store is the freshest source.
@@ -4268,132 +4171,12 @@ function spawnTracked(t: {
   // the rail sat frozen until the binding was repointed by hand. So every
   // adopt asks the question too; the probe follows the chain to the newest
   // hop and refuses on every doubt, exactly as when a watcher raises it.
-  if (isClaudeCommand(command) && t.claudeSessionId) {
-    void rebindRotatedClaudeSession(t.id)
-    // The process's own statement arrives once claude has booted and written
-    // ~/.claude/sessions/<pid>.json — seconds after the pane exists. Ask on a
-    // short schedule so a resume that minted a new id is bound before the
-    // first turn, not at the next sweep.
-    for (const delay of ORACLE_BOOT_DELAYS_MS) {
-      setTimeout(() => void rebindRotatedClaudeSession(t.id, 'oracle'), delay).unref()
-    }
-  }
-  if (isCodexCommand(command) && !t.codexSessionRef) {
-    // DETERMINISTIC bind (EXACT-CONTEXT gate): the rollout is the file the
-    // codex PROCESS holds open (lsof of the pane pid), never a most-recent
-    // mtime guess — so it cannot grab a stray or cross-wire two agents. Poll
-    // until the process opens its rollout (at session start / first turn).
-    const attempt = (delays: number[]): void => {
-      const delay = delays.length === 0 ? BIND_RETRY_TAIL_MS : delays[0]
-      setTimeout(() => {
-        try {
-          const hit = store.nodeAcrossWorkspaces(t.id)
-          if (!hit || hit.node.kind !== 'terminal') return
-          if ((hit.node as TerminalNodeData).codexSessionRef) return
-          const ref = resolveCodexRolloutByPid(ptys.panePid(t.id))
-          if (!ref) return void attempt(delays.length === 0 ? [] : delays.slice(1)) // rollout not open yet
-          // 1:1 authoritative: a rollout already owned by another node is never
-          // reassignable (defense-in-depth; lsof already makes this 1:1).
-          if (isRefOwned(store.terminalsAcross(), t.id, 'codexSessionRef', ref)) {
-            return void attempt(delays.length === 0 ? [] : delays.slice(1))
-          }
-          store.updateNodeUnsafe(t.id, { codexSessionRef: ref })
-          agents.setSessionRef(t.id, ref)
-          // Rollout bound → durable turn history can start reconciling.
-          watchSessionTurns(t.id)
-        } catch (error) {
-          console.error('Codex rollout bind failed:', error)
-        }
-      }, delay)
-    }
-    attempt([3000, 8000, 20000, 45000])
-  } else if (isCodexCommand(command) && t.codexSessionRef) {
-    // An ALREADY-BOUND card may have been backtracked while nobody watched:
-    // `codex resume` then writes the newest continuation, which can be days
-    // old. Once the process has opened its rollout, look across the tree.
-    for (const delay of [8000, 45000]) {
-      setTimeout(() => followMovedCodexRollout(t.id, 'everywhere'), delay).unref()
-    }
-  }
-  // OpenCode session bind (Tinker recipe): the ses_<id>.json appears at/after
-  // the first turn, so retry on a schedule until it binds (MEDIUM-3 — the
-  // lazy re-bind, not a single shot). recover snapshots then carry
-  // opencodeSessionId so `opencode --session <id>` can resume.
-  if (isOpenCodeCommand(command) && !t.opencodeSessionId) {
-    // DETERMINISTIC bind via lsof of the pane pid (same 1:1 guarantee as
-    // codex) — never an mtime guess that could stray/cross-wire.
-    const attempt = (delays: number[]): void => {
-      const delay = delays.length === 0 ? BIND_RETRY_TAIL_MS : delays[0]
-      setTimeout(() => {
-        try {
-          const hit = store.nodeAcrossWorkspaces(t.id)
-          if (!hit || hit.node.kind !== 'terminal') return
-          if ((hit.node as TerminalNodeData).opencodeSessionId) return
-          const sid = resolveOpencodeSessionByPid(ptys.panePid(t.id))
-          if (!sid) return void attempt(delays.length === 0 ? [] : delays.slice(1))
-          if (isRefOwned(store.terminalsAcross(), t.id, 'opencodeSessionId', sid)) {
-            return void attempt(delays.length === 0 ? [] : delays.slice(1))
-          }
-          store.updateNodeUnsafe(t.id, { opencodeSessionId: sid })
-          agents.setSessionRef(t.id, sid)
-          // Registry-driven: no-op while opencode is scrape-only, automatic
-          // the day it gains a session-file parser (contract rule 4).
-          watchSessionTurns(t.id)
-        } catch (error) {
-          console.error('OpenCode session bind failed:', error)
-        }
-      }, delay)
-    }
-    attempt([3000, 8000, 20000, 45000])
-  }
-  // Pi session bind: a FRESH boot has no session id yet — the file appears
-  // once Pi starts, so poll on a schedule (same recipe as codex/opencode).
-  // Resolution follows the LIVE pane's own launch, not the command we would
-  // build today: a pane created before the exclusive-dir wiring is reattached
-  // as-is by `new-session -A` and keeps writing to pi's shared cwd dir, and
-  // scanning only the exclusive dir left such nodes forever unbound (their
-  // rail degraded to PTY scrapes labelled '(recovered turn)'). Adoption from
-  // the shared dir is gated on the pane's start window plus the 1:1 ownership
-  // check below, so no other agent's session can be taken.
-  if (isPiCommand(command) && !t.piSessionId) {
-    const attempt = (delays: number[]): void => {
-      const delay = delays.length === 0 ? BIND_RETRY_TAIL_MS : delays[0]
-      setTimeout(() => {
-        try {
-          const hit = store.nodeAcrossWorkspaces(t.id)
-          if (!hit || hit.node.kind !== 'terminal') return
-          if ((hit.node as TerminalNodeData).piSessionId) return
-          const pane = ptys.paneLaunch(t.id)
-          const session = resolvePiSessionByPane({
-            cwd: t.cwd,
-            terminalId: t.id,
-            command: pane?.command ?? null,
-            paneStartedAtMs: pane?.startedAtMs ?? null,
-            exclude: claimedPiSessions(t.id),
-            // A SERVED pi writes its session under the SANDBOX roots (the
-            // spawn passes them at line ~1145); scanning the owner's default
-            // root here meant a served orch could answer forever and never
-            // bind — no piSessionId, no file-backed turns, and every caller
-            // ask died as "completed no file-backed agent turn" (the final
-            // broken link of the paid-session line, 2026-08-27).
-            ...(servedCtx
-              ? {
-                  sessionsRoot: path.join(servedCtx.sandbox, '.cookrew', 'pi-sessions'),
-                  agentDir: path.join(servedCtx.sandbox, '.pi', 'agent')
-                }
-              : {})
-          })
-          if (!session) return void attempt(delays.length === 0 ? [] : delays.slice(1))
-          store.updateNodeUnsafe(t.id, { piSessionId: session.id })
-          agents.setSessionRef(t.id, session.id)
-          // Session discovered → durable turn history can start reconciling.
-          watchSessionTurns(t.id)
-        } catch (error) {
-          console.error('Pi session bind failed:', error)
-        }
-      }, delay)
-    }
-    attempt([3000, 8000, 20000, 45000])
+  if (harness) {
+    // A card that came in bound follows its session if the harness moved it
+    // (rotation, backtrack); an unbound one is bound once its file appears.
+    const boundRef = t[harness.sessionField]
+    if (boundRef) supportFor(FOLLOW_BOUND_SESSION, harness.id)?.(t.id)
+    else bindAfterSpawn(harness, t, servedCtx)
   }
   // Session-bound terminals: the harness session file is the source of truth
   // for turn records — reconcile now (rebuilds legacy scraped records) and
@@ -4402,6 +4185,270 @@ function spawnTracked(t: {
   // harness with a bound session ref gets durable history, not just Claude.
   watchSessionTurns(t.id)
   return ptys.get(t.id) !== undefined
+}
+
+type SpawnSubject = Parameters<typeof spawnTracked>[0]
+type ServedSpawnPlace = NonNullable<ReturnType<typeof servedSpawnContexts.get>>
+
+/** The line a (re)boot runs: the harness's own session resumed, or a fresh one bound. */
+function launchLineFor(harness: HarnessEntry, t: SpawnSubject, command: string, servedCtx: ServedSpawnPlace | undefined): string {
+  const bind = harness.bind
+  switch (bind.kind) {
+    case 'minted':
+      return mintedLaunchLine(t, command)
+    case 'pid-held':
+      return pidHeldResumeLine(harness, t, command)
+    case 'exclusive-dir':
+      return exclusiveDirLaunchLine(t, command, servedCtx)
+    default:
+      return assertNeverBind(bind)
+  }
+}
+
+function assertNeverBind(bind: never): never {
+  throw new Error(`unknown bind strategy: ${JSON.stringify(bind)}`)
+}
+
+/**
+ * Resume the session the pane's process held open, as-is (codex: `codex
+ * resume <uuid>`, uuid from the rollout filename, global opts kept before the
+ * subcommand; opencode: `--session <id>`). Routed through resumeKey so the
+ * stored ref is validated, never shelled raw (HIGH-2). No ref: a fresh boot.
+ */
+function pidHeldResumeLine(harness: HarnessEntry, t: SpawnSubject, command: string): string {
+  const ref = t[harness.sessionField]
+  const key = typeof ref === 'string' && ref.length > 0 ? harness.resumeKey(ref) : null
+  return key ? harness.resumeCommand(command, key, { terminalId: t.id, cwd: t.cwd }) : command
+}
+
+function mintedLaunchLine(t: SpawnSubject, command: string): string {
+  // Bind every Claude terminal to a known session id (adopting one already
+  // baked into an older fork command) so session-file features — native
+  // fork, resume after a dead tmux session — never guess which session
+  // file is this terminal's. tmux reuses live sessions, so the effective
+  // command only matters when the terminal actually (re)boots.
+  // Resolve against what claude is REALLY running: a stored id whose file is
+  // gone (minted for an already-live session tmux reattach never rebooted,
+  // or orphaned by a cold reboot) is recovered from turn history rather than
+  // resumed blind — otherwise the agent boots an empty conversation. Invalid
+  // stored ids (e.g. planted via the unauthenticated node-update endpoint)
+  // are dropped inside the resolver before reaching any path/command.
+  // NOTE: a still-live tmux session is reattached by `new-session -A`, which
+  // ignores this command — so resume only takes on a session that was killed
+  // and recreated, never on one that merely detached.
+  const resolved = resolveClaudeSessionId({
+    command,
+    cwd: t.cwd,
+    storedId: t.claudeSessionId,
+    turns: turns.history(t.id),
+    // The pane's own process is the authority over any file (the 2026-09-06
+    // adoption defect, claude-session-adoption.ts) — but ONLY from the warm
+    // cache: a cold pane-pid lookup is a synchronous herdr child process,
+    // and a fleet respawning at once would pay for one each. A card with no
+    // cached pid resolves exactly as before and the oracle's boot retries
+    // land the live answer seconds later.
+    live: { panePid: panePids.isWarm(t.id) ? panePids.pidOf(t.id) : null }
+  })
+  const sessionId = dampedSpawnSession(t, resolved)
+  if (t.claudeSessionId !== sessionId) {
+    // Re-resolve = a transition (e.g. the stored id's file vanished after a
+    // /clear): record the old binding on the lineage so the rail keeps the
+    // earlier segment visible and rewind can still cut into it.
+    if (t.claudeSessionId) rebinds.left(t.id, t.claudeSessionId)
+    store.updateNodeUnsafe(t.id, withSessionLineage(t, sessionId))
+  }
+  // A session another LIVE claude process still holds cannot be resumed —
+  // claude prints "currently running as a background agent … add
+  // --fork-session" and exits. Nothing here noticed, so the pty booted, died
+  // instantly, and the card reported READY over a black void (observed on
+  // Forge, held by a leftover `claude bg-spare`). Forking branches off a copy
+  // of the whole transcript, so the agent returns knowing what it knew; the
+  // new id is picked up by the spawn-time rotation probe below, which records
+  // the old one on the lineage so the rail keeps its history.
+  const fork = planHeldSessionFork(
+    claudeSpawnCommand(command, t.cwd, sessionId),
+    sessionId,
+    liveSessionHolders(),
+    randomUUID
+  )
+  const effective = fork.command
+  // Bind the copy only once it EXISTS. Naming it ourselves is what makes the
+  // binding possible at all, but a still-live tmux session is reattached by
+  // `new-session -A`, which ignores this command entirely — so the fork may
+  // never run. Binding on intent pointed a node at a session file that was
+  // never written, which is worse than the bug it was fixing: the rail had
+  // nothing to read and the exact-context gate could no longer pass.
+  if (fork.forkedTo) bindForkWhenWritten(t.id, sessionId, fork.forkedTo, t.cwd)
+  return effective
+}
+
+function exclusiveDirLaunchLine(t: SpawnSubject, command: string, servedCtx: ServedSpawnPlace | undefined): string {
+  // H4: wire the pi-bind machinery so the Pi preset actually uses it.
+  // Every terminal gets an EXCLUSIVE session dir, so two Pi terminals in
+  // the same cwd never share one session tree (the cross-agent race
+  // pi-bind exists to eliminate). A node with a prior session in its dir
+  // resumes it; otherwise a fresh session boots scoped to that dir.
+  const binding = piLaunchBinding({
+    command,
+    cwd: t.cwd,
+    terminalId: t.id,
+    ...(servedCtx
+      ? {
+          sessionsRoot: path.join(servedCtx.sandbox, '.cookrew', 'pi-sessions'),
+          agentDir: path.join(servedCtx.sandbox, '.pi', 'agent')
+        }
+      : {}),
+    // An unbound node adopts an UNOWNED session from its own cwd scope
+    // rather than booting fresh beside it. Ownership is checked here, not
+    // in pi-bind, because only the store knows what every other node claims
+    // — and that check is the whole reason this is not the most-recent
+    // guess the exclusive-dir design exists to forbid.
+    storedSessionId: t.piSessionId ?? (servedCtx ? null : adoptablePiSession(t.id, t.cwd))
+  })
+  if (t.piSessionId !== binding.sessionId) {
+    store.updateNodeUnsafe(t.id, { piSessionId: binding.sessionId })
+  }
+  return binding.command
+}
+
+/** Bind a card that booted with no session ref, once its session exists. */
+function bindAfterSpawn(harness: HarnessEntry, t: SpawnSubject, servedCtx: ServedSpawnPlace | undefined): void {
+  const bind = harness.bind
+  switch (bind.kind) {
+    case 'minted':
+      // Named before boot (mintedLaunchLine); the oracle follows it from there.
+      return
+    case 'pid-held':
+      return pollPidHeldBind(harness, bind.resolveByPid, t)
+    case 'exclusive-dir':
+      return pollExclusiveDirBind(t, servedCtx)
+    default:
+      return assertNeverBind(bind)
+  }
+}
+
+/**
+ * DETERMINISTIC bind (EXACT-CONTEXT gate): the session is the file the
+ * harness PROCESS holds open (lsof of the pane pid), never a most-recent
+ * mtime guess — so it cannot grab a stray or cross-wire two agents. The file
+ * appears seconds after boot (codex: at session start; opencode: at the
+ * first turn), so poll on a schedule, then keep a slow retry tail until it
+ * binds (BIND_RETRY_TAIL_MS, MEDIUM-3 — the lazy re-bind, not a single shot).
+ */
+function pollPidHeldBind(harness: HarnessEntry, resolveByPid: (pid: number | null) => string | null, t: SpawnSubject): void {
+  const field = harness.sessionField
+  const attempt = (delays: number[]): void => {
+    const delay = delays.length === 0 ? BIND_RETRY_TAIL_MS : delays[0]
+    const next = (): void => attempt(delays.length === 0 ? [] : delays.slice(1))
+    setTimeout(() => {
+      try {
+        const hit = store.nodeAcrossWorkspaces(t.id)
+        if (!hit || hit.node.kind !== 'terminal') return
+        if ((hit.node as TerminalNodeData)[field]) return
+        const ref = resolveByPid(ptys.panePid(t.id))
+        if (!ref) return next() // not open yet
+        // 1:1 authoritative: a session already owned by another node is never
+        // reassignable (defense-in-depth; lsof already makes this 1:1).
+        if (isRefOwned(store.terminalsAcross(), t.id, field, ref)) return next()
+        store.updateNodeUnsafe(t.id, { [field]: ref } as Partial<TerminalNodeData>)
+        agents.setSessionRef(t.id, ref)
+        // Bound → durable turn history can start reconciling (registry-driven:
+        // a no-op while the harness is scrape-only).
+        watchSessionTurns(t.id)
+      } catch (error) {
+        console.error(`${HARNESS_CARDS[harness.id].name} session bind failed:`, error)
+      }
+    }, delay)
+  }
+  attempt([3000, 8000, 20000, 45000])
+}
+
+/**
+ * Pi session bind: a FRESH boot has no session id yet — the file appears
+ * once Pi starts, so poll on a schedule (same recipe as pid-held).
+ * Resolution follows the LIVE pane's own launch, not the command we would
+ * build today: a pane created before the exclusive-dir wiring is reattached
+ * as-is by `new-session -A` and keeps writing to pi's shared cwd dir, and
+ * scanning only the exclusive dir left such nodes forever unbound (their
+ * rail degraded to PTY scrapes labelled '(recovered turn)'). Adoption from
+ * the shared dir is gated on the pane's start window plus the 1:1 ownership
+ * check, so no other agent's session can be taken.
+ */
+function pollExclusiveDirBind(t: SpawnSubject, servedCtx: ServedSpawnPlace | undefined): void {
+  const attempt = (delays: number[]): void => {
+    const delay = delays.length === 0 ? BIND_RETRY_TAIL_MS : delays[0]
+    setTimeout(() => {
+      try {
+        const hit = store.nodeAcrossWorkspaces(t.id)
+        if (!hit || hit.node.kind !== 'terminal') return
+        if ((hit.node as TerminalNodeData).piSessionId) return
+        const pane = ptys.paneLaunch(t.id)
+        const session = resolvePiSessionByPane({
+          cwd: t.cwd,
+          terminalId: t.id,
+          command: pane?.command ?? null,
+          paneStartedAtMs: pane?.startedAtMs ?? null,
+          exclude: claimedPiSessions(t.id),
+          // A SERVED pi writes its session under the SANDBOX roots (the
+          // spawn passes them at line ~1145); scanning the owner's default
+          // root here meant a served orch could answer forever and never
+          // bind — no piSessionId, no file-backed turns, and every caller
+          // ask died as "completed no file-backed agent turn" (the final
+          // broken link of the paid-session line, 2026-08-27).
+          ...(servedCtx
+            ? {
+                sessionsRoot: path.join(servedCtx.sandbox, '.cookrew', 'pi-sessions'),
+                agentDir: path.join(servedCtx.sandbox, '.pi', 'agent')
+              }
+            : {})
+        })
+        if (!session) return void attempt(delays.length === 0 ? [] : delays.slice(1))
+        store.updateNodeUnsafe(t.id, { piSessionId: session.id })
+        agents.setSessionRef(t.id, session.id)
+        // Session discovered → durable turn history can start reconciling.
+        watchSessionTurns(t.id)
+      } catch (error) {
+        console.error('Pi session bind failed:', error)
+      }
+    }, delay)
+  }
+  attempt([3000, 8000, 20000, 45000])
+}
+
+/**
+ * Follow a bound session the harness may have moved while nobody watched.
+ * Keyed by every harness: one that keeps a single file per pane says so.
+ */
+const FOLLOW_BOUND_SESSION: PerHarness<(terminalId: string) => void> = {
+  // SPAWN-TIME successor probe, not only the quiet-pane watcher: a crash
+  // recovery rotates the session while no pane exists, so by the time a pane
+  // exists again the staleness watcher has nothing stale to notice.
+  // resolveClaudeSessionId keeps a stored id merely because its file still
+  // EXISTS — it never asks whether a newer file claims that file's uuids.
+  // Measured on Conductor: 368/368 head uuids replayed into a successor and
+  // the rail sat frozen until the binding was repointed by hand. So every
+  // adopt asks the question too; the probe follows the chain to the newest
+  // hop and refuses on every doubt, exactly as when a watcher raises it.
+  claude: (terminalId) => {
+    void rebindRotatedClaudeSession(terminalId)
+    // The process's own statement arrives once claude has booted and written
+    // ~/.claude/sessions/<pid>.json — seconds after the pane exists. Ask on a
+    // short schedule so a resume that minted a new id is bound before the
+    // first turn, not at the next sweep.
+    for (const delay of ORACLE_BOOT_DELAYS_MS) {
+      setTimeout(() => void rebindRotatedClaudeSession(terminalId, 'oracle'), delay).unref()
+    }
+  },
+  // An ALREADY-BOUND card may have been backtracked while nobody watched:
+  // `codex resume` then writes the newest continuation, which can be days
+  // old. Once the process has opened its rollout, look across the tree.
+  codex: (terminalId) => {
+    for (const delay of [8000, 45000]) {
+      setTimeout(() => followMovedCodexRollout(terminalId, 'everywhere'), delay).unref()
+    }
+  },
+  opencode: unsupported('one session file per pane: nothing moves it'),
+  pi: unsupported('one session file per exclusive dir: nothing moves it')
 }
 
 /** Claude sessions owned by OTHER terminals — current bindings AND lineage.
