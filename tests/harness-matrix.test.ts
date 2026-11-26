@@ -7,9 +7,11 @@
 // loosening one.
 
 import { describe, expect, it } from 'vitest'
-import { HARNESS_CARDS, HARNESS_IDS, HARNESS_NAMES, harnessOfPreset, isHarnessId } from '../src/shared/harness-catalog'
+import { HARNESS_CARDS, HARNESS_IDS, HARNESS_NAMES, harnessOfCommand, harnessOfPreset, isHarnessId } from '../src/shared/harness-catalog'
+import { GATEWAY_MODELS_IN_TUNE, harnessFlag, LINE_REBUILT_ON_SEND } from '../src/shared/harness-ui'
+import { agentKind, herdrAgentKind } from '../src/main/herdr-host-multiplexer'
 import { isUnsupported, supportedIds, unsupported, type PerHarness } from '../src/shared/harness-support'
-import { HARNESS_BY_ID, HARNESSES, withoutSessionFlags } from '../src/main/harness'
+import { HARNESS_BY_ID, HARNESSES, harnessFor, withoutSessionFlags } from '../src/main/harness'
 import { featureMatrix, lacksBecause, OPTIONAL_FEATURES } from '../src/main/harness-features'
 import { HARNESS_INPUT } from '../src/main/harness-input'
 import { EXACT_RESTORE, SESSION_ON_DISK } from '../src/main/recover-gate'
@@ -38,6 +40,8 @@ const TABLES: Record<string, Readonly<Record<string, unknown>>> = {
   'not-routable reason (route-view.ts)': NOT_ROUTABLE_REASON,
   'route overrides (launch-tune.ts)': ROUTE_OVERRIDES,
   'own subscription (ai-account.ts)': OWN_SUBSCRIPTION,
+  'line rebuilt on send (harness-ui.ts)': LINE_REBUILT_ON_SEND,
+  'gateway models in the tune dial (harness-ui.ts)': GATEWAY_MODELS_IN_TUNE,
   ...Object.fromEntries(Object.entries(OPTIONAL_FEATURES).map(([feature, table]) => [`optional: ${feature}`, table]))
 }
 
@@ -166,3 +170,44 @@ describe('preset names draw their harness', () => {
     expect(harnessOfPreset(null)).toBeNull()
   })
 })
+
+describe('one command matcher, main and renderer alike', () => {
+  const LINES = [
+    'claude --permission-mode bypassPermissions',
+    '  codex resume 5e55a0de-0000-4000-8000-0000000000bb',
+    'opencode --session ses_abc',
+    'pi --session-dir /x',
+    '/Users/me/.cookrew/bin/qwen-pi --model q',
+    'pipeline run',
+    'zsh',
+    '',
+    'claudex',
+    'codexx'
+  ]
+
+  it('the registry and the catalog name the same harness for every launch line', () => {
+    for (const line of LINES) expect(harnessOfCommand(line), line).toBe(harnessFor(line)?.id ?? null)
+  })
+
+  it('herdr is told the kind its detector knows; the process check keeps the binary', () => {
+    expect(herdrAgentKind('/Users/me/.cookrew/bin/qwen-pi --model q')).toBe('pi')
+    expect(agentKind('/Users/me/.cookrew/bin/qwen-pi --model q')).toBe('qwen-pi')
+    for (const id of HARNESS_IDS) expect(herdrAgentKind(`${HARNESS_CARDS[id].bin} --x`)).toBe(HARNESS_CARDS[id].herdrKind)
+    expect(herdrAgentKind('/opt/homebrew/bin/codex resume')).toBe('codex')
+    expect(herdrAgentKind('zsh')).toBe('zsh')
+    expect(herdrAgentKind('')).toBe('shell')
+  })
+
+  it('renderer tables answer false for anything that is not a harness', () => {
+    for (const value of [null, undefined, 'shell', 'other', 'Codex', 3]) {
+      expect(harnessFlag(LINE_REBUILT_ON_SEND, value)).toBe(false)
+    }
+    expect(harnessFlag(LINE_REBUILT_ON_SEND, 'codex')).toBe(true)
+    expect(supportedIdsOf(LINE_REBUILT_ON_SEND)).toEqual(['codex'])
+    expect(supportedIdsOf(GATEWAY_MODELS_IN_TUNE)).toEqual(['claude'])
+  })
+})
+
+function supportedIdsOf(table: Readonly<Record<string, boolean>>): string[] {
+  return HARNESS_IDS.filter((id) => table[id])
+}

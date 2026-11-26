@@ -7,6 +7,7 @@
 // (real messages and tool calls, not a text replay) while the origin session
 // file is only ever read, never modified.
 
+import { HARNESS_CARDS } from './harness-catalog'
 import type { TurnRecord } from './turn'
 import { CheckpointAssigner, checkpointIdentity, type CheckpointStep } from './session-turns'
 
@@ -275,7 +276,7 @@ export function buildForkedSessionLinesForUuids(
 
 /** True when a terminal runs Claude Code (the only agent we can session-fork). */
 export function isClaudeCommand(command: string): boolean {
-  return /^\s*claude\b/.test(command)
+  return HARNESS_CARDS.claude.matches(command)
 }
 
 const SESSION_FLAG_RE = /\s--(?:resume|session-id)(?:[= ]\S+)?/g

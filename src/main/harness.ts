@@ -6,7 +6,7 @@
 
 import type { HarnessTuning } from '../shared/agent-tuning'
 import { stripSessionFlags } from '../shared/claude-fork'
-import { HARNESS_IDS, type HarnessId } from '../shared/harness-catalog'
+import { HARNESS_CARDS, HARNESS_IDS, type HarnessId } from '../shared/harness-catalog'
 import type { TerminalNodeData } from '../shared/model'
 import { parseSessionTurns } from '../shared/session-turns'
 import {
@@ -25,7 +25,6 @@ import { codexTuning } from './codex-tuning'
 import { resolveOpencodeSessionByPid } from './opencode-bind'
 import { piTuning } from './pi-tuning'
 import {
-  isPiCommand,
   piNodeSessionDir,
   piResumeCommand,
   piSessionHome,
@@ -239,7 +238,7 @@ export interface Harness {
 
 const CLAUDE: Harness = {
   id: 'claude',
-  matches: (c) => /^\s*claude\b/.test(c),
+  matches: HARNESS_CARDS.claude.matches,
   bind: { kind: 'minted' },
   sessionField: 'claudeSessionId',
   resumeKey: (ref) => (ref ? ref : null),
@@ -259,7 +258,7 @@ const stripCodexResume = (command: string): string => command.replace(/\s+resume
 
 const CODEX: Harness = {
   id: 'codex',
-  matches: (c) => /^\s*codex\b/.test(c),
+  matches: HARNESS_CARDS.codex.matches,
   // The rollout the codex process holds open is its session.
   bind: { kind: 'pid-held', resolveByPid: (pid) => resolveCodexRolloutByPid(pid) },
   // Stored ref is the rollout FILE path; the resume key is its session uuid.
@@ -291,7 +290,7 @@ const CODEX: Harness = {
 const OPENCODE_SESSION_FLAG_RE = /\s(?:--session|--continue|-s|-c)(?:[= ]\S+)?/g
 const OPENCODE: Harness = {
   id: 'opencode',
-  matches: (c) => /^\s*opencode\b/.test(c),
+  matches: HARNESS_CARDS.opencode.matches,
   bind: { kind: 'pid-held', resolveByPid: (pid) => resolveOpencodeSessionByPid(pid) },
   sessionField: 'opencodeSessionId',
   // Defense-in-depth (HIGH-2): opencodeSessionId can arrive via the unauth
@@ -309,7 +308,7 @@ const OPENCODE: Harness = {
 
 const PI: Harness = {
   id: 'pi',
-  matches: isPiCommand,
+  matches: HARNESS_CARDS.pi.matches,
   bind: { kind: 'exclusive-dir' },
   sessionField: 'piSessionId',
   stripSessionFlags: stripPiSessionFlags,

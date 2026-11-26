@@ -315,7 +315,7 @@ describe('a send to a Codex agent rebuilds its line', () => {
   const PO = '\x1b[200~'
   const PC = '\x1b[201~'
   const pic = '/Users/drej/.cookrew/attachments/Screenshot_20261117_201900_Chrome.jpg'
-  const codex = (id = 'a1') => noteLineAgents([{ id, codex: true }])
+  const codex = (id = 'a1') => noteLineAgents([{ id, rebuild: true }])
 
   it('clears the box, pastes the words, then each picture on its own, then Enter', () => {
     codex()
@@ -342,7 +342,7 @@ describe('a send to a Codex agent rebuilds its line', () => {
 
   it('an agent named by one source stays as another left it', () => {
     codex()
-    noteLineAgents([{ id: 'b2', codex: false }])
+    noteLineAgents([{ id: 'b2', rebuild: false }])
     submitLine('a1', 'x')
     expect(typedKeys()).toEqual([`${CODEX_CLEAR}${PO}x${PC}`, '\r'])
   })
@@ -365,7 +365,7 @@ describe('a send to a Codex agent rebuilds its line', () => {
 
   it('other agents keep their typed line, and a card that stops being Codex does too', () => {
     codex()
-    noteLineAgents([{ id: 'a1', codex: false }])
+    noteLineAgents([{ id: 'a1', rebuild: false }])
     typeLine('a1', 'hello')
     submitLine('a1', 'hello there')
     expect(typedKeys()).toEqual(['hello', ' there', '\r'])

@@ -193,14 +193,15 @@ export function typeLine(agentId: string, text: string, force = false): void {
 let rebuilt: ReadonlySet<string> = new Set()
 
 /**
- * What these agents run: a Codex agent's line is rebuilt on its send. Agents
+ * What these agents run: an agent whose harness rebuilds its line on a send
+ * (shared/harness-ui.ts LINE_REBUILT_ON_SEND — Codex today). Agents
  * not named keep what they were, so the active workspace's cards and the
  * fleet's other workspaces can each say what they know (Dock.tsx).
  */
-export function noteLineAgents(agents: readonly { readonly id: string; readonly codex: boolean }[]): void {
+export function noteLineAgents(agents: readonly { readonly id: string; readonly rebuild: boolean }[]): void {
   const next = new Set(rebuilt)
   for (const agent of agents) {
-    if (agent.codex) next.add(agent.id)
+    if (agent.rebuild) next.add(agent.id)
     else next.delete(agent.id)
   }
   if (next.size !== rebuilt.size || [...next].some((id) => !rebuilt.has(id))) rebuilt = next

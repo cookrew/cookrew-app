@@ -47,6 +47,7 @@
 // The PUSH path (agent status) is a different concern and does not come through
 // this interface; it holds a socket open, because that is what it needs.
 
+import { HARNESS_CARDS, harnessOfCommand } from '../shared/harness-catalog'
 import { TEST_WORKER_CAPS } from './pane-env'
 import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -355,6 +356,18 @@ export function agentKind(command: string): string {
   const first = command.trim().split(/\s+/)[0] ?? ''
   const base = first.split('/').pop() ?? ''
   return base.length > 0 ? base : 'shell'
+}
+
+/**
+ * The kind Cookrew REPORTS to herdr for a pane: the harness's own herdr kind
+ * (harness-catalog herdrKind) when the command runs a known harness, else the
+ * binary. Kept apart from agentKind, which also names the PROCESS a live pane
+ * must be running (paneRuns): a `qwen-pi` wrapper's process is `qwen-pi` but
+ * herdr's detector is `pi`, and the two answers must not be confused.
+ */
+export function herdrAgentKind(command: string): string {
+  const id = harnessOfCommand(command)
+  return id ? HARNESS_CARDS[id].herdrKind : agentKind(command)
 }
 
 /** Where the pane a boot types into came from: made by this call, the server's idle starter, or already labelled. */
@@ -1517,7 +1530,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     const known = pane.agent_status
     const state =
       known === 'idle' || known === 'working' || known === 'blocked' ? known : 'unknown'
-    const kind = pane.agent && pane.agent.length > 0 ? pane.agent : agentKind(spec.command)
+    const kind = pane.agent && pane.agent.length > 0 ? pane.agent : herdrAgentKind(spec.command)
     this.quiet([
       'pane', 'report-agent', pane.pane_id,
       '--source', 'cookrew',
@@ -1991,12 +2004,12 @@ export class HerdrHostMultiplexer implements Multiplexer {
     this.quiet([
       'pane', 'report-agent', paneId,
       '--source', 'cookrew',
-      '--agent', agentKind(spec.command),
+      '--agent', herdrAgentKind(spec.command),
       '--state', 'idle'
     ])
     // Same discipline as reportAgent: un-muzzle the detector where one
     // exists, but never at the cost of the registration itself.
-    this.releaseKeepingRegistration(paneId, agentKind(spec.command), 'idle')
+    this.releaseKeepingRegistration(paneId, herdrAgentKind(spec.command), 'idle')
     // Registration propagates asynchronously; give it a bounded moment so the
     // attach spawned right after this does not race it.
     const deadline = Date.now() + Math.min(this.settleMs, 1000)

@@ -9,6 +9,7 @@
 // belongs to the agent, so it lives here, not in either host.
 
 import { useAgentTuning } from './use-agent-tuning'
+import { GATEWAY_MODELS_IN_TUNE, harnessFlag } from '../../../shared/harness-ui'
 import { useCardRoute } from './use-card-route'
 import { TuneMenu } from './TuneMenu'
 import { routeDialAllowed, routeDialInput, routeDialLines } from '../../../shared/route-view'
@@ -52,7 +53,7 @@ export function CardTune({ terminalId, phase, remote, onMouseDown, rise = false,
   // gets one MDL dial for model and route alike. Every pick goes to main as a
   // model pick (claude-model-route.ts), which saves the route and the flags
   // and restarts once, keeping the effort it runs at.
-  const merged = tuning.state?.harness === 'claude' && routeDial !== null && !routeDial.notRoutable && routeDial.choices.length > 0
+  const merged = harnessFlag(GATEWAY_MODELS_IN_TUNE, tuning.state?.harness) && routeDial !== null && !routeDial.notRoutable && routeDial.choices.length > 0
   const reading = tuning.state?.tuning ?? null
   const current = merged ? currentModelValue(cardRoute.state?.route ?? null, reading) : null
   const lines = routeDialLines(cardRoute.state)
