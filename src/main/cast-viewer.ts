@@ -10,9 +10,9 @@
 import { randomUUID } from 'node:crypto'
 import { sanitizeInput, sanitizePaste, type CdpInputCommand, type MapContext } from '../shared/cast-input'
 import { fieldsInFrame, type FieldReport } from './page-fields'
-import { capViewportScale, sanitizeViewportMessage } from '../shared/cast-viewport'
+import { capViewportScale, sanitizeViewportMessage, type ViewportMetrics } from '../shared/cast-viewport'
 import { CAST_STATS_TYPE, sanitizeCastStats } from '../shared/cast-stats'
-import { appendCastStats, type CastStatsEntry } from './cast-stats-log'
+import { appendCastStats, type CastAsks, type CastStatsEntry } from './cast-stats-log'
 import { castTuning } from './cast-tuning'
 import { CAST_CODEC, VIDEO_ON_TYPE, isVideoKeyAsk, sanitizeCodecs, sanitizeVideoAck } from '../shared/cast-video'
 import type { CastEncoderHost } from './cast-encoder'
@@ -156,6 +156,9 @@ export class CastViewer {
   private sentFrames = 0
   private sentBytes = 0
   private sentSize: { width: number; height: number } = { width: 0, height: 0 }
+  /** The viewport asks it made since its last report, and its last one (cast-stats-log.ts · CastAsks). */
+  private askCounts = { offers: 0, claims: 0 }
+  private lastAsk: ViewportMetrics | null = null
   private reportedAt = 0
   /** This viewer's pictures as H.264 (cast-video-out.ts); null while it gets JPEG. */
   private video: VideoOut | null = null
@@ -419,6 +422,7 @@ export class CastViewer {
     if (viewportMessage) {
       if (viewportMessage.type === 'release') instance.releaseViewport(this.id)
       else {
+        this.countAsk(viewportMessage.type, viewportMessage.metrics)
         const metrics = capViewportScale(viewportMessage.metrics, this.allowedScale())
         if (viewportMessage.type === 'offer') instance.offerViewport(this.id, metrics)
         else instance.claimViewport(this.id, metrics)
@@ -505,6 +509,7 @@ export class CastViewer {
     this.reportedAt = now
     this.sentFrames = 0
     this.sentBytes = 0
+    const asks = this.takeAsks()
     const measured = this.video?.takeMeasured()
     ;(this.options.report ?? appendCastStats)({
       at: new Date(now).toISOString(),
@@ -535,10 +540,28 @@ export class CastViewer {
             }
           }
         : {}),
+      // What the phone asked for, so a view that flips size says whose ask it was.
+      ...(asks ? { asks } : {}),
       // What is in force, not what the file says now: a quality change waits
       // for the next stream start, and a comparison must not be told otherwise.
       inUse: { scaleMax: this.allowedScale(), quality: this.instance?.frameQualityInUse ?? 0 }
     })
+  }
+
+  /** One viewport ask from this viewer, as it arrived (before its scale is held to the cap). */
+  private countAsk(kind: 'offer' | 'claim', metrics: ViewportMetrics): void {
+    const { offers, claims } = this.askCounts
+    this.askCounts = kind === 'offer' ? { offers: offers + 1, claims } : { offers, claims: claims + 1 }
+    this.lastAsk = metrics
+  }
+
+  /** The window's asks for its report, counted from zero again; null for a viewer that never asked. */
+  private takeAsks(): CastAsks | null {
+    const last = this.lastAsk
+    const counts = this.askCounts
+    this.askCounts = { offers: 0, claims: 0 }
+    if (!last) return null
+    return { ...counts, width: last.width, height: last.height, scale: last.scale ?? 1 }
   }
 
   /** What is held down in Chrome on this viewer's behalf, for a viewer that leaves mid-press. */
