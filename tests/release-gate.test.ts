@@ -75,7 +75,7 @@ describe('release.yml', () => {
     expect(runs(jobs.verify)).toContain('npm test')
     expect(runs(jobs.verify)).toContain('npm run typecheck')
     expect(runs(jobs.verify)).toContain('scripts/release-gate.mjs tag')
-    expect(jobs.build.needs).toBe('verify')
+    expect(jobs.build.needs).toEqual(['verify', 'draft'])
   })
 
   it('a tag is refused before anything else unless it merges dev into main, with the history to tell', () => {
@@ -87,6 +87,20 @@ describe('release.yml', () => {
 
   it('still builds a dispatch or a pull request, which skip the tag checks', () => {
     expect(jobs.build.if).toContain("needs.verify.result == 'skipped'")
+  })
+
+  // 0.6.43: the two build legs each made a draft for the tag in the same second, each with half the assets.
+  it('makes the tag\u2019s one draft before either build leg, so both upload into it', () => {
+    expect(jobs.draft.needs).toBe('verify')
+    expect(jobs.draft.if).toContain("startsWith(github.ref, 'refs/tags/')")
+    const script = runs(jobs.draft)
+    expect(script.indexOf('gh release view')).toBeLessThan(script.indexOf('gh release create'))
+    expect(script).toContain('--draft')
+    expect(script).toContain('--verify-tag')
+    // Runs nothing of the repository beside a token that may write releases.
+    expect(jobs.draft.steps.some((step) => step.uses?.startsWith('actions/checkout'))).toBe(false)
+    expect(jobs.build.if).toContain("needs.draft.result == 'success'")
+    expect(jobs.build.if).toContain("needs.draft.result == 'skipped'")
   })
 
   it('publishes on a tag, only after every build, and only with the assets in place', () => {
