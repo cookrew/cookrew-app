@@ -943,9 +943,12 @@ describe('the successor probe runs at SPAWN/ADOPT, not only when a pane goes qui
     // f8cf0774 -> cf006c7e sat undetected until the binding was repointed by
     // hand, because resolveClaudeSessionId keeps a stored id whose file merely
     // EXISTS without ever asking whether a successor claims its uuids.
+    // The spawn follows every card that came in bound, by harness
+    // (FOLLOW_BOUND_SESSION), and Claude's entry is the successor probe.
     expect(indexSource).toContain(
-      "if (isClaudeCommand(command) && t.claudeSessionId) {\n    void rebindRotatedClaudeSession(t.id)"
+      "const boundRef = t[harness.sessionField]\n    if (boundRef) supportFor(FOLLOW_BOUND_SESSION, harness.id)?.(t.id)"
     )
+    expect(indexSource).toContain('  claude: (terminalId) => {\n    void rebindRotatedClaudeSession(terminalId)')
   })
 
   it('keeps the staleness watcher as the other trigger', () => {

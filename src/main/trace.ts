@@ -26,6 +26,7 @@ import { reachableLineage } from './lineage-spill'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { rolloutIdFromRolloutPath } from './codex-bind'
 import { codexBaseChain } from './codex-lineage'
+import { harnessHas } from './harness-features'
 import { HARNESS_BY_ID, harnessFor, type HarnessId, type HarnessWatchOptions, type TurnFinality } from './harness'
 import type { SessionTurnParser } from './session-sync'
 import type { TurnRecord } from '../shared/turn'
@@ -377,7 +378,7 @@ export class TraceReader {
       id: b.id,
       sessionId: node.claudeSessionId ?? undefined
     }))
-    if (options.includeLineage !== true || kind !== 'claude') return current
+    if (options.includeLineage !== true || !harnessHas('sessionLineage', node.command)) return current
     const segments = await this.lineageSegments(terminalId)
     const earlier = segments.flatMap((segment) =>
       segment.entries.flatMap((entry) =>

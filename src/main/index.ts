@@ -287,7 +287,9 @@ import { commandRun, createSessionReader, linuxSession, remoteBuild, remoteSetti
 import { createRemoteTray } from './remote-tray'
 import { claudeSettingsGateway, launchPick, newAgentPlan, withGatewayModel } from './claude-model-route'
 import { harnessFor, type Harness as HarnessEntry } from './harness'
-import { HARNESS_CARDS } from '../shared/harness-catalog'
+import { harnessHas } from './harness-features'
+import { inputFor } from './harness-input'
+import { HARNESS_CARDS, HARNESS_NAMES } from '../shared/harness-catalog'
 import { supportFor, unsupported, type PerHarness } from '../shared/harness-support'
 import { canRestoreExact as exactGate, isRefOwned, sessionOnDisk } from './recover-gate'
 import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
@@ -3649,7 +3651,7 @@ function bootBlockOf(t: LaunchSubject): LaunchFailure | null {
 
 /** Where the card boots: spawnTracked moves a card to where its claude session lives first. */
 function bootCwdOf(t: LaunchSubject): string {
-  const repaired = isClaudeCommand(t.command) && t.claudeSessionId ? claudeCwdRepair({ cwd: t.cwd, sessionId: t.claudeSessionId }) : null
+  const repaired = harnessHas('sessionCwdRepair', t.command) && t.claudeSessionId ? claudeCwdRepair({ cwd: t.cwd, sessionId: t.claudeSessionId }) : null
   return repaired ?? t.cwd
 }
 
@@ -3679,7 +3681,7 @@ function ownerWorkspaceDirs(): string[] {
 
 /** A Claude card would sit on "Is this a project you trust?" with nobody to answer: say so on the card. */
 function claudeFolderBlock(t: LaunchSubject, cwd: string): LaunchFailure | null {
-  if (!isClaudeCommand(t.command)) return null
+  if (!harnessHas('firstBootPrep', t.command)) return null
   const home = store.ownerOf(t.id)
   if (home !== undefined && isServedWorkspace(home)) return null
   const name = store.nodeAcrossWorkspaces(t.id)?.node.name
@@ -4016,7 +4018,7 @@ function spawnTracked(t: {
   const home = store.ownerOf(t.id)
   const servedPlace = inSessionsRoot(t.cwd, sessionsRootOf(sessionsBase)) || inSessionsRoot(t.cwd, resolvedOr(sessionsRootOf(sessionsBase)))
   const repairedCwd =
-    isClaudeCommand(t.command) && t.claudeSessionId && !servedPlace && !(home !== undefined && isServedWorkspace(home))
+    harnessHas('sessionCwdRepair', t.command) && t.claudeSessionId && !servedPlace && !(home !== undefined && isServedWorkspace(home))
       ? claudeCwdRepair({ cwd: t.cwd, sessionId: t.claudeSessionId })
       : null
   if (repairedCwd !== null) {
@@ -4062,7 +4064,7 @@ function spawnTracked(t: {
     if (forgetDeadBox(defaultProducerLease(), t.id, () => panePresence(t.id))) {
       console.error(`[cookrew] ${t.id}: its pane is gone, and with it the input box a delivery was unconfirmed in`)
     }
-    if (!servedCtx && isClaudeCommand(command)) prepareClaudeCard(command, t.cwd)
+    if (!servedCtx && harnessHas('firstBootPrep', command)) prepareClaudeCard(command, t.cwd)
   }
   // Bound and resumed by the harness's declared strategy (harness.ts
   // BindStrategy), never by its name: a harness that picks a strategy gets
@@ -4188,6 +4190,12 @@ function spawnTracked(t: {
 }
 
 type SpawnSubject = Parameters<typeof spawnTracked>[0]
+
+/** A waking pane waits for its input box only where every input does (harness-input.ts). */
+function wakeDrawn(session: PtySession): (() => boolean) | undefined {
+  const input = inputFor(session.command ?? '')
+  return input?.gatesEveryInput ? () => input.drawn(session.viewportText()) : undefined
+}
 type ServedSpawnPlace = NonNullable<ReturnType<typeof servedSpawnContexts.get>>
 
 /** The line a (re)boot runs: the harness's own session resumed, or a fresh one bound. */
@@ -4654,7 +4662,7 @@ function sleepSweep(): void {
       // A session filed under another directory is resumable too: the spawn
       // moves the card there first (claudeCwdRepair), so it is not a lost one.
       resumable:
-        isClaudeCommand(n.command) &&
+        harnessHas('idleSleep', n.command) &&
         !!n.claudeSessionId &&
         (canRestoreExact(n) || claudeCwdRepair({ cwd: n.cwd, sessionId: n.claudeSessionId }) !== null),
       served: n.servedSession != null || ptys.isServed(n.id) || isServedWorkspace(store.ownerOf(n.id)),
@@ -4803,7 +4811,7 @@ const waker = new AgentWaker<PtySession>({
   // anything, so a Claude session waits for its input box as well.
   ready: (session) =>
     waitForReady(session, {
-      drawn: isClaudeCommand(session.command ?? '') ? () => claudeComposerDrawn(session.viewportText()) : undefined,
+      drawn: wakeDrawn(session),
       gone: () => ptys.get(session.terminalId) !== session
     }),
   sleep: { take: (id) => idleSleep.takeAsleep(id), mark: (id) => idleSleep.markAsleep(id) },
@@ -5957,7 +5965,7 @@ function recoverAgent(id: string): RecoverResult {
   // claude-live-session.ts), so it costs nothing to always know.
   const holders = liveSessionHolders()
   const heldSession = (node: TerminalNodeData): boolean =>
-    isClaudeCommand(node.command) &&
+    harnessHas('heldSessionFork', node.command) &&
     !!node.claudeSessionId &&
     blocksResume(holderOf(node.claudeSessionId, holders))
 
@@ -6242,7 +6250,7 @@ function cardRouteFor(node: TerminalNodeData): { routed: boolean; catalog: reado
 /** The effort levels a claude card's model takes: its route's catalog row, else null (claude's own). */
 function cardEffortChoices(id: string): readonly string[] | null {
   const node = store.nodeAcrossWorkspaces(id)?.node
-  if (node?.kind !== 'terminal' || !isClaudeCommand(node.command)) return null
+  if (node?.kind !== 'terminal' || !harnessHas('routeEffortChoices', node.command)) return null
   const where = cardRouteFor(node)
   if (!where.routed) return null
   const levels = where.levelsOf(routeService.routeOf(node))
@@ -6336,8 +6344,7 @@ function tuneDeps(): TuneDeps {
       const state = routeService.state()
       if (state.status !== 'online') return null
       const node = store.nodeAcrossWorkspaces(id)?.node
-      const harness = node?.kind === 'terminal' ? harnessFor(node.command)?.id : null
-      if (!harness || harness === 'pi') return null
+      if (node?.kind !== 'terminal' || !harnessHas('routeDial', node.command)) return null
       return ['direct', ...state.models.map((m) => m.id)]
     }
   }
@@ -6494,7 +6501,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
   // the checkpoint conversation. Codex/absent copy → boot fresh (rolePrompt
   // injection below is unchanged either way).
   const restoredSessionId =
-    role?.sessionCopyRef && isClaudeCommand(role.command)
+    role?.sessionCopyRef && harnessHas('roleSessionCopy', role.command)
       ? resumeRoleSession({
           sessionCopyRef: role.sessionCopyRef,
           copyDir: roleSessionDir(),
@@ -6523,7 +6530,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
   // The person chose this folder for the agent, on a screen saying what it may
   // do there: the owner's ruling (2026-11-05) is that this answers Claude's trust
   // dialog. By real path: Claude keys its answer on one, and /tmp is a symlink.
-  if (opts.patient === true && isClaudeCommand(terminal.command)) trustDirectory(realDir(terminal.cwd), claudePrep().claudeJson)
+  if (opts.patient === true && harnessHas('firstBootPrep', terminal.command)) trustDirectory(realDir(terminal.cwd), claudePrep().claudeJson)
   const added = store.addNode(placed)
   spawnTracked(added as TerminalNodeData)
   // A bare shell takes no first prompt: typed into zsh, the words would run as a command.
@@ -8295,7 +8302,7 @@ app.whenReady().then(() => {
       // until then the one harness route-env refuses is pi.
       routing: () => {
         const state = routeService.state()
-        const names: Record<string, Harness> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', pi: 'Pi' }
+        const names: Record<string, Harness> = HARNESS_NAMES
         const routable: Partial<Record<Harness, boolean>> = { Pi: false }
         for (const row of state.harnesses) {
           const flag = (row as { routable?: boolean }).routable

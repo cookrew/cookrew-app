@@ -20,7 +20,7 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { launchOffer, type LaunchOffer } from '../shared/launch-tune'
-import { harnessFor } from './harness'
+import { harnessFor, type HarnessId } from './harness'
 import { piModelFor, piModels, piThinkingLevels, type PiModel } from './pi-catalog'
 
 export interface LaunchOfferOptions {
@@ -123,18 +123,16 @@ export function opencodeLaunchOffer(options: LaunchOfferOptions = {}): LaunchOff
 
 /** The pick a new agent of this launch command can take, or null (a shell, a team, an unknown harness). */
 export function launchOfferFor(command: string, options: LaunchOfferOptions = {}): LaunchOffer | null {
-  switch (harnessFor(command)?.id) {
-    case 'claude':
-      return launchOffer(command)
-    case 'codex':
-      return codexLaunchOffer(options)
-    case 'pi':
-      return piLaunchOffer(options)
-    case 'opencode':
-      return opencodeLaunchOffer(options)
-    default:
-      return null
-  }
+  const harness = harnessFor(command)
+  return harness ? LAUNCH_OFFERS[harness.id](command, options) : null
+}
+
+/** Where each harness's pickable models and efforts come from; one entry per harness. */
+export const LAUNCH_OFFERS: Readonly<Record<HarnessId, (command: string, options: LaunchOfferOptions) => LaunchOffer | null>> = {
+  claude: (command) => launchOffer(command),
+  codex: (_command, options) => codexLaunchOffer(options),
+  pi: (_command, options) => piLaunchOffer(options),
+  opencode: (_command, options) => opencodeLaunchOffer(options)
 }
 
 /**

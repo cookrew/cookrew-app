@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { writeFileAtomic } from './atomic-file'
 import type { HarnessId } from './harness'
+import { supportFor, unsupported, type PerHarness } from '../shared/harness-support'
 import type { KeyReader, PaneKeychain } from './pane-keychain'
 import type { SecretsStore } from './secrets-store'
 import { shellQuote } from './shell-quote'
@@ -71,18 +72,32 @@ const commandLine = ({ command, args }: KeyReader): string => [command, ...args]
 
 /** What a harness is started with for a source; null when it does not speak it. */
 export function accessLaunch(source: AccessSource, harness: HarnessId | undefined, paths: AccessPaths): AccessLaunch | null {
-  const { baseUrl, model, protocol } = source
-  const { piDir } = paths
-  const readKey = commandLine(paths.readKey)
-  if (harness === 'pi') {
+  const launch = supportFor(OWN_ENDPOINT, harness)
+  return launch ? launch(source, paths, commandLine(paths.readKey)) : null
+}
+
+type EndpointLaunch = (source: AccessSource, paths: AccessPaths, readKey: string) => AccessLaunch | null
+
+/**
+ * How each harness runs on a person's own endpoint, keyed by every harness.
+ * A harness that speaks the source's protocol returns its launch, one that
+ * does not returns null, and one with no way to read the key from a helper
+ * declares that it cannot.
+ */
+export const OWN_ENDPOINT: PerHarness<EndpointLaunch> = {
+  pi: (source, paths, readKey) => {
+    const { baseUrl, model, protocol } = source
+    const { piDir } = paths
     const provider = { baseUrl, api: protocol === 'anthropic' ? 'anthropic-messages' : 'openai-completions', apiKey: `!${readKey}`, models: [{ id: model }] }
     return {
       env: { PI_CODING_AGENT_DIR: piDir, PI_CODING_AGENT_SESSION_DIR: path.join(homedir(), '.pi', 'agent', 'sessions') },
       args: ['--provider', PROVIDER, '--model', model],
       files: [{ path: path.join(piDir, 'models.json'), content: `${JSON.stringify({ providers: { [PROVIDER]: provider } }, null, 2)}\n` }]
     }
-  }
-  if (protocol === 'anthropic' && harness === 'claude') {
+  },
+  claude: (source, _paths, readKey) => {
+    const { baseUrl, model, protocol } = source
+    if (protocol !== 'anthropic') return null
     return {
       env: {
         ANTHROPIC_BASE_URL: baseUrl,
@@ -97,8 +112,10 @@ export function accessLaunch(source: AccessSource, harness: HarnessId | undefine
       args: ['--settings', JSON.stringify({ apiKeyHelper: readKey })],
       files: []
     }
-  }
-  if (protocol === 'openai' && harness === 'codex' && source.wire !== 'chat') {
+  },
+  codex: (source, paths) => {
+    const { baseUrl, model, protocol } = source
+    if (protocol !== 'openai' || source.wire === 'chat') return null
     return {
       env: {},
       args: [
@@ -111,8 +128,8 @@ export function accessLaunch(source: AccessSource, harness: HarnessId | undefine
       ],
       files: []
     }
-  }
-  return null
+  },
+  opencode: unsupported('no key-helper hook: it would need the key written into its config file')
 }
 
 export interface AccessStoreDeps {

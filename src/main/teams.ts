@@ -46,12 +46,11 @@ import {
   buildResumeForkNotice,
   buildRoleBootMessage
 } from '../shared/fork'
-import { stripSessionFlags } from '../shared/claude-fork'
+import { withoutSessionFlags } from './harness'
 import { scopeToSelection } from '../shared/team-actions'
 import { fileSlug } from '../shared/slug'
 import { claudeSessionFile, forkClaudeSession, forkClaudeSessionAssembled } from './claude-fork'
 import { injectWhenReady } from './fork'
-import { isPiCommand, stripPiSessionFlags } from './pi-bind'
 import { roleSlug } from './roles'
 import type { RoleStore } from './roles'
 import type { WorkspaceStore } from './store'
@@ -496,9 +495,7 @@ function planTerminal(
     // `resume` the SOURCE's live session file: duplicate-in-place would run
     // two processes appending to one rollout. Lineage and the restore stack
     // reference the source's sessions, so they stay behind too.
-    command: isPiCommand(role ? role.command : node.command)
-      ? stripPiSessionFlags(role ? role.command : node.command)
-      : stripSessionFlags(role ? role.command : node.command),
+    command: withoutSessionFlags(role ? role.command : node.command),
     claudeSessionId: carries ? (node.claudeSessionId ?? null) : null,
     piSessionId: carries ? (node.piSessionId ?? null) : null,
     codexSessionRef: carries ? (node.codexSessionRef ?? null) : null,

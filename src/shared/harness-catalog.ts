@@ -10,20 +10,41 @@ export const HARNESS_IDS = ['claude', 'codex', 'opencode', 'pi'] as const
 
 export type HarnessId = (typeof HARNESS_IDS)[number]
 
+/** What the person reads: dock, routing panel, first-run, Sous. */
+export const HARNESS_NAMES = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  opencode: 'OpenCode',
+  pi: 'Pi'
+} as const satisfies Record<HarnessId, string>
+
+export type HarnessName = (typeof HARNESS_NAMES)[HarnessId]
+
 /** Display facts the renderer needs without reaching into main. */
 export interface HarnessCard {
   id: HarnessId
-  /** What the person reads: dock, routing panel, first-run. */
-  name: string
+  name: HarnessName
   /** The executable a launch line starts with. */
   bin: string
+  /**
+   * A preset NAME that draws this harness's mark and sprite (renderer has the
+   * preset's name, not its command). Tried in catalog order, so a broader
+   * pattern must come later.
+   */
+  presetPattern: RegExp
 }
 
 export const HARNESS_CARDS: Readonly<Record<HarnessId, HarnessCard>> = {
-  claude: { id: 'claude', name: 'Claude Code', bin: 'claude' },
-  codex: { id: 'codex', name: 'Codex', bin: 'codex' },
-  opencode: { id: 'opencode', name: 'OpenCode', bin: 'opencode' },
-  pi: { id: 'pi', name: 'Pi', bin: 'pi' }
+  claude: { id: 'claude', name: HARNESS_NAMES.claude, bin: 'claude', presetPattern: /claude/i },
+  codex: { id: 'codex', name: HARNESS_NAMES.codex, bin: 'codex', presetPattern: /codex/i },
+  opencode: { id: 'opencode', name: HARNESS_NAMES.opencode, bin: 'opencode', presetPattern: /opencode/i },
+  pi: { id: 'pi', name: HARNESS_NAMES.pi, bin: 'pi', presetPattern: /^pi$|^pi |pi agent|^pi-agent$/i }
+}
+
+/** The harness a preset's name draws, or null (a shell, a custom preset). */
+export function harnessOfPreset(preset: string | null | undefined): HarnessId | null {
+  const name = preset ?? ''
+  return HARNESS_IDS.find((id) => HARNESS_CARDS[id].presetPattern.test(name)) ?? null
 }
 
 const ID_SET: ReadonlySet<string> = new Set(HARNESS_IDS)

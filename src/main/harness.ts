@@ -30,6 +30,7 @@ import {
   piResumeCommand,
   piSessionHome,
   piWatchFile,
+  stripPiSessionFlags,
   validPiSessionId
 } from './pi-bind'
 
@@ -164,6 +165,13 @@ export interface Harness {
    *  that don't need either field simply ignore them. */
   resumeCommand(command: string, key: string, context: { terminalId: string; cwd: string }): string
   /**
+   * The launch command with every session-binding flag removed. A copy (fork,
+   * team duplicate, published template) must never carry the source's
+   * binding: it would resume — and append to — the SOURCE's session file.
+   * Bindings live on node fields; the spawn rebuilds the flags.
+   */
+  stripSessionFlags(command: string): string
+  /**
    * Turn-history capability (harness-integration-contract):
    * 'file'   — durable TurnRecords are derived from the harness's session
    *            FILE (SessionTurnSync reconcile); `parseTurns` must be wired
@@ -236,6 +244,7 @@ const CLAUDE: Harness = {
   sessionField: 'claudeSessionId',
   resumeKey: (ref) => (ref ? ref : null),
   resumeCommand: (command, key) => `${stripSessionFlags(command)} --resume ${key}`,
+  stripSessionFlags,
   turns: 'file',
   // Tail proof: assistant stop_reason 'end_turn' (session-turns accumulator).
   turnFinality: 'native',
@@ -244,6 +253,9 @@ const CLAUDE: Harness = {
   traceParser: () => createClaudeTraceAccumulator(),
   tuning: claudeTuning
 }
+
+/** Codex's `resume` subcommand and everything after it (global opts stay before it). */
+const stripCodexResume = (command: string): string => command.replace(/\s+resume\b.*$/, '').trim()
 
 const CODEX: Harness = {
   id: 'codex',
@@ -256,7 +268,8 @@ const CODEX: Harness = {
   // Global opts (e.g. --dangerously-bypass-approvals-and-sandbox) MUST stay
   // BEFORE the `resume` subcommand (Tinker). Strip any prior resume tail.
   resumeCommand: (command, key) =>
-    `${command.replace(/\s+resume\b.*$/, '').trim()} resume ${key}`,
+    `${stripCodexResume(command)} resume ${key}`,
+  stripSessionFlags: (command) => stripCodexResume(stripSessionFlags(command)),
   turns: 'file',
   // Tail proof: the rollout's own per-turn `task_complete` event (verified on
   // real ~/.codex/sessions files, both rollout generations; an interrupted
@@ -287,6 +300,7 @@ const OPENCODE: Harness = {
   resumeKey: (ref) => (/^ses_[A-Za-z0-9]+$/.test(ref) ? ref : null),
   resumeCommand: (command, key) =>
     `${command.replace(OPENCODE_SESSION_FLAG_RE, '').trim()} --session ${key}`,
+  stripSessionFlags: (command) => stripSessionFlags(command).replace(OPENCODE_SESSION_FLAG_RE, '').trim(),
   // OpenCode has no session-file trace/turn parser yet — declared limitation.
   turns: 'scrape',
   // No file, no tail, no proof: a file-backed dispatch can never close here.
@@ -298,6 +312,7 @@ const PI: Harness = {
   matches: isPiCommand,
   bind: { kind: 'exclusive-dir' },
   sessionField: 'piSessionId',
+  stripSessionFlags: stripPiSessionFlags,
   // This value can be restored from persisted/mobile-originated node data and
   // reaches a shell command, so accept only Pi's closed session-id alphabet.
   resumeKey: (ref) => (validPiSessionId(ref) ? ref : null),
@@ -335,6 +350,15 @@ export const HARNESS_BY_ID: Readonly<Record<HarnessId, Harness>> = {
 
 /** Every registered harness, in catalog order. Conformance: tests/harness-conformance.test.ts. */
 export const HARNESSES: Harness[] = HARNESS_IDS.map((id) => HARNESS_BY_ID[id])
+
+/**
+ * The launch command with its session-binding flags removed, per harness. A
+ * plain shell gets Claude's strip, as it always did (a shell line names no
+ * harness, and the strip is a no-op on it).
+ */
+export function withoutSessionFlags(command: string): string {
+  return (harnessFor(command) ?? CLAUDE).stripSessionFlags(command)
+}
 
 /** The harness a launch command runs, or null (plain shell / unknown). */
 export function harnessFor(command: string): Harness | null {

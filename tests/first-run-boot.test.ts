@@ -44,7 +44,8 @@ describe('a real launch', () => {
   // (its rows have no numbers), so the person would wait behind it unseen.
   it('trusts the chosen folder for the first task alone, before the agent starts', () => {
     const create = body('createTerminal')
-    expect(create).toMatch(/opts\.patient === true && isClaudeCommand\(terminal\.command\)\) trustDirectory\(realDir\(terminal\.cwd\)/)
+    // Declared per harness (harness-features.ts firstBootPrep): Claude's trust dialog is the one Cookrew pre-answers.
+    expect(create).toMatch(/opts\.patient === true && harnessHas\('firstBootPrep', terminal\.command\)\) trustDirectory\(realDir\(terminal\.cwd\)/)
     expect(create.indexOf('trustDirectory(')).toBeLessThan(create.indexOf('spawnTracked('))
   })
 

@@ -22,6 +22,7 @@
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { harnessFor } from './harness'
+import { harnessHas } from './harness-features'
 import { restorePointIndex } from '../shared/model'
 import type { TerminalNodeData } from '../shared/model'
 import { claudeStreamChain, type ChainOptions, type StreamChain } from './stream-chain'
@@ -140,7 +141,7 @@ export async function streamChainOf(
 ): Promise<StreamChain> {
   const harness = harnessFor(node.command)
   if (!harness?.traceParser) return { files: [], missing: [] }
-  if (harness.id === 'claude') return claudeStreamChain(node, deps.chainOptions ?? {})
+  if (harnessHas('sessionLineage', node.command)) return claudeStreamChain(node, deps.chainOptions ?? {})
   const kind: TraceKind = harness.id
   const file = deps.fileOf?.(node) ?? null
   if (file === null) return { files: [], missing: [] }

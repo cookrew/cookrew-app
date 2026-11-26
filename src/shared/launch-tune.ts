@@ -35,6 +35,7 @@
  */
 
 import { EFFORT_LEVELS, MODEL_ALIASES } from './agent-tuning'
+import { isHarnessId, type HarnessId } from './harness-catalog'
 
 export type LaunchKnob = 'model' | 'effort'
 
@@ -43,8 +44,8 @@ export const LAUNCH_KNOBS: readonly LaunchKnob[] = ['model', 'effort']
 /** What a new agent was asked to start on. An absent knob = the harness's own default. */
 export type LaunchTune = Partial<Record<LaunchKnob, string>>
 
-/** The harnesses that take a launch pick (harness.ts ids). */
-export type LaunchHarness = 'claude' | 'codex' | 'pi' | 'opencode'
+/** The harnesses that take a launch pick: every catalog harness. */
+export type LaunchHarness = HarnessId
 
 /** The values a new agent of one harness can start on. */
 export interface LaunchOffer {
@@ -141,6 +142,14 @@ export function launchCommand(command: string, raw: unknown, offer: LaunchOffer 
   }, command)
 }
 
+/** The launch picks a route overrides, per harness (the route's model and, for pi, its level). */
+export const ROUTE_OVERRIDES: Readonly<Record<HarnessId, readonly LaunchKnob[]>> = {
+  claude: ['model'],
+  codex: ['model'],
+  opencode: ['model'],
+  pi: ['model', 'effort']
+}
+
 /**
  * A ROUTED card's command, without the pick a route decides instead (review
  * 2026-11-02). The route's args come after the command, and codex's `-m`
@@ -152,9 +161,8 @@ export function launchCommand(command: string, raw: unknown, offer: LaunchOffer 
  * card routed to claude-opus-5-5. Its `--effort` stays: it holds on a route.
  */
 export function withoutRoutedPick(command: string, harness: string | null | undefined): string {
-  const knobs: readonly LaunchKnob[] =
-    harness === 'codex' || harness === 'opencode' || harness === 'claude' ? ['model'] : harness === 'pi' ? ['model', 'effort'] : []
-  const spelling = harness ? SPELLING[harness as LaunchHarness] : undefined
+  const knobs: readonly LaunchKnob[] = isHarnessId(harness) ? ROUTE_OVERRIDES[harness] : []
+  const spelling = isHarnessId(harness) ? SPELLING[harness] : undefined
   return knobs.reduce((line, knob) => {
     const strip = spelling?.[knob]?.strip
     return strip ? line.replace(strip, '') : line

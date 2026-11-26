@@ -1,3 +1,4 @@
+import type { HarnessId } from './harness-catalog'
 /**
  * WHAT A DESKTOP SAYS ABOUT ITSELF, and what the registry says about a desktop.
  *
@@ -125,7 +126,7 @@ export type AgentPhase = 'idle' | 'thinking' | 'waiting' | 'replied' | 'offline'
  */
 export type PhaseSource = 'live' | 'probe' | 'ledger'
 
-export type Harness = 'claude' | 'codex' | 'opencode' | 'pi' | 'shell' | 'other'
+export type Harness = HarnessId | 'shell' | 'other'
 
 export interface FleetAttachment {
   id: string

@@ -1,3 +1,4 @@
+import { isHarnessId } from '../../../shared/harness-catalog'
 import { SHARE_COPY } from '../../../shared/account-guide-copy'
 import { useState } from 'react'
 import type { HarnessRow, RouteDecision, RouteModel, RouteState } from '../../../shared/route'
@@ -137,7 +138,7 @@ export function Harnesses({
               </span>
             )
           })}
-          <span className="small">{row.id === 'claude' || row.id === 'codex' || row.id === 'opencode' || row.id === 'pi' ? 'full rail' : ''}</span>
+          <span className="small">{isHarnessId(row.id) ? 'full rail' : ''}</span>
         </div>
       ))}
     </>

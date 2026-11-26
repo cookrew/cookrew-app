@@ -3,8 +3,9 @@
     Claude Code a starburst, Codex a ring, OpenCode a terminal block, Pi a
     pixel π, and
     Shell (or any custom preset) the classic invader. */
+import { harnessOfPreset, type HarnessId } from '../../../shared/harness-catalog'
 
-export type AgentSpriteKind = 'claude' | 'codex' | 'opencode' | 'pi' | 'shell'
+export type AgentSpriteKind = HarnessId | 'shell'
 
 const GRIDS: Record<AgentSpriteKind, string[]> = {
   claude: [
@@ -56,11 +57,7 @@ const GRIDS: Record<AgentSpriteKind, string[]> = {
 }
 
 export function spriteForPreset(preset: string): AgentSpriteKind {
-  if (/claude/i.test(preset)) return 'claude'
-  if (/codex/i.test(preset)) return 'codex'
-  if (/opencode/i.test(preset)) return 'opencode'
-  if (/^pi$/i.test(preset.trim())) return 'pi'
-  return 'shell'
+  return harnessOfPreset(preset.trim()) ?? 'shell'
 }
 
 export const SPRITE_CELLS: Record<AgentSpriteKind, React.JSX.Element[]> = Object.fromEntries(

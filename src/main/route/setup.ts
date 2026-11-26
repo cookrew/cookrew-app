@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import type { HarnessRow, RouteSetupLines } from '../../shared/route'
 import { ROUTABLE } from '../route-env'
+import { HARNESS_CARDS, HARNESS_IDS, type HarnessId } from '../../shared/harness-catalog'
 
 /**
  * THE LINES THE SETUP TERMINAL TYPES, AND THE HARNESS ROWS (route program).
@@ -54,15 +55,28 @@ export interface HarnessFacts {
   loginLine: string | null
   /** Files whose presence means "signed in"; null = nothing readable. */
   signInFiles: ((home: string) => string[]) | null
+  /** A sign-in kept in the login keychain also counts (Claude's, probed off the main thread). */
+  keychainSignIn: boolean
   routable: boolean
 }
 
-export const HARNESS_FACTS: readonly HarnessFacts[] = [
-  { id: 'claude', name: 'Claude Code', bin: 'claude', installLine: 'curl -fsSL https://claude.ai/install.sh | bash', loginLine: 'claude', signInFiles: (home) => [path.join(home, '.claude', '.credentials.json')], routable: ROUTABLE.claude },
-  { id: 'codex', name: 'Codex', bin: 'codex', installLine: 'npm i -g @openai/codex', loginLine: 'codex login', signInFiles: (home) => [path.join(home, '.codex', 'auth.json')], routable: ROUTABLE.codex },
-  { id: 'opencode', name: 'OpenCode', bin: 'opencode', installLine: 'curl -fsSL https://opencode.ai/install | bash', loginLine: 'opencode auth login', signInFiles: (home) => [path.join(home, '.local', 'share', 'opencode', 'auth.json')], routable: ROUTABLE.opencode },
-  { id: 'pi', name: 'Pi', bin: 'pi', installLine: 'npm i -g @earendil-works/pi-coding-agent', loginLine: null, signInFiles: null, routable: ROUTABLE.pi }
-]
+type OwnFacts = Omit<HarnessFacts, 'id' | 'name' | 'bin' | 'routable'>
+
+/** What only each harness knows about getting it installed and signed in; one entry per harness. */
+const OWN_FACTS: Readonly<Record<HarnessId, OwnFacts>> = {
+  claude: { installLine: 'curl -fsSL https://claude.ai/install.sh | bash', loginLine: 'claude', signInFiles: (home) => [path.join(home, '.claude', '.credentials.json')], keychainSignIn: true },
+  codex: { installLine: 'npm i -g @openai/codex', loginLine: 'codex login', signInFiles: (home) => [path.join(home, '.codex', 'auth.json')], keychainSignIn: false },
+  opencode: { installLine: 'curl -fsSL https://opencode.ai/install | bash', loginLine: 'opencode auth login', signInFiles: (home) => [path.join(home, '.local', 'share', 'opencode', 'auth.json')], keychainSignIn: false },
+  pi: { installLine: 'npm i -g @earendil-works/pi-coding-agent', loginLine: null, signInFiles: null, keychainSignIn: false }
+}
+
+export const HARNESS_FACTS: readonly HarnessFacts[] = HARNESS_IDS.map((id) => ({
+  id,
+  name: HARNESS_CARDS[id].name,
+  bin: HARNESS_CARDS[id].bin,
+  ...OWN_FACTS[id],
+  routable: ROUTABLE[id]
+}))
 
 /** `which`, by hand: the first PATH entry holding an executable of that name. */
 export function onPath(bin: string, pathEnv: string | undefined): boolean {
@@ -143,7 +157,7 @@ export class HarnessScan {
       let signedIn: boolean | null = null
       if (h.signInFiles) {
         signedIn = h.signInFiles(this.deps.home).some((f) => exists(f))
-        if (!signedIn && h.id === 'claude') signedIn = this.keychainSignedIn
+        if (!signedIn && h.keychainSignIn) signedIn = this.keychainSignedIn
       }
       return { id: h.id, name: h.name, installed: installed(h.bin), signedIn, inDock: inDock.has(h.id), installLine: h.installLine, loginLine: h.loginLine, routable: h.routable }
     })
@@ -173,7 +187,8 @@ export function harnessRows(deps: HarnessScanDeps & { claudeKeychain?: () => boo
   const scan = new HarnessScan({ ...deps, keychain: async () => deps.claudeKeychain?.() ?? false })
   const rows = scan.rows()
   if (deps.claudeKeychain?.()) {
-    return rows.map((r) => (r.id === 'claude' && !r.signedIn ? { ...r, signedIn: true } : r))
+    const keychain = new Set(HARNESS_FACTS.filter((h) => h.keychainSignIn).map((h) => h.id))
+    return rows.map((r) => (keychain.has(r.id) && !r.signedIn ? { ...r, signedIn: true } : r))
   }
   return rows
 }
