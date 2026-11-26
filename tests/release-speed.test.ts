@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 const yaml = createRequire(import.meta.url)('js-yaml') as { load(text: string): unknown }
 
 type Step = { id?: string; uses?: string; run?: string; if?: string; with?: Record<string, string> }
-type Job = { needs?: string; if?: string; strategy?: { matrix: { task: (number | string)[] } }; steps: Step[] }
+type Job = { needs?: string | string[]; if?: string; strategy?: { matrix: { task: (number | string)[] } }; steps: Step[] }
 type Workflow = { jobs: Record<string, Job> }
 const workflow = (name: string) => yaml.load(readFileSync(`.github/workflows/${name}.yml`, 'utf8')) as Workflow
 const { verify, build } = workflow('release').jobs
@@ -22,7 +22,8 @@ it('partitions the whole suite, with a separate typecheck, before either install
   expect(verify.strategy?.matrix.task).toEqual(['typecheck', ...Array.from({ length: count }, (_, i) => i + 1)])
   expect(test).toMatchObject({ run: `npm test -- --shard=\${{ matrix.task }}/${count}`, if: "matrix.task != 'typecheck'" })
   expect(verify.steps.find((step) => step.run === 'npm run typecheck')?.if).toBe("matrix.task == 'typecheck'")
-  expect(build.needs).toBe('verify')
+  // After verify, and after the tag's one draft (release-gate.test.ts): never beside the tests.
+  expect(build.needs).toEqual(['verify', 'draft'])
   expect(build.if).toContain("!startsWith(github.ref, 'refs/tags/') && needs.verify.result == 'skipped'")
 })
 
