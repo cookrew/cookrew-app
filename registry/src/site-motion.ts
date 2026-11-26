@@ -28,9 +28,11 @@ export const CANVAS_CLIP = {
  * THE FILM (2026-11-25). The 60-second promo with music, in the front page's hero in place of the ink lockup, under
  * the buttons so the headline and the download stay in the first screen: 1920×1080 H.264 + AAC, faststart, encoded
  * down from the master for the web. It opens muted and loops; the controls let a reader turn the sound on and scrub.
+ * Each language plays its own cut (2026-11-26): English subtitles on the English pages, Chinese on /zh.
  */
 export const HERO_FILM = {
-  file: 'cookrew-film.mp4',
+  file: 'cookrew-film-en.mp4',
+  fileZh: 'cookrew-film.mp4',
   poster: 'cookrew-film-poster.jpg',
   width: 1920,
   height: 1080,
@@ -46,7 +48,7 @@ export const HERO_FILM = {
 export function heroFilm(): string {
   const film = HERO_FILM
   const label = esc(tr(film.label, film.labelZh))
-  const src = `${SITE_FRAMES}${film.file}`
+  const src = `${SITE_FRAMES}${tr(film.file, film.fileZh)}`
   const common = `playsinline controls poster="${esc(`${SITE_FRAMES}${film.poster}`)}" width="${film.width}" height="${film.height}" aria-label="${label}" title="${label}"`
   return `<div class="tf-film"><video class="f-auto" autoplay muted loop preload="metadata" ${common}><source src="${src}" type="video/mp4" media="(prefers-reduced-motion: no-preference)"></video><video class="f-still" preload="none" ${common}><source src="${src}" type="video/mp4"></video></div>`
 }
