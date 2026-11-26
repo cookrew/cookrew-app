@@ -288,6 +288,57 @@ describe('the Mac sends H.264 at the speed the phone takes it', () => {
     expect(waits.every((ms) => ms < VIDEO_REFRESH_MS * 2)).toBe(true)
   })
 
+  // Owner's phone, 2026-11-26: a desktop-sized page fell back to the window floor on 0.6.42 and the
+  // phone-like simulation did not reproduce it. A report says what the pacing did, so the next one can.
+  it('reports, per stretch, the key frames asked for and sent, chunks written off, and what the line estimate held', async () => {
+    vi.useFakeTimers()
+    const { out, enc } = videoOut()
+    const chunk20 = 'A'.repeat(Math.ceil((20 * 1024 * 4) / 3))
+    out.offer(picture(1), CTX)
+    enc.calls[0].answer({ data: chunk20, key: true })
+    await settle()
+    vi.advanceTimersByTime(700)
+    out.ack(1)
+    for (let i = 2; i <= 4; i++) {
+      out.offer(picture(i), CTX)
+      enc.calls.at(-1)?.answer({ data: chunk20, key: false })
+      await settle()
+      vi.advanceTimersByTime(120)
+      out.ack(i)
+    }
+    out.keyAsked()
+    vi.advanceTimersByTime(VIDEO_KEY_MIN_MS)
+    out.keyAsked()
+    const first = out.takeMeasured()
+    expect(first.keyAsks).toBe(2)
+    expect(first.keyFrames).toBe(1)
+    expect(first.writeOffs).toBe(0)
+    // Asked for, the line starts over: nothing known now, so it says so rather than an old number.
+    expect(first.speedKBps).toBe(0)
+    expect(first.rttMs).toBe(0)
+    expect(first.gain).toBeGreaterThan(1)
+    expect(first.lineResets).toBe(2)
+    // A fresh stretch starts its counts at zero.
+    const second = out.takeMeasured()
+    expect([second.keyAsks, second.keyFrames, second.writeOffs, second.lineResets]).toEqual([0, 0, 0, 0])
+  })
+
+  it('reports the line estimate while it is known', async () => {
+    vi.useFakeTimers()
+    const { out, enc } = videoOut()
+    const chunk20 = 'A'.repeat(Math.ceil((20 * 1024 * 4) / 3))
+    for (let i = 1; i <= 6; i++) {
+      out.offer(picture(i), CTX)
+      enc.calls.at(-1)?.answer({ data: chunk20, key: i === 1 })
+      await settle()
+      vi.advanceTimersByTime(150)
+      out.ack(i)
+    }
+    const measured = out.takeMeasured()
+    expect(measured.speedKBps).toBeGreaterThan(0)
+    expect(measured.rttMs).toBeGreaterThan(0)
+  })
+
   it('says when the encoder failed, and stops', async () => {
     const { out, enc, failures } = videoOut()
     out.offer(picture(1), CTX)

@@ -42,6 +42,16 @@ export interface CastVideoTimings {
   /** Chunk sent to its acknowledgement back. */
   readonly ackP50: number
   readonly ackP95: number
+  /** What the pacing did in the window (absent in reports from before 0.6.43). */
+  readonly keyAsks?: number
+  readonly keyFrames?: number
+  readonly writeOffs?: number
+  /** Key asks plus the estimate's own new-network forgets (forgets alone = lineResets - keyAsks). */
+  readonly lineResets?: number
+  /** The line estimate at the report: KB/s, its own round trip, the startup/drain gain. */
+  readonly speedKBps?: number
+  readonly rttMs?: number
+  readonly gain?: number
 }
 
 export interface CastStatsEntry {
