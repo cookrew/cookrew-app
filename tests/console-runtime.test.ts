@@ -407,6 +407,31 @@ describe('what the app does while its machine is being left', () => {
     expect(runtime.get().view).toEqual({ kind: 'devices', wants: null })
   })
 
+  it('the page’s own re-ask is owed to the refusal that caused it only: given up on, a later visit by the address is a person’s ask', async () => {
+    const w = world({ route: at(M) })
+    const asks: boolean[] = []
+    const runtime = createConsoleRuntime({
+      ...w.deps,
+      openDoor: (id, ask) => (asks.push(ask?.explicit === true), w.deps.openDoor(id, ask))
+    })
+    await runtime.boot()
+    w.doors[0].answer({ kind: 'open' })
+    await settle()
+    runtime.keyRefused(M)
+    w.doors[1].answer({ kind: 'open' })
+    await settle()
+    // Refused again at once: the machine's answer is said, and NO door is asked on the page's own.
+    runtime.keyRefused(M)
+    await settle()
+    expect(w.doors).toHaveLength(2)
+    expect(w.route.get()).toEqual(DEVICES)
+    // The person comes back to it by the address (back, forward, a link): their ask, not a leftover of the page's.
+    w.route.set(at(M))
+    await settle()
+    expect(w.doors).toHaveLength(3)
+    expect(asks).toEqual([true, false, true])
+  })
+
   it('a key refused again long after a re-entry is asked for again, not given up on', async () => {
     const w = world({ route: at(M) })
     let clock = 1_000_000

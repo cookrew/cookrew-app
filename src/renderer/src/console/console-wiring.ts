@@ -14,10 +14,10 @@
  */
 import { CROSS_ORIGIN_NO_COOKIE, RELAY_PLANE, subscribeDataPlane } from '../data-plane'
 import { configureMachineScope, enterMachine, machineBaseOf, machineScope } from '../machine-scope'
-import { browserPairDeps, enterWithGrant, type GrantStore } from '../account-pair-client'
+import { browserPairDeps, enterWithGrant, type EnterResult, type GrantStore } from '../account-pair-client'
 import { relayAccountMachines } from '../relay-machines'
 import { relayMachineWhy, relayMachines } from '../relay-machine-call'
-import { codeKeyForBase, tokenKeyForBase } from '../pairing-scope'
+import { codeKeyForBase, nextCodeKey, tokenKeyForBase } from '../pairing-scope'
 import { takeSeat } from '../device-seat'
 import { readConsoleConfig, type ConsoleConfig } from './console-config'
 import { browserDeviceStore, consoleDevice, type ConsoleDevice } from './device-key'
@@ -77,6 +77,74 @@ const tolerant = (held: Storage | null): Pick<Storage, 'getItem' | 'setItem' | '
     }
   }
 })
+
+export interface MachineDoorDeps {
+  /** This browser's lasting storage: machines' keys and connect codes. */
+  readonly kept: KeyValue
+  /** This tab's: the code a machine's own screen handed over (handed-code.ts). */
+  readonly pending: KeyValue
+  readonly signedIn: () => boolean
+  /**
+   * Into the machine's door at `target` with the pass held here (account-pair-client.ts · enterWithGrant).
+   * `explicit`: a person asked, or a code they scanned has just landed: a failed sealed try's wait is cut short.
+   */
+  readonly enter: (target: string, machineId: string, explicit: boolean) => Promise<EnterResult>
+}
+
+export interface MachineDoor {
+  /**
+   * This browser into one machine: the key it holds for it, or its door entered with the pass. `explicit`
+   * says a person asked (console-runtime.ts); left out, the ask is the page's own and waits its turn.
+   */
+  readonly open: (machineId: string, ask?: { readonly explicit: boolean }) => Promise<DoorAnswer>
+  /** File the code that machine's own screen handed over, for that machine only (handed-code.ts · landHandedCode). True when one landed. */
+  readonly landCode: (machineId: string) => boolean
+}
+
+/** The connect code's place in this browser for a machine, or null for what is not a machine. */
+const codeKeyFor = (machineId: string): string | null => {
+  const base = machineBaseOf(machineId)
+  return base === null ? null : codeKeyForBase(base)
+}
+
+export function createMachineDoor(deps: MachineDoorDeps): MachineDoor {
+  const { kept, pending, signedIn } = deps
+  const landCode = (machineId: string): boolean => {
+    const key = codeKeyFor(machineId)
+    const holding = (): string => (key === null ? '' : `${kept.getItem(key)}\n${kept.getItem(nextCodeKey(key))}`)
+    const before = holding()
+    landHandedCode({ machineId, pending, kept, keyFor: codeKeyFor })
+    return holding() !== before
+  }
+  const open = async (machineId: string, ask?: { readonly explicit: boolean }): Promise<DoorAnswer> => {
+    const target = machineBaseOf(machineId)
+    if (target === null) return { kind: 'refused', from: 'page', message: 'That is not a machine.' }
+    // FILED BEFORE THE DOOR IS ASKED, not only on entering (console-runtime.ts asks the door first and
+    // enters after it opens): a machine that takes only sealed connections answers the door's own
+    // begin sealed or not at all, and the sealed session is keyed by this code. Only the machine the
+    // code was handed for, and never in place of a code already held (handed-code.ts).
+    // A code that has just landed is a person's act (they scanned it) as much as a press is.
+    const landed = landCode(machineId)
+    const key = tokenKeyForBase(target)
+    if (kept.getItem(key) !== null) return { kind: 'open' }
+    const entered = await deps.enter(target, machineId, ask?.explicit === true || landed)
+    if (entered.kind === 'entered') {
+      // Signed out while the door was answering: its key is kept for nobody.
+      if (!signedIn()) return { kind: 'refused', from: 'page', message: 'Signed out.' }
+      try {
+        kept.setItem(key, entered.token)
+      } catch {
+        return { kind: 'refused', from: 'page', message: 'This browser keeps nothing for this page, so it cannot hold a machine’s key. Private browsing does this.' }
+      }
+      return { kind: 'open' }
+    }
+    if (entered.kind === 'needs-proof') return { kind: 'needs-proof' }
+    if (entered.kind === 'no-device') return { kind: 'refused', from: 'page', message: 'This browser has no key for Cookrew. Sign out and in again.' }
+    // `failed` is this page's own sentence (it could not sign, or the door named another machine); `refused` is the machine's.
+    return { kind: 'refused', from: entered.kind === 'refused' ? 'machine' : 'page', message: entered.message }
+  }
+  return { open, landCode }
+}
 
 const REGISTRY_ANSWER_MS = 20_000
 /** How long a press waits for the worker to be active before saying this browser cannot subscribe. */
@@ -216,29 +284,16 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
     }
   })
 
-  const openDoor = async (machineId: string): Promise<DoorAnswer> => {
-    const target = machineBaseOf(machineId)
-    if (target === null) return { kind: 'refused', from: 'page', message: 'That is not a machine.' }
-    const key = tokenKeyForBase(target)
-    if (kept.getItem(key) !== null) return { kind: 'open' }
-    const door = browserPairDeps(target, device)
-    // One machine turning the pass away does not take it from the others.
-    const entered = await enterWithGrant({ ...door, grants: { ...door.grants, clear: () => undefined } }, machineId)
-    if (entered.kind === 'entered') {
-      // Signed out while the door was answering: its key is kept for nobody.
-      if (!signedIn()) return { kind: 'refused', from: 'page', message: 'Signed out.' }
-      try {
-        kept.setItem(key, entered.token)
-      } catch {
-        return { kind: 'refused', from: 'page', message: 'This browser keeps nothing for this page, so it cannot hold a machine’s key. Private browsing does this.' }
-      }
-      return { kind: 'open' }
+  const door = createMachineDoor({
+    kept,
+    pending,
+    signedIn,
+    enter: (target, machineId, explicit) => {
+      const pair = browserPairDeps(target, device, undefined, { explicit })
+      // One machine turning the pass away does not take it from the others.
+      return enterWithGrant({ ...pair, grants: { ...pair.grants, clear: () => undefined } }, machineId)
     }
-    if (entered.kind === 'needs-proof') return { kind: 'needs-proof' }
-    if (entered.kind === 'no-device') return { kind: 'refused', from: 'page', message: 'This browser has no key for Cookrew. Sign out and in again.' }
-    // `failed` is this page's own sentence (it could not sign, or the door named another machine); `refused` is the machine's.
-    return { kind: 'refused', from: entered.kind === 'refused' ? 'machine' : 'page', message: entered.message }
-  }
+  })
 
   // THE PATH EACH MACHINE'S SESSION SETTLED ON, for its tile. Noted while that machine is in
   // scope and at no other moment: leaving a machine puts the plane back on the relay as part of
@@ -252,7 +307,7 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
   const enterScope = (machineId: string | null): void => {
     // The unlock code this machine's own screen handed over, filed before anything of the machine
     // is made (its unlock sheet reads it when it is).
-    if (machineId !== null) landHandedCode({ machineId, pending, kept, keyFor: (id) => (machineBaseOf(id) === null ? null : codeKeyForBase(machineBaseOf(id) as string)) })
+    if (machineId !== null) door.landCode(machineId)
     changingScope = true
     try {
       enterMachine(machineId)
@@ -276,7 +331,7 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
     gate,
     devices,
     router,
-    openDoor,
+    openDoor: door.open,
     forgetDoor: (machineId) => {
       const target = machineBaseOf(machineId)
       if (target !== null) kept.removeItem(tokenKeyForBase(target))

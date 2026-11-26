@@ -15,12 +15,32 @@ export { Seal2StreamError, type Seal2Stream } from './stream'
  * keeps every record it sent until the far end acks it, so a carrier that
  * drops a line can be handed the very same bytes again (`replay`).
  *
- * WHAT THE CARRIER MUST DO: pass `send`'s bytes on in order, hand whole
- * records to `receive`, call `replay(from)` when a line is replaced, call
+ * WHAT THE CARRIER MUST DO: pass `send`'s bytes on, each record whole and at
+ * least once, and never further ahead of the oldest one the far end may not
+ * have taken than its inbox holds (canvas-seal-wire.ts · SEAL_WINDOW sequence
+ * numbers): records may arrive out of order, the inbox puts them back. Hand
+ * whole records to `receive`, call `replay(from)` when a line is replaced, call
  * `drained()` when its own queue empties, and call `tick()` every few seconds.
- * Long-poll and POST today (seal2/http-link.ts, main/seal2-terminus.ts); a
+ * `send`'s hint says which records a request or an answer waits for (`urgent`)
+ * and which only keep the session going and may wait for the next line out.
+ * Long-poll and POST today (seal2/http-link.ts, main/seal2-live.ts); a
  * WebSocket later is the same four calls.
  */
+
+/** What the carrier is told with each record. */
+export interface Seal2SendHint {
+  readonly seq: number
+  /**
+   * It carries a stream's own content (OPEN, HEAD, DATA, END, ABORT): something a
+   * request or an answer waits for. False for ACK, CREDIT, PING and GOAWAY, which
+   * may ride whatever leaves next: on a relay that counts each POST, a session
+   * reading an answer acks every ACK_DELAY_MS and must not open a POST each time.
+   */
+  readonly urgent: boolean
+}
+
+/** Frames that carry no request or answer bytes. */
+const CONTROL_KINDS: ReadonlySet<Frame2['kind']> = new Set(['ack', 'credit', 'ping', 'goaway'])
 
 export interface Seal2Limits {
   readonly maxStreams: number
@@ -48,8 +68,8 @@ const DEFAULT_LIMITS: Seal2Limits = {
 export interface Seal2ConnectionOptions {
   readonly session: Seal2Session
   readonly role: 'initiator' | 'responder'
-  /** One record's wire bytes, in order. */
-  send(wire: Uint8Array): void
+  /** One record's wire bytes, sealed in sequence. */
+  send(wire: Uint8Array, hint: Seal2SendHint): void
   /** Bytes the carrier holds and has not sent yet. */
   backlog?(): number
   /** A stream the far end opened. Respond, or abort it. Absent: every stream is refused. */
@@ -138,7 +158,7 @@ export function createSeal2Connection(options: Seal2ConnectionOptions): Seal2Con
     options.onClose?.(why, clean)
   }
 
-  const put = async (plain: Uint8Array): Promise<void> => {
+  const put = async (plain: Uint8Array, urgent: boolean): Promise<void> => {
     const record = await session.seal(plain)
     queued -= plain.length
     if (closed) return
@@ -146,16 +166,17 @@ export function createSeal2Connection(options: Seal2ConnectionOptions): Seal2Con
     kept.push({ seq: record.seq, wire })
     retained += wire.length
     sealedCount = record.seq + 1
-    options.send(wire)
+    options.send(wire, { seq: record.seq, urgent })
   }
 
   /** One at a time: the cipher is asynchronous, and the wire must stay in sequence. */
   const send = (frame: Frame2): void => {
     if (closed) return
     const plain = encodeFrame2(frame)
+    const urgent = !CONTROL_KINDS.has(frame.kind)
     queued += plain.length
     if (retained + queued > limits.hardLimit) return close('the far end fell too far behind')
-    tail = tail.then(() => put(plain)).catch((error: unknown) => close(`sealing failed: ${String(error)}`))
+    tail = tail.then(() => put(plain, urgent)).catch((error: unknown) => close(`sealing failed: ${String(error)}`))
   }
 
   const maybeLeave = (): void => {

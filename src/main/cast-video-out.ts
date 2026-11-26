@@ -2,6 +2,7 @@ import type { MapContext } from '../shared/cast-input'
 import { VIDEO_FRAME_TYPE } from '../shared/cast-video'
 import type { CastEncoderSession } from './cast-encoder'
 import type { OutboundFrame } from './cast-viewer'
+import { LineEstimate, type SentChunk } from './cast-line-estimate'
 
 /**
  * ONE VIEWER'S PICTURE AS H.264 (cast-video-out.ts).
@@ -37,9 +38,10 @@ import type { OutboundFrame } from './cast-viewer'
 export const VIDEO_WINDOW_START = 96 * 1024
 /**
  * THE WINDOW IS A DELAY BUDGET, NOT A CREDIT. Measured throughput times how
- * long a chunk may be in flight: at least MIN_INFLIGHT_S, and otherwise one
- * round trip with some slack, so a frame can be sent while the previous ones
- * are still acknowledged (measured 11-24 on the relay: a shrinking window left
+ * long a chunk may be in flight: at least MIN_INFLIGHT_S, and otherwise the
+ * line's round trip plus the gap acknowledgements come in (doubled while the
+ * line is not yet known full; cast-line-estimate.ts), so a frame can be sent
+ * while the previous ones are still acknowledged (measured 11-24 on the relay: a shrinking window left
  * 16-40 KB in flight, one to three 12-16 KB frames, which is 1-4 fps at a
  * 0.7-1.3 s round trip, while the line carried 50-100 KB/s). The cost is about
  * a round trip of standing latency — the scroll lead hides it — and not a
@@ -48,20 +50,32 @@ export const VIDEO_WINDOW_START = 96 * 1024
 export const VIDEO_WINDOW_MIN = 16 * 1024
 export const VIDEO_WINDOW_MAX = 512 * 1024
 const MIN_INFLIGHT_S = 0.8
-const RTT_SHARE = 1.2
 /**
- * The budget never grows past this. It is built from the FASTEST round trip
- * lately, not the one just seen: a queue this window itself made would
- * otherwise raise the next budget, which is how a delay-based loop runs away.
- * The cap bounds even that.
+ * The budget never grows past this. It is built from the line's own round trip
+ * (cast-line-estimate.ts: from chunks with nothing ahead of them), not the one
+ * just seen: a queue this window itself made would otherwise raise the next
+ * budget, which is how a delay-based loop runs away. The cap bounds even that.
+ *
+ * It was 1.5 s, under the round trip of a sealed relay (acknowledgements took
+ * 1.3-2.3 s on the phone, owner 2026-11-25): each round's window was smaller
+ * than the line, and it shrank to the floor.
  */
-const MAX_INFLIGHT_S = 1.5
-/** The fastest acknowledgement is forgotten after this: a phone moves to a slower network. */
-const FASTEST_MEMORY_MS = 10_000
+const MAX_INFLIGHT_S = 4
+/** An unacknowledged chunk stops counting after this many of the fastest round trips lately, within [VIDEO_ACK_TIMEOUT_MS, 2x that]. */
+const LOST_AFTER_RTTS = 2.5
 /** Measurements kept between reports, at most: a viewer whose reports never come must not grow them forever. */
 const MEASURED_MAX = 1000
 /** Chunks in flight whatever their size: a run of tiny refreshes is no reason to send forty. */
 export const VIDEO_WINDOW_MAX_CHUNKS = 24
+/**
+ * On a long line the cap grows to what a 30 fps page sends in CHUNK_CAP_RTTS of
+ * its round trip, up to VIDEO_WINDOW_MAX_CHUNKS_LONG. At 24 a caret and its
+ * sharpening refreshes filled it on a 2 s line, and capped there a few hundred
+ * bytes a second read as the line's speed (owner 2026-11-25, "帧率也很低").
+ */
+export const VIDEO_WINDOW_MAX_CHUNKS_LONG = 96
+const SOURCE_FPS = 30
+const CHUNK_CAP_RTTS = 1.5
 /** An acknowledgement this late was lost: the chunk stops counting against the window. */
 export const VIDEO_ACK_TIMEOUT_MS = 2500
 /**
@@ -118,7 +132,7 @@ export class VideoOut {
   private count = 0
   private refreshes = 0
   private waitingReady = false
-  private readonly inFlight = new Map<number, { at: number; bytes: number }>()
+  private readonly inFlight = new Map<number, SentChunk>()
   /** When the last key frame went out; null before the first, which never waits. */
   private lastKeyAt: number | null = null
   /** The size pictures are encoded at in this viewport revision: the largest seen, so a two-row jitter is no new size. */
@@ -128,11 +142,8 @@ export class VideoOut {
   private readonly started: number
   /** Bytes the phone may have unacknowledged; learned from how long acknowledgements take. */
   private window = VIDEO_WINDOW_START
-  /** Recent acknowledgement round trips, for the report and the delay budget. */
-  private samples: { at: number; took: number }[] = []
-  /** Measured bytes per second the phone's acknowledgements show, smoothed; 0 until the first pair. */
-  private goodput = 0
-  private lastAckAt = 0
+  /** The line's speed and round trip, from the phone's acknowledgements. */
+  private line = new LineEstimate()
   /** When the newest picture began waiting to be encoded. */
   private pendingSince = 0
   /** What this stretch measured, for the viewer's report (cast-stats-log.ts). */
@@ -194,33 +205,37 @@ export class VideoOut {
       acked += info.bytes
       this.inFlight.delete(sent)
     }
-    if (newest) this.learn(this.now() - newest.at, acked)
+    if (newest) this.learn(newest, acked)
+    // ANY acknowledgement says the phone is there, one for a chunk already written off or cleared by a key
+    // frame asked for included. Ignored, such a phone read as silent while it acknowledged, every chunk was
+    // written off before its acknowledgement came, and the sender poured into a line it had stopped measuring
+    // (review 2026-11-25: a 33 s queue after a network change).
+    else this.line.heard(this.now())
     this.pump()
   }
 
   /**
-   * The delay budget, from one acknowledgement: the line's measured throughput
-   * times how long a chunk may be in flight (a round trip with slack, never
-   * under MIN_INFLIGHT_S). Sharpness is untouched; the standing latency it buys
-   * is what keeps frames flowing on a slow line.
+   * The delay budget, from one acknowledgement: what the line carries a second
+   * (cast-line-estimate.ts) times how long a chunk may be in flight: its own
+   * round trip with slack, plus the gap acknowledgements come in, never under
+   * MIN_INFLIGHT_S. Sharpness is untouched; the standing latency it buys is
+   * what keeps frames flowing on a slow line.
    */
-  private learn(took: number, acked: number): void {
+  private learn(newest: SentChunk, acked: number): void {
     const now = this.now()
-    this.measure('ackMs', took)
-    this.samples = [...this.samples.filter((s) => now - s.at < FASTEST_MEMORY_MS), { at: now, took }]
-    if (this.lastAckAt > 0) {
-      const dt = now - this.lastAckAt
-      if (dt >= 20 && acked > 0) {
-        const sample = (acked * 1000) / dt
-        this.goodput = this.goodput > 0 ? this.goodput * 0.7 + sample * 0.3 : sample
-      }
-    }
-    this.lastAckAt = now
-    if (this.goodput > 0) {
-      const baseline = Math.min(...this.samples.map((s) => s.took))
-      const inflightS = Math.min(MAX_INFLIGHT_S, Math.max(MIN_INFLIGHT_S, (baseline / 1000) * RTT_SHARE))
-      this.window = Math.min(VIDEO_WINDOW_MAX, Math.max(VIDEO_WINDOW_MIN, Math.round(this.goodput * inflightS)))
-    }
+    this.measure('ackMs', now - newest.at)
+    this.line.acked(now, newest, acked)
+    const speed = this.line.bytesPerSecond
+    if (speed <= 0) return
+    // The round trip of a chunk sent alone already holds the wait for its acknowledgement's POST; with the gap
+    // the next one comes after, the line stays busy. More only stands as a queue in front of the finger.
+    const budgetMs = (this.line.roundTripMs + this.line.ackGapMs(now)) * this.line.gain
+    // In startup, never more than twice what the last round delivered: a line that got slower meanwhile is
+    // still read at its old speed for the rate memory, and the doubled budget poured onto it (review round 3).
+    const startupCap = this.line.gain > 1 && this.line.lastRoundBytes > 0 ? 2 * this.line.lastRoundBytes : Infinity
+    const inflightS = Math.min(MAX_INFLIGHT_S, Math.max(MIN_INFLIGHT_S, budgetMs / 1000))
+    this.window = Math.min(VIDEO_WINDOW_MAX, startupCap, Math.max(VIDEO_WINDOW_MIN, Math.round(speed * inflightS)))
+    this.window = Math.max(VIDEO_WINDOW_MIN, this.window)
   }
 
   private measure(kind: 'encodeMs' | 'waitMs' | 'ackMs', value: number): void {
@@ -234,10 +249,22 @@ export class VideoOut {
     return this.window
   }
 
+  /** Chunks unacknowledged at most: VIDEO_WINDOW_MAX_CHUNKS, more on a line whose round trip needs them. */
+  private maxChunks(): number {
+    const needed = Math.ceil((this.line.roundTripMs / 1000) * SOURCE_FPS * CHUNK_CAP_RTTS)
+    return Math.min(VIDEO_WINDOW_MAX_CHUNKS_LONG, Math.max(VIDEO_WINDOW_MAX_CHUNKS, needed))
+  }
+
+  /** When an unacknowledged chunk stops counting: a few of the fastest round trips lately, within [VIDEO_ACK_TIMEOUT_MS, 2x that]. */
+  private lostAfter(): number {
+    const took = this.line.tookMs(this.now())
+    if (took.length === 0) return VIDEO_ACK_TIMEOUT_MS
+    return Math.min(2 * VIDEO_ACK_TIMEOUT_MS, Math.max(VIDEO_ACK_TIMEOUT_MS, Math.min(...took) * LOST_AFTER_RTTS))
+  }
+
   /** The median acknowledgement round trip of the last ten seconds (0 before any): the line, for cast-profile.ts. */
   ackP50(): number {
-    const now = this.now()
-    const recent = this.samples.filter((s) => now - s.at < FASTEST_MEMORY_MS).map((s) => s.took)
+    const recent = this.line.tookMs(this.now())
     if (recent.length === 0) return 0
     recent.sort((a, b) => a - b)
     return Math.round(recent[Math.min(recent.length - 1, Math.floor(recent.length / 2))])
@@ -254,10 +281,11 @@ export class VideoOut {
   keyAsked(): void {
     this.needKey = true
     this.inFlight.clear()
-    // Very likely another line (the phone came back on a new network): what was
-    // learned of the old one is no guide to this one.
+    // Very likely another line (the phone came back on a new network): what was learned of the old one is no
+    // guide to this one, and the chunks just cleared are still crossing. Kept, the estimate went on pouring a
+    // full window on top of them (review 2026-11-25). Startup again, from VIDEO_WINDOW_START.
     this.window = Math.min(this.window, VIDEO_WINDOW_START)
-    this.samples = []
+    this.line = new LineEstimate()
     if (!this.pending && this.last) this.setPending(this.last)
     this.pump()
   }
@@ -281,20 +309,30 @@ export class VideoOut {
   private pump(): void {
     if (this.closed || this.encoding || !this.pending) return
     const now = this.now()
+    const lostAfter = this.lostAfter()
+    // WRITTEN OFF ONLY WHEN THE PHONE WENT QUIET: no acknowledgement of anything for lostAfter. While
+    // acknowledgements keep coming the line is alive, only slow, and every chunk on it still counts; writing
+    // the slow ones off let the sender pour more onto a line that had just got slower (a 7 s queue, measured
+    // in tests/cast-video-line.test.ts), and hid that it was full.
+    const heard = (sent: SentChunk): number => Math.max(sent.at, this.line.lastAckAt)
     for (const [n, sent] of this.inFlight) {
-      if (now - sent.at < VIDEO_ACK_TIMEOUT_MS) continue
+      if (now - heard(sent) < lostAfter) continue
       this.inFlight.delete(n)
     }
-    // An acknowledgement that never came is a slow line, not a queue: the next
-    // acknowledgement's throughput sample brings the window down on its own.
     const bytes = [...this.inFlight.values()].reduce((sum, sent) => sum + sent.bytes, 0)
-    if (this.inFlight.size >= VIDEO_WINDOW_MAX_CHUNKS || (this.inFlight.size > 0 && bytes >= this.window)) {
-      const oldest = Math.min(...[...this.inFlight.values()].map((sent) => sent.at))
+    // PROBE THE ROUND TRIP (BBR's ProbeRTT): with no chunk sent alone for a while, the next waits until the
+    // line is empty and goes alone, so the line's own round trip is read again. Without it, a page that never
+    // paused had only acknowledgements with its own queue in them to read, and the queue fed the round trip
+    // that fed the queue: ~3.4 s behind after minutes on a slow relay (review round 4). One round trip of
+    // pictures every PROBE_EVERY_MS.
+    const probing = this.inFlight.size > 0 && this.line.probeDue(now)
+    if (probing || this.inFlight.size >= this.maxChunks() || (this.inFlight.size > 0 && bytes >= this.window)) {
+      const oldest = Math.min(...[...this.inFlight.values()].map(heard))
       if (this.timer) clearTimeout(this.timer)
       this.timer = setTimeout(() => {
         this.timer = null
         this.pump()
-      }, Math.max(10, oldest + VIDEO_ACK_TIMEOUT_MS - now))
+      }, Math.max(10, oldest + lostAfter - now))
       return
     }
     const keyWait = this.needKey && this.lastKeyAt !== null ? this.lastKeyAt + VIDEO_KEY_MIN_MS - now : 0
@@ -358,7 +396,9 @@ export class VideoOut {
             data: chunk.data,
             meta: frame.meta
           })
-          this.inFlight.set(n, { at: this.now(), bytes })
+          const unacknowledged = [...this.inFlight.values()].reduce((sum, sent) => sum + sent.bytes, 0)
+          const limit = { chunks: this.inFlight.size, maxChunks: this.maxChunks() }
+          this.inFlight.set(n, this.line.sent(this.now(), bytes, unacknowledged, this.window, { ...limit, key: chunk.key === true }))
           if (chunk.key) {
             this.needKey = false
             this.lastKeyAt = this.now()

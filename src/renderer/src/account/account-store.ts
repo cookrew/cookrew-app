@@ -92,7 +92,7 @@ export const ACCOUNT_COPY = machineTable({
   ASK_HAVE_CODE: 'Have a code from another device?',
   /** D8, the join half — live in cut 2 (V3-10). */
   FIRST_RUN_JOIN_ASK: 'Have Cookrew on another device?',
-  FIRST_RUN_JOIN_HOW: 'On your phone or other Mac: avatar → Devices → ADD A MAC.',
+  FIRST_RUN_JOIN_HOW: 'On your phone or other Mac: avatar → Devices → PAIR A NEW MAC.',
   /**
    * D8, THE CARD A DEEP LINK OPENS — and what it may honestly say.
    *
@@ -122,7 +122,7 @@ export const ACCOUNT_COPY = machineTable({
    * it: a code is one-shot, so the next step is another code.
    */
   JOIN_CODE_SPENT:
-    'That code has been used or has expired. Codes work once — mint another on the device you are signed in on: avatar → Devices → ADD A MAC.',
+    'That code has been used or has expired. Codes work once — mint another on the device you are signed in on: avatar → Devices → PAIR A NEW MAC.',
   /** D8, the first-run field beside the two buttons. */
   JOIN_FIELD_LABEL: 'Code from your other device',
   /**

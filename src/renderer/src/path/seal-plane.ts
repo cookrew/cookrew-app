@@ -2,7 +2,7 @@ import { MACHINE_RELAY_PREFIX, RELAY_SESSION_HEADER } from '../../../shared/mach
 import { sealedFetch } from '../../../shared/seal2/http'
 import type { Seal2Link } from '../../../shared/seal2/http-link'
 import { machineBaseOf, machineScope, registerScopeState, scopeBase, setSealedRoute } from '../machine-scope'
-import { codeKeyForBase } from '../pairing-scope'
+import { codeKeyForBase, nextCodeKey } from '../pairing-scope'
 import { sealFetchFor } from '../use/seal-fetch'
 import { authStore } from '../auth-gate'
 import { openSealSession, SealDowngradedError, SealRefusedError, type OpenedSeal } from './seal-client'
@@ -48,9 +48,11 @@ export interface SealPlaneTiming {
   readonly oldMacMs: number
   /** How long a refused code is answered from memory, so a page does not shake hands per request. */
   readonly refusedMs: number
+  /** The least time between two explicit asks that cut a machine's wait short (askNow): presses are not a storm. */
+  readonly explicitMs: number
 }
 
-const DEFAULT_TIMING: SealPlaneTiming = { now: () => Date.now(), retryMs: 5_000, maxRetryMs: 300_000, oldMacMs: 600_000, refusedMs: 10_000 }
+const DEFAULT_TIMING: SealPlaneTiming = { now: () => Date.now(), retryMs: 5_000, maxRetryMs: 300_000, oldMacMs: 600_000, refusedMs: 10_000, explicitMs: 5_000 }
 let timing: SealPlaneTiming = DEFAULT_TIMING
 
 /** Tests set the clock and the waits. */
@@ -89,6 +91,22 @@ const probes = new Map<string, Probe>()
 const oldMacs = new Set<string>()
 /** A refused or unreachable machine, answered from memory until `until`. */
 const failures = new Map<string, { readonly until: number; readonly answer: () => Response | Error }>()
+/**
+ * HOW A HELD CODE WAS REFUSED, with no successor the Mac vouched for waiting:
+ * `replaced` is the Mac's own word, PROVED with the held code (seal-client.ts ·
+ * checkReplaced); `unverified` is a bare "no such code", which anybody on the
+ * line could have said. Neither takes, drops or unpins anything.
+ */
+export type CodeRefusal = 'replaced' | 'unverified'
+
+/** Machine and code, and how the code was last refused. */
+const staleCodes = new Map<string, CodeRefusal>()
+/** The re-pair answers this plane made itself, known by identity: no answer from a relay or a Mac is ever one. */
+const ownRefusals = new WeakMap<Response, CodeRefusal>()
+/** Machine and code, and when an explicit ask last cut its wait short. */
+const askedAt = new Map<string, number>()
+
+const refusalOf = (error: SealRefusedError): CodeRefusal => (error.why === 'replaced' ? 'replaced' : 'unverified')
 const pinnedListeners = new Set<(base: string) => void>()
 /** Bumped when the scope is cleared: work begun before must not write into after. */
 let generation = 0
@@ -138,17 +156,48 @@ const keep = (base: string, entry: Held): void => {
   if (before !== undefined && before !== entry) void before.link.then((link) => link.close()).catch(() => undefined)
 }
 
-/** What the page's own code reads as "this machine refused its credentials": the re-pair screen. */
-const refusedAnswer = (): Response =>
-  new Response(JSON.stringify({ error: 'This machine no longer knows the connect code held here. Scan its code again.' }), {
+/** What the page's own code reads as "this machine refused its credentials": the re-pair screen. Marked as this plane's own. */
+const refusedAnswer = (why: CodeRefusal): Response => {
+  const answer = new Response(JSON.stringify({ error: 'This machine no longer knows the connect code held here. Scan its code again.' }), {
     status: 401,
     headers: { 'content-type': 'application/json' }
   })
+  ownRefusals.set(answer, why)
+  return answer
+}
 
 /** Per machine and code: a code scanned a moment later is not answered with the last one's failure. */
 const failureKey = (base: string, code: string): string => `${base}\n${code}`
 const remember = (base: string, code: string, answer: () => Response | Error, ms: number): void => {
   failures.set(failureKey(base, code), { until: timing.now() + ms, answer })
+}
+
+/** A code the Mac vouched for takes the held one's place. The machine in view keeps its code in the gate's memory as well: both learn it. */
+const adopt = (base: string, vouched: string): void => {
+  if (base === scopeBase()) authStore().saveConnectCode(vouched)
+  else storage()?.setItem(codeKeyForBase(base), vouched)
+}
+
+/**
+ * The vouched code, taken off its waiting place (vouchedNextCode), put back there when it cannot be kept:
+ * the page was left meanwhile, or the held place could not be written (storage full). A code the person
+ * scanned is never lost to a failed write; the next try finds it waiting and the Mac vouches for it again.
+ */
+const putBack = (base: string, vouched: string): void => {
+  try {
+    storage()?.setItem(nextCodeKey(codeKeyForBase(base)), vouched)
+  } catch {
+    // Nowhere to keep it: the person scans the machine's code again.
+  }
+}
+const taken = (base: string, vouched: string): boolean => {
+  try {
+    adopt(base, vouched)
+    return true
+  } catch {
+    putBack(base, vouched)
+    return false
+  }
 }
 
 /**
@@ -175,15 +224,17 @@ async function openPinned(base: string, code: string): Promise<Seal2Link> {
     const store = storage()
     const codeKey = codeKeyForBase(base)
     const vouched = store === null ? null : await vouchedNextCode(store, codeKey, code, error)
-    if (vouched === null || gen !== generation) throw new CodeRefused()
-    // The machine in view keeps its code in the gate's memory as well: both learn it.
-    if (base === scopeBase()) authStore().saveConnectCode(vouched)
-    else store?.setItem(codeKey, vouched)
+    if (vouched !== null && gen !== generation) putBack(base, vouched)
+    if (vouched === null || gen !== generation || !taken(base, vouched)) throw new CodeRefused(refusalOf(error))
     throw new RetryWithCode(vouched)
   }
 }
 
-class CodeRefused extends Error {}
+class CodeRefused extends Error {
+  constructor(readonly why: CodeRefusal) {
+    super('the held code was refused')
+  }
+}
 class RetryWithCode extends Error {
   constructor(readonly code: string) {
     super('a vouched code is tried')
@@ -233,18 +284,48 @@ function probe(base: string, code: string): void {
       }
       if (gen !== generation) return opened.link.close()
       oldMacs.delete(key)
+      staleCodes.delete(key)
       keep(base, { code, link: Promise.resolve(opened.link) })
       probes.delete(key)
       pinned(base)
     })
-    .catch((error: unknown) => {
-      if (error instanceof SealDowngradedError) {
-        probes.delete(key)
-        if (gen === generation) pinned(base)
-        return
+    .catch(async (error: unknown) => {
+      // ALWAYS ENDS OR RESCHEDULES THE TRY. Anything this handler throws (a storage write refused) would
+      // leave the try running for good: no new try, every explicit ask ignored (review 2026-11-25).
+      try {
+        if (await refused(error)) return
+      } catch {
+        // What it learned could not be kept: tried again later, like any failed try.
       }
       after(nextDelay(held), nextDelay(held))
     })
+  /** True when the refusal ended this try itself (downgraded, a vouched code taken, the page left). */
+  const refused = async (error: unknown): Promise<boolean> => {
+    if (error instanceof SealDowngradedError) {
+      probes.delete(key)
+      if (gen === generation) pinned(base)
+      return true
+    }
+    if (!(error instanceof SealRefusedError) || (error.why !== 'code' && error.why !== 'replaced')) return false
+    // The rule a pinned machine already keeps (openPinned), now before the pin as well: the waiting
+    // code is taken ONLY when the Mac's refusal of the held one names it with a proof keyed by the held
+    // one (seal-next-code.ts). A bare "no such code" anybody on the line could forge takes nothing,
+    // and throws nothing away: the held code and the waiting one both stay.
+    const store = storage()
+    const vouched = store === null ? null : await vouchedNextCode(store, codeKeyForBase(base), code, error)
+    if (gen !== generation) {
+      if (vouched !== null) putBack(base, vouched)
+      return true
+    }
+    if (vouched !== null && taken(base, vouched)) {
+      probes.delete(key)
+      // Its try starts before this one is over, so whoever waits on this one can wait on that one next.
+      probe(base, vouched)
+      return true
+    }
+    staleCodes.set(key, refusalOf(error))
+    return false
+  }
   probes.set(key, { at: 0, delay: held?.delay ?? 0, running })
 }
 
@@ -290,8 +371,9 @@ async function linkOrAnswer(base: string, code: string, call: SealedCall): Promi
     // The machine stays pinned: the vouched code is asked on v2 like the last.
     if (error instanceof RetryWithCode) return sendSealed(base, error.code, call, false)
     if (error instanceof CodeRefused) {
-      remember(base, code, refusedAnswer, timing.refusedMs)
-      return refusedAnswer()
+      staleCodes.set(failureKey(base, code), error.why)
+      remember(base, code, () => refusedAnswer(error.why), timing.refusedMs)
+      return refusedAnswer(error.why)
     }
     const failed = error instanceof Error ? error : new Error(String(error))
     remember(base, code, () => failed, timing.retryMs)
@@ -310,6 +392,7 @@ async function sendSealed(base: string, code: string, call: SealedCall, again: b
   const link = await linkOrAnswer(base, code, call)
   if (link instanceof Response) return link
   failures.delete(failureKey(base, code))
+  staleCodes.delete(failureKey(base, code))
   try {
     const answer = await sealedFetch(link.connection, call)
     return toResponse(answer.status, answer.headers, answer.body)
@@ -353,6 +436,44 @@ export function sealOutcome(url: string): SealOutcome {
   if (viaSeal(url) !== null) return 'sealed'
   return oldMacs.has(`${base}\n${code}`) ? 'old-mac' : 'undecided'
 }
+
+/**
+ * How the code this page holds for this URL's machine was last refused, with no
+ * successor the Mac vouched for, or null. Read from this page's own handshakes,
+ * never from an answer: no relay or machine can set it by what it sends back.
+ */
+export function codeRefusal(url: string): CodeRefusal | null {
+  const base = machineBaseFor(url)
+  const code = base === null ? null : storage()?.getItem(codeKeyForBase(base))
+  return base === null || code == null ? null : (staleCodes.get(failureKey(base, code)) ?? null)
+}
+
+/**
+ * A PERSON ASKED, OR A CODE THEY SCANNED HAS JUST LANDED: the next request to
+ * this URL's machine tries the sealed session now, not after the wait a failed
+ * try left (5 s doubling to 5 min) or the refusal kept in memory. Only for an
+ * explicit ask: polling never calls this. Bounded all the same: not while a try
+ * is under way, and at most once per `explicitMs` for a machine and code, so
+ * pressing again and again is one handshake per few seconds, never a storm. The
+ * wait's own growth is kept for the automatic tries that follow. Nothing held is
+ * taken, dropped or unpinned.
+ */
+export function askNow(url: string): void {
+  const base = machineBaseFor(url)
+  const code = base === null ? null : storage()?.getItem(codeKeyForBase(base))
+  if (base === null || code == null) return
+  const key = failureKey(base, code)
+  const held = probes.get(key)
+  if (held?.running) return
+  const last = askedAt.get(key)
+  if (last !== undefined && timing.now() - last < timing.explicitMs) return
+  askedAt.set(key, timing.now())
+  if (held !== undefined) probes.set(key, { ...held, at: 0 })
+  failures.delete(key)
+}
+
+/** Is this answer one of this plane's own re-pair answers, and for which refusal? By identity only: a copy or a look-alike is not. */
+export const ownRefusalOf = (answer: Response): CodeRefusal | null => ownRefusals.get(answer) ?? null
 
 /** Did the machine refuse this plain request because this device is to speak sealed? */
 export async function refusedInTheClear(response: Response): Promise<boolean> {
@@ -402,6 +523,8 @@ registerScopeState(
     probes.clear()
     oldMacs.clear()
     failures.clear()
+    staleCodes.clear()
+    askedAt.clear()
   },
   'clear'
 )

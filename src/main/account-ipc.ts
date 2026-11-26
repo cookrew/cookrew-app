@@ -599,7 +599,15 @@ async function revoke(deps: AccountIpcDeps, input: unknown): Promise<AccountResu
   const record = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
   const deviceId = asString(record.deviceId)
   if (deviceId.length === 0) return { ok: false, reason: 'bad_device' }
-  const password = asString(record.password)
+  const result = await revokeAtRegistry(deps, deviceId, asString(record.password))
+  // ITS ADMISSION HERE ENDS WITH IT (owner 2026-11-25): the Devices tab lists a
+  // device once, so the row a revoke removed must not come back as "admitted on
+  // this Mac" until the revoked-list poll prunes it a minute later.
+  if (result.ok) deps.admitted?.forget(deviceId)
+  return result
+}
+
+async function revokeAtRegistry(deps: AccountIpcDeps, deviceId: string, password: string): Promise<AccountResult<void>> {
   const proof = await providerProof(deps, 'revoke-device')
   if (proof !== null) return proof.ok ? deps.accounts.revokeDevice(deviceId, { stepUp: proof.value }) : proof
   const proven = await deps.accounts.stepUp(password)

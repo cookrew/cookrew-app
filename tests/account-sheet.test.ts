@@ -289,7 +289,7 @@ describe('the account card (D8) — asked for by what the person reached', () =>
       })
       // The half says where a code comes from, which is the question a person
       // standing at a blank Mac actually has.
-      expect(view.join?.how).toContain('ADD A MAC')
+      expect(view.join?.how).toContain('PAIR A NEW MAC')
     }
   })
 })

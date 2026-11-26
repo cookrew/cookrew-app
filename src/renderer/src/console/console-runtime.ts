@@ -56,8 +56,11 @@ export interface RuntimeDeps {
     subscribe(listener: () => void): () => void
     go(route: ConsoleRoute): void
   }
-  /** This browser into one machine: the key it holds for it, or its door entered with the pass. */
-  readonly openDoor: (machineId: string) => Promise<DoorAnswer>
+  /**
+   * This browser into one machine: the key it holds for it, or its door entered with the pass.
+   * `explicit`: a person asked for it (they chose it, or opened the page at it); false when the page asks again on its own.
+   */
+  readonly openDoor: (machineId: string, ask?: { readonly explicit: boolean }) => Promise<DoorAnswer>
   /** Let go of this browser's key for one machine. */
   readonly forgetDoor: (machineId: string) => void
   /** Put a machine in scope, or none (machine-scope.ts · enterMachine). */
@@ -131,11 +134,16 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
   /** The name the REGISTRY knows a machine by: a machine does not name itself on this page. */
   const nameOf = (machineId: string): string => deps.devices.get().machines.find((machine) => machine.id === machineId)?.name ?? 'That machine'
 
+  /** The machine whose door the page is about to ask again on its own (its key was refused): not a person's ask. */
+  let reasking: string | null = null
+
   const askDoor = (machineId: string): void => {
+    const explicit = reasking !== machineId
+    reasking = null
     door = { machine: machineId, state: 'asking' }
     const waiting = (): boolean => door?.machine === machineId && door.state === 'asking'
     void deps
-      .openDoor(machineId)
+      .openDoor(machineId, { explicit })
       .catch((): DoorAnswer => ({ kind: 'refused', from: 'page', message: `${nameOf(machineId)} is not answering.` }))
       .then(async (answer) => {
         // Answered for a door nobody is waiting at any more: it opens nothing.
@@ -270,6 +278,8 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
     },
     open: (machineId, workspaceId = null, side = 'agents') => {
       retried = null
+      // Chosen by a person: whatever the page meant to ask on its own is this person's ask now.
+      reasking = null
       // Chosen now: a no from an earlier ask is not this answer; its door is asked again.
       if (door?.state === 'refused') door = null
       tell(state.view, null)
@@ -281,6 +291,8 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
       deps.forgetDoor(machineId)
       const repeat = retried !== null && retried.machine === machineId && now() - retried.at < RETRY_WINDOW_MS
       retried = { machine: machineId, at: now() }
+      // Given up on (repeat), the page asks nothing on its own: a later visit by the address is a person's ask.
+      reasking = repeat ? null : machineId
       leaveScope()
       // Asked again a moment ago and refused again: that is the machine's answer.
       if (repeat) door = { machine: machineId, state: 'refused', message: `${nameOf(machineId)} did not let this browser in.` }
