@@ -67,5 +67,8 @@ Supporting suites: `tests/session-watch.test.ts` (TraceReader.watchSpec resoluti
 | codex | lsof pane pid | `resume <uuid>` | ✅ | ✅ file | ❌ (honest refusal) |
 | pi | exclusive `--session-dir`, or live-pane adoption (rule 8) | `--session <id>` in the dir that holds it | ✅ | ✅ file | ❌ (honest refusal) |
 | opencode | lsof pane pid | `--session <id>` | ❌ | ⚠️ scrape (declared) | ❌ (honest refusal) |
+| agy (Antigravity CLI) | lsof pane pid → `presence/<uuid>.lock` (from the first turn); follows `/clear` | `--conversation <uuid>` | ✅ | ✅ file, `structural` finality | ❌ (honest refusal) |
+
+agy (2026-11-27) is the worked example of adding a harness after rule 9: one catalog id, one registry entry, a parser in `src/shared/agy-trace.ts`, `src/main/agy-bind.ts`, and one declaration per feature table — every one of them listed by the compiler. Not supported, with the reason on file: Magpie routing, the shared MCP hub, own endpoint, served seats, and the Claude-only features. Its folder trust and inline rendering ride on its launch line (`harness-launch.ts`, `--settings` for that session only). End-to-end proof: an isolated daemon drives a real agy card through boot, bind, a turn, an approval wait, a kill and resume, and `/clear`.
 
 OpenCode reaching `'file'` = add `parseOpencodeTrace` (+ `parseOpencodeTurns` composition + `opencodeWatchFile`) and flip the two registry fields — no call-site edits anywhere else (rule 4).

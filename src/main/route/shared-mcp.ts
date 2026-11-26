@@ -45,5 +45,6 @@ export const SHARED_MCP_ARGS: PerHarness<(url: string) => string[]> = {
   claude: (url) => ['--mcp-config', JSON.stringify({ mcpServers: { [HUB_SERVER]: { type: 'http', url } } })],
   codex: (url) => ['-c', `mcp_servers.${HUB_SERVER}.url="${url}"`],
   opencode: unsupported('no per-process MCP flag proven; magpie writes the hub into its config file'),
-  pi: unsupported('no per-process MCP flag proven; magpie writes the hub into its config file')
+  pi: unsupported('no per-process MCP flag proven; magpie writes the hub into its config file'),
+  agy: unsupported('agy has no per-process MCP flag; it reads ~/.gemini/config/mcp_config.json')
 }

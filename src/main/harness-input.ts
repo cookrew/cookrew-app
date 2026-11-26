@@ -45,6 +45,15 @@ export function opencodeComposerDrawn(screen: string): boolean {
   return screen.trim() !== '' && !/starting background server/i.test(screen)
 }
 
+/**
+ * Antigravity CLI's input box, read off real 1.5.18 boots: a `>` row between
+ * two rules over the `? for shortcuts` footer. Until it is drawn the screen
+ * holds a spinner (the sign-in check) or the first-boot banner.
+ */
+export function agyComposerDrawn(screen: string): boolean {
+  return /\? for shortcuts/.test(screen)
+}
+
 export interface HarnessInput {
   /** Its input box is drawn on this screen. */
   drawn: (screen: string) => boolean
@@ -65,7 +74,9 @@ export const HARNESS_INPUT: Readonly<Record<HarnessId, HarnessInput>> = {
   claude: { drawn: claudeComposerDrawn, gatesEveryInput: true, directSubmit: '\r' },
   codex: { drawn: codexComposerDrawn, gatesEveryInput: false, directSubmit: '\r' },
   opencode: { drawn: opencodeComposerDrawn, gatesEveryInput: false, directSubmit: '\r' },
-  pi: { drawn: piComposerDrawn, gatesEveryInput: false, directSubmit: '\n' }
+  pi: { drawn: piComposerDrawn, gatesEveryInput: false, directSubmit: '\n' },
+  // Every input waits: keys sent during its sign-in spinner are lost (measured 2026-11-26).
+  agy: { drawn: agyComposerDrawn, gatesEveryInput: true, directSubmit: '\r' }
 }
 
 /** The input facts for a launch command, or null for a plain shell. */

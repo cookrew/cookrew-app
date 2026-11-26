@@ -6,7 +6,7 @@
 // one line here — and every feature table keyed by HarnessId then refuses to
 // compile until it says what that harness does (harness-support.ts).
 
-export const HARNESS_IDS = ['claude', 'codex', 'opencode', 'pi'] as const
+export const HARNESS_IDS = ['claude', 'codex', 'opencode', 'pi', 'agy'] as const
 
 export type HarnessId = (typeof HARNESS_IDS)[number]
 
@@ -15,7 +15,8 @@ export const HARNESS_NAMES = {
   claude: 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
-  pi: 'Pi'
+  pi: 'Pi',
+  agy: 'Antigravity CLI'
 } as const satisfies Record<HarnessId, string>
 
 export type HarnessName = (typeof HARNESS_NAMES)[HarnessId]
@@ -66,7 +67,9 @@ export const HARNESS_CARDS: Readonly<Record<HarnessId, HarnessCard>> = {
   claude: { id: 'claude', name: HARNESS_NAMES.claude, bin: 'claude', presetPattern: /claude/i, matches: leadingWord('claude'), herdrKind: 'claude' },
   codex: { id: 'codex', name: HARNESS_NAMES.codex, bin: 'codex', presetPattern: /codex/i, matches: leadingWord('codex'), herdrKind: 'codex' },
   opencode: { id: 'opencode', name: HARNESS_NAMES.opencode, bin: 'opencode', presetPattern: /opencode/i, matches: leadingWord('opencode'), herdrKind: 'opencode' },
-  pi: { id: 'pi', name: HARNESS_NAMES.pi, bin: 'pi', presetPattern: /^pi$|^pi |pi agent|^pi-agent$/i, matches: isPiLaunch, herdrKind: 'pi' }
+  pi: { id: 'pi', name: HARNESS_NAMES.pi, bin: 'pi', presetPattern: /^pi$|^pi |pi agent|^pi-agent$/i, matches: isPiLaunch, herdrKind: 'pi' },
+  // herdr's own manifest id is `agy` (aliases antigravity, antigravity-cli), measured on herdr 0.9.5.
+  agy: { id: 'agy', name: HARNESS_NAMES.agy, bin: 'agy', presetPattern: /antigravity|^agy\b/i, matches: leadingWord('agy'), herdrKind: 'agy' }
 }
 
 /** The harness a launch command runs, or null (a plain shell, an unknown binary). Main and renderer alike. */

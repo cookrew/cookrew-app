@@ -36,11 +36,16 @@ const ONLY_CLAUDE = (reason: string): PerHarness<true> => ({
   claude: true,
   codex: unsupported(reason),
   opencode: unsupported(reason),
-  pi: unsupported(reason)
+  pi: unsupported(reason),
+  agy: unsupported(reason)
 })
 
 export const OPTIONAL_FEATURES: Readonly<Record<OptionalFeature, PerHarness<true>>> = {
-  firstBootPrep: ONLY_CLAUDE('it asks nothing Cookrew knows how to pre-answer'),
+  firstBootPrep: {
+    ...ONLY_CLAUDE('it asks nothing Cookrew knows how to pre-answer'),
+    // Folder trust rides on agy's own launch line (harness-launch.ts · agySessionLine).
+    agy: unsupported('its folder trust is granted on its launch line, for that session only')
+  },
   sessionCwdRepair: ONLY_CLAUDE('its session address does not depend on the card directory'),
   idleSleep: ONLY_CLAUDE('no process record proves it idle and resumable'),
   heldSessionFork: ONLY_CLAUDE('no live-holder record to ask'),
@@ -54,7 +59,8 @@ export const OPTIONAL_FEATURES: Readonly<Record<OptionalFeature, PerHarness<true
     codex: true,
     opencode: true,
     // NOT_ROUTABLE_REASON (shared/route-view.ts) says the same on R1's tick.
-    pi: unsupported('pi takes a provider only from its global models.json')
+    pi: unsupported('pi takes a provider only from its global models.json'),
+    agy: unsupported('agy takes its model only from its Google sign-in or the Gemini API; a route through Magpie is not proven yet')
   },
   routeEffortChoices: ONLY_CLAUDE('its effort dial reads only the harness’s own levels')
 }

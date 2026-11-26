@@ -1,7 +1,7 @@
 /** Per-agent pixel sprites on the invader's 3px-cell grid (11×8 cells,
     33×24 px), drawn in currentColor so the card's phase class tints them:
     Claude Code a starburst, Codex a ring, OpenCode a terminal block, Pi a
-    pixel π, and
+    pixel π, Antigravity CLI an arch, and
     Shell (or any custom preset) the classic invader. */
 import { harnessOfPreset, type HarnessId } from '../../../shared/harness-catalog'
 
@@ -34,6 +34,15 @@ const GRIDS: Record<AgentSpriteKind, string[]> = {
     'X.X...XXX.X',
     'X.........X',
     'XXXXXXXXXXX'
+  ],
+  agy: [
+    '...XXXXX...',
+    '..XX...XX..',
+    '.XX.....XX.',
+    '.X.......X.',
+    'XX.......XX',
+    'X.........X',
+    'X.........X'
   ],
   pi: [
     'XXXXXXXXXXX',

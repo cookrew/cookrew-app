@@ -11,7 +11,7 @@ import { HARNESS_CARDS, HARNESS_IDS, HARNESS_NAMES, harnessOfCommand, harnessOfP
 import { GATEWAY_MODELS_IN_TUNE, harnessFlag, LINE_REBUILT_ON_SEND } from '../src/shared/harness-ui'
 import { agentKind, herdrAgentKind } from '../src/main/herdr-host-multiplexer'
 import { isUnsupported, supportedIds, unsupported, type PerHarness } from '../src/shared/harness-support'
-import { HARNESS_BY_ID, HARNESSES, harnessFor, withoutSessionFlags } from '../src/main/harness'
+import { copiedSessionBindings, HARNESS_BY_ID, HARNESSES, harnessFor, SESSION_FIELDS, withoutSessionFlags } from '../src/main/harness'
 import { featureMatrix, lacksBecause, OPTIONAL_FEATURES } from '../src/main/harness-features'
 import { HARNESS_INPUT } from '../src/main/harness-input'
 import { EXACT_RESTORE, SESSION_ON_DISK } from '../src/main/recover-gate'
@@ -23,6 +23,7 @@ import { HARNESS_FACTS } from '../src/main/route/setup'
 import { ROUTABLE } from '../src/main/route-env'
 import { NOT_ROUTABLE_REASON } from '../src/shared/route-view'
 import { ROUTE_OVERRIDES } from '../src/shared/launch-tune'
+import { LAUNCH_LINE } from '../src/main/harness-launch'
 import { OWN_SUBSCRIPTION } from '../src/shared/ai-account'
 import { FIRST_RUN_AGENTS, FIRST_RUN_SIGN_IN, HARNESS_INSTALL_FIX, UNKNOWN_FACTS } from '../src/shared/preflight'
 
@@ -42,6 +43,7 @@ const TABLES: Record<string, Readonly<Record<string, unknown>>> = {
   'route overrides (launch-tune.ts)': ROUTE_OVERRIDES,
   'own subscription (ai-account.ts)': OWN_SUBSCRIPTION,
   'line rebuilt on send (harness-ui.ts)': LINE_REBUILT_ON_SEND,
+  'launch line (harness-launch.ts)': LAUNCH_LINE,
   'first-run install fix (preflight.ts)': HARNESS_INSTALL_FIX,
   'first-run sign-in (preflight.ts)': FIRST_RUN_SIGN_IN,
   'gateway models in the tune dial (harness-ui.ts)': GATEWAY_MODELS_IN_TUNE,
@@ -147,11 +149,19 @@ describe('G9 · the support matrix changes only on purpose', () => {
 })
 
 describe('G10 · a copy never resumes its source', () => {
+  it('a copied node clears every harness session field, and a cut carries every one', () => {
+    expect([...SESSION_FIELDS].sort()).toEqual(HARNESSES.map((h) => h.sessionField).sort())
+    const bound = Object.fromEntries(SESSION_FIELDS.map((field) => [field, `ref-${field}`]))
+    expect(Object.values(copiedSessionBindings(bound))).toEqual(SESSION_FIELDS.map(() => null))
+    expect(copiedSessionBindings(bound, true)).toEqual(bound)
+  })
+
   const KEYS: Record<string, string> = {
     claude: '5e55a0de-0000-4000-8000-0000000000aa',
     codex: '5e55a0de-0000-4000-8000-0000000000bb',
     opencode: 'ses_abcDEF123',
-    pi: 'abcdef12-3456-4789-8abc-def012345678'
+    pi: 'abcdef12-3456-4789-8abc-def012345678',
+    agy: '73f44614-99dc-4b12-a26c-92c3a56c594e'
   }
 
   for (const id of HARNESS_IDS) {

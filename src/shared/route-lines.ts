@@ -47,9 +47,10 @@ export const ROUTE_LINE_PATTERNS: readonly RegExp[] = [
   // The local tier, exactly as scripts/route-auto-group.mjs prints it (stays=turn is required: Magpie facts §4).
   /^magpie group add auto models=[A-Za-z0-9./:,_-]+ routing=smart stays=turn$/,
   /^npm i(nstall)? -g @[a-z0-9-]+\/[a-z0-9-]+$/,
-  /^(claude|claude login|codex login|opencode auth login)$/,
+  /^(claude|claude login|codex login|opencode auth login|agy)$/,
   /^curl -fsSL https:\/\/opencode\.ai\/install \| bash$/,
   /^curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash$/,
+  /^curl -fsSL https:\/\/antigravity\.google\/cli\/install\.sh \| bash$/,
   // A formula starts with a letter or digit: `--cask` and `-f` are not formulae.
   /^brew install [A-Za-z0-9][A-Za-z0-9._/@-]*$/
 ]

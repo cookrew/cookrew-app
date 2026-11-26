@@ -2,7 +2,7 @@ import { homedir } from 'node:os'
 import type { CanvasNode } from '../shared/model'
 import type { ScrubReport, SecretFinding } from '../shared/preset-manifest'
 import type { TeamSnapshot } from './teams'
-import { withoutSessionFlags } from './harness'
+import { copiedSessionBindings, withoutSessionFlags } from './harness'
 
 /**
  * EXPORT SCRUBBER (marketplace §5). The team snapshot was designed for LOCAL
@@ -219,10 +219,7 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
       // No session binding leaves the machine: an inherited id would make the
       // buyer's copy resume a session file that is not theirs and does not
       // exist. Same field list planTerminal clears on a fork.
-      claudeSessionId: null,
-      piSessionId: null,
-      codexSessionRef: null,
-      opencodeSessionId: null,
+      ...copiedSessionBindings(node),
       sessionLineage: undefined,
       restoreStack: undefined,
       pendingInject: null,

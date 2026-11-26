@@ -148,6 +148,6 @@ describe('the bridge', () => {
 
   it('answers rows from the facts', async () => {
     const handlers = firstRunHandlers({ store: new FirstRunStore(fileIn(), nothing), probe: async () => UNKNOWN_FACTS, tasks: { resume: () => undefined, discard: () => undefined, sync: () => undefined }, blocked: () => null })
-    expect((await handlers.preflight()).map((r) => r.state)).toEqual(Array(8).fill('unknown'))
+    expect((await handlers.preflight()).map((r) => r.state)).toEqual(Array(9).fill('unknown'))
   })
 })

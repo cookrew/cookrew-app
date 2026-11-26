@@ -86,6 +86,9 @@ const PRESET_ALIASES: Record<string, string> = {
   pi: 'Pi',
   shell: 'Shell',
   opencode: 'OpenCode',
+  agy: 'Antigravity CLI',
+  antigravity: 'Antigravity CLI',
+  'antigravity cli': 'Antigravity CLI',
 }
 
 export function normalizePreset(preset: string): string {

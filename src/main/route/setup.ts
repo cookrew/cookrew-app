@@ -67,7 +67,9 @@ const OWN_FACTS: Readonly<Record<HarnessId, OwnFacts>> = {
   claude: { installLine: 'curl -fsSL https://claude.ai/install.sh | bash', loginLine: 'claude', signInFiles: (home) => [path.join(home, '.claude', '.credentials.json')], keychainSignIn: true },
   codex: { installLine: 'npm i -g @openai/codex', loginLine: 'codex login', signInFiles: (home) => [path.join(home, '.codex', 'auth.json')], keychainSignIn: false },
   opencode: { installLine: 'curl -fsSL https://opencode.ai/install | bash', loginLine: 'opencode auth login', signInFiles: (home) => [path.join(home, '.local', 'share', 'opencode', 'auth.json')], keychainSignIn: false },
-  pi: { installLine: 'npm i -g @earendil-works/pi-coding-agent', loginLine: null, signInFiles: null, keychainSignIn: false }
+  pi: { installLine: 'npm i -g @earendil-works/pi-coding-agent', loginLine: null, signInFiles: null, keychainSignIn: false },
+  // Its Google sign-in sits in the login keychain under a name not documented: nothing readable says signed in.
+  agy: { installLine: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', loginLine: 'agy', signInFiles: null, keychainSignIn: false }
 }
 
 export const HARNESS_FACTS: readonly HarnessFacts[] = HARNESS_IDS.map((id) => ({

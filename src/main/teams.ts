@@ -46,7 +46,7 @@ import {
   buildResumeForkNotice,
   buildRoleBootMessage
 } from '../shared/fork'
-import { withoutSessionFlags } from './harness'
+import { copiedSessionBindings, withoutSessionFlags } from './harness'
 import { scopeToSelection } from '../shared/team-actions'
 import { fileSlug } from '../shared/slug'
 import { claudeSessionFile, forkClaudeSession, forkClaudeSessionAssembled } from './claude-fork'
@@ -496,10 +496,7 @@ function planTerminal(
     // two processes appending to one rollout. Lineage and the restore stack
     // reference the source's sessions, so they stay behind too.
     command: withoutSessionFlags(role ? role.command : node.command),
-    claudeSessionId: carries ? (node.claudeSessionId ?? null) : null,
-    piSessionId: carries ? (node.piSessionId ?? null) : null,
-    codexSessionRef: carries ? (node.codexSessionRef ?? null) : null,
-    opencodeSessionId: carries ? (node.opencodeSessionId ?? null) : null,
+    ...copiedSessionBindings(node, carries),
     // Lineage travels with the session it describes: it names the earlier
     // segments of THIS conversation, which is now this card's.
     sessionLineage: carries ? node.sessionLineage : undefined,

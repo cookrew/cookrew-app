@@ -23,6 +23,15 @@ import { codexWatchFile, resolveCodexRolloutByPid, sessionIdFromRolloutPath } fr
 import { codexTraceAccumulatorFor, codexTurnParserFor } from './codex-lineage'
 import { codexTuning } from './codex-tuning'
 import { resolveOpencodeSessionByPid } from './opencode-bind'
+import { agyTurnParser, createAgyTraceAccumulator, parseAgyTurns } from '../shared/agy-trace'
+import {
+  agyConversationOfFile,
+  agyResumeCommand,
+  agyWatchFile,
+  resolveAgyConversationByPid,
+  stripAgySessionFlags,
+  validAgyConversationId
+} from './agy-bind'
 import { piTuning } from './pi-tuning'
 import {
   piNodeSessionDir,
@@ -39,6 +48,7 @@ export interface HarnessWatchOptions {
   codexSessionsDir?: string
   piSessionsRoot?: string
   piAgentDir?: string
+  agyDataDir?: string
 }
 
 export type { HarnessId }
@@ -49,6 +59,7 @@ export type SessionField =
   | 'codexSessionRef'
   | 'opencodeSessionId'
   | 'piSessionId'
+  | 'agySessionId'
 
 /**
  * The node fields a watchFile resolver may read — id, cwd, and this harness's
@@ -359,16 +370,60 @@ const PI: Harness = {
   tuning: piTuning
 }
 
+const AGY_PARSERS = new Map<string, ReturnType<typeof agyTurnParser>>()
+
+const AGY: Harness = {
+  id: 'agy',
+  matches: HARNESS_CARDS.agy.matches,
+  // The conversation the agy process holds a presence lock on (agy-bind.ts).
+  bind: { kind: 'pid-held', resolveByPid: (pid) => resolveAgyConversationByPid(pid) },
+  sessionField: 'agySessionId',
+  // The id can arrive from persisted or mobile-originated node data and
+  // reaches a shell line: only agy's closed UUID alphabet passes.
+  resumeKey: (ref) => (validAgyConversationId(ref) ? ref : null),
+  resumeCommand: (command, key) => agyResumeCommand(command, key),
+  stripSessionFlags: stripAgySessionFlags,
+  turns: 'file',
+  // No end-of-turn record: a tail ending on a reply with no tool call is the
+  // loop's stop (agy-trace.ts); a tool call waiting for approval stays open.
+  turnFinality: 'structural',
+  parseTurns: parseAgyTurns,
+  // Ids namespaced by the conversation, one parser object per file (SessionTurnSync re-watches by identity).
+  parseTurnsFor: (file) => {
+    const known = AGY_PARSERS.get(file)
+    if (known) return known
+    const parser = agyTurnParser(agyConversationOfFile(file))
+    AGY_PARSERS.set(file, parser)
+    return parser
+  },
+  watchFile: agyWatchFile,
+  traceParser: (file) => createAgyTraceAccumulator(agyConversationOfFile(file))
+}
+
 /** One entry per catalog id: a new id does not compile until it has one. */
 export const HARNESS_BY_ID: Readonly<Record<HarnessId, Harness>> = {
   claude: CLAUDE,
   codex: CODEX,
   opencode: OPENCODE,
-  pi: PI
+  pi: PI,
+  agy: AGY
 }
 
 /** Every registered harness, in catalog order. Conformance: tests/harness-conformance.test.ts. */
 export const HARNESSES: Harness[] = HARNESS_IDS.map((id) => HARNESS_BY_ID[id])
+
+/** Every node field that binds a card to a session, one per harness. */
+export const SESSION_FIELDS: readonly SessionField[] = HARNESSES.map((h) => h.sessionField)
+
+/**
+ * The session bindings a COPY of `node` gets: every harness's field, each
+ * null unless the copy takes the conversation over (`carry`, a cut). Spread
+ * over a copied node so a harness added later can never ride along unseen —
+ * its field would make the copy resume, and append to, the source's session.
+ */
+export function copiedSessionBindings(node: Partial<Pick<TerminalNodeData, SessionField>>, carry = false): Record<SessionField, string | null> {
+  return Object.fromEntries(SESSION_FIELDS.map((field) => [field, carry ? (node[field] ?? null) : null])) as Record<SessionField, string | null>
+}
 
 /**
  * The launch command with its session-binding flags removed, per harness. A

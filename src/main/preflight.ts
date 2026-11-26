@@ -96,7 +96,9 @@ const SIGN_IN_ENV: Readonly<Record<HarnessId, readonly string[]>> = {
   claude: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'],
   codex: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
   opencode: [],
-  pi: []
+  pi: [],
+  // GEMINI_API_KEY signs agy in only with modelProvider=gemini set; its own sign-in is a Google account.
+  agy: []
 }
 
 async function factsNow(deps: ProbeDeps): Promise<ToolFacts> {

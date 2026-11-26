@@ -22,7 +22,7 @@ export type ToolState = 'found' | 'missing' | 'unknown'
  * HARNESS_IDS (tests/harness-matrix.test.ts), and each one a ToolId, so a new
  * harness needs its first-run copy before it compiles.
  */
-export const FIRST_RUN_AGENTS: readonly (ToolId & HarnessId)[] = ['claude', 'codex', 'pi', 'opencode']
+export const FIRST_RUN_AGENTS: readonly (ToolId & HarnessId)[] = ['claude', 'codex', 'pi', 'opencode', 'agy']
 
 /**
  * Every harness has a state here (the Record makes a new catalog id fail to
@@ -66,6 +66,7 @@ export const UNKNOWN_FACTS: ToolFacts = {
   codexSignedIn: null,
   pi: 'unknown',
   opencode: 'unknown',
+  agy: 'unknown',
   herdr: 'unknown',
   tmux: 'unknown',
   chrome: 'unknown',
@@ -101,6 +102,7 @@ export interface PreflightRow {
 const CLAUDE_INSTALL = 'curl -fsSL https://claude.ai/install.sh | bash'
 const CODEX_NPM = 'npm i -g @openai/codex'
 const OPENCODE_INSTALL = 'curl -fsSL https://opencode.ai/install | bash'
+const AGY_INSTALL = 'curl -fsSL https://antigravity.google/cli/install.sh | bash'
 const MAGPIE_INSTALL = 'curl -fsSL https://usemagpie.ai/install.sh | sh'
 const HOMEBREW_INSTALL = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
 
@@ -132,7 +134,8 @@ export const HARNESS_INSTALL_FIX: Readonly<Record<HarnessId, (facts: ToolFacts) 
     const line = piInstallLine(facts.platform, facts.arch)
     return line === null ? null : { label: FIX_LABELS.INSTALL, line }
   },
-  opencode: () => ({ label: FIX_LABELS.INSTALL, line: OPENCODE_INSTALL })
+  opencode: () => ({ label: FIX_LABELS.INSTALL, line: OPENCODE_INSTALL }),
+  agy: () => ({ label: FIX_LABELS.INSTALL, line: AGY_INSTALL })
 }
 
 const isHarnessTool = (id: ToolId): id is ToolId & HarnessId => (FIRST_RUN_AGENTS as readonly string[]).includes(id)
@@ -205,7 +208,8 @@ export const FIRST_RUN_SIGN_IN: PerHarness<{ signedIn: (facts: ToolFacts) => boo
   claude: { signedIn: (facts) => facts.claudeSignedIn, loginLine: 'claude' },
   codex: { signedIn: (facts) => facts.codexSignedIn, loginLine: 'codex login' },
   opencode: unsupported('it signs in to many providers, none of them one first run offers'),
-  pi: unsupported('it has no sign-in of its own; a model key or the gateway is enough')
+  pi: unsupported('it has no sign-in of its own; a model key or the gateway is enough'),
+  agy: unsupported('it signs in with a Google account in its own first run, and nothing readable says it did')
 }
 
 /** A harness's row: its state, and a sign-in fix where first run reads one. */

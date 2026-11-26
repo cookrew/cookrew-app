@@ -64,6 +64,24 @@ const COMPLETED: Record<string, string[]> = {
         stopReason: 'stop'
       }
     })
+  ],
+  // agy (structural): the last step is a reply with no tool call.
+  agy: [
+    JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-08-05T10:00:00Z', content: '<USER_REQUEST>\nrun it\n</USER_REQUEST>' }),
+    JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-08-05T10:00:01Z', tool_calls: [{ name: 'run_command', args: { CommandLine: '"touch x"' } }] }),
+    JSON.stringify({ step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: '2026-08-05T10:00:02Z', content: 'Created At: x\nCompleted At: y\nok' }),
+    JSON.stringify({ step_index: 3, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-08-05T10:00:03Z', content: 'Ran it.' })
+  ]
+}
+
+/**
+ * A STRUCTURAL harness's tail waiting for the person: the call is asked,
+ * nothing ran. It must read open (herdr reported exactly this state as done).
+ */
+const APPROVAL_WAIT: Record<string, string[]> = {
+  agy: [
+    JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-08-05T10:00:00Z', content: '<USER_REQUEST>\nrun it\n</USER_REQUEST>' }),
+    JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-08-05T10:00:01Z', tool_calls: [{ name: 'run_command', args: { CommandLine: '"touch x"' } }] })
   ]
 }
 
@@ -84,6 +102,12 @@ const IN_FLIGHT: Record<string, string[]> = {
         stopReason: 'toolUse'
       }
     })
+  ],
+  // agy: the call ran, no reply yet.
+  agy: [
+    JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-08-05T10:00:00Z', content: '<USER_REQUEST>\nrun it\n</USER_REQUEST>' }),
+    JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-08-05T10:00:01Z', tool_calls: [{ name: 'run_command', args: { CommandLine: '"touch x"' } }] }),
+    JSON.stringify({ step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: '2026-08-05T10:00:02Z', content: 'Created At: x\nCompleted At: y\nok' })
   ]
 }
 
@@ -116,12 +140,17 @@ describe('harness turn-finality capability', () => {
     expect(settlesFromFile('boundary')).toBe(false)
   })
 
-  it('no harness claims structural finality yet (agy and devin bring theirs with real-session fixtures)', () => {
-    // When one does, it must add its COMPLETED and IN_FLIGHT fixtures here AND
-    // an APPROVAL_WAIT fixture: a tail step holding a tool call that waits for
-    // the person must stay open (herdr reported exactly that state as done).
-    expect(HARNESSES.filter((h) => h.turnFinality === 'structural').map((h) => h.id)).toEqual([])
+  it('structural finality is claimed by agy alone (real-session fixtures: tests/agy-trace.test.ts)', () => {
+    expect(HARNESSES.filter((h) => h.turnFinality === 'structural').map((h) => h.id)).toEqual(['agy'])
   })
+
+  for (const harness of HARNESSES.filter((h) => h.turnFinality === 'structural')) {
+    it(`${harness.id}: a tail waiting for approval stays OPEN`, () => {
+      const waiting = APPROVAL_WAIT[harness.id]
+      expect(waiting, `${harness.id} must ship an APPROVAL_WAIT fixture`).toBeDefined()
+      expect(harness.parseTurns!(waiting).at(-1)?.final).toBeUndefined()
+    })
+  }
 
   for (const harness of HARNESSES.filter((h) => settlesFromFile(h.turnFinality))) {
     it(`${harness.id}: the parser DELIVERS the claimed proof on the tail record`, () => {

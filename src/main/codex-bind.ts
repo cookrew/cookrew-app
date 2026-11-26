@@ -134,7 +134,7 @@ export function rolloutFromOpenFiles(openFiles: readonly string[]): string | nul
 /** Injectable for tests; returns the absolute paths a pid holds open. */
 export type OpenFilesReader = (pid: number) => string[]
 
-const defaultOpenFiles: OpenFilesReader = (pid) => {
+export const defaultOpenFiles: OpenFilesReader = (pid) => {
   try {
     return execFileSync('lsof', ['-p', String(pid), '-Fn'], {
       stdio: ['ignore', 'pipe', 'ignore'],

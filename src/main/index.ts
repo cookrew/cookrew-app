@@ -257,7 +257,8 @@ import {
 } from './claude-fork'
 import { isCodexCommand, resolveCodexRolloutByPid, validCodexSessionRef } from './codex-bind'
 import { codexRolloutToFollow } from './codex-lineage'
-import { codexInlineLine } from './codex-inline'
+import { harnessLaunchLine } from './harness-launch'
+import { agyLastConversation, resolveAgyConversationByPid, validAgyConversationId } from './agy-bind'
 import { piAdoptableSession, piLaunchBinding, resolvePiSessionByPane } from './pi-bind'
 import {
   applyTuning,
@@ -3999,6 +4000,7 @@ function spawnTracked(t: {
   codexSessionRef?: string | null
   opencodeSessionId?: string | null
   piSessionId?: string | null
+  agySessionId?: string | null
   sessionLineage?: string[]
 }): boolean {
   // A card being closed takes no new pane: it would outlive the card, or be
@@ -4101,9 +4103,10 @@ function spawnTracked(t: {
   const spawnRoute = route && !served ? { env: { ...route.env, ...access?.env }, args: [...route.args, ...(access?.args ?? []), ...mcpArgs] } : null
   // A routed card runs the route's model: a launch pick's model gives way to it.
   // A direct claude card's alias is spelled for the gateway its own settings name (claude-model-route.ts).
-  // Codex runs inline, never on its own alternate screen (codex-inline.ts).
-  const launched = codexInlineLine(
-    spawnRoute && route && (route.effective !== 'direct' || access) ? withoutRoutedPick(effective, harnessFor(effective)?.id) : directClaudeLine(effective)
+  // Per-harness launch arguments (harness-launch.ts): Codex inline, agy's session settings.
+  const launched = harnessLaunchLine(
+    spawnRoute && route && (route.effective !== 'direct' || access) ? withoutRoutedPick(effective, harnessFor(effective)?.id) : directClaudeLine(effective),
+    t.cwd
   )
   const fresh = !ptys.get(t.id)
   let session: PtySession
@@ -4353,7 +4356,7 @@ function pollPidHeldBind(harness: HarnessEntry, resolveByPid: (pid: number | nul
         const hit = store.nodeAcrossWorkspaces(t.id)
         if (!hit || hit.node.kind !== 'terminal') return
         if ((hit.node as TerminalNodeData)[field]) return
-        const ref = resolveByPid(ptys.panePid(t.id))
+        const ref = resolveByPid(ptys.shellPid(t.id))
         if (!ref) return next() // not open yet
         // 1:1 authoritative: a session already owned by another node is never
         // reassignable (defense-in-depth; lsof already makes this 1:1).
@@ -4456,7 +4459,68 @@ const FOLLOW_BOUND_SESSION: PerHarness<(terminalId: string) => void> = {
     }
   },
   opencode: unsupported('one session file per pane: nothing moves it'),
-  pi: unsupported('one session file per exclusive dir: nothing moves it')
+  pi: unsupported('one session file per exclusive dir: nothing moves it'),
+  // A /clear opens a new conversation; the sweep re-reads the lock the process holds (followHeldAgyConversation).
+  agy: (terminalId) => {
+    for (const delay of [8000, 45000]) setTimeout(() => followHeldAgyConversation(terminalId), delay).unref()
+  }
+}
+
+/**
+ * The sweep's follow of a bound card, per harness: true when it handled the
+ * card. `mayLookUp` spends the sweep's one cold pane-pid lookup.
+ */
+const SWEEP_FOLLOW: PerHarness<(terminalId: string, mayLookUp: () => boolean) => boolean> = {
+  claude: (terminalId, mayLookUp) => {
+    if (!mayLookUp()) return true
+    void rebindRotatedClaudeSession(terminalId, 'oracle')
+    return true
+  },
+  // Disk-only until a continuation of the bound rollout exists, so a quiet
+  // fleet pays a few readdirs here, never a process lookup.
+  codex: (terminalId) => {
+    followMovedCodexRollout(terminalId)
+    return true
+  },
+  opencode: unsupported('one session file per pane: nothing moves it'),
+  pi: unsupported('one session file per exclusive dir: nothing moves it'),
+  // One file read per card; an lsof only when agy's folder index names another conversation.
+  agy: (terminalId) => {
+    followHeldAgyConversation(terminalId, true)
+    return true
+  }
+}
+
+/**
+ * agy moved this card to another conversation (/clear, /new, /resume <id>):
+ * its process now holds that conversation's presence lock. Follow it — never
+ * onto a conversation another card owns. `hinted`: look up the process only
+ * when agy's folder index names another conversation than the bound one.
+ */
+function followHeldAgyConversation(terminalId: string, hinted = false): void {
+  try {
+    const hit = store.nodeAcrossWorkspaces(terminalId)
+    if (!hit || hit.node.kind !== 'terminal') return
+    const node = hit.node as TerminalNodeData
+    const bound = node.agySessionId
+    if (harnessFor(node.command)?.id !== 'agy' || !validAgyConversationId(bound)) return
+    if (hinted && (agyLastConversation(node.cwd) ?? bound) === bound) return
+    const held = resolveAgyConversationByPid(panePids.pidOf(terminalId))
+    if (held === null || held === bound) return
+    if (isRefOwned(store.terminalsAcross(), terminalId, 'agySessionId', held)) return
+    store.updateNodeAcrossWorkspacesUnsafe(terminalId, { agySessionId: held })
+    agents.setSessionRef(terminalId, held)
+    const spec = traces.watchSpec(terminalId)
+    if (spec) {
+      sessionSync.rebind(terminalId, spec.file, spec.parse)
+      multiplexer()?.reportAgentSession?.(sessionNameFor(terminalId), spec.file)
+    }
+    store.withOpContext({ actor: 'agent' }, () =>
+      store.recordEventIn(hit.workspaceId, 'terminal.session-rotated', terminalId, node.name, `${bound} → ${held}`)
+    )
+  } catch (error) {
+    console.error('Antigravity conversation follow failed:', error)
+  }
 }
 
 /** Claude sessions owned by OTHER terminals — current bindings AND lineage.
@@ -4479,7 +4543,10 @@ const rotationProbes = new Set<string>()
 const claimedReported = new Map<string, string>()
 
 /** Pane pids, one herdr lookup per pane lifetime (claude-session-oracle.ts). */
-const panePids = new PanePidCache((terminalId) => ptys.panePid(terminalId))
+// shellPid, not panePid: the direct backend has no multiplexer to ask, and its
+// pane's process IS the pty child. panePid answered null there, so no
+// pid-held card (codex, opencode, agy) ever bound on the direct backend.
+const panePids = new PanePidCache((terminalId) => ptys.shellPid(terminalId))
 
 /**
  * Bindings a card has recently walked away from (rebind-damper.ts). A move
@@ -4842,15 +4909,10 @@ const oracleSweep = setInterval(() => {
   let coldLookups = 0
   for (const node of store.terminalsAcross()) {
     if (!ptys.get(node.id)) continue
-    // Codex: disk-only until a continuation of the bound rollout exists, so
-    // a quiet fleet pays a few readdirs here, never a process lookup.
-    if (isCodexCommand(node.command) && node.codexSessionRef) {
-      followMovedCodexRollout(node.id)
-      continue
-    }
-    if (!isClaudeCommand(node.command) || !node.claudeSessionId) continue
-    if (!panePids.isWarm(node.id) && coldLookups++ > 0) continue
-    void rebindRotatedClaudeSession(node.id, 'oracle')
+    const harness = harnessFor(node.command)
+    if (!harness || !node[harness.sessionField]) continue
+    const follow = supportFor(SWEEP_FOLLOW, harness.id)
+    if (follow?.(node.id, () => panePids.isWarm(node.id) || coldLookups++ === 0)) continue
   }
   // Then retract phases herdr no longer stands behind — the silences it
   // never sends as events (feed down, a retraction to unknown, a pane that
