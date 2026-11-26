@@ -66,10 +66,11 @@ export const LINE_CASES = [
     // outlive it and pour a full window onto the new one.
     name: 'rest on the relay, then scroll on a slow far network',
     sim: { kbps: 250, rttMs: 650, slowerAt: 12, slowerKbps: 50, slowerRttMs: 2000, phases: [scroll(10), blink(12), scroll(25)] },
-    // KNOWN LIMIT: a line ~5x slower and ~3x farther, met while startup still reads the old speed, carries
-    // ~2.5 s of queue averaged over its first 25 s before it drains (0.6.41: no queue, locked at 0.52 fps).
+    // A line ~5x slower and ~3x farther carries ~1.2 s of queue averaged over its first 25 s while it is
+    // learned (0.6.43: 1.9 s; 0.6.41: no queue, locked at 0.52 fps). The confirming probe after a first slow
+    // lone chunk is what finds it.
     fps: 1.5,
-    queueMs: 2800
+    queueMs: 1800
   },
   // Review 2026-11-25, round 3: a key frame asked for must not freeze the estimate, poison the round trip, or
   // let chunks still crossing stop counting.
@@ -86,6 +87,8 @@ export const LINE_CASES = [
     queueMs: 2500
   },
   {
+    // Two slow lone chunks in a row now, not one (a stall is one: owner's phone 2026-11-26); the second is a
+    // confirming probe two round trips after the first. 2.3 fps measured (0.6.43: 2.17).
     name: 'another network while scrolling, no key frame, no pause',
     sim: { kbps: 250, rttMs: 650, slowerAt: 20, slowerKbps: 60, slowerRttMs: 2000, phases: [scroll(20), scroll(40)] },
     fps: 2,
