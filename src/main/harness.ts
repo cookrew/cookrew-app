@@ -25,6 +25,15 @@ import { codexTuning } from './codex-tuning'
 import { resolveOpencodeSessionByPid } from './opencode-bind'
 import { agyTurnParser, createAgyTraceAccumulator, parseAgyTurns } from '../shared/agy-trace'
 import { createDevinTraceAccumulator, devinTurnParser, parseDevinTurns } from '../shared/devin-trace'
+import { createHostedTraceAccumulator, hostedTurnParser, parseHostedTurns } from '../shared/hosted-trace'
+import {
+  hostedResumeCommand,
+  hostedSessionOfFile,
+  hostedWatchFile,
+  resolveHostedSessionByPid,
+  stripHostedSessionFlags,
+  validHostedSessionId
+} from './hosted-bind'
 import {
   devinResumeCommand,
   devinSessionOfFile,
@@ -59,6 +68,7 @@ export interface HarnessWatchOptions {
   piAgentDir?: string
   agyDataDir?: string
   devinDataDir?: string
+  hostedHome?: string
 }
 
 export type { HarnessId }
@@ -71,6 +81,7 @@ export type SessionField =
   | 'piSessionId'
   | 'agySessionId'
   | 'devinSessionId'
+  | 'dshSessionId'
 
 /**
  * The node fields a watchFile resolver may read — id, cwd, and this harness's
@@ -439,6 +450,33 @@ const DEVIN: Harness = {
   traceParser: (file) => createDevinTraceAccumulator(devinSessionOfFile(file))
 }
 
+const DSH_PARSERS = new Map<string, ReturnType<typeof hostedTurnParser>>()
+
+const DSH: Harness = {
+  id: 'dsh',
+  matches: HARNESS_CARDS.dsh.matches,
+  // The transcript Cookrew's ACP host in the pane holds open (hosted-bind.ts).
+  bind: { kind: 'pid-held', resolveByPid: (pid) => resolveHostedSessionByPid('dsh', pid) },
+  sessionField: 'dshSessionId',
+  // Persisted and mobile-originated values reach a shell line: the host's id alphabet only.
+  resumeKey: (ref) => (validHostedSessionId(ref) ? ref : null),
+  resumeCommand: (command, key) => hostedResumeCommand(command, key),
+  stripSessionFlags: stripHostedSessionFlags,
+  turns: 'file',
+  // Tail proof: the host's `end` record, written when ACP session/prompt answers.
+  turnFinality: 'native',
+  parseTurns: parseHostedTurns,
+  parseTurnsFor: (file) => {
+    const known = DSH_PARSERS.get(file)
+    if (known) return known
+    const parser = hostedTurnParser(hostedSessionOfFile(file))
+    DSH_PARSERS.set(file, parser)
+    return parser
+  },
+  watchFile: (node, options) => hostedWatchFile('dsh', node.dshSessionId, options.hostedHome),
+  traceParser: (file) => createHostedTraceAccumulator(hostedSessionOfFile(file))
+}
+
 /** One entry per catalog id: a new id does not compile until it has one. */
 export const HARNESS_BY_ID: Readonly<Record<HarnessId, Harness>> = {
   claude: CLAUDE,
@@ -446,7 +484,8 @@ export const HARNESS_BY_ID: Readonly<Record<HarnessId, Harness>> = {
   opencode: OPENCODE,
   pi: PI,
   agy: AGY,
-  devin: DEVIN
+  devin: DEVIN,
+  dsh: DSH
 }
 
 /** Every registered harness, in catalog order. Conformance: tests/harness-conformance.test.ts. */

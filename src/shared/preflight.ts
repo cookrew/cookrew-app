@@ -22,7 +22,7 @@ export type ToolState = 'found' | 'missing' | 'unknown'
  * HARNESS_IDS (tests/harness-matrix.test.ts), and each one a ToolId, so a new
  * harness needs its first-run copy before it compiles.
  */
-export const FIRST_RUN_AGENTS: readonly (ToolId & HarnessId)[] = ['claude', 'codex', 'pi', 'opencode', 'agy', 'devin']
+export const FIRST_RUN_AGENTS: readonly (ToolId & HarnessId)[] = ['claude', 'codex', 'pi', 'opencode', 'agy', 'devin', 'dsh']
 
 /**
  * Every harness has a state here (the Record makes a new catalog id fail to
@@ -70,6 +70,7 @@ export const UNKNOWN_FACTS: ToolFacts = {
   opencode: 'unknown',
   agy: 'unknown',
   devin: 'unknown',
+  dsh: 'unknown',
   herdr: 'unknown',
   tmux: 'unknown',
   chrome: 'unknown',
@@ -107,6 +108,7 @@ const CODEX_NPM = 'npm i -g @openai/codex'
 const OPENCODE_INSTALL = 'curl -fsSL https://opencode.ai/install | bash'
 const AGY_INSTALL = 'curl -fsSL https://antigravity.google/cli/install.sh | bash'
 const DEVIN_INSTALL = 'curl -fsSL https://cli.devin.ai/install.sh | bash'
+const DSH_NPM = 'npm i -g @deepseek-ai/dsh'
 const MAGPIE_INSTALL = 'curl -fsSL https://usemagpie.ai/install.sh | sh'
 const HOMEBREW_INSTALL = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
 
@@ -140,7 +142,9 @@ export const HARNESS_INSTALL_FIX: Readonly<Record<HarnessId, (facts: ToolFacts) 
   },
   opencode: () => ({ label: FIX_LABELS.INSTALL, line: OPENCODE_INSTALL }),
   agy: () => ({ label: FIX_LABELS.INSTALL, line: AGY_INSTALL }),
-  devin: () => ({ label: FIX_LABELS.INSTALL, line: DEVIN_INSTALL })
+  devin: () => ({ label: FIX_LABELS.INSTALL, line: DEVIN_INSTALL }),
+  // An npm package that needs Node 24.9 or newer: without npm there is no line to offer.
+  dsh: (facts) => (facts.npm === 'found' ? { label: FIX_LABELS.INSTALL, line: DSH_NPM } : null)
 }
 
 const isHarnessTool = (id: ToolId): id is ToolId & HarnessId => (FIRST_RUN_AGENTS as readonly string[]).includes(id)
@@ -215,7 +219,8 @@ export const FIRST_RUN_SIGN_IN: PerHarness<{ signedIn: (facts: ToolFacts) => boo
   opencode: unsupported('it signs in to many providers, none of them one first run offers'),
   pi: unsupported('it has no sign-in of its own; a model key or the gateway is enough'),
   agy: unsupported('it signs in with a Google account in its own first run, and nothing readable says it did'),
-  devin: { signedIn: (facts) => facts.devinSignedIn ?? null, loginLine: 'devin auth login' }
+  devin: { signedIn: (facts) => facts.devinSignedIn ?? null, loginLine: 'devin auth login' },
+  dsh: unsupported('it runs on a DeepSeek key or the gateway, with no sign-in of its own')
 }
 
 /** A harness's row: its state, and a sign-in fix where first run reads one. */

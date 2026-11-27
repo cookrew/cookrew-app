@@ -47,5 +47,7 @@ export const SHARED_MCP_ARGS: PerHarness<(url: string) => string[]> = {
   opencode: unsupported('no per-process MCP flag proven; magpie writes the hub into its config file'),
   pi: unsupported('no per-process MCP flag proven; magpie writes the hub into its config file'),
   agy: unsupported('agy has no per-process MCP flag; it reads ~/.gemini/config/mcp_config.json'),
-  devin: unsupported('Devin has no per-process MCP flag; it reads ~/.config/devin/mcp_config.json')
+  devin: unsupported('Devin has no per-process MCP flag; it reads ~/.config/devin/mcp_config.json'),
+  // The host hands it to dsh in ACP session/new (mcpServers, http), which dsh accepts (measured 2026-11-28).
+  dsh: (url) => ['--mcp', url]
 }

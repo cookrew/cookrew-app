@@ -38,7 +38,8 @@ const ONLY_CLAUDE = (reason: string): PerHarness<true> => ({
   opencode: unsupported(reason),
   pi: unsupported(reason),
   agy: unsupported(reason),
-  devin: unsupported(reason)
+  devin: unsupported(reason),
+  dsh: unsupported(reason)
 })
 
 export const OPTIONAL_FEATURES: Readonly<Record<OptionalFeature, PerHarness<true>>> = {
@@ -47,7 +48,8 @@ export const OPTIONAL_FEATURES: Readonly<Record<OptionalFeature, PerHarness<true
     // Folder trust rides on agy's own launch line (harness-launch.ts · agySessionLine).
     agy: unsupported('its folder trust is granted on its launch line, for that session only'),
     // Folder trust is skipped on its launch line (harness-launch.ts · devinSessionLine).
-    devin: unsupported('its folder trust is skipped on its launch line, for that session only')
+    devin: unsupported('its folder trust is skipped on its launch line, for that session only'),
+    dsh: unsupported('it asks nothing at its first boot; Cookrew\u2019s ACP host opens its session')
   },
   sessionCwdRepair: ONLY_CLAUDE('its session address does not depend on the card directory'),
   idleSleep: ONLY_CLAUDE('no process record proves it idle and resumable'),
@@ -64,7 +66,8 @@ export const OPTIONAL_FEATURES: Readonly<Record<OptionalFeature, PerHarness<true
     // NOT_ROUTABLE_REASON (shared/route-view.ts) says the same on R1's tick.
     pi: unsupported('pi takes a provider only from its global models.json'),
     agy: unsupported('agy takes its model only from its Google sign-in or the Gemini API; a route through Magpie is not proven yet'),
-    devin: unsupported('Devin runs on its own Cognition account: no gateway or own key reaches it')
+    devin: unsupported('Devin runs on its own Cognition account: no gateway or own key reaches it'),
+    dsh: true
   },
   routeEffortChoices: ONLY_CLAUDE('its effort dial reads only the harness’s own levels')
 }

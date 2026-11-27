@@ -100,7 +100,8 @@ const SIGN_IN_ENV: Readonly<Record<HarnessId, readonly string[]>> = {
   // GEMINI_API_KEY signs agy in only with modelProvider=gemini set; its own sign-in is a Google account.
   agy: [],
   // WINDSURF_API_KEY signs in only `devin acp`, not the terminal agent a card runs.
-  devin: []
+  devin: [],
+  dsh: ['DEEPSEEK_API_KEY']
 }
 
 async function factsNow(deps: ProbeDeps): Promise<ToolFacts> {

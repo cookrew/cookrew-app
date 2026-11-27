@@ -20,6 +20,7 @@ import { supportFor, unsupported, type PerHarness } from '../shared/harness-supp
 import { opencodeSessionFileExists } from './opencode-bind'
 import { agyConversationExists } from './agy-bind'
 import { devinSessionExists } from './devin-bind'
+import { dshSessionExists } from './hosted-bind'
 import { piSessionHome } from './pi-bind'
 
 /** Injectable side-effects so the gate is testable without real files. */
@@ -46,6 +47,8 @@ export interface ExactGateDeps {
   agyExists?: (conversationId: string) => boolean
   /** Devin session-files existence check (defaults to the real data dir). */
   devinExists?: (sessionId: string) => boolean
+  /** DeepSeek Harness's own session copy existence check (defaults to ~/.dsh). */
+  dshExists?: (sessionId: string) => boolean
   /** Claude session resolver (defaults to the real, file-backed resolver). */
   claudeResolver?: (options: ResolveSessionOptions) => string | null
 }
@@ -122,6 +125,13 @@ export const EXACT_RESTORE: Readonly<Record<HarnessId, ExactCheck>> = {
     const devinExists = deps.devinExists ?? ((id: string) => devinSessionExists(id))
     const key = HARNESS_BY_ID.devin.resumeKey(node.devinSessionId ?? '')
     return key !== null && devinExists(key)
+  },
+  // dsh: an id in the host's alphabet whose session dsh itself still holds
+  // (session/resume reads dsh's copy, not Cookrew's transcript).
+  dsh: (node, deps) => {
+    const dshExists = deps.dshExists ?? ((id: string) => dshSessionExists(id))
+    const key = HARNESS_BY_ID.dsh.resumeKey(node.dshSessionId ?? '')
+    return key !== null && dshExists(key)
   }
 }
 
@@ -138,7 +148,8 @@ export const SESSION_ON_DISK: PerHarness<(node: TerminalNodeData, exists: (file:
   opencode: unsupported('the exact-context gate already proves the session file'),
   pi: unsupported('the exact-context gate already proves the session file'),
   agy: unsupported('the exact-context gate already proves the conversation'),
-  devin: unsupported('the exact-context gate already proves the session')
+  devin: unsupported('the exact-context gate already proves the session'),
+  dsh: unsupported('the exact-context gate already proves the session')
 }
 
 export function sessionOnDisk(node: TerminalNodeData, exists: (file: string) => boolean = existsSync): boolean {

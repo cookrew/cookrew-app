@@ -18,6 +18,8 @@ export const PRESETS: AgentPreset[] = [
   { name: 'Antigravity CLI', command: 'agy --mode accept-edits' },
   // Devin's default `auto` permission mode runs read-only tools and asks before writes and commands.
   { name: 'Devin', command: 'devin' },
+  // Its default sandbox writes inside the folder and asks for anything past it.
+  { name: 'DeepSeek Harness', command: 'cookrew-acp dsh' },
   { name: 'Shell', command: '' }
 ]
 

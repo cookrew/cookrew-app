@@ -133,6 +133,13 @@ export function launchOfferFor(command: string, options: LaunchOfferOptions = {}
   return harness ? LAUNCH_OFFERS[harness.id](command, options) : null
 }
 
+/**
+ * dsh's own catalog, as its ACP session/new lists it (0.2.2-rc.5, measured
+ * 2026-11-28), and its reasoning_effort levels. A routed card runs the
+ * route's model instead (route-env.ts).
+ */
+const DSH_OFFER: LaunchOffer = { harness: 'dsh', model: ['deepseek-v4-flash', 'deepseek-flash', 'deepseek-v4-pro'], effort: ['off', 'low', 'high', 'max'] }
+
 /** Where each harness's pickable models and efforts come from; one entry per harness. */
 export const LAUNCH_OFFERS: Readonly<Record<HarnessId, (command: string, options: LaunchOfferOptions) => LaunchOffer | null>> = {
   claude: (command) => launchOffer(command),
@@ -140,7 +147,8 @@ export const LAUNCH_OFFERS: Readonly<Record<HarnessId, (command: string, options
   pi: (_command, options) => piLaunchOffer(options),
   opencode: (_command, options) => opencodeLaunchOffer(options),
   agy: (_command, options) => agyLaunchOffer({ cacheFile: options.agyModelCache, refresh: options.modelRefresh }),
-  devin: (_command, options) => devinLaunchOffer({ cacheFile: options.devinModelCache, refresh: options.modelRefresh })
+  devin: (_command, options) => devinLaunchOffer({ cacheFile: options.devinModelCache, refresh: options.modelRefresh }),
+  dsh: () => DSH_OFFER
 }
 
 /**

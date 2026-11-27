@@ -64,6 +64,11 @@ export function devinComposerDrawn(screen: string): boolean {
   return lines.some((line, at) => /^❭(?:\s|$)/.test(line) && at > 0 && /^[─━]{10,}/.test(lines[at - 1]))
 }
 
+/** Cookrew's ACP host (cli/cookrew-acp.mjs): its box sits over a `⏎ send` footer, drawn once the agent's session is open. */
+export function hostedComposerDrawn(screen: string): boolean {
+  return /⏎ send/.test(screen)
+}
+
 export interface HarnessInput {
   /** Its input box is drawn on this screen. */
   drawn: (screen: string) => boolean
@@ -88,7 +93,9 @@ export const HARNESS_INPUT: Readonly<Record<HarnessId, HarnessInput>> = {
   // Every input waits: keys sent during its sign-in spinner are lost (measured 2026-11-26).
   agy: { drawn: agyComposerDrawn, gatesEveryInput: true, directSubmit: '\r' },
   // It signs in and asks about Git first: every input waits for its box.
-  devin: { drawn: devinComposerDrawn, gatesEveryInput: true, directSubmit: '\r' }
+  devin: { drawn: devinComposerDrawn, gatesEveryInput: true, directSubmit: '\r' },
+  // The host queues what arrives early, but a first task still waits for the session it opens.
+  dsh: { drawn: hostedComposerDrawn, gatesEveryInput: true, directSubmit: '\r' }
 }
 
 /** The input facts for a launch command, or null for a plain shell. */

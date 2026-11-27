@@ -28,7 +28,9 @@ export const LAUNCH_LINE: Readonly<Record<HarnessId, LaunchLine>> = {
   // The card's folder trusted and inline rendering, for this session only (agy-bind.ts).
   agy: (line, card) => agySessionLine(line, card.cwd),
   // Its own config (files store, no Claude hooks), in-process, folder trust skipped (devin-bind.ts).
-  devin: (line, card) => devinSessionLine(line, card.terminalId)
+  devin: (line, card) => devinSessionLine(line, card.terminalId),
+  // The host takes its card from COOKREW_TERMINAL_ID and the folder from the pane.
+  dsh: AS_IS
 }
 
 /** The line a card's process is started with, given the line resume and routing produced. */

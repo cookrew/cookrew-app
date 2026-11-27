@@ -173,6 +173,9 @@ export function completionRequest(
     case 'devin':
       // Same: a Devin seat would spend the owner's Cognition account.
       return null
+    case 'dsh':
+      // No served seat runs dsh yet: its probe would be `dsh headless`, which no seat has proven.
+      return null
   }
 }
 

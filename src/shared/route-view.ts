@@ -104,7 +104,8 @@ export const NOT_ROUTABLE_REASON: Record<HarnessRow['id'], string | null> = {
   opencode: null,
   pi: 'pi takes a provider only from its global models.json',
   agy: 'agy takes its model only from its Google sign-in or the Gemini API; a route through Magpie is not proven yet',
-  devin: 'Devin runs on its own Cognition account: no gateway or own key reaches it'
+  devin: 'Devin runs on its own Cognition account: no gateway or own key reaches it',
+  dsh: null
 }
 
 /** Forge's word when it sent one; the table above until then. */

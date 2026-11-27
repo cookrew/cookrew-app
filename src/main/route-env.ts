@@ -52,7 +52,7 @@ export interface RouteEnv {
 export const SESSION_HEADER = 'X-Magpie-Session'
 export const ROUTE_DIR = path.join(process.env.HOME ?? '', '.cookrew', 'route')
 /** Which harnesses can be pointed at the gateway per process — all four, each proven with one real turn on 2026-10-11. */
-export const ROUTABLE: Record<HarnessId, boolean> = { claude: true, codex: true, opencode: true, pi: true, agy: false, devin: false }
+export const ROUTABLE: Record<HarnessId, boolean> = { claude: true, codex: true, opencode: true, pi: true, agy: false, devin: false, dsh: true }
 
 /** The header line claude takes: `Name: value`, one per line. */
 export function sessionHeaderLine(cardId: string): string {
@@ -159,6 +159,18 @@ export function routeEnv(input: RouteEnvInput): RouteEnv {
       // Not routable (ROUTABLE.devin): Devin's models are served on its own
       // Cognition account, with no base URL or key a gateway could stand in.
       return { env: {}, args: [], files: [], routable: false }
+    case 'dsh':
+      // dsh speaks Anthropic Messages to DEEPSEEK_BASE_URL with DEEPSEEK_API_KEY,
+      // and the host sets the model by a per-card patch row, so a gateway
+      // group works (measured 2026-11-28: `group/smart` through magpie). dsh
+      // sends no custom header: the gateway counts the card's calls under the
+      // key, not the card's session.
+      return {
+        env: { DEEPSEEK_BASE_URL: gateway.url, DEEPSEEK_API_KEY: gateway.key },
+        args: ['--model', model],
+        files: [],
+        routable: true
+      }
   }
 }
 

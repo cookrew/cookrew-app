@@ -130,6 +130,10 @@ const SPELLING: Readonly<Record<LaunchHarness, Partial<Record<LaunchKnob, FlagSp
   },
   devin: {
     model: { flag: (v) => `--model ${v}`, strip: flagForm('--model') }
+  },
+  dsh: {
+    model: { flag: (v) => `--model ${v}`, strip: flagForm('--model') },
+    effort: { flag: (v) => `--effort ${v}`, strip: flagForm('--effort') }
   }
 }
 
@@ -156,7 +160,8 @@ export const ROUTE_OVERRIDES: Readonly<Record<HarnessId, readonly LaunchKnob[]>>
   opencode: ['model'],
   pi: ['model', 'effort'],
   agy: ['model', 'effort'],
-  devin: ['model']
+  devin: ['model'],
+  dsh: ['model']
 }
 
 /**

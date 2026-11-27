@@ -258,8 +258,9 @@ import {
 import { isCodexCommand, resolveCodexRolloutByPid, validCodexSessionRef } from './codex-bind'
 import { codexRolloutToFollow } from './codex-lineage'
 import { harnessLaunchLine } from './harness-launch'
-import { agyLastConversation, resolveAgyConversationByPid, validAgyConversationId } from './agy-bind'
-import { devinNewerLock, resolveDevinSessionByPid, validDevinSessionId } from './devin-bind'
+import { agyLastConversation } from './agy-bind'
+import { devinNewerLock } from './devin-bind'
+import { hostedNewerTranscript } from './hosted-bind'
 import { piAdoptableSession, piLaunchBinding, resolvePiSessionByPane } from './pi-bind'
 import {
   applyTuning,
@@ -288,7 +289,7 @@ import type { UpdateStatus } from '../shared/update-check'
 import { commandRun, createSessionReader, linuxSession, remoteBuild, remoteSettingsFile } from './remote-probe'
 import { createRemoteTray } from './remote-tray'
 import { claudeSettingsGateway, launchPick, newAgentPlan, withGatewayModel } from './claude-model-route'
-import { harnessFor, settlesFromFile, type Harness as HarnessEntry } from './harness'
+import { harnessFor, settlesFromFile, type Harness as HarnessEntry, type SessionField } from './harness'
 import { harnessHas } from './harness-features'
 import { inputFor } from './harness-input'
 import { HARNESS_CARDS, HARNESS_NAMES } from '../shared/harness-catalog'
@@ -3993,18 +3994,14 @@ function adoptablePiSession(terminalId: string, cwd: string): string | null {
  * Spawn (or reuse) a PTY for a terminal node and register turn tracking. False
  * when no session came of it: the card says why, and the caller must not say it started.
  */
+// Every harness's session field, from the registry's own type: a new harness's
+// field cannot be left off what a spawn reads (contract rule 9).
 function spawnTracked(t: {
   id: string
   command: string
   cwd: string
-  claudeSessionId?: string | null
-  codexSessionRef?: string | null
-  opencodeSessionId?: string | null
-  piSessionId?: string | null
-  agySessionId?: string | null
-  devinSessionId?: string | null
   sessionLineage?: string[]
-}): boolean {
+} & Partial<Pick<TerminalNodeData, SessionField>>): boolean {
   // A card being closed takes no new pane: it would outlive the card, or be
   // what the close's own retry ends.
   if (closingTerminals.has(t.id)) return false
@@ -4462,14 +4459,15 @@ const FOLLOW_BOUND_SESSION: PerHarness<(terminalId: string) => void> = {
   },
   opencode: unsupported('one session file per pane: nothing moves it'),
   pi: unsupported('one session file per exclusive dir: nothing moves it'),
-  // A /clear opens a new conversation; the sweep re-reads the lock the process holds (followHeldAgyConversation).
-  agy: (terminalId) => {
-    for (const delay of [8000, 45000]) setTimeout(() => followHeldAgyConversation(terminalId), delay).unref()
-  },
-  // /clear and /resume move a Devin card to another session: follow the lock it holds.
-  devin: (terminalId) => {
-    for (const delay of [8000, 45000]) setTimeout(() => followHeldDevinSession(terminalId), delay).unref()
-  }
+  // /clear, /new and /resume move these cards to another session: follow the
+  // one their process now holds (followHeldSession), soon after a boot.
+  agy: (terminalId) => followHeldSoon(terminalId),
+  devin: (terminalId) => followHeldSoon(terminalId),
+  dsh: (terminalId) => followHeldSoon(terminalId)
+}
+
+function followHeldSoon(terminalId: string): void {
+  for (const delay of [8000, 45000]) setTimeout(() => followHeldSession(terminalId), delay).unref()
 }
 
 /**
@@ -4490,36 +4488,51 @@ const SWEEP_FOLLOW: PerHarness<(terminalId: string, mayLookUp: () => boolean) =>
   },
   opencode: unsupported('one session file per pane: nothing moves it'),
   pi: unsupported('one session file per exclusive dir: nothing moves it'),
-  // One file read per card; an lsof only when agy's folder index names another conversation.
-  agy: (terminalId) => {
-    followHeldAgyConversation(terminalId, true)
-    return true
-  },
-  // One readdir per card; a process lookup only when a newer session lock exists.
-  devin: (terminalId) => {
-    followHeldDevinSession(terminalId, true)
-    return true
-  }
+  agy: (terminalId) => (followHeldSession(terminalId, true), true),
+  devin: (terminalId) => (followHeldSession(terminalId, true), true),
+  dsh: (terminalId) => (followHeldSession(terminalId, true), true)
 }
 
 /**
- * Devin moved this card to another session (/clear, /resume): its worker now
- * holds that session's lock. Follow it, never onto a session another card
- * owns. `hinted`: look the process up only when a lock newer than the bound
- * session's exists.
+ * What makes the sweep look a pid-held card's process up: a cheap disk sign
+ * that it may have moved to another session. Keyed by every harness; one the
+ * sweep never follows says so.
  */
-function followHeldDevinSession(terminalId: string, hinted = false): void {
+const MOVED_HINT: PerHarness<(node: TerminalNodeData, bound: string) => boolean> = {
+  claude: unsupported('the session oracle follows it (claude-session-oracle.ts)'),
+  codex: unsupported('a continuation rollout on disk is the follow (codex-lineage.ts)'),
+  opencode: unsupported('one session file per pane: nothing moves it'),
+  pi: unsupported('one session file per exclusive dir: nothing moves it'),
+  // One file read: agy's own folder index names another conversation.
+  agy: (node, bound) => (agyLastConversation(node.cwd) ?? bound) !== bound,
+  // One readdir: a session lock newer than the bound session's.
+  devin: (_node, bound) => devinNewerLock(bound),
+  // One readdir: a host transcript newer than the bound one (a /new).
+  dsh: (_node, bound) => hostedNewerTranscript('dsh', bound)
+}
+
+/**
+ * The harness moved this card to another session (/clear, /new, /resume):
+ * its process now holds that session's file. Follow it, never onto a session
+ * another card owns. `hinted`: look the process up only when the harness's
+ * MOVED_HINT says it may have moved. Pid-held harnesses only.
+ */
+function followHeldSession(terminalId: string, hinted = false): void {
   try {
     const hit = store.nodeAcrossWorkspaces(terminalId)
     if (!hit || hit.node.kind !== 'terminal') return
     const node = hit.node as TerminalNodeData
-    const bound = node.devinSessionId
-    if (harnessFor(node.command)?.id !== 'devin' || !validDevinSessionId(bound)) return
-    if (hinted && !devinNewerLock(bound)) return
-    const held = resolveDevinSessionByPid(panePids.pidOf(terminalId))
-    if (held === null || held === bound) return
-    if (isRefOwned(store.terminalsAcross(), terminalId, 'devinSessionId', held)) return
-    store.updateNodeAcrossWorkspacesUnsafe(terminalId, { devinSessionId: held })
+    const harness = harnessFor(node.command)
+    if (!harness || harness.bind.kind !== 'pid-held') return
+    const field = harness.sessionField
+    const bound = node[field]
+    if (typeof bound !== 'string' || harness.resumeKey(bound) === null) return
+    const hint = supportFor(MOVED_HINT, harness.id)
+    if (hinted && (!hint || !hint(node, bound))) return
+    const held = harness.bind.resolveByPid(panePids.pidOf(terminalId))
+    if (held === null || held === bound || harness.resumeKey(held) === null) return
+    if (isRefOwned(store.terminalsAcross(), terminalId, field, held)) return
+    store.updateNodeAcrossWorkspacesUnsafe(terminalId, { [field]: held } as Partial<TerminalNodeData>)
     agents.setSessionRef(terminalId, held)
     const spec = traces.watchSpec(terminalId)
     if (spec) {
@@ -4530,39 +4543,7 @@ function followHeldDevinSession(terminalId: string, hinted = false): void {
       store.recordEventIn(hit.workspaceId, 'terminal.session-rotated', terminalId, node.name, `${bound} → ${held}`)
     )
   } catch (error) {
-    console.error('Devin session follow failed:', error)
-  }
-}
-
-/**
- * agy moved this card to another conversation (/clear, /new, /resume <id>):
- * its process now holds that conversation's presence lock. Follow it — never
- * onto a conversation another card owns. `hinted`: look up the process only
- * when agy's folder index names another conversation than the bound one.
- */
-function followHeldAgyConversation(terminalId: string, hinted = false): void {
-  try {
-    const hit = store.nodeAcrossWorkspaces(terminalId)
-    if (!hit || hit.node.kind !== 'terminal') return
-    const node = hit.node as TerminalNodeData
-    const bound = node.agySessionId
-    if (harnessFor(node.command)?.id !== 'agy' || !validAgyConversationId(bound)) return
-    if (hinted && (agyLastConversation(node.cwd) ?? bound) === bound) return
-    const held = resolveAgyConversationByPid(panePids.pidOf(terminalId))
-    if (held === null || held === bound) return
-    if (isRefOwned(store.terminalsAcross(), terminalId, 'agySessionId', held)) return
-    store.updateNodeAcrossWorkspacesUnsafe(terminalId, { agySessionId: held })
-    agents.setSessionRef(terminalId, held)
-    const spec = traces.watchSpec(terminalId)
-    if (spec) {
-      sessionSync.rebind(terminalId, spec.file, spec.parse)
-      multiplexer()?.reportAgentSession?.(sessionNameFor(terminalId), spec.file)
-    }
-    store.withOpContext({ actor: 'agent' }, () =>
-      store.recordEventIn(hit.workspaceId, 'terminal.session-rotated', terminalId, node.name, `${bound} → ${held}`)
-    )
-  } catch (error) {
-    console.error('Antigravity conversation follow failed:', error)
+    console.error(`Session follow failed for ${terminalId}:`, error)
   }
 }
 
