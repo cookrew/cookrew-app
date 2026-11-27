@@ -71,6 +71,23 @@ const COMPLETED: Record<string, string[]> = {
     JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-08-05T10:00:01Z', tool_calls: [{ name: 'run_command', args: { CommandLine: '"touch x"' } }] }),
     JSON.stringify({ step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: '2026-08-05T10:00:02Z', content: 'Created At: x\nCompleted At: y\nok' }),
     JSON.stringify({ step_index: 3, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-08-05T10:00:03Z', content: 'Ran it.' })
+  ],
+  // devin (native): finish_reason 'stop' on a reply with no tool call.
+  devin: [
+    JSON.stringify({ kind: 'node', at: 1, node: { id: 1, parent_id: null, message: { role: 'user', content: 'run it', metadata: { is_user_input: true, created_at: '2026-08-05T10:00:00Z' } } } }),
+    JSON.stringify({ kind: 'node', at: 1, node: { id: 2, parent_id: 1, message: { role: 'assistant', content: '', tool_calls: [{ id: 'c1', name: 'exec', arguments: { command: 'touch x' } }], metadata: { finish_reason: 'tool_calls', created_at: '2026-08-05T10:00:01Z' } } } }),
+    JSON.stringify({ kind: 'node', at: 1, node: { id: 3, parent_id: 2, message: { role: 'tool', content: 'ok', tool_call_id: 'c1', metadata: { created_at: '2026-08-05T10:00:02Z' } } } }),
+    JSON.stringify({ kind: 'node', at: 1, node: { id: 4, parent_id: 3, message: { role: 'assistant', content: 'Ran it.', tool_calls: [], metadata: { finish_reason: 'stop', created_at: '2026-08-05T10:00:03Z' } } } })
+  ],
+  // dsh (hosted, native): the host's `end` record when session/prompt answers.
+  dsh: [
+    JSON.stringify({ t: 'user', text: 'run it' }),
+    JSON.stringify({ t: 'end', stop: 'end_turn' })
+  ],
+  // alma (hosted, native): the host's `end` record when Alma's turn ends.
+  alma: [
+    JSON.stringify({ t: 'user', text: 'run it' }),
+    JSON.stringify({ t: 'end', stop: 'end_turn' })
   ]
 }
 
@@ -108,6 +125,19 @@ const IN_FLIGHT: Record<string, string[]> = {
     JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-08-05T10:00:00Z', content: '<USER_REQUEST>\nrun it\n</USER_REQUEST>' }),
     JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-08-05T10:00:01Z', tool_calls: [{ name: 'run_command', args: { CommandLine: '"touch x"' } }] }),
     JSON.stringify({ step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: '2026-08-05T10:00:02Z', content: 'Created At: x\nCompleted At: y\nok' })
+  ],
+  // devin: the call is asked (an approval wait looks the same), no reply yet.
+  devin: [
+    JSON.stringify({ kind: 'node', at: 1, node: { id: 1, parent_id: null, message: { role: 'user', content: 'run it', metadata: { is_user_input: true, created_at: '2026-08-05T10:00:00Z' } } } }),
+    JSON.stringify({ kind: 'node', at: 1, node: { id: 2, parent_id: 1, message: { role: 'assistant', content: '', tool_calls: [{ id: 'c1', name: 'exec', arguments: { command: 'touch x' } }], metadata: { finish_reason: 'tool_calls', created_at: '2026-08-05T10:00:01Z' } } } })
+  ],
+  // dsh: the turn is open until the host records its end (an approval wait looks the same).
+  dsh: [
+    JSON.stringify({ t: 'user', text: 'run it' })
+  ],
+  // alma: open until the host records the turn's end.
+  alma: [
+    JSON.stringify({ t: 'user', text: 'run it' })
   ]
 }
 
@@ -129,9 +159,9 @@ describe('harness turn-finality capability', () => {
     }
   })
 
-  it('claude, codex and pi all prove native finality (background dispatches can settle)', () => {
+  it('claude, codex, pi, devin, dsh and alma all prove native finality (background dispatches can settle)', () => {
     const native = HARNESSES.filter((h) => h.turnFinality === 'native').map((h) => h.id).sort()
-    expect(native).toEqual(['claude', 'codex', 'pi'])
+    expect(native).toEqual(['alma', 'claude', 'codex', 'devin', 'dsh', 'pi'])
   })
 
   it('only a file proof lets a background dispatch settle from the file', () => {

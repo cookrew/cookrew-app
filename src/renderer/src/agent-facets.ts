@@ -89,6 +89,11 @@ const PRESET_ALIASES: Record<string, string> = {
   agy: 'Antigravity CLI',
   antigravity: 'Antigravity CLI',
   'antigravity cli': 'Antigravity CLI',
+  devin: 'Devin',
+  dsh: 'DeepSeek Harness',
+  deepseek: 'DeepSeek Harness',
+  'deepseek harness': 'DeepSeek Harness',
+  alma: 'Alma',
 }
 
 export function normalizePreset(preset: string): string {

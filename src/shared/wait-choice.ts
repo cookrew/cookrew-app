@@ -359,7 +359,61 @@ function confirmOf(lines: readonly string[]): WaitChoice | null {
 
 /** The menu a waiting turn's lines show, or null. */
 export function parseWaitChoice(lines: readonly string[]): WaitChoice | null {
-  return menuOf(lines) ?? confirmOf(lines)
+  return menuOf(lines) ?? confirmOf(lines) ?? cursorMenuOf(lines)
+}
+
+/**
+ * A selector with UNNUMBERED rows: Devin CLI 3000.14 draws the row under its
+ * cursor as `❭ Allow  Write(<dir>)`, the others indented to the same column,
+ * and under them `↑↓ select · ↵ confirm · esc cancel` (read off a real
+ * approval, 2026-11-26). Its rows have no digit, so an answer is arrows from
+ * the cursor and Enter (rowKeys, key ''). The footer is required: rows alone
+ * are any list in a reply.
+ */
+const CURSOR_ROW_RE = /^(\s*)❭\s+(\S.*)$/
+const CURSOR_FOOTER_RE = /↑↓\s*select\b.*\besc\s+cancel\b/
+/** Any of that selector's footers: the trust and onboarding dialogs end on "esc skip". */
+const SELECT_FOOTER_RE = /↑↓\s*select\b.*\b(?:esc|↵)/
+/** What the agent is doing, on the line over the rows: `⏺ Writing`, and what it names under it. */
+const DOING_RE = /^\s*⏺\s+(\S.*)$/
+
+function cursorBlockOf(lines: readonly string[]): { rows: { at: number; text: string; cursor: boolean }[]; footer: number } | null {
+  const footer = lines.findLastIndex((line) => CURSOR_FOOTER_RE.test(line))
+  if (footer < 0 || lines.slice(footer + 1).filter((l) => !isBlank(l)).length > MAX_AFTER) return null
+  let at = footer - 1
+  while (at >= 0 && isBlank(lines[at])) at -= 1
+  const rows: { at: number; text: string; cursor: boolean }[] = []
+  let column: number | null = null
+  for (; at >= 0; at -= 1) {
+    const line = lines[at]
+    const cursor = CURSOR_ROW_RE.exec(line)
+    const start = cursor ? cursor[1].length + line.slice(cursor[1].length).search(/[^❭\s]/) : line.search(/\S/)
+    if (start < 0 || (column !== null && start !== column)) break
+    if (!cursor && start < 1) break
+    column = start
+    rows.unshift({ at, text: (cursor ? cursor[2] : line.trim()).replace(/\s{2,}/g, ' '), cursor: cursor !== null })
+  }
+  return rows.length >= 2 && rows.filter((r) => r.cursor).length === 1 ? { rows, footer } : null
+}
+
+function cursorMenuOf(lines: readonly string[]): WaitChoice | null {
+  const block = cursorBlockOf(lines)
+  if (!block) return null
+  const top = block.rows[0].at
+  const doing = lines.slice(Math.max(0, top - 6), top).findLastIndex((line) => DOING_RE.test(line))
+  const doingAt = doing < 0 ? -1 : Math.max(0, top - 6) + doing
+  const what = doingAt < 0 ? [] : [DOING_RE.exec(lines[doingAt])?.[1] ?? '', ...lines.slice(doingAt + 1, top).map((l) => l.trim()).filter((l) => l !== '' && !/^[└│├]/.test(l))]
+  const options: WaitOption[] = block.rows.map((row) => ({ key: '', label: row.text, detail: null }))
+  const deny = options.findIndex((o) => /^deny\b/i.test(o.label))
+  return {
+    kind: 'menu',
+    // The first row says what is allowed ("Allow Write(/w)"): asked, it is the question.
+    question: `${options[0].label}?`,
+    sub: what.length > 0 ? what.join(' ') : null,
+    options,
+    cursor: block.rows.findIndex((r) => r.cursor),
+    escIndex: deny >= 0 ? deny : null
+  }
 }
 
 /**
@@ -413,6 +467,8 @@ const PLAN_FOOTER_RE = /ctrl\+g to edit/i
  */
 export function menuHeldOnScreen(screen: string): boolean {
   const lines = screenLines(screen)
+  const held = cursorBlockOf(lines)
+  if (held && !lines.slice(held.footer + 1).some((line) => PAST_RE.test(line))) return true
   const block = blocksOf(lines).at(-1)
   const choice = menuOf(lines)
   if (!block || !choice) return false
@@ -429,7 +485,7 @@ export function menuHeldOnScreen(screen: string): boolean {
  * Enter there still answers it.
  */
 export function dialogOnScreen(screen: string): boolean {
-  return screenLines(screen).slice(-MAX_AFTER - 2).some((line) => FOOTER_RE.test(line))
+  return screenLines(screen).slice(-MAX_AFTER - 2).some((line) => FOOTER_RE.test(line) || SELECT_FOOTER_RE.test(line))
 }
 
 /**

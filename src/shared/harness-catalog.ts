@@ -6,7 +6,7 @@
 // one line here — and every feature table keyed by HarnessId then refuses to
 // compile until it says what that harness does (harness-support.ts).
 
-export const HARNESS_IDS = ['claude', 'codex', 'opencode', 'pi', 'agy'] as const
+export const HARNESS_IDS = ['claude', 'codex', 'opencode', 'pi', 'agy', 'devin', 'dsh', 'alma'] as const
 
 export type HarnessId = (typeof HARNESS_IDS)[number]
 
@@ -16,7 +16,10 @@ export const HARNESS_NAMES = {
   codex: 'Codex',
   opencode: 'OpenCode',
   pi: 'Pi',
-  agy: 'Antigravity CLI'
+  agy: 'Antigravity CLI',
+  devin: 'Devin',
+  dsh: 'DeepSeek Harness',
+  alma: 'Alma'
 } as const satisfies Record<HarnessId, string>
 
 export type HarnessName = (typeof HARNESS_NAMES)[HarnessId]
@@ -44,6 +47,12 @@ export interface HarnessCard {
   herdrKind: string
 }
 
+/** A line that runs Cookrew's ACP host on this agent: `cookrew-acp dsh …`, by name or by path. */
+const hostedLaunch = (agent: string): ((command: string) => boolean) => {
+  const re = new RegExp(`^\\s*(?:\\S*/)?cookrew-acp\\s+${agent}(?:\\s|$)`)
+  return (command) => re.test(command)
+}
+
 /** A launch line whose first word is exactly `bin` (`claude …`, `codex resume …`). */
 const leadingWord = (bin: string): ((command: string) => boolean) => {
   const re = new RegExp(`^\\s*${bin}\\b`)
@@ -69,7 +78,15 @@ export const HARNESS_CARDS: Readonly<Record<HarnessId, HarnessCard>> = {
   opencode: { id: 'opencode', name: HARNESS_NAMES.opencode, bin: 'opencode', presetPattern: /opencode/i, matches: leadingWord('opencode'), herdrKind: 'opencode' },
   pi: { id: 'pi', name: HARNESS_NAMES.pi, bin: 'pi', presetPattern: /^pi$|^pi |pi agent|^pi-agent$/i, matches: isPiLaunch, herdrKind: 'pi' },
   // herdr's own manifest id is `agy` (aliases antigravity, antigravity-cli), measured on herdr 0.9.5.
-  agy: { id: 'agy', name: HARNESS_NAMES.agy, bin: 'agy', presetPattern: /antigravity|^agy\b/i, matches: leadingWord('agy'), herdrKind: 'agy' }
+  agy: { id: 'agy', name: HARNESS_NAMES.agy, bin: 'agy', presetPattern: /antigravity|^agy\b/i, matches: leadingWord('agy'), herdrKind: 'agy' },
+  // herdr 0.9.5 ships a `devin` detector (agent-detection/remote/devin.toml).
+  devin: { id: 'devin', name: HARNESS_NAMES.devin, bin: 'devin', presetPattern: /devin/i, matches: leadingWord('devin'), herdrKind: 'devin' },
+  // No terminal UI of its own: Cookrew's ACP host runs it in the pane (cli/cookrew-acp.mjs).
+  // herdr has no detector for it; the host reports its state.
+  dsh: { id: 'dsh', name: HARNESS_NAMES.dsh, bin: 'dsh', presetPattern: /deepseek|^dsh\b/i, matches: hostedLaunch('dsh'), herdrKind: 'dsh' },
+  // A stateful server on this machine: Cookrew's host drives its API (cli/host/alma.mjs).
+  // herdr has no detector for it; the host reports its state.
+  alma: { id: 'alma', name: HARNESS_NAMES.alma, bin: 'alma', presetPattern: /^alma\b/i, matches: hostedLaunch('alma'), herdrKind: 'alma' }
 }
 
 /** The harness a launch command runs, or null (a plain shell, an unknown binary). Main and renderer alike. */

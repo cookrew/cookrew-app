@@ -130,7 +130,14 @@ export const OWN_ENDPOINT: PerHarness<EndpointLaunch> = {
     }
   },
   opencode: unsupported('no key-helper hook: it would need the key written into its config file'),
-  agy: unsupported('it speaks only the Gemini API; an own endpoint is Anthropic or OpenAI')
+  agy: unsupported('it speaks only the Gemini API; an own endpoint is Anthropic or OpenAI'),
+  devin: unsupported('Devin runs on its own Cognition account: no gateway or own key reaches it'),
+  // dsh speaks Anthropic Messages to DEEPSEEK_BASE_URL; the host runs the key helper and hands the key over in its env.
+  dsh: (source, _paths, readKey) => {
+    if (source.protocol !== 'anthropic') return null
+    return { env: {}, args: ['--base-url', source.baseUrl, '--key-command', readKey, '--model', source.model], files: [] }
+  },
+  alma: unsupported('Alma runs its own providers; a card picks one of them')
 }
 
 export interface AccessStoreDeps {

@@ -170,6 +170,15 @@ export function completionRequest(
       // the login keychain, which a stranger's sandbox must never reach. The
       // preflight refuses the grant rather than probe the owner's account.
       return null
+    case 'devin':
+      // Same: a Devin seat would spend the owner's Cognition account.
+      return null
+    case 'dsh':
+      // No served seat runs dsh yet: its probe would be `dsh headless`, which no seat has proven.
+      return null
+    case 'alma':
+      // No served seat runs Alma: it would drive the owner's own server and threads.
+      return null
   }
 }
 

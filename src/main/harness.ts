@@ -24,6 +24,24 @@ import { codexTraceAccumulatorFor, codexTurnParserFor } from './codex-lineage'
 import { codexTuning } from './codex-tuning'
 import { resolveOpencodeSessionByPid } from './opencode-bind'
 import { agyTurnParser, createAgyTraceAccumulator, parseAgyTurns } from '../shared/agy-trace'
+import { createDevinTraceAccumulator, devinTurnParser, parseDevinTurns } from '../shared/devin-trace'
+import { createHostedTraceAccumulator, hostedTurnParser, parseHostedTurns } from '../shared/hosted-trace'
+import {
+  hostedResumeCommand,
+  hostedSessionOfFile,
+  hostedWatchFile,
+  resolveHostedSessionByPid,
+  stripHostedSessionFlags,
+  validHostedSessionId
+} from './hosted-bind'
+import {
+  devinResumeCommand,
+  devinSessionOfFile,
+  devinWatchFile,
+  resolveDevinSessionByPid,
+  stripDevinSessionFlags,
+  validDevinSessionId
+} from './devin-bind'
 import {
   agyConversationOfFile,
   agyResumeCommand,
@@ -49,6 +67,8 @@ export interface HarnessWatchOptions {
   piSessionsRoot?: string
   piAgentDir?: string
   agyDataDir?: string
+  devinDataDir?: string
+  hostedHome?: string
 }
 
 export type { HarnessId }
@@ -60,6 +80,9 @@ export type SessionField =
   | 'opencodeSessionId'
   | 'piSessionId'
   | 'agySessionId'
+  | 'devinSessionId'
+  | 'dshSessionId'
+  | 'almaThreadId'
 
 /**
  * The node fields a watchFile resolver may read — id, cwd, and this harness's
@@ -400,13 +423,80 @@ const AGY: Harness = {
   traceParser: (file) => createAgyTraceAccumulator(agyConversationOfFile(file))
 }
 
+const DEVIN_PARSERS = new Map<string, ReturnType<typeof devinTurnParser>>()
+
+const DEVIN: Harness = {
+  id: 'devin',
+  matches: HARNESS_CARDS.devin.matches,
+  // The session whose lock the Devin worker under the pane holds (devin-bind.ts).
+  bind: { kind: 'pid-held', resolveByPid: (pid) => resolveDevinSessionByPid(pid) },
+  sessionField: 'devinSessionId',
+  // Persisted and mobile-originated values reach a shell line: Devin's slug alphabet only.
+  resumeKey: (ref) => (validDevinSessionId(ref) ? ref : null),
+  resumeCommand: (command, key) => devinResumeCommand(command, key),
+  stripSessionFlags: stripDevinSessionFlags,
+  turns: 'file',
+  // Tail proof: an assistant reply with finish_reason 'stop' and no tool call
+  // (devin-trace.ts, verified on real 3000.14 session logs).
+  turnFinality: 'native',
+  parseTurns: parseDevinTurns,
+  parseTurnsFor: (file) => {
+    const known = DEVIN_PARSERS.get(file)
+    if (known) return known
+    const parser = devinTurnParser(devinSessionOfFile(file))
+    DEVIN_PARSERS.set(file, parser)
+    return parser
+  },
+  watchFile: devinWatchFile,
+  traceParser: (file) => createDevinTraceAccumulator(devinSessionOfFile(file))
+}
+
+const HOSTED_PARSERS = new Map<string, ReturnType<typeof hostedTurnParser>>()
+
+/**
+ * A harness Cookrew's host runs in the pane (cli/cookrew-acp.mjs): pid-held by
+ * the transcript the host holds open, resumed with --resume, its turns read
+ * from the host's own records (`native` finality: the `end` record).
+ */
+function hostedHarness(id: HarnessId, sessionField: 'dshSessionId' | 'almaThreadId'): Harness {
+  const field = sessionField
+  return {
+    id,
+    matches: HARNESS_CARDS[id].matches,
+    bind: { kind: 'pid-held', resolveByPid: (pid) => resolveHostedSessionByPid(id, pid) },
+    sessionField,
+    // Persisted and mobile-originated values reach a shell line: the host's id alphabet only.
+    resumeKey: (ref) => (validHostedSessionId(ref) ? ref : null),
+    resumeCommand: (command, key) => hostedResumeCommand(command, key),
+    stripSessionFlags: stripHostedSessionFlags,
+    turns: 'file',
+    turnFinality: 'native',
+    parseTurns: parseHostedTurns,
+    parseTurnsFor: (file) => {
+      const known = HOSTED_PARSERS.get(file)
+      if (known) return known
+      const parser = hostedTurnParser(hostedSessionOfFile(file))
+      HOSTED_PARSERS.set(file, parser)
+      return parser
+    },
+    watchFile: (node, options) => hostedWatchFile(id, node[field], options.hostedHome),
+    traceParser: (file) => createHostedTraceAccumulator(hostedSessionOfFile(file))
+  }
+}
+
+const DSH = hostedHarness('dsh', 'dshSessionId')
+const ALMA = hostedHarness('alma', 'almaThreadId')
+
 /** One entry per catalog id: a new id does not compile until it has one. */
 export const HARNESS_BY_ID: Readonly<Record<HarnessId, Harness>> = {
   claude: CLAUDE,
   codex: CODEX,
   opencode: OPENCODE,
   pi: PI,
-  agy: AGY
+  agy: AGY,
+  devin: DEVIN,
+  dsh: DSH,
+  alma: ALMA
 }
 
 /** Every registered harness, in catalog order. Conformance: tests/harness-conformance.test.ts. */

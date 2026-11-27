@@ -69,7 +69,13 @@ const OWN_FACTS: Readonly<Record<HarnessId, OwnFacts>> = {
   opencode: { installLine: 'curl -fsSL https://opencode.ai/install | bash', loginLine: 'opencode auth login', signInFiles: (home) => [path.join(home, '.local', 'share', 'opencode', 'auth.json')], keychainSignIn: false },
   pi: { installLine: 'npm i -g @earendil-works/pi-coding-agent', loginLine: null, signInFiles: null, keychainSignIn: false },
   // Its Google sign-in sits in the login keychain under a name not documented: nothing readable says signed in.
-  agy: { installLine: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', loginLine: 'agy', signInFiles: null, keychainSignIn: false }
+  agy: { installLine: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', loginLine: 'agy', signInFiles: null, keychainSignIn: false },
+  // `devin auth login` writes this file; it is absent until then (measured 2026-11-26).
+  devin: { installLine: 'curl -fsSL https://cli.devin.ai/install.sh | bash', loginLine: 'devin auth login', signInFiles: (home) => [path.join(home, '.local', 'share', 'devin', 'credentials.toml')], keychainSignIn: false },
+  // A DeepSeek key in DEEPSEEK_API_KEY, or the gateway: no sign-in of its own.
+  dsh: { installLine: 'npm i -g @deepseek-ai/dsh', loginLine: null, signInFiles: null, keychainSignIn: false },
+  // An app, not a package: its CLI ships inside it, and its models come from the app's providers.
+  alma: { installLine: 'open https://alma.chat', loginLine: null, signInFiles: null, keychainSignIn: false }
 }
 
 export const HARNESS_FACTS: readonly HarnessFacts[] = HARNESS_IDS.map((id) => ({

@@ -37,14 +37,21 @@ const ONLY_CLAUDE = (reason: string): PerHarness<true> => ({
   codex: unsupported(reason),
   opencode: unsupported(reason),
   pi: unsupported(reason),
-  agy: unsupported(reason)
+  agy: unsupported(reason),
+  devin: unsupported(reason),
+  dsh: unsupported(reason),
+  alma: unsupported(reason)
 })
 
 export const OPTIONAL_FEATURES: Readonly<Record<OptionalFeature, PerHarness<true>>> = {
   firstBootPrep: {
     ...ONLY_CLAUDE('it asks nothing Cookrew knows how to pre-answer'),
     // Folder trust rides on agy's own launch line (harness-launch.ts · agySessionLine).
-    agy: unsupported('its folder trust is granted on its launch line, for that session only')
+    agy: unsupported('its folder trust is granted on its launch line, for that session only'),
+    // Folder trust is skipped on its launch line (harness-launch.ts · devinSessionLine).
+    devin: unsupported('its folder trust is skipped on its launch line, for that session only'),
+    dsh: unsupported('it asks nothing at its first boot; Cookrew\u2019s ACP host opens its session'),
+    alma: unsupported('its workspace and thread are made by Cookrew\u2019s host over its API')
   },
   sessionCwdRepair: ONLY_CLAUDE('its session address does not depend on the card directory'),
   idleSleep: ONLY_CLAUDE('no process record proves it idle and resumable'),
@@ -60,7 +67,11 @@ export const OPTIONAL_FEATURES: Readonly<Record<OptionalFeature, PerHarness<true
     opencode: true,
     // NOT_ROUTABLE_REASON (shared/route-view.ts) says the same on R1's tick.
     pi: unsupported('pi takes a provider only from its global models.json'),
-    agy: unsupported('agy takes its model only from its Google sign-in or the Gemini API; a route through Magpie is not proven yet')
+    agy: unsupported('agy takes its model only from its Google sign-in or the Gemini API; a route through Magpie is not proven yet'),
+    devin: unsupported('Devin runs on its own Cognition account: no gateway or own key reaches it'),
+    dsh: true,
+    // Alma's providers live in its own settings; a card runs one of them.
+    alma: unsupported('Alma serves its own providers\u2019 models; a card picks one of them')
   },
   routeEffortChoices: ONLY_CLAUDE('its effort dial reads only the harness’s own levels')
 }

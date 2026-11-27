@@ -98,7 +98,11 @@ const SIGN_IN_ENV: Readonly<Record<HarnessId, readonly string[]>> = {
   opencode: [],
   pi: [],
   // GEMINI_API_KEY signs agy in only with modelProvider=gemini set; its own sign-in is a Google account.
-  agy: []
+  agy: [],
+  // WINDSURF_API_KEY signs in only `devin acp`, not the terminal agent a card runs.
+  devin: [],
+  dsh: ['DEEPSEEK_API_KEY'],
+  alma: []
 }
 
 async function factsNow(deps: ProbeDeps): Promise<ToolFacts> {
@@ -123,6 +127,7 @@ async function factsNow(deps: ProbeDeps): Promise<ToolFacts> {
     ...harnessStates,
     claudeSignedIn: signedIn(claude.signedIn, deps.env, SIGN_IN_ENV.claude),
     codexSignedIn: signedIn(codex.signedIn, deps.env, SIGN_IN_ENV.codex),
+    devinSignedIn: signedIn(states.devin.signedIn, deps.env, SIGN_IN_ENV.devin),
     herdr: bin('herdr'),
     tmux: bin('tmux'),
     chrome: check(deps.chrome),

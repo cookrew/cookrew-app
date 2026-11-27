@@ -103,18 +103,18 @@ describe('G9 · the support matrix changes only on purpose', () => {
       nativeFork: ['claude'],
       restore: ['claude'],
       sessionLineage: ['claude'],
-      routeDial: ['claude', 'codex', 'opencode'],
+      routeDial: ['claude', 'codex', 'opencode', 'dsh'],
       routeEffortChoices: ['claude']
     })
   })
 
   it('per-process plumbing', () => {
     const ids = (table: PerHarness<unknown>): string[] => supportedIds(table)
-    expect(ids(SHARED_MCP_ARGS)).toEqual(['claude', 'codex'])
-    expect(ids(OWN_ENDPOINT)).toEqual(['claude', 'codex', 'pi'])
+    expect(ids(SHARED_MCP_ARGS)).toEqual(['claude', 'codex', 'dsh'])
+    expect(ids(OWN_ENDPOINT)).toEqual(['claude', 'codex', 'pi', 'dsh'])
     expect(ids(SESSION_ON_DISK)).toEqual(['claude', 'codex'])
     expect(ids(OWN_SUBSCRIPTION)).toEqual(['claude', 'codex'])
-    expect(ids(FIRST_RUN_SIGN_IN)).toEqual(['claude', 'codex'])
+    expect(ids(FIRST_RUN_SIGN_IN)).toEqual(['claude', 'codex', 'devin'])
   })
 
   it('Claude keeps every optional feature (the baseline never regresses, like G2)', () => {
@@ -161,7 +161,10 @@ describe('G10 · a copy never resumes its source', () => {
     codex: '5e55a0de-0000-4000-8000-0000000000bb',
     opencode: 'ses_abcDEF123',
     pi: 'abcdef12-3456-4789-8abc-def012345678',
-    agy: '73f44614-99dc-4b12-a26c-92c3a56c594e'
+    agy: '73f44614-99dc-4b12-a26c-92c3a56c594e',
+    devin: 'wary-seeker',
+    dsh: 'addff6fc-dbb7-4d65-9721-250105b33631',
+    alma: 'mwzbq7jibffmx6d3ua3'
   }
 
   for (const id of HARNESS_IDS) {
