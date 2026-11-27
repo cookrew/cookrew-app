@@ -93,6 +93,7 @@ const PRESET_ALIASES: Record<string, string> = {
   dsh: 'DeepSeek Harness',
   deepseek: 'DeepSeek Harness',
   'deepseek harness': 'DeepSeek Harness',
+  alma: 'Alma',
 }
 
 export function normalizePreset(preset: string): string {

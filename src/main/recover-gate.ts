@@ -20,7 +20,7 @@ import { supportFor, unsupported, type PerHarness } from '../shared/harness-supp
 import { opencodeSessionFileExists } from './opencode-bind'
 import { agyConversationExists } from './agy-bind'
 import { devinSessionExists } from './devin-bind'
-import { dshSessionExists } from './hosted-bind'
+import { dshSessionExists, hostedTranscriptFile } from './hosted-bind'
 import { piSessionHome } from './pi-bind'
 
 /** Injectable side-effects so the gate is testable without real files. */
@@ -132,6 +132,13 @@ export const EXACT_RESTORE: Readonly<Record<HarnessId, ExactCheck>> = {
     const dshExists = deps.dshExists ?? ((id: string) => dshSessionExists(id))
     const key = HARNESS_BY_ID.dsh.resumeKey(node.dshSessionId ?? '')
     return key !== null && dshExists(key)
+  },
+  // alma: a thread id whose transcript Cookrew's host opened (the host resumes
+  // it through Alma; a thread Alma no longer has is refused there, out loud).
+  alma: (node, deps) => {
+    const exists = deps.fileExists ?? existsSync
+    const key = HARNESS_BY_ID.alma.resumeKey(node.almaThreadId ?? '')
+    return key !== null && exists(hostedTranscriptFile('alma', key))
   }
 }
 
@@ -149,7 +156,8 @@ export const SESSION_ON_DISK: PerHarness<(node: TerminalNodeData, exists: (file:
   pi: unsupported('the exact-context gate already proves the session file'),
   agy: unsupported('the exact-context gate already proves the conversation'),
   devin: unsupported('the exact-context gate already proves the session'),
-  dsh: unsupported('the exact-context gate already proves the session')
+  dsh: unsupported('the exact-context gate already proves the session'),
+  alma: unsupported('the exact-context gate already proves the session')
 }
 
 export function sessionOnDisk(node: TerminalNodeData, exists: (file: string) => boolean = existsSync): boolean {

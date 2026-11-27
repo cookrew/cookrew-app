@@ -20,6 +20,7 @@ export const PRESETS: AgentPreset[] = [
   { name: 'Devin', command: 'devin' },
   // Its default sandbox writes inside the folder and asks for anything past it.
   { name: 'DeepSeek Harness', command: 'cookrew-acp dsh' },
+  { name: 'Alma', command: 'cookrew-acp alma' },
   { name: 'Shell', command: '' }
 ]
 

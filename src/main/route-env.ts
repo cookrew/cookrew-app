@@ -52,7 +52,7 @@ export interface RouteEnv {
 export const SESSION_HEADER = 'X-Magpie-Session'
 export const ROUTE_DIR = path.join(process.env.HOME ?? '', '.cookrew', 'route')
 /** Which harnesses can be pointed at the gateway per process — all four, each proven with one real turn on 2026-10-11. */
-export const ROUTABLE: Record<HarnessId, boolean> = { claude: true, codex: true, opencode: true, pi: true, agy: false, devin: false, dsh: true }
+export const ROUTABLE: Record<HarnessId, boolean> = { claude: true, codex: true, opencode: true, pi: true, agy: false, devin: false, dsh: true, alma: false }
 
 /** The header line claude takes: `Name: value`, one per line. */
 export function sessionHeaderLine(cardId: string): string {
@@ -171,6 +171,10 @@ export function routeEnv(input: RouteEnvInput): RouteEnv {
         files: [],
         routable: true
       }
+    case 'alma':
+      // Not routable (ROUTABLE.alma): Alma serves models from the providers in
+      // its own settings — the Magpie provider included — and a card picks one.
+      return { env: {}, args: [], files: [], routable: false }
   }
 }
 

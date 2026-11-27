@@ -136,7 +136,8 @@ export const OWN_ENDPOINT: PerHarness<EndpointLaunch> = {
   dsh: (source, _paths, readKey) => {
     if (source.protocol !== 'anthropic') return null
     return { env: {}, args: ['--base-url', source.baseUrl, '--key-command', readKey, '--model', source.model], files: [] }
-  }
+  },
+  alma: unsupported('Alma runs its own providers; a card picks one of them')
 }
 
 export interface AccessStoreDeps {

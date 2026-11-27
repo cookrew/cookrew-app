@@ -255,7 +255,7 @@ describe('reading the board', () => {
   })
 
   it('lets a saved endpoint choose among the tools that speak it', () => {
-    const found = (over: Partial<ToolFacts>): ToolFacts => ({ ...UNKNOWN_FACTS, claude: 'missing', codex: 'missing', pi: 'missing', opencode: 'missing', agy: 'missing', devin: 'missing', dsh: 'missing', ...over })
+    const found = (over: Partial<ToolFacts>): ToolFacts => ({ ...UNKNOWN_FACTS, claude: 'missing', codex: 'missing', pi: 'missing', opencode: 'missing', agy: 'missing', devin: 'missing', dsh: 'missing', alma: 'missing', ...over })
     expect(firstAgentHarness(preflightRows(found({ codex: 'found' })), ['Claude Code', 'Pi'])).toBe('Claude Code')
     expect(firstAgentHarness(preflightRows(found({ pi: 'found' })), ['Claude Code', 'Pi'])).toBe('Pi')
     expect(firstAgentHarness(preflightRows(found({ claude: 'found' })), ['Pi'])).toBe('Pi')

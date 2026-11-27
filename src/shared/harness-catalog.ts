@@ -6,7 +6,7 @@
 // one line here — and every feature table keyed by HarnessId then refuses to
 // compile until it says what that harness does (harness-support.ts).
 
-export const HARNESS_IDS = ['claude', 'codex', 'opencode', 'pi', 'agy', 'devin', 'dsh'] as const
+export const HARNESS_IDS = ['claude', 'codex', 'opencode', 'pi', 'agy', 'devin', 'dsh', 'alma'] as const
 
 export type HarnessId = (typeof HARNESS_IDS)[number]
 
@@ -18,7 +18,8 @@ export const HARNESS_NAMES = {
   pi: 'Pi',
   agy: 'Antigravity CLI',
   devin: 'Devin',
-  dsh: 'DeepSeek Harness'
+  dsh: 'DeepSeek Harness',
+  alma: 'Alma'
 } as const satisfies Record<HarnessId, string>
 
 export type HarnessName = (typeof HARNESS_NAMES)[HarnessId]
@@ -82,7 +83,10 @@ export const HARNESS_CARDS: Readonly<Record<HarnessId, HarnessCard>> = {
   devin: { id: 'devin', name: HARNESS_NAMES.devin, bin: 'devin', presetPattern: /devin/i, matches: leadingWord('devin'), herdrKind: 'devin' },
   // No terminal UI of its own: Cookrew's ACP host runs it in the pane (cli/cookrew-acp.mjs).
   // herdr has no detector for it; the host reports its state.
-  dsh: { id: 'dsh', name: HARNESS_NAMES.dsh, bin: 'dsh', presetPattern: /deepseek|^dsh\b/i, matches: hostedLaunch('dsh'), herdrKind: 'dsh' }
+  dsh: { id: 'dsh', name: HARNESS_NAMES.dsh, bin: 'dsh', presetPattern: /deepseek|^dsh\b/i, matches: hostedLaunch('dsh'), herdrKind: 'dsh' },
+  // A stateful server on this machine: Cookrew's host drives its API (cli/host/alma.mjs).
+  // herdr has no detector for it; the host reports its state.
+  alma: { id: 'alma', name: HARNESS_NAMES.alma, bin: 'alma', presetPattern: /^alma\b/i, matches: hostedLaunch('alma'), herdrKind: 'alma' }
 }
 
 /** The harness a launch command runs, or null (a plain shell, an unknown binary). Main and renderer alike. */

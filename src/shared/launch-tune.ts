@@ -134,6 +134,10 @@ const SPELLING: Readonly<Record<LaunchHarness, Partial<Record<LaunchKnob, FlagSp
   dsh: {
     model: { flag: (v) => `--model ${v}`, strip: flagForm('--model') },
     effort: { flag: (v) => `--effort ${v}`, strip: flagForm('--effort') }
+  },
+  alma: {
+    model: { flag: (v) => `--model ${v}`, strip: flagForm('--model') },
+    effort: { flag: (v) => `--effort ${v}`, strip: flagForm('--effort') }
   }
 }
 
@@ -161,7 +165,8 @@ export const ROUTE_OVERRIDES: Readonly<Record<HarnessId, readonly LaunchKnob[]>>
   pi: ['model', 'effort'],
   agy: ['model', 'effort'],
   devin: ['model'],
-  dsh: ['model']
+  dsh: ['model'],
+  alma: ['model', 'effort']
 }
 
 /**

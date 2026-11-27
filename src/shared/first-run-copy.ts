@@ -71,6 +71,7 @@ export const TOOL_COPY = {
   devin: { name: 'Devin', does: 'Runs your agent. You need one of these.' },
   // Vendor + the command it runs, as Antigravity CLI does; "Harness" is a word the first run must not use.
   dsh: { name: 'DeepSeek dsh', does: 'Runs your agent. You need one of these.' },
+  alma: { name: 'Alma', does: 'Runs your agent. You need one of these.' },
   multiplexer: { name: 'herdr or tmux', does: 'Keeps your agents alive across restarts.' },
   chrome: { name: 'Chrome', does: 'Lets agents open and use web pages.' },
   magpie: { name: 'Magpie', does: 'Lets agents use other AI models.' },

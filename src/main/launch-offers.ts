@@ -24,6 +24,7 @@ import { harnessFor, type HarnessId } from './harness'
 import { piModelFor, piModels, piThinkingLevels, type PiModel } from './pi-catalog'
 import { agyLaunchOffer } from './agy-models'
 import { devinLaunchOffer } from './devin-models'
+import { almaLaunchOffer } from './alma-models'
 
 export interface LaunchOfferOptions {
   /** Test seams; each defaults to where the harness itself looks. */
@@ -32,6 +33,7 @@ export interface LaunchOfferOptions {
   opencodeConfig?: string
   agyModelCache?: string
   devinModelCache?: string
+  almaModelCache?: string
   /** Test seam: what starts an `agy models` refresh. */
   modelRefresh?: (cacheFile: string) => void
 }
@@ -148,7 +150,8 @@ export const LAUNCH_OFFERS: Readonly<Record<HarnessId, (command: string, options
   opencode: (_command, options) => opencodeLaunchOffer(options),
   agy: (_command, options) => agyLaunchOffer({ cacheFile: options.agyModelCache, refresh: options.modelRefresh }),
   devin: (_command, options) => devinLaunchOffer({ cacheFile: options.devinModelCache, refresh: options.modelRefresh }),
-  dsh: () => DSH_OFFER
+  dsh: () => DSH_OFFER,
+  alma: (_command, options) => almaLaunchOffer({ cacheFile: options.almaModelCache, refresh: options.modelRefresh })
 }
 
 /**

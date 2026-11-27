@@ -1,7 +1,7 @@
 import { tscGateEnv } from './tsc-gate'
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
-import { mkdirSync, copyFileSync, chmodSync, existsSync, writeFileSync } from 'node:fs'
+import { mkdirSync, copyFileSync, chmodSync, cpSync, existsSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import pty, { IPty } from 'node-pty'
 import xtermHeadless from '@xterm/headless'
@@ -439,6 +439,7 @@ export interface PtySessionOptions {
 const CLI_NAMES = ['cookrew', 'crew'] as const
 /** Cookrew's ACP host (cli/cookrew-acp.mjs) and the name panes run it by. */
 const HOST_SCRIPT = 'cookrew-acp.mjs'
+const HOST_LIB = 'host'
 const HOST_NAME = 'cookrew-acp'
 
 /**
@@ -1509,12 +1510,14 @@ export class PtyManager {
       writeFileSync(wrapper, cliWrapper(script, runtime))
       chmodSync(wrapper, 0o755)
     }
-    // The ACP host beside it (cli/cookrew-acp.mjs): what a card runs for an agent
-    // with no terminal UI of its own (DeepSeek Harness). Same app Node, same wrapper.
+    // The ACP host beside it (cli/cookrew-acp.mjs and cli/host/): what a card runs
+    // for an agent with no terminal UI of its own. Same app Node, same wrapper.
     const hostSource = path.join(path.dirname(cliSource), HOST_SCRIPT)
-    if (existsSync(hostSource)) {
-      const host = path.join(this.runtimeDir, HOST_SCRIPT)
+    const hostLib = path.join(path.dirname(cliSource), HOST_LIB)
+    const host = path.join(this.runtimeDir, HOST_SCRIPT)
+    if (existsSync(hostSource) && existsSync(hostLib)) {
       copyFileSync(hostSource, host)
+      cpSync(hostLib, path.join(this.runtimeDir, HOST_LIB), { recursive: true })
       const wrapper = path.join(this.runtimeDir, HOST_NAME)
       writeFileSync(wrapper, cliWrapper(host, runtime))
       chmodSync(wrapper, 0o755)

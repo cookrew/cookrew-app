@@ -12,11 +12,11 @@ import { ENDPOINT_COPY, EXAMPLE_TASKS, FIRST_SCREEN_COPY, HINT_COPY, PREFLIGHT_C
 import { preflightRows, UNKNOWN_FACTS, type ToolFacts } from '../src/shared/preflight'
 
 const green: ToolFacts = {
-  claude: 'found', claudeSignedIn: true, codex: 'found', codexSignedIn: true, pi: 'found', opencode: 'found', agy: 'found', devin: 'found', dsh: 'found', herdr: 'found', tmux: 'found',
+  claude: 'found', claudeSignedIn: true, codex: 'found', codexSignedIn: true, pi: 'found', opencode: 'found', agy: 'found', devin: 'found', dsh: 'found', alma: 'found', herdr: 'found', tmux: 'found',
   chrome: 'found', magpie: 'found', ollama: 'found', brew: 'found', npm: 'found', host: 'herdr', platform: 'darwin', arch: 'arm64'
 }
 const gaps: ToolFacts = { ...green, codex: 'missing', codexSignedIn: null, pi: 'found', herdr: 'missing', tmux: 'missing', host: 'direct', ollama: 'missing' }
-const none: ToolFacts = { ...gaps, claude: 'missing', claudeSignedIn: null, pi: 'missing', opencode: 'missing', agy: 'missing', devin: 'missing', dsh: 'missing' }
+const none: ToolFacts = { ...gaps, claude: 'missing', claudeSignedIn: null, pi: 'missing', opencode: 'missing', agy: 'missing', devin: 'missing', dsh: 'missing', alma: 'missing' }
 const view = (facts: ToolFacts | null, over: Partial<Parameters<typeof PreflightView>[0]> = {}): string =>
   renderToStaticMarkup(
     <PreflightView rows={facts ? preflightRows(facts) : null} running={null} error={null} onRun={vi.fn()} onCheck={vi.fn()} onContinue={vi.fn()} onSkip={vi.fn()} {...over} />
@@ -29,7 +29,7 @@ describe('the tool check on screen', () => {
 
   it('draws one row per tool, each with its state', () => {
     const html = view(gaps)
-    expect(html.match(/class="fr-row /g)).toHaveLength(11)
+    expect(html.match(/class="fr-row /g)).toHaveLength(12)
     expect(html).toContain(PREFLIGHT_COPY.FOUND)
     expect(html).toContain(PREFLIGHT_COPY.MISSING)
   })

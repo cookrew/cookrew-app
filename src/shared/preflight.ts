@@ -22,7 +22,7 @@ export type ToolState = 'found' | 'missing' | 'unknown'
  * HARNESS_IDS (tests/harness-matrix.test.ts), and each one a ToolId, so a new
  * harness needs its first-run copy before it compiles.
  */
-export const FIRST_RUN_AGENTS: readonly (ToolId & HarnessId)[] = ['claude', 'codex', 'pi', 'opencode', 'agy', 'devin', 'dsh']
+export const FIRST_RUN_AGENTS: readonly (ToolId & HarnessId)[] = ['claude', 'codex', 'pi', 'opencode', 'agy', 'devin', 'dsh', 'alma']
 
 /**
  * Every harness has a state here (the Record makes a new catalog id fail to
@@ -71,6 +71,7 @@ export const UNKNOWN_FACTS: ToolFacts = {
   agy: 'unknown',
   devin: 'unknown',
   dsh: 'unknown',
+  alma: 'unknown',
   herdr: 'unknown',
   tmux: 'unknown',
   chrome: 'unknown',
@@ -144,7 +145,8 @@ export const HARNESS_INSTALL_FIX: Readonly<Record<HarnessId, (facts: ToolFacts) 
   agy: () => ({ label: FIX_LABELS.INSTALL, line: AGY_INSTALL }),
   devin: () => ({ label: FIX_LABELS.INSTALL, line: DEVIN_INSTALL }),
   // An npm package that needs Node 24.9 or newer: without npm there is no line to offer.
-  dsh: (facts) => (facts.npm === 'found' ? { label: FIX_LABELS.INSTALL, line: DSH_NPM } : null)
+  dsh: (facts) => (facts.npm === 'found' ? { label: FIX_LABELS.INSTALL, line: DSH_NPM } : null),
+  alma: () => null
 }
 
 const isHarnessTool = (id: ToolId): id is ToolId & HarnessId => (FIRST_RUN_AGENTS as readonly string[]).includes(id)
@@ -220,7 +222,8 @@ export const FIRST_RUN_SIGN_IN: PerHarness<{ signedIn: (facts: ToolFacts) => boo
   pi: unsupported('it has no sign-in of its own; a model key or the gateway is enough'),
   agy: unsupported('it signs in with a Google account in its own first run, and nothing readable says it did'),
   devin: { signedIn: (facts) => facts.devinSignedIn ?? null, loginLine: 'devin auth login' },
-  dsh: unsupported('it runs on a DeepSeek key or the gateway, with no sign-in of its own')
+  dsh: unsupported('it runs on a DeepSeek key or the gateway, with no sign-in of its own'),
+  alma: unsupported('its sign-ins belong to the app (Settings › Providers)')
 }
 
 /** A harness's row: its state, and a sign-in fix where first run reads one. */

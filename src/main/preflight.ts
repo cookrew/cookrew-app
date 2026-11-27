@@ -101,7 +101,8 @@ const SIGN_IN_ENV: Readonly<Record<HarnessId, readonly string[]>> = {
   agy: [],
   // WINDSURF_API_KEY signs in only `devin acp`, not the terminal agent a card runs.
   devin: [],
-  dsh: ['DEEPSEEK_API_KEY']
+  dsh: ['DEEPSEEK_API_KEY'],
+  alma: []
 }
 
 async function factsNow(deps: ProbeDeps): Promise<ToolFacts> {

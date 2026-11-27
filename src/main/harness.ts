@@ -82,6 +82,7 @@ export type SessionField =
   | 'agySessionId'
   | 'devinSessionId'
   | 'dshSessionId'
+  | 'almaThreadId'
 
 /**
  * The node fields a watchFile resolver may read — id, cwd, and this harness's
@@ -450,32 +451,41 @@ const DEVIN: Harness = {
   traceParser: (file) => createDevinTraceAccumulator(devinSessionOfFile(file))
 }
 
-const DSH_PARSERS = new Map<string, ReturnType<typeof hostedTurnParser>>()
+const HOSTED_PARSERS = new Map<string, ReturnType<typeof hostedTurnParser>>()
 
-const DSH: Harness = {
-  id: 'dsh',
-  matches: HARNESS_CARDS.dsh.matches,
-  // The transcript Cookrew's ACP host in the pane holds open (hosted-bind.ts).
-  bind: { kind: 'pid-held', resolveByPid: (pid) => resolveHostedSessionByPid('dsh', pid) },
-  sessionField: 'dshSessionId',
-  // Persisted and mobile-originated values reach a shell line: the host's id alphabet only.
-  resumeKey: (ref) => (validHostedSessionId(ref) ? ref : null),
-  resumeCommand: (command, key) => hostedResumeCommand(command, key),
-  stripSessionFlags: stripHostedSessionFlags,
-  turns: 'file',
-  // Tail proof: the host's `end` record, written when ACP session/prompt answers.
-  turnFinality: 'native',
-  parseTurns: parseHostedTurns,
-  parseTurnsFor: (file) => {
-    const known = DSH_PARSERS.get(file)
-    if (known) return known
-    const parser = hostedTurnParser(hostedSessionOfFile(file))
-    DSH_PARSERS.set(file, parser)
-    return parser
-  },
-  watchFile: (node, options) => hostedWatchFile('dsh', node.dshSessionId, options.hostedHome),
-  traceParser: (file) => createHostedTraceAccumulator(hostedSessionOfFile(file))
+/**
+ * A harness Cookrew's host runs in the pane (cli/cookrew-acp.mjs): pid-held by
+ * the transcript the host holds open, resumed with --resume, its turns read
+ * from the host's own records (`native` finality: the `end` record).
+ */
+function hostedHarness(id: HarnessId, sessionField: 'dshSessionId' | 'almaThreadId'): Harness {
+  const field = sessionField
+  return {
+    id,
+    matches: HARNESS_CARDS[id].matches,
+    bind: { kind: 'pid-held', resolveByPid: (pid) => resolveHostedSessionByPid(id, pid) },
+    sessionField,
+    // Persisted and mobile-originated values reach a shell line: the host's id alphabet only.
+    resumeKey: (ref) => (validHostedSessionId(ref) ? ref : null),
+    resumeCommand: (command, key) => hostedResumeCommand(command, key),
+    stripSessionFlags: stripHostedSessionFlags,
+    turns: 'file',
+    turnFinality: 'native',
+    parseTurns: parseHostedTurns,
+    parseTurnsFor: (file) => {
+      const known = HOSTED_PARSERS.get(file)
+      if (known) return known
+      const parser = hostedTurnParser(hostedSessionOfFile(file))
+      HOSTED_PARSERS.set(file, parser)
+      return parser
+    },
+    watchFile: (node, options) => hostedWatchFile(id, node[field], options.hostedHome),
+    traceParser: (file) => createHostedTraceAccumulator(hostedSessionOfFile(file))
+  }
 }
+
+const DSH = hostedHarness('dsh', 'dshSessionId')
+const ALMA = hostedHarness('alma', 'almaThreadId')
 
 /** One entry per catalog id: a new id does not compile until it has one. */
 export const HARNESS_BY_ID: Readonly<Record<HarnessId, Harness>> = {
@@ -485,7 +495,8 @@ export const HARNESS_BY_ID: Readonly<Record<HarnessId, Harness>> = {
   pi: PI,
   agy: AGY,
   devin: DEVIN,
-  dsh: DSH
+  dsh: DSH,
+  alma: ALMA
 }
 
 /** Every registered harness, in catalog order. Conformance: tests/harness-conformance.test.ts. */

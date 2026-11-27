@@ -83,6 +83,11 @@ const COMPLETED: Record<string, string[]> = {
   dsh: [
     JSON.stringify({ t: 'user', text: 'run it' }),
     JSON.stringify({ t: 'end', stop: 'end_turn' })
+  ],
+  // alma (hosted, native): the host's `end` record when Alma's turn ends.
+  alma: [
+    JSON.stringify({ t: 'user', text: 'run it' }),
+    JSON.stringify({ t: 'end', stop: 'end_turn' })
   ]
 }
 
@@ -129,6 +134,10 @@ const IN_FLIGHT: Record<string, string[]> = {
   // dsh: the turn is open until the host records its end (an approval wait looks the same).
   dsh: [
     JSON.stringify({ t: 'user', text: 'run it' })
+  ],
+  // alma: open until the host records the turn's end.
+  alma: [
+    JSON.stringify({ t: 'user', text: 'run it' })
   ]
 }
 
@@ -150,9 +159,9 @@ describe('harness turn-finality capability', () => {
     }
   })
 
-  it('claude, codex, pi, devin and dsh all prove native finality (background dispatches can settle)', () => {
+  it('claude, codex, pi, devin, dsh and alma all prove native finality (background dispatches can settle)', () => {
     const native = HARNESSES.filter((h) => h.turnFinality === 'native').map((h) => h.id).sort()
-    expect(native).toEqual(['claude', 'codex', 'devin', 'dsh', 'pi'])
+    expect(native).toEqual(['alma', 'claude', 'codex', 'devin', 'dsh', 'pi'])
   })
 
   it('only a file proof lets a background dispatch settle from the file', () => {

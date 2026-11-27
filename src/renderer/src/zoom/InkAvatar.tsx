@@ -50,7 +50,7 @@ type BrandMark = Exclude<HarnessMark, 'shell'>
 const isBrand = (mark: HarnessMark): mark is BrandMark => mark !== 'shell'
 
 /** A logo's width in the ensō's 100-box, so the four read about the same size. */
-const SIZE: Readonly<Record<BrandMark, number>> = { claude: 54, codex: 50, opencode: 46, pi: 48, agy: 50, devin: 50, dsh: 52 }
+const SIZE: Readonly<Record<BrandMark, number>> = { claude: 54, codex: 50, opencode: 46, pi: 48, agy: 50, devin: 50, dsh: 52, alma: 50 }
 /** The middle of the disc, where the ink mark stood (GLYPH). */
 const CENTRE = { x: 50, y: 50.5 }
 
@@ -60,6 +60,9 @@ const OPENCODE_FRAME = 'M384 416H128V96H384V416ZM320 160H192V352H320V160Z'
 const OPENCODE_BLOCK = 'M320 224V352H192V224H320Z'
 /** Antigravity CLI: an arch (its boot banner draws one), Cookrew's own drawing — not Google's logo. */
 const AGY_ARCH = 'M8 92 C8 30 26 8 50 8 C74 8 92 30 92 92 L72 92 C72 44 62 28 50 28 C38 28 28 44 28 92 Z'
+
+/** Alma: a sprout in a ring, Cookrew's own drawing — not Alma's logo. */
+const SPROUT = 'M50 8 A42 42 0 1 0 50 92 A42 42 0 1 0 50 8 Z M50 22 A28 28 0 1 1 50 78 A28 28 0 1 1 50 22 Z M50 84 C50 62 60 50 74 42 C68 62 62 72 50 84 Z M50 84 C50 66 42 56 30 50 C35 66 41 74 50 84 Z'
 
 /** DeepSeek Harness: two waves, Cookrew's own drawing — not DeepSeek's whale. */
 const DSH_WAVES = 'M6 40 Q22 22 38 40 T70 40 T94 34 L94 46 Q78 54 70 52 T38 52 T6 52 Z M6 64 Q22 46 38 64 T70 64 T94 58 L94 70 Q78 78 70 76 T38 76 T6 76 Z'
@@ -106,6 +109,13 @@ const HarnessLogo = memo(function HarnessLogo({ mark }: { mark: BrandMark }): Re
       <svg className="ink-logo-art" {...box} viewBox="96 96 320 320">
         <path d={OPENCODE_BLOCK} fill="#5A5858" />
         <path d={OPENCODE_FRAME} fill="var(--zv-logo-ink)" fillRule="evenodd" clipRule="evenodd" />
+      </svg>
+    )
+  }
+  if (mark === 'alma') {
+    return (
+      <svg className="ink-logo-art" {...box} viewBox="0 0 100 100">
+        <path d={SPROUT} fill="#5FAF7F" fillRule="evenodd" />
       </svg>
     )
   }

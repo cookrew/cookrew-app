@@ -34,7 +34,7 @@ describe('the machines', () => {
 
   it('gaps has an agent tool and is missing the rest', () => {
     const missing = rows('gaps').filter((r) => r.state === 'missing').map((r) => r.id)
-    expect(missing).toEqual(['codex', 'pi', 'opencode', 'agy', 'devin', 'dsh', 'multiplexer', 'chrome', 'magpie', 'ollama'])
+    expect(missing).toEqual(['codex', 'pi', 'opencode', 'agy', 'devin', 'dsh', 'alma', 'multiplexer', 'chrome', 'magpie', 'ollama'])
     expect(mayContinue(rows('gaps'))).toBe(true)
   })
 

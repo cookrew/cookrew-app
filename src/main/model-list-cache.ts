@@ -11,7 +11,9 @@ import path from 'node:path'
 import { writeFileAtomic } from './atomic-file'
 
 const REFRESH_MS = 6 * 60 * 60 * 1000
-const SLUG_RE = /^[a-z0-9][a-z0-9.-]{0,79}$/
+// A model id as a harness names it: providers and models, dots, dashes and
+// one colon (Alma's `<providerId>:<model>`).
+const SLUG_RE = /^[a-z0-9][a-z0-9.:_-]{0,127}$/
 
 export interface ModelCache {
   at: number

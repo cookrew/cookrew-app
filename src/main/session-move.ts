@@ -112,7 +112,9 @@ export const SESSION_CARRY: Readonly<Record<HarnessId, (options: SessionMoveOpti
   // `devin -r <slug>` resumes from any folder (measured 2026-11-27: same log, new folder noted).
   devin: () => ({ kind: 'not-needed' }),
   // dsh resumes a session only in the folder it began in ("session cwd does not match", measured 2026-11-28).
-  dsh: () => ({ kind: 'unavailable' })
+  dsh: () => ({ kind: 'unavailable' }),
+  // A thread belongs to its workspace in Alma; another folder is another thread.
+  alma: () => ({ kind: 'unavailable' })
 }
 
 /**

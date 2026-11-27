@@ -4463,7 +4463,8 @@ const FOLLOW_BOUND_SESSION: PerHarness<(terminalId: string) => void> = {
   // one their process now holds (followHeldSession), soon after a boot.
   agy: (terminalId) => followHeldSoon(terminalId),
   devin: (terminalId) => followHeldSoon(terminalId),
-  dsh: (terminalId) => followHeldSoon(terminalId)
+  dsh: (terminalId) => followHeldSoon(terminalId),
+  alma: (terminalId) => followHeldSoon(terminalId)
 }
 
 function followHeldSoon(terminalId: string): void {
@@ -4490,7 +4491,8 @@ const SWEEP_FOLLOW: PerHarness<(terminalId: string, mayLookUp: () => boolean) =>
   pi: unsupported('one session file per exclusive dir: nothing moves it'),
   agy: (terminalId) => (followHeldSession(terminalId, true), true),
   devin: (terminalId) => (followHeldSession(terminalId, true), true),
-  dsh: (terminalId) => (followHeldSession(terminalId, true), true)
+  dsh: (terminalId) => (followHeldSession(terminalId, true), true),
+  alma: (terminalId) => (followHeldSession(terminalId, true), true)
 }
 
 /**
@@ -4508,7 +4510,9 @@ const MOVED_HINT: PerHarness<(node: TerminalNodeData, bound: string) => boolean>
   // One readdir: a session lock newer than the bound session's.
   devin: (_node, bound) => devinNewerLock(bound),
   // One readdir: a host transcript newer than the bound one (a /new).
-  dsh: (_node, bound) => hostedNewerTranscript('dsh', bound)
+  dsh: (_node, bound) => hostedNewerTranscript('dsh', bound),
+  // One readdir: a host transcript newer than the bound one (a /new thread).
+  alma: (_node, bound) => hostedNewerTranscript('alma', bound)
 }
 
 /**

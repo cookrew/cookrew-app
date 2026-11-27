@@ -95,7 +95,8 @@ export const HARNESS_INPUT: Readonly<Record<HarnessId, HarnessInput>> = {
   // It signs in and asks about Git first: every input waits for its box.
   devin: { drawn: devinComposerDrawn, gatesEveryInput: true, directSubmit: '\r' },
   // The host queues what arrives early, but a first task still waits for the session it opens.
-  dsh: { drawn: hostedComposerDrawn, gatesEveryInput: true, directSubmit: '\r' }
+  dsh: { drawn: hostedComposerDrawn, gatesEveryInput: true, directSubmit: '\r' },
+  alma: { drawn: hostedComposerDrawn, gatesEveryInput: true, directSubmit: '\r' }
 }
 
 /** The input facts for a launch command, or null for a plain shell. */

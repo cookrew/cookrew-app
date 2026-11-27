@@ -163,7 +163,8 @@ describe('G10 · a copy never resumes its source', () => {
     pi: 'abcdef12-3456-4789-8abc-def012345678',
     agy: '73f44614-99dc-4b12-a26c-92c3a56c594e',
     devin: 'wary-seeker',
-    dsh: 'addff6fc-dbb7-4d65-9721-250105b33631'
+    dsh: 'addff6fc-dbb7-4d65-9721-250105b33631',
+    alma: 'mwzbq7jibffmx6d3ua3'
   }
 
   for (const id of HARNESS_IDS) {

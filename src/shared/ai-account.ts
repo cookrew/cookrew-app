@@ -97,7 +97,8 @@ export const OWN_SUBSCRIPTION: PerHarness<Omit<SubscriptionLine, 'line'>> = {
   pi: unsupported('has no sign-in of its own'),
   agy: unsupported('signs in with a Google account in its own first run'),
   devin: unsupported('signs in to Cognition with `devin auth login`, which the tool check offers'),
-  dsh: unsupported('it runs on a DeepSeek key or the gateway, with no sign-in of its own')
+  dsh: unsupported('it runs on a DeepSeek key or the gateway, with no sign-in of its own'),
+  alma: unsupported('its sign-ins belong to the app (Settings › Providers)')
 }
 
 export interface GuideFacts {

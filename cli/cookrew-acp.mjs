@@ -1,41 +1,41 @@
 #!/usr/bin/env node
-// COOKREW-ACP: an agent that speaks the Agent Client Protocol, run in a pane.
+// COOKREW-ACP: an agent that has no terminal UI of its own, run in a card's pane.
 //
-// Some agents ship no terminal UI of their own (DeepSeek Harness removed its
-// TUI in 2026-08; ACP is its non-web surface). Cookrew runs this host in the
-// card's pane instead: it starts the agent as a child, talks ACP v1 to it over
-// stdio, and draws a plain inline UI the pane, the phone and Cookrew's own
-// readers already understand:
+// Some agents ship no TUI (DeepSeek Harness removed its own in 2026-08; ACP is
+// its non-web surface) and some are a stateful server with an API (Alma). This
+// host draws the pane itself and drives whichever the card names:
 //
-//   - a prompt box (`❯ `) between two rules over a `⏎ send` footer;
-//   - the agent's reply, tool calls (`⏺ title`) and their results (`⎿`);
-//   - an approval as a NUMBERED menu with an `esc to cancel` footer, so
-//     Cookrew's wait-menu reader (shared/wait-choice.ts) answers it.
+//   cookrew-acp dsh  …   ACP v1 over stdio to `dsh --profile acp`   (cli/host/acp.mjs)
+//   cookrew-acp alma …   Alma's HTTP API, its socket only to stop  (cli/host/alma.mjs)
 //
-// And it writes Cookrew's own transcript of the session,
-// ~/.cookrew/hosted/<agent>/<session>.jsonl, holding it open for its whole
-// life: the pane's process holds the file, which is how Cookrew binds the card
-// (lsof, harness.ts 'pid-held'). Every turn ends on an `end` record, the
-// end-of-turn proof (shared/hosted-trace.ts).
+// Either way it writes Cookrew's transcript of the session to
+// ~/.cookrew/hosted/<agent>/<session>.jsonl and HOLDS IT OPEN: that file is the
+// card's binding (lsof, harness.ts 'pid-held'), and its `end` record is the
+// end-of-turn proof (shared/hosted-trace.ts). The screen it draws is the one
+// Cookrew's readers already understand — a `❯ ` box, `⏺` tool lines, and an
+// approval as a numbered menu with an `esc to cancel` footer (cli/host/ui.mjs).
 //
 // Usage: cookrew-acp <agent> [--model M] [--effort E] [--resume ID] [--mcp URL]…
 //                    [--base-url URL] [--key-command CMD] [--permission MODE]
-//                    [--effort-option ID]
-//        cookrew-acp --command '["bin","arg"]' …   (any ACP agent; tests)
+//                    [--effort-option ID] [--command '["bin","arg"]']
 //
 // Runs on the app's own Node (Electron as node, the `cookrew` shim's way), so
 // it uses nothing but Node's own modules.
 
-import { spawn, execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { closeSync, existsSync, mkdirSync, openSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
+import { AcpBackend } from './host/acp.mjs'
+import { AlmaBackend } from './host/alma.mjs'
+import { Screen } from './host/ui.mjs'
 
 delete process.env.ELECTRON_RUN_AS_NODE
 
-/** What the host knows of each agent it runs. */
+/** What the host knows of each agent it runs directly (ACP agents a card can also name by --command). */
 const AGENTS = {
   dsh: {
+    kind: 'acp',
     name: 'DeepSeek Harness',
     bin: 'dsh',
     install: 'npm i -g @deepseek-ai/dsh',
@@ -48,6 +48,11 @@ const AGENTS = {
     // gateway's `group/smart`) works too; a patch replaces the row's config.
     modelPatch: (model) => `- id: agent-default-model\n  config:\n    provider: deepseek-official\n    model: ${JSON.stringify(model)}\n`,
     effortOption: 'reasoning_effort'
+  },
+  alma: {
+    kind: 'alma',
+    name: 'Alma',
+    baseUrl: 'http://127.0.0.1:23001'
   }
 }
 
@@ -91,11 +96,9 @@ function fail(message, code = 2) {
 
 const opts = parseArgs(process.argv.slice(2))
 if (!opts.agentId || !NAME_RE.test(opts.agentId)) fail('usage: cookrew-acp <agent> [--model M] [--resume ID] …')
-const agent = opts.command
-  ? { name: opts.agentId, bin: opts.command[0], args: () => opts.command.slice(1), env: {}, effortOption: opts.effortOption }
-  : AGENTS[opts.agentId]
-if (agent && opts.effortOption) agent.effortOption = opts.effortOption
-if (!agent) fail(`no ACP agent named ${opts.agentId}; known: ${Object.keys(AGENTS).join(', ')}`)
+const spec = opts.command ? { kind: 'acp', name: opts.agentId, bin: opts.command[0], args: () => opts.command.slice(1), env: {}, effortOption: opts.effortOption } : { ...AGENTS[opts.agentId] }
+if (!spec?.kind) fail(`no agent named ${opts.agentId}; known: ${Object.keys(AGENTS).join(', ')}`)
+if (opts.effortOption && spec.kind === 'acp') spec.effortOption = opts.effortOption
 if (opts.resume !== undefined && !ID_RE.test(opts.resume)) fail('--resume takes a session id')
 
 const cwd = process.cwd()
@@ -152,67 +155,14 @@ function flushText() {
 // ---- the screen ----
 
 const out = (text) => process.stdout.write(text)
-const width = () => Math.max(20, process.stdout.columns || 100)
-const dim = (text) => `\x1b[2m${text}\x1b[22m`
-let atLineStart = true
-function print(text) {
-  if (!text) return
-  out(text)
-  atLineStart = text.endsWith('\n')
-}
-const newline = () => { if (!atLineStart) print('\n') }
+const screen = new Screen(out, { name: spec.name })
 
 let state = 'boot'
 let buffer = ''
-let inputDrawn = false
 let menu = null
 const queue = []
-let model = ''
-let effort = ''
-
-function shown() {
-  const lines = buffer.split('\n')
-  const last = lines.at(-1)
-  const more = lines.length > 1 ? dim(` (+${lines.length - 1} lines)`) : ''
-  const room = width() - 6
-  return `${last.length > room ? `…${last.slice(-room)}` : last}${more}`
-}
-
-function footer() {
-  const parts = [agent.name, model, effort].filter(Boolean)
-  return dim(`  ${parts.join(' · ')} · ⏎ send · esc esc stop · /new`)
-}
-
-function drawInput() {
-  if (inputDrawn || state !== 'idle') return
-  newline()
-  const rule = '─'.repeat(width() - 1)
-  out(`${rule}\n❯ ${shown()}\n${rule}\n${footer()}\x1b[2A\r\x1b[2K❯ ${shown()}`)
-  inputDrawn = true
-  atLineStart = false
-}
-
-function redrawPrompt() {
-  if (inputDrawn) out(`\r\x1b[2K❯ ${shown()}`)
-}
-
-function eraseInput() {
-  if (!inputDrawn) return
-  out('\x1b[1A\r\x1b[J')
-  inputDrawn = false
-  atLineStart = true
-}
-
-function drawMenu() {
-  const { question, about, options, cursor } = menu
-  // One line, so the question is the whole line that asks it (a "what" line
-  // over it without a "?" would be read as part of the question).
-  const lines = [`  ${about ? `${about} · ` : ''}${question}`, ...options.map((o, i) => `${i === cursor ? '❯' : ' '} ${i + 1}. ${o.name}`), dim('  esc to cancel · ↑/↓ to move · enter to select')]
-  if (menu.drawn) out(`\x1b[${menu.drawn}A\r\x1b[J`)
-  out(`${lines.join('\n')}\n`)
-  menu.drawn = lines.length
-  atLineStart = true
-}
+let lastMessage = null
+let thinking = false
 
 // ---- herdr status (the pane's lifecycle, when a herdr hosts it) ----
 
@@ -232,270 +182,178 @@ function report(status) {
   }
 }
 
-// ---- ACP over the child's stdio ----
+// ---- what the agent says ----
 
-const childEnv = { ...process.env, ...agent.env }
-delete childEnv.ELECTRON_RUN_AS_NODE
-if (opts.baseUrl && agent.baseUrlEnv) childEnv[agent.baseUrlEnv] = opts.baseUrl
-if (opts.permission && agent.permissionEnv) childEnv[agent.permissionEnv] = opts.permission
-if (opts.keyCommand && agent.keyEnv) {
-  try {
-    childEnv[agent.keyEnv] = execFileSync('/bin/sh', ['-c', opts.keyCommand], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
-  } catch {
-    fail('the key command did not answer', 1)
+const showText = (message, text) => {
+  screen.newline()
+  if (message !== lastMessage) {
+    if (lastMessage !== null) screen.print('\n')
+    lastMessage = message
+  }
+  bufferText('text', message, text)
+  screen.print(text)
+}
+
+const events = {
+  // The session is known and its transcript opens before its first record.
+  session: ({ id, resumed }) => openTranscript(id, resumed),
+  text: showText,
+  thought: (message, text) => {
+    bufferText('thought', message, text)
+    if (!thinking) {
+      screen.newline()
+      // No spinner glyph: Cookrew reads one as a live turn, which would keep
+      // an approval from being offered while the card waits for the person.
+      screen.print(`\x1b[2m  thinking…\x1b[22m\n`)
+      thinking = true
+    }
+  },
+  tool: (id, title, about, kind = null) => {
+    flushText()
+    record({ t: 'tool', id, title, kind, input: about })
+    screen.newline()
+    screen.print(`⏺ ${title}${about ? ` \x1b[2m${about}\x1b[22m` : ''}\n`)
+    lastMessage = null
+  },
+  toolDone: (id, status, output) => {
+    flushText()
+    record({ t: 'tool_done', id, status, output: String(output).slice(0, 2000) })
+    // The first line that says something: not dsh's <path> wrapper, not a bare [stderr] tag.
+    const first = String(output).split('\n').find((l) => l.trim() && !l.startsWith('<') && !/^\[\w+\]$/.test(l.trim())) ?? (status === 'failed' ? 'failed' : 'done')
+    screen.newline()
+    screen.print(`  \x1b[2m⎿ ${first.slice(0, screen.width() - 8)}\x1b[22m\n`)
+  },
+  permissionRecord: ({ about, options }) => {
+    flushText()
+    record({ t: 'permission', about, options })
+  },
+  permission: ({ about, options }) =>
+    new Promise((resolve) => {
+      screen.newline()
+      state = 'menu'
+      menu = { options, cursor: 0, about, question: 'Allow this?', drawn: 0, resolve }
+      screen.drawMenu(menu)
+      report('blocked')
+    }),
+  answered: (name) => {
+    record({ t: 'answer', option: name })
+    screen.clearMenu(menu)
+    if (menu) screen.print(`  \x1b[2m${name}\x1b[22m\n`)
+    menu = null
+    state = 'working'
+    report('working')
+  },
+  model: ({ model, effort }) => {
+    screen.model = model ?? ''
+    screen.effort = effort ?? ''
+    record({ t: 'model', model: screen.model, effort: screen.effort })
+    if (screen.inputDrawn) { screen.eraseInput(); screen.drawInput(state) }
+  },
+  notice: (message) => {
+    screen.newline()
+    screen.print(`\x1b[2m  ${message}\x1b[22m\n`)
+  },
+  exit: ({ error, code, signal }) => {
+    if (state === 'closing') return
+    closeTranscript()
+    restoreTerminal()
+    screen.newline()
+    const why = error ? (error.code === 'ENOENT' ? `${spec.bin} is not installed.${spec.install ? ` Install it: ${spec.install}` : ''}` : `${spec.bin} did not start: ${error.message}`) : `${spec.name} exited (${signal ?? code}).`
+    process.stderr.write(`cookrew-acp: ${why}\n${(childErr ?? '').trim().split('\n').slice(-5).join('\n')}\n`)
+    process.exit(error?.code === 'ENOENT' ? 127 : 1)
   }
 }
-let patch = null
-if (opts.model && agent.modelPatch) {
-  const card = (process.env.COOKREW_TERMINAL_ID || '').match(/^[A-Za-z0-9-]{1,64}$/) ? process.env.COOKREW_TERMINAL_ID : `pid-${process.pid}`
-  mkdirSync(path.join(home, 'patches'), { recursive: true, mode: 0o700 })
-  patch = path.join(home, 'patches', `${card}.yml`)
-  writeFileSync(patch, agent.modelPatch(opts.model), { mode: 0o600 })
-}
-
-const child = spawn(agent.bin, agent.args(patch), { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] })
 let childErr = ''
-child.stderr.on('data', (chunk) => { childErr = `${childErr}${chunk}`.slice(-4000) })
-child.on('error', (error) => {
-  restoreTerminal()
-  const install = agent.install ? ` Install it: ${agent.install}` : ''
-  process.stderr.write(error.code === 'ENOENT' ? `cookrew-acp: ${agent.bin} is not installed.${install}\n` : `cookrew-acp: ${agent.bin} did not start: ${error.message}\n`)
-  process.exit(127)
-})
-child.on('exit', (code, signal) => {
-  if (state === 'closing') return
-  closeTranscript()
-  restoreTerminal()
-  newline()
-  process.stderr.write(`cookrew-acp: ${agent.name} exited (${signal ?? code}).\n${childErr.trim().split('\n').slice(-5).join('\n')}\n`)
-  process.exit(1)
-})
 
-let nextId = 0
-const waiting = new Map()
-let inbound = ''
-child.stdout.on('data', (chunk) => {
-  inbound += chunk
-  let at
-  while ((at = inbound.indexOf('\n')) >= 0) {
-    const line = inbound.slice(0, at)
-    inbound = inbound.slice(at + 1)
-    if (line.trim()) handleMessage(line)
+// ---- the backend ----
+
+function makeBackend() {
+  if (spec.kind === 'alma') {
+    const baseUrl = opts.baseUrl ?? process.env.ALMA_API_URL ?? spec.baseUrl
+    return new AlmaBackend({ baseUrl, model: opts.model, effort: opts.effort, cwd, events })
   }
-})
-
-const send = (message) => child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`)
-function call(method, params) {
-  return new Promise((resolve, reject) => {
-    nextId += 1
-    waiting.set(nextId, { resolve, reject })
-    send({ id: nextId, method, params })
+  const env = { ...process.env, ...spec.env }
+  delete env.ELECTRON_RUN_AS_NODE
+  if (opts.baseUrl && spec.baseUrlEnv) env[spec.baseUrlEnv] = opts.baseUrl
+  if (opts.permission && spec.permissionEnv) env[spec.permissionEnv] = opts.permission
+  if (opts.keyCommand && spec.keyEnv) {
+    try {
+      env[spec.keyEnv] = execFileSync('/bin/sh', ['-c', opts.keyCommand], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    } catch {
+      fail('the key command did not answer', 1)
+    }
+  }
+  let patch = null
+  if (opts.model && spec.modelPatch) {
+    const card = (process.env.COOKREW_TERMINAL_ID || '').match(/^[A-Za-z0-9-]{1,64}$/) ? process.env.COOKREW_TERMINAL_ID : `pid-${process.pid}`
+    mkdirSync(path.join(home, 'patches'), { recursive: true, mode: 0o700 })
+    patch = path.join(home, 'patches', `${card}.yml`)
+    writeFileSync(patch, spec.modelPatch(opts.model), { mode: 0o600 })
+  }
+  return new AcpBackend({
+    bin: spec.bin,
+    args: spec.args(patch),
+    env,
+    cwd,
+    mcp: opts.mcp,
+    model: opts.model,
+    effort: opts.effort,
+    effortOption: spec.effortOption,
+    events,
+    onChildStderr: (chunk) => { childErr = `${childErr}${chunk}`.slice(-4000) }
   })
 }
 
-function handleMessage(line) {
-  let message
-  try {
-    message = JSON.parse(line)
-  } catch {
-    return
-  }
-  if (message.id !== undefined && !message.method) {
-    const pending = waiting.get(message.id)
-    waiting.delete(message.id)
-    if (!pending) return
-    if (message.error) pending.reject(new Error(message.error.message ?? 'the agent refused'))
-    else pending.resolve(message.result ?? {})
-    return
-  }
-  if (message.method === 'session/update') return onUpdate(message.params?.update ?? {})
-  if (message.method === 'session/request_permission' && message.id !== undefined) return askPermission(message.id, message.params ?? {})
-  // The client capabilities said no file system and no terminals: anything else is refused.
-  if (message.id !== undefined) send({ id: message.id, error: { code: -32601, message: `${message.method} is not offered by this client` } })
-}
-
-// ---- what the agent says ----
-
-const tools = new Map()
-let lastMessage = null
-let thinking = false
-
-function summary(input) {
-  if (!input || typeof input !== 'object') return ''
-  const text = input.description ?? input.command ?? input.file_path ?? input.path ?? Object.values(input).find((v) => typeof v === 'string') ?? ''
-  const one = String(text).split('\n')[0]
-  return one.length > 100 ? `${one.slice(0, 99)}…` : one
-}
-
-function contentText(content) {
-  if (!Array.isArray(content)) return ''
-  return content.map((part) => (part?.content?.type === 'text' ? part.content.text : part?.type === 'text' ? part.text : '')).filter(Boolean).join('\n')
-}
-
-function onUpdate(update) {
-  switch (update.sessionUpdate) {
-    case 'agent_message_chunk': {
-      const text = update.content?.type === 'text' ? update.content.text : ''
-      if (!text) return
-      if (update.messageId !== lastMessage) {
-        newline()
-        if (lastMessage !== null) print('\n')
-        lastMessage = update.messageId ?? null
-      }
-      bufferText('text', update.messageId ?? null, text)
-      print(text)
-      return
-    }
-    case 'agent_thought_chunk': {
-      const text = update.content?.type === 'text' ? update.content.text : ''
-      if (!text) return
-      bufferText('thought', update.messageId ?? null, text)
-      if (!thinking) {
-        newline()
-        // No spinner glyph: Cookrew reads one as a live turn, which would keep
-        // an approval from being offered while the card waits for the person.
-        print(`${dim('  thinking…')}\n`)
-        thinking = true
-      }
-      return
-    }
-    case 'tool_call': {
-      flushText()
-      const title = update.title ?? 'tool'
-      const about = summary(update.rawInput)
-      tools.set(update.toolCallId, { title, about })
-      record({ t: 'tool', id: update.toolCallId, title, kind: update.kind ?? null, input: about })
-      newline()
-      print(`⏺ ${title}${about ? ` ${dim(about)}` : ''}\n`)
-      lastMessage = null
-      return
-    }
-    case 'tool_call_update': {
-      if (update.status !== 'completed' && update.status !== 'failed') return
-      flushText()
-      const output = contentText(update.content)
-      record({ t: 'tool_done', id: update.toolCallId, status: update.status, output: output.slice(0, 2000) })
-      // The first line that says something: not dsh's <path> wrapper, not a bare [stderr] tag.
-      const first = output.split('\n').find((l) => l.trim() && !l.startsWith('<') && !/^\[\w+\]$/.test(l.trim())) ?? (update.status === 'failed' ? 'failed' : 'done')
-      newline()
-      print(`  ${dim(`⎿ ${first.slice(0, width() - 8)}`)}\n`)
-      return
-    }
-    default:
-      return
-  }
-}
-
-function askPermission(requestId, params) {
-  flushText()
-  const options = Array.isArray(params.options) ? params.options : []
-  const tool = tools.get(params.toolCall?.toolCallId) ?? { title: params.toolCall?.title ?? 'tool', about: '' }
-  const about = `${tool.title}${tool.about ? `: ${tool.about}` : ''}`
-  record({ t: 'permission', id: params.toolCall?.toolCallId ?? null, about, options: options.map((o) => o.name) })
-  newline()
-  state = 'menu'
-  menu = { requestId, options, cursor: 0, about, question: 'Allow this?', drawn: 0 }
-  drawMenu()
-  report('blocked')
-}
-
-function answerMenu(index) {
-  if (!menu) return
-  const { requestId, options } = menu
-  const option = index === null ? null : options[index]
-  const reject = options.find((o) => String(o.kind).startsWith('reject'))
-  const chosen = option ?? reject ?? null
-  send({ id: requestId, result: { outcome: chosen ? { outcome: 'selected', optionId: chosen.optionId } : { outcome: 'cancelled' } } })
-  record({ t: 'answer', option: chosen?.name ?? 'cancelled' })
-  out(`\x1b[${menu.drawn}A\r\x1b[J`)
-  print(`  ${dim(`${chosen?.name ?? 'Cancelled'}`)}\n`)
-  menu = null
-  state = 'working'
-  report('working')
-}
+let backend = makeBackend()
 
 // ---- turns ----
 
-let sessionId = null
 let cancelArmedAt = 0
 
 async function runTurn(text) {
   state = 'working'
-  eraseInput()
-  print(`\n❯ ${text.replace(/\n/g, '\n  ')}\n`)
-  print(`${dim('… working (esc esc to stop)')}\n`)
+  screen.eraseInput()
+  screen.print(`\n❯ ${text.replace(/\n/g, '\n  ')}\n`)
+  screen.print(`\x1b[2m… working (esc esc to stop)\x1b[22m\n`)
   lastMessage = null
   thinking = false
   record({ t: 'user', text })
   report('working')
   try {
-    const result = await call('session/prompt', { sessionId, prompt: [{ type: 'text', text }] })
+    const { stop } = await backend.prompt(text)
     flushText()
-    record({ t: 'end', stop: result.stopReason ?? 'end_turn' })
+    record({ t: 'end', stop: stop ?? 'end_turn' })
   } catch (error) {
     flushText()
-    newline()
-    print(`${dim(`✗ ${error.message}`)}\n`)
+    screen.newline()
+    screen.print(`\x1b[2m✗ ${error.message}\x1b[22m\n`)
     record({ t: 'error', message: error.message })
     record({ t: 'end', stop: 'error' })
   }
-  newline()
+  screen.newline()
   report('idle')
   state = 'idle'
   if (queue.length > 0) return runTurn(queue.shift())
-  drawInput()
+  screen.drawInput(state)
+}
+
+async function openSession({ resume } = {}) {
+  return backend.open({ resume })
 }
 
 async function newSession() {
-  const mcpServers = opts.mcp.map((url, i) => ({ type: 'http', name: i === 0 ? 'magpie' : `mcp${i + 1}`, url, headers: [] }))
-  const created = await call('session/new', { cwd, mcpServers })
-  sessionId = created.sessionId
-  openTranscript(sessionId, false)
-  await applyOptions(created.configOptions)
-}
-
-async function resumeSession(id) {
-  const mcpServers = opts.mcp.map((url, i) => ({ type: 'http', name: i === 0 ? 'magpie' : `mcp${i + 1}`, url, headers: [] }))
-  const resumed = await call('session/resume', { sessionId: id, cwd, mcpServers })
-  sessionId = id
-  openTranscript(sessionId, true)
-  await applyOptions(resumed.configOptions)
-}
-
-function current(options, id) {
-  const option = Array.isArray(options) ? options.find((o) => o.id === id || o.category === id) : null
-  if (!option) return ''
-  const value = option.currentValue
-  try {
-    const parsed = JSON.parse(value)
-    return Array.isArray(parsed) ? String(parsed.at(-1)) : String(value)
-  } catch {
-    return String(value ?? '')
-  }
-}
-
-async function applyOptions(options) {
-  let latest = options
-  if (opts.effort && agent.effortOption) {
-    try {
-      latest = (await call('session/set_config_option', { sessionId, configId: agent.effortOption, value: opts.effort })).configOptions ?? latest
-    } catch (error) {
-      print(`${dim(`✗ effort ${opts.effort}: ${error.message}`)}\n`)
-    }
-  }
-  model = opts.model ?? current(latest, 'model')
-  effort = current(latest, agent.effortOption ?? 'thought_level')
-  record({ t: 'model', model, effort })
+  backend.close()
+  backend = makeBackend()
+  await openSession({})
 }
 
 async function command(text) {
   const word = text.trim().split(/\s+/)[0]
   if (word === '/new' || word === '/clear') {
-    eraseInput()
-    if (sessionId) await call('session/close', { sessionId }).catch(() => undefined)
+    screen.eraseInput()
     await newSession()
-    print(`\n✓ New session ${dim(sessionId)}\n`)
-    drawInput()
+    screen.print(`\n✓ New session \x1b[2m${transcript?.sessionId ?? ''}\x1b[22m\n`)
+    screen.drawInput(state)
     return true
   }
   if (word === '/exit' || word === '/quit') {
@@ -508,10 +366,10 @@ async function command(text) {
 async function submit() {
   const text = buffer
   buffer = ''
-  if (!text.trim()) return redrawPrompt()
+  if (!text.trim()) return screen.redrawPrompt()
   if (state !== 'idle') {
     queue.push(text)
-    print(`${dim(`  queued: ${text.split('\n')[0].slice(0, 60)}`)}\n`)
+    screen.print(`\x1b[2m  queued: ${text.split('\n')[0].slice(0, 60)}\x1b[22m\n`)
     return
   }
   if (text.trim().startsWith('/') && (await command(text))) return
@@ -532,7 +390,8 @@ function onKeys(data) {
       const chunk = data.slice(at, end < 0 ? data.length : end)
       buffer += chunk.replace(/\r\n?/g, '\n')
       at += chunk.length
-      redrawPrompt()
+      screen.buffer = buffer
+      screen.redrawPrompt()
       continue
     }
     const seq = /^\x1b\[[0-9;]*[A-Za-z~]/.exec(data.slice(at))
@@ -547,7 +406,13 @@ function onSequence(seq) {
   if (seq === '\x1b[A') menu.cursor = (menu.cursor + menu.options.length - 1) % menu.options.length
   else if (seq === '\x1b[B') menu.cursor = (menu.cursor + 1) % menu.options.length
   else return
-  drawMenu()
+  screen.drawMenu(menu)
+}
+
+function answerMenu(index) {
+  if (!menu) return
+  menu.resolve(index)
+  menu = null
 }
 
 function onKey(key) {
@@ -562,13 +427,13 @@ function onKey(key) {
       const now = Date.now()
       if (key === '\x03' || now - cancelArmedAt < ESC_GAP_MS) {
         cancelArmedAt = 0
-        send({ method: 'session/cancel', params: { sessionId } })
-        print(`${dim('  stopping…')}\n`)
+        void backend.cancel()
+        screen.print(`\x1b[2m  stopping…\x1b[22m\n`)
       } else cancelArmedAt = now
       return
     }
     if (key === '\x03') {
-      if (buffer) { buffer = ''; return redrawPrompt() }
+      if (buffer) { buffer = ''; screen.buffer = buffer; return screen.redrawPrompt() }
       const now = Date.now()
       if (now - cancelArmedAt < 1000) return quit(0)
       cancelArmedAt = now
@@ -577,10 +442,10 @@ function onKey(key) {
   }
   if (key === '\x04') return state === 'idle' && !buffer ? quit(0) : undefined
   if (key === '\r') return void submit()
-  if (key === '\n') { buffer += '\n'; return redrawPrompt() }
-  if (key === '\x7f' || key === '\b') { buffer = buffer.slice(0, -1); return redrawPrompt() }
-  if (key === '\x15') { buffer = ''; return redrawPrompt() }
-  if (key >= ' ' || key === '\t') { buffer += key; redrawPrompt() }
+  if (key === '\n') { buffer += '\n'; screen.buffer = buffer; return screen.redrawPrompt() }
+  if (key === '\x7f' || key === '\b') { buffer = buffer.slice(0, -1); screen.buffer = buffer; return screen.redrawPrompt() }
+  if (key === '\x15') { buffer = ''; screen.buffer = buffer; return screen.redrawPrompt() }
+  if (key >= ' ' || key === '\t') { buffer += key; screen.buffer = buffer; screen.redrawPrompt() }
 }
 
 // ---- life ----
@@ -594,33 +459,32 @@ function restoreTerminal() {
 
 function quit(code) {
   state = 'closing'
-  eraseInput()
+  screen.eraseInput()
   closeTranscript()
   restoreTerminal()
   report('idle')
-  child.kill()
+  backend.close()
   process.exit(code)
 }
 
 process.on('SIGTERM', () => quit(0))
 process.on('SIGHUP', () => quit(0))
-process.stdout.on('resize', () => { if (inputDrawn) { eraseInput(); drawInput() } })
+process.stdout.on('resize', () => { if (screen.inputDrawn) { screen.eraseInput(); screen.drawInput(state) } })
 if (process.stdin.isTTY) process.stdin.setRawMode(true)
 process.stdin.setEncoding('utf8')
 process.stdin.on('data', onKeys)
 out('\x1b[?2004h')
-print(`${dim('Cookrew ·')} ${agent.name} ${dim(`(ACP) · ${cwd}`)}\n`)
+screen.print(`\x1b[2mCookrew ·\x1b[22m ${spec.name} \x1b[2m(${spec.kind === 'alma' ? 'Alma API' : 'ACP'}) · ${cwd}\x1b[22m\n`)
 
 try {
-  await call('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } })
   if (opts.resume) {
     try {
-      await resumeSession(opts.resume)
-      print(`${dim(`resumed ${opts.resume}`)}\n`)
+      await openSession({ resume: opts.resume })
+      screen.print(`\x1b[2mresumed ${opts.resume}\x1b[22m\n`)
     } catch (error) {
       // Never a silent fresh start in its place: the card would lose its
       // conversation without a word. The person decides.
-      print(`✗ Session ${opts.resume} could not be resumed: ${error.message}\n  Press Enter for a new session, or Ctrl-D to quit.\n`)
+      screen.print(`✗ Session ${opts.resume} could not be resumed: ${error.message}\n  Press Enter for a new session, or Ctrl-D to quit.\n`)
       state = 'stuck'
       await new Promise((resolve) => {
         const onStuckKey = (data) => {
@@ -635,17 +499,18 @@ try {
       await newSession()
     }
   } else {
-    await newSession()
+    await openSession({})
   }
 } catch (error) {
   restoreTerminal()
-  process.stderr.write(`cookrew-acp: ${agent.name} did not open a session: ${error.message}\n${childErr.trim().split('\n').slice(-5).join('\n')}\n`)
+  const refused = /ECONNREFUSED/.test(String(error.cause ?? error)) ? `Alma is not running at ${opts.baseUrl ?? spec.baseUrl}. Open Alma once.` : error.message
+  process.stderr.write(`cookrew-acp: ${spec.name} did not open a session: ${refused}\n${(childErr ?? '').trim().split('\n').slice(-5).join('\n')}\n`)
   state = 'closing'
-  child.kill()
+  backend.close()
   process.exit(1)
 }
 
 state = 'idle'
 report('idle')
 if (queue.length > 0) void runTurn(queue.shift())
-else drawInput()
+else screen.drawInput(state)

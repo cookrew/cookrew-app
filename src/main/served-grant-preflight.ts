@@ -176,6 +176,9 @@ export function completionRequest(
     case 'dsh':
       // No served seat runs dsh yet: its probe would be `dsh headless`, which no seat has proven.
       return null
+    case 'alma':
+      // No served seat runs Alma: it would drive the owner's own server and threads.
+      return null
   }
 }
 
