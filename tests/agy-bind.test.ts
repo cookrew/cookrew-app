@@ -22,7 +22,9 @@ import {
 import { agyLaunchOffer, agyOfferOf, agySlugsOf } from '../src/main/agy-models'
 
 const ID = '73f44614-99dc-4b12-a26c-92c3a56c594e'
-const DATA = '/Users/me/.gemini/antigravity-cli'
+// Native separators: these are real path joins on every platform the suite runs on.
+const DATA = path.join(path.sep, 'Users', 'me', '.gemini', 'antigravity-cli')
+const under = (...parts: string[]): string => path.join(DATA, ...parts)
 
 describe('agy conversation ids', () => {
   it('accepts lowercase UUIDs only', () => {
@@ -41,9 +43,9 @@ describe('agy conversation ids', () => {
 
 describe('binding by the presence lock the agy process holds', () => {
   const files = [
-    `${DATA}/conversation_summaries.db`,
-    `${DATA}/conversations/${ID}.db`,
-    `${DATA}/presence/${ID}.lock`
+    under('conversation_summaries.db'),
+    under('conversations', `${ID}.db`),
+    under('presence', `${ID}.lock`)
   ]
 
   it('finds the conversation from the open presence lock', () => {
@@ -51,20 +53,21 @@ describe('binding by the presence lock the agy process holds', () => {
     expect(resolveAgyConversationByPid(42, () => files)).toBeNull() // default data dir is not DATA
   })
 
-  it('a data dir reached through a symlink still matches the resolved path lsof prints', () => {
+  // lsof, and the symlinks it resolves, are POSIX only.
+  it.skipIf(process.platform === 'win32')('a data dir reached through a symlink still matches the resolved path lsof prints', () => {
     const real = mkdtempSync(path.join(tmpdir(), 'agy-real-'))
     const link = path.join(mkdtempSync(path.join(tmpdir(), 'agy-link-')), 'antigravity-cli')
     symlinkSync(real, link)
-    expect(agyConversationFromOpenFiles([`${realpathSync(real)}/presence/${ID}.lock`], link)).toBe(ID)
+    expect(agyConversationFromOpenFiles([path.join(realpathSync(real), 'presence', `${ID}.lock`)], link)).toBe(ID)
   })
 
   it('before the first turn there is no lock and nothing to bind', () => {
-    expect(agyConversationFromOpenFiles([`${DATA}/presence`, `${DATA}/brain`], DATA)).toBeNull()
+    expect(agyConversationFromOpenFiles([under('presence'), under('brain')], DATA)).toBeNull()
   })
 
   it('refuses a lock outside the data dir and a planted name', () => {
-    expect(agyConversationFromOpenFiles([`/tmp/presence/${ID}.lock`], DATA)).toBeNull()
-    expect(agyConversationFromOpenFiles([`${DATA}/presence/../evil.lock`, `${DATA}/presence/x.lock`], DATA)).toBeNull()
+    expect(agyConversationFromOpenFiles([path.join(path.sep, 'tmp', 'presence', `${ID}.lock`)], DATA)).toBeNull()
+    expect(agyConversationFromOpenFiles([[under('presence'), '..', 'evil.lock'].join(path.sep), under('presence', 'x.lock')], DATA)).toBeNull()
   })
 
   it('no pid, no lookup', () => {
@@ -87,7 +90,7 @@ describe('agy resume and copies', () => {
   })
 
   it('the watch file needs a valid bound id', () => {
-    expect(agyWatchFile({ agySessionId: ID }, { agyDataDir: DATA })).toBe(`${DATA}/brain/${ID}/.system_generated/logs/transcript.jsonl`)
+    expect(agyWatchFile({ agySessionId: ID }, { agyDataDir: DATA })).toBe(under('brain', ID, '.system_generated', 'logs', 'transcript.jsonl'))
     expect(agyWatchFile({ agySessionId: '../../x' }, { agyDataDir: DATA })).toBeNull()
     expect(agyWatchFile({}, { agyDataDir: DATA })).toBeNull()
   })
@@ -104,9 +107,11 @@ describe('agy resume and copies', () => {
 
 describe('agy session line', () => {
   it('trusts the folder as given AND as resolved: agy asks about the given one', () => {
-    const dir = mkdtempSync('/tmp/agy-trust-')
-    const line = agySessionLine('agy', dir)
-    expect(line).toContain(`"trustedWorkspaces":["${dir}","/private${dir}"]`)
+    // On a Mac /tmp and the temp dir resolve under /private, so both spellings
+    // are listed; where the folder is already real, once.
+    const dir = mkdtempSync(path.join(tmpdir(), 'agy-trust-'))
+    const folders = [...new Set([dir, realpathSync(dir)])]
+    expect(agySessionLine('agy', dir)).toContain(`"trustedWorkspaces":${JSON.stringify(folders)}`)
   })
 
   it('trusts the card folder and renders inline, as one shell word', () => {
