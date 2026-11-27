@@ -8,7 +8,7 @@
 // strands commissioned work until the sweep.
 
 import { describe, expect, it } from 'vitest'
-import { HARNESSES } from '../src/main/harness'
+import { HARNESSES, settlesFromFile } from '../src/main/harness'
 
 const T0 = Date.parse('2026-08-05T10:00:00.000Z')
 
@@ -64,6 +64,24 @@ const COMPLETED: Record<string, string[]> = {
         stopReason: 'stop'
       }
     })
+  ],
+  // agy (structural): the last step is a reply with no tool call.
+  agy: [
+    JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-08-05T10:00:00Z', content: '<USER_REQUEST>\nrun it\n</USER_REQUEST>' }),
+    JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-08-05T10:00:01Z', tool_calls: [{ name: 'run_command', args: { CommandLine: '"touch x"' } }] }),
+    JSON.stringify({ step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: '2026-08-05T10:00:02Z', content: 'Created At: x\nCompleted At: y\nok' }),
+    JSON.stringify({ step_index: 3, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-08-05T10:00:03Z', content: 'Ran it.' })
+  ]
+}
+
+/**
+ * A STRUCTURAL harness's tail waiting for the person: the call is asked,
+ * nothing ran. It must read open (herdr reported exactly this state as done).
+ */
+const APPROVAL_WAIT: Record<string, string[]> = {
+  agy: [
+    JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-08-05T10:00:00Z', content: '<USER_REQUEST>\nrun it\n</USER_REQUEST>' }),
+    JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-08-05T10:00:01Z', tool_calls: [{ name: 'run_command', args: { CommandLine: '"touch x"' } }] })
   ]
 }
 
@@ -84,22 +102,28 @@ const IN_FLIGHT: Record<string, string[]> = {
         stopReason: 'toolUse'
       }
     })
+  ],
+  // agy: the call ran, no reply yet.
+  agy: [
+    JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-08-05T10:00:00Z', content: '<USER_REQUEST>\nrun it\n</USER_REQUEST>' }),
+    JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-08-05T10:00:01Z', tool_calls: [{ name: 'run_command', args: { CommandLine: '"touch x"' } }] }),
+    JSON.stringify({ step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: '2026-08-05T10:00:02Z', content: 'Created At: x\nCompleted At: y\nok' })
   ]
 }
 
 describe('harness turn-finality capability', () => {
-  it("every harness declares turnFinality: 'native' | 'boundary'", () => {
+  it("every harness declares turnFinality: 'native' | 'structural' | 'boundary'", () => {
     for (const harness of HARNESSES) {
       expect(
-        ['native', 'boundary'],
+        ['native', 'structural', 'boundary'],
         `${harness.id} must declare its end-of-turn proof`
       ).toContain(harness.turnFinality)
     }
   })
 
-  it("'native' requires turns: 'file' — a scrape cannot prove a tail", () => {
+  it("a file proof ('native' or 'structural') requires turns: 'file' — a scrape cannot prove a tail", () => {
     for (const harness of HARNESSES) {
-      if (harness.turnFinality === 'native') {
+      if (settlesFromFile(harness.turnFinality)) {
         expect(harness.turns, `${harness.id} claims a file proof with no file`).toBe('file')
       }
     }
@@ -110,7 +134,25 @@ describe('harness turn-finality capability', () => {
     expect(native).toEqual(['claude', 'codex', 'pi'])
   })
 
-  for (const harness of HARNESSES.filter((h) => h.turnFinality === 'native')) {
+  it('only a file proof lets a background dispatch settle from the file', () => {
+    expect(settlesFromFile('native')).toBe(true)
+    expect(settlesFromFile('structural')).toBe(true)
+    expect(settlesFromFile('boundary')).toBe(false)
+  })
+
+  it('structural finality is claimed by agy alone (real-session fixtures: tests/agy-trace.test.ts)', () => {
+    expect(HARNESSES.filter((h) => h.turnFinality === 'structural').map((h) => h.id)).toEqual(['agy'])
+  })
+
+  for (const harness of HARNESSES.filter((h) => h.turnFinality === 'structural')) {
+    it(`${harness.id}: a tail waiting for approval stays OPEN`, () => {
+      const waiting = APPROVAL_WAIT[harness.id]
+      expect(waiting, `${harness.id} must ship an APPROVAL_WAIT fixture`).toBeDefined()
+      expect(harness.parseTurns!(waiting).at(-1)?.final).toBeUndefined()
+    })
+  }
+
+  for (const harness of HARNESSES.filter((h) => settlesFromFile(h.turnFinality))) {
     it(`${harness.id}: the parser DELIVERS the claimed proof on the tail record`, () => {
       const turns = harness.parseTurns!(COMPLETED[harness.id])
       expect(turns).toHaveLength(1)

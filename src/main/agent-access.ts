@@ -129,7 +129,8 @@ export const OWN_ENDPOINT: PerHarness<EndpointLaunch> = {
       files: []
     }
   },
-  opencode: unsupported('no key-helper hook: it would need the key written into its config file')
+  opencode: unsupported('no key-helper hook: it would need the key written into its config file'),
+  agy: unsupported('it speaks only the Gemini API; an own endpoint is Anthropic or OpenAI')
 }
 
 export interface AccessStoreDeps {

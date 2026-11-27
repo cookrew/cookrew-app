@@ -3,6 +3,7 @@
 // the routed-only activity path, the boot sequence, the served refusals, the
 // route-id check, and the cached harness scan with the Keychain probe.
 
+import { HARNESS_IDS } from '../src/shared/harness-catalog'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
@@ -291,13 +292,13 @@ describe('10 · 11 · the cached scan and the Keychain probe', () => {
     expect(first.find((r) => r.id === 'claude')?.signedIn).toBe(false)
     scan.rows()
     scan.rows()
-    expect(scans).toBe(4) // four harnesses, one scan
+    expect(scans).toBe(HARNESS_IDS.length) // one install check per harness, one scan
     await scan.rowsSettled()
     expect(scan.rows().find((r) => r.id === 'claude')?.signedIn).toBe(true)
     expect(probes).toBe(1)
     now += 31_000
     scan.rows()
-    expect(scans).toBe(12)
+    expect(scans).toBe(3 * HARNESS_IDS.length) // the Keychain rescan, then the TTL's
     await scan.rowsSettled()
     expect(probes).toBe(2)
     expect(scan.rows().find((r) => r.id === 'pi')?.signedIn).toBeNull()

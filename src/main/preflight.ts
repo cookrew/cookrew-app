@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import path from 'node:path'
 import { UNKNOWN_FACTS, type ToolFacts, type ToolState } from '../shared/preflight'
+import { HARNESS_IDS, type HarnessId } from '../shared/harness-catalog'
 import { HarnessScan, onPath } from './route/setup'
 import { bypassConsentState } from './claude-consent'
 
@@ -90,12 +91,22 @@ function signedIn(fact: boolean | null, env: ProbeDeps['env'], keys: readonly st
   return fact === false && keys.some((key) => Boolean(env?.[key])) ? true : fact
 }
 
+/** Keys a pane inherits that sign each harness in, whatever its login files say. */
+const SIGN_IN_ENV: Readonly<Record<HarnessId, readonly string[]>> = {
+  claude: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'],
+  codex: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
+  opencode: [],
+  pi: [],
+  // GEMINI_API_KEY signs agy in only with modelProvider=gemini set; its own sign-in is a Google account.
+  agy: []
+}
+
 async function factsNow(deps: ProbeDeps): Promise<ToolFacts> {
   deps.adoptDirs(await deps.shellDirs().catch(() => [] as readonly string[]))
   const pathEnv = deps.panePath()
   const agents = await deps.agents(pathEnv).catch(() => null)
-  const claude = agentState(agents, 'claude')
-  const codex = agentState(agents, 'codex')
+  const states = Object.fromEntries(HARNESS_IDS.map((id) => [id, agentState(agents, id)])) as Record<HarnessId, ReturnType<typeof agentState>>
+  const { claude, codex } = states
   const bin = (name: string): ToolState => {
     const onThisPath = (): boolean => pathEnv.split(path.delimiter).some((dir) => deps.exists(path.join(dir, name)))
     return check(onThisPath)
@@ -107,13 +118,11 @@ async function factsNow(deps: ProbeDeps): Promise<ToolFacts> {
   } catch {
     host = null
   }
+  const harnessStates = Object.fromEntries(HARNESS_IDS.map((id) => [id, states[id].state])) as Record<HarnessId, ToolState>
   return {
-    claude: claude.state,
-    claudeSignedIn: signedIn(claude.signedIn, deps.env, ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY']),
-    codex: codex.state,
-    codexSignedIn: signedIn(codex.signedIn, deps.env, ['OPENAI_API_KEY', 'CODEX_API_KEY']),
-    pi: agentState(agents, 'pi').state,
-    opencode: agentState(agents, 'opencode').state,
+    ...harnessStates,
+    claudeSignedIn: signedIn(claude.signedIn, deps.env, SIGN_IN_ENV.claude),
+    codexSignedIn: signedIn(codex.signedIn, deps.env, SIGN_IN_ENV.codex),
     herdr: bin('herdr'),
     tmux: bin('tmux'),
     chrome: check(deps.chrome),

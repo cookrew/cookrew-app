@@ -6,7 +6,7 @@
 
 import type { HarnessTuning } from '../shared/agent-tuning'
 import { stripSessionFlags } from '../shared/claude-fork'
-import { HARNESS_IDS, type HarnessId } from '../shared/harness-catalog'
+import { HARNESS_CARDS, HARNESS_IDS, type HarnessId } from '../shared/harness-catalog'
 import type { TerminalNodeData } from '../shared/model'
 import { parseSessionTurns } from '../shared/session-turns'
 import {
@@ -23,9 +23,17 @@ import { codexWatchFile, resolveCodexRolloutByPid, sessionIdFromRolloutPath } fr
 import { codexTraceAccumulatorFor, codexTurnParserFor } from './codex-lineage'
 import { codexTuning } from './codex-tuning'
 import { resolveOpencodeSessionByPid } from './opencode-bind'
+import { agyTurnParser, createAgyTraceAccumulator, parseAgyTurns } from '../shared/agy-trace'
+import {
+  agyConversationOfFile,
+  agyResumeCommand,
+  agyWatchFile,
+  resolveAgyConversationByPid,
+  stripAgySessionFlags,
+  validAgyConversationId
+} from './agy-bind'
 import { piTuning } from './pi-tuning'
 import {
-  isPiCommand,
   piNodeSessionDir,
   piResumeCommand,
   piSessionHome,
@@ -40,6 +48,7 @@ export interface HarnessWatchOptions {
   codexSessionsDir?: string
   piSessionsRoot?: string
   piAgentDir?: string
+  agyDataDir?: string
 }
 
 export type { HarnessId }
@@ -50,6 +59,7 @@ export type SessionField =
   | 'codexSessionRef'
   | 'opencodeSessionId'
   | 'piSessionId'
+  | 'agySessionId'
 
 /**
  * The node fields a watchFile resolver may read — id, cwd, and this harness's
@@ -83,8 +93,28 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *              dispatch for such a harness (the conductor reads this off the
  *              watchSpec). Scrape-only harnesses declare 'boundary' too:
  *              with no file there is no tail to prove anything.
+ *
+ * 'structural' — the harness writes NO end-of-turn record, but its file's
+ *              own SHAPE proves the end: the tail step is an assistant reply
+ *              carrying no tool call, which is the condition its agent loop
+ *              stops on. A step that still holds a tool call — one running,
+ *              or one waiting for the person's approval — keeps the tail
+ *              open. Found 2026-11-26 on real Devin (`--export` ATIF) and
+ *              Antigravity (`transcript.jsonl`) sessions, neither of which
+ *              marks a turn's end; the live status cannot stand in for it
+ *              under herdr, which strips OSC 7501 and reported a Devin
+ *              approval wait as `done`. A structural claim must be proven
+ *              like a native one AND show its approval-wait shape stays
+ *              open (tests/harness-finality.test.ts). Declared limitation: a
+ *              reply that ends while the harness waits on background work it
+ *              started reads as final.
  */
-export type TurnFinality = 'native' | 'boundary'
+export type TurnFinality = 'native' | 'structural' | 'boundary'
+
+/** Can a file observer close a background dispatch's turn for this harness? */
+export function settlesFromFile(finality: TurnFinality): boolean {
+  return finality === 'native' || finality === 'structural'
+}
 
 /**
  * Golden-save cloning contract (Sol r3 P1; S7, see
@@ -239,7 +269,7 @@ export interface Harness {
 
 const CLAUDE: Harness = {
   id: 'claude',
-  matches: (c) => /^\s*claude\b/.test(c),
+  matches: HARNESS_CARDS.claude.matches,
   bind: { kind: 'minted' },
   sessionField: 'claudeSessionId',
   resumeKey: (ref) => (ref ? ref : null),
@@ -259,7 +289,7 @@ const stripCodexResume = (command: string): string => command.replace(/\s+resume
 
 const CODEX: Harness = {
   id: 'codex',
-  matches: (c) => /^\s*codex\b/.test(c),
+  matches: HARNESS_CARDS.codex.matches,
   // The rollout the codex process holds open is its session.
   bind: { kind: 'pid-held', resolveByPid: (pid) => resolveCodexRolloutByPid(pid) },
   // Stored ref is the rollout FILE path; the resume key is its session uuid.
@@ -291,7 +321,7 @@ const CODEX: Harness = {
 const OPENCODE_SESSION_FLAG_RE = /\s(?:--session|--continue|-s|-c)(?:[= ]\S+)?/g
 const OPENCODE: Harness = {
   id: 'opencode',
-  matches: (c) => /^\s*opencode\b/.test(c),
+  matches: HARNESS_CARDS.opencode.matches,
   bind: { kind: 'pid-held', resolveByPid: (pid) => resolveOpencodeSessionByPid(pid) },
   sessionField: 'opencodeSessionId',
   // Defense-in-depth (HIGH-2): opencodeSessionId can arrive via the unauth
@@ -309,7 +339,7 @@ const OPENCODE: Harness = {
 
 const PI: Harness = {
   id: 'pi',
-  matches: isPiCommand,
+  matches: HARNESS_CARDS.pi.matches,
   bind: { kind: 'exclusive-dir' },
   sessionField: 'piSessionId',
   stripSessionFlags: stripPiSessionFlags,
@@ -340,16 +370,60 @@ const PI: Harness = {
   tuning: piTuning
 }
 
+const AGY_PARSERS = new Map<string, ReturnType<typeof agyTurnParser>>()
+
+const AGY: Harness = {
+  id: 'agy',
+  matches: HARNESS_CARDS.agy.matches,
+  // The conversation the agy process holds a presence lock on (agy-bind.ts).
+  bind: { kind: 'pid-held', resolveByPid: (pid) => resolveAgyConversationByPid(pid) },
+  sessionField: 'agySessionId',
+  // The id can arrive from persisted or mobile-originated node data and
+  // reaches a shell line: only agy's closed UUID alphabet passes.
+  resumeKey: (ref) => (validAgyConversationId(ref) ? ref : null),
+  resumeCommand: (command, key) => agyResumeCommand(command, key),
+  stripSessionFlags: stripAgySessionFlags,
+  turns: 'file',
+  // No end-of-turn record: a tail ending on a reply with no tool call is the
+  // loop's stop (agy-trace.ts); a tool call waiting for approval stays open.
+  turnFinality: 'structural',
+  parseTurns: parseAgyTurns,
+  // Ids namespaced by the conversation, one parser object per file (SessionTurnSync re-watches by identity).
+  parseTurnsFor: (file) => {
+    const known = AGY_PARSERS.get(file)
+    if (known) return known
+    const parser = agyTurnParser(agyConversationOfFile(file))
+    AGY_PARSERS.set(file, parser)
+    return parser
+  },
+  watchFile: agyWatchFile,
+  traceParser: (file) => createAgyTraceAccumulator(agyConversationOfFile(file))
+}
+
 /** One entry per catalog id: a new id does not compile until it has one. */
 export const HARNESS_BY_ID: Readonly<Record<HarnessId, Harness>> = {
   claude: CLAUDE,
   codex: CODEX,
   opencode: OPENCODE,
-  pi: PI
+  pi: PI,
+  agy: AGY
 }
 
 /** Every registered harness, in catalog order. Conformance: tests/harness-conformance.test.ts. */
 export const HARNESSES: Harness[] = HARNESS_IDS.map((id) => HARNESS_BY_ID[id])
+
+/** Every node field that binds a card to a session, one per harness. */
+export const SESSION_FIELDS: readonly SessionField[] = HARNESSES.map((h) => h.sessionField)
+
+/**
+ * The session bindings a COPY of `node` gets: every harness's field, each
+ * null unless the copy takes the conversation over (`carry`, a cut). Spread
+ * over a copied node so a harness added later can never ride along unseen —
+ * its field would make the copy resume, and append to, the source's session.
+ */
+export function copiedSessionBindings(node: Partial<Pick<TerminalNodeData, SessionField>>, carry = false): Record<SessionField, string | null> {
+  return Object.fromEntries(SESSION_FIELDS.map((field) => [field, carry ? (node[field] ?? null) : null])) as Record<SessionField, string | null>
+}
 
 /**
  * The launch command with its session-binding flags removed, per harness. A

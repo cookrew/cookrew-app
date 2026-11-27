@@ -7,9 +7,11 @@
 // loosening one.
 
 import { describe, expect, it } from 'vitest'
-import { HARNESS_CARDS, HARNESS_IDS, HARNESS_NAMES, harnessOfPreset, isHarnessId } from '../src/shared/harness-catalog'
+import { HARNESS_CARDS, HARNESS_IDS, HARNESS_NAMES, harnessOfCommand, harnessOfPreset, isHarnessId } from '../src/shared/harness-catalog'
+import { GATEWAY_MODELS_IN_TUNE, harnessFlag, LINE_REBUILT_ON_SEND } from '../src/shared/harness-ui'
+import { agentKind, herdrAgentKind } from '../src/main/herdr-host-multiplexer'
 import { isUnsupported, supportedIds, unsupported, type PerHarness } from '../src/shared/harness-support'
-import { HARNESS_BY_ID, HARNESSES, withoutSessionFlags } from '../src/main/harness'
+import { copiedSessionBindings, HARNESS_BY_ID, HARNESSES, harnessFor, SESSION_FIELDS, withoutSessionFlags } from '../src/main/harness'
 import { featureMatrix, lacksBecause, OPTIONAL_FEATURES } from '../src/main/harness-features'
 import { HARNESS_INPUT } from '../src/main/harness-input'
 import { EXACT_RESTORE, SESSION_ON_DISK } from '../src/main/recover-gate'
@@ -21,7 +23,9 @@ import { HARNESS_FACTS } from '../src/main/route/setup'
 import { ROUTABLE } from '../src/main/route-env'
 import { NOT_ROUTABLE_REASON } from '../src/shared/route-view'
 import { ROUTE_OVERRIDES } from '../src/shared/launch-tune'
+import { LAUNCH_LINE } from '../src/main/harness-launch'
 import { OWN_SUBSCRIPTION } from '../src/shared/ai-account'
+import { FIRST_RUN_AGENTS, FIRST_RUN_SIGN_IN, HARNESS_INSTALL_FIX, UNKNOWN_FACTS } from '../src/shared/preflight'
 
 const TABLES: Record<string, Readonly<Record<string, unknown>>> = {
   'registry (harness.ts)': HARNESS_BY_ID,
@@ -38,6 +42,11 @@ const TABLES: Record<string, Readonly<Record<string, unknown>>> = {
   'not-routable reason (route-view.ts)': NOT_ROUTABLE_REASON,
   'route overrides (launch-tune.ts)': ROUTE_OVERRIDES,
   'own subscription (ai-account.ts)': OWN_SUBSCRIPTION,
+  'line rebuilt on send (harness-ui.ts)': LINE_REBUILT_ON_SEND,
+  'launch line (harness-launch.ts)': LAUNCH_LINE,
+  'first-run install fix (preflight.ts)': HARNESS_INSTALL_FIX,
+  'first-run sign-in (preflight.ts)': FIRST_RUN_SIGN_IN,
+  'gateway models in the tune dial (harness-ui.ts)': GATEWAY_MODELS_IN_TUNE,
   ...Object.fromEntries(Object.entries(OPTIONAL_FEATURES).map(([feature, table]) => [`optional: ${feature}`, table]))
 }
 
@@ -70,6 +79,11 @@ describe('G8 · every feature table declares every harness', () => {
     expect(() => unsupported('  ')).toThrow()
   })
 
+  it('first run lists every harness exactly once, and knows nothing of each until asked', () => {
+    expect([...FIRST_RUN_AGENTS].sort()).toEqual([...HARNESS_IDS].sort())
+    for (const id of HARNESS_IDS) expect(UNKNOWN_FACTS[id]).toBe('unknown')
+  })
+
   it('wire values are checked against the catalog', () => {
     for (const id of HARNESS_IDS) expect(isHarnessId(id)).toBe(true)
     for (const bad of ['', 'shell', 'Claude Code', '../claude', null, 3]) expect(isHarnessId(bad)).toBe(false)
@@ -100,6 +114,7 @@ describe('G9 · the support matrix changes only on purpose', () => {
     expect(ids(OWN_ENDPOINT)).toEqual(['claude', 'codex', 'pi'])
     expect(ids(SESSION_ON_DISK)).toEqual(['claude', 'codex'])
     expect(ids(OWN_SUBSCRIPTION)).toEqual(['claude', 'codex'])
+    expect(ids(FIRST_RUN_SIGN_IN)).toEqual(['claude', 'codex'])
   })
 
   it('Claude keeps every optional feature (the baseline never regresses, like G2)', () => {
@@ -134,11 +149,19 @@ describe('G9 · the support matrix changes only on purpose', () => {
 })
 
 describe('G10 · a copy never resumes its source', () => {
+  it('a copied node clears every harness session field, and a cut carries every one', () => {
+    expect([...SESSION_FIELDS].sort()).toEqual(HARNESSES.map((h) => h.sessionField).sort())
+    const bound = Object.fromEntries(SESSION_FIELDS.map((field) => [field, `ref-${field}`]))
+    expect(Object.values(copiedSessionBindings(bound))).toEqual(SESSION_FIELDS.map(() => null))
+    expect(copiedSessionBindings(bound, true)).toEqual(bound)
+  })
+
   const KEYS: Record<string, string> = {
     claude: '5e55a0de-0000-4000-8000-0000000000aa',
     codex: '5e55a0de-0000-4000-8000-0000000000bb',
     opencode: 'ses_abcDEF123',
-    pi: 'abcdef12-3456-4789-8abc-def012345678'
+    pi: 'abcdef12-3456-4789-8abc-def012345678',
+    agy: '73f44614-99dc-4b12-a26c-92c3a56c594e'
   }
 
   for (const id of HARNESS_IDS) {
@@ -166,3 +189,44 @@ describe('preset names draw their harness', () => {
     expect(harnessOfPreset(null)).toBeNull()
   })
 })
+
+describe('one command matcher, main and renderer alike', () => {
+  const LINES = [
+    'claude --permission-mode bypassPermissions',
+    '  codex resume 5e55a0de-0000-4000-8000-0000000000bb',
+    'opencode --session ses_abc',
+    'pi --session-dir /x',
+    '/Users/me/.cookrew/bin/qwen-pi --model q',
+    'pipeline run',
+    'zsh',
+    '',
+    'claudex',
+    'codexx'
+  ]
+
+  it('the registry and the catalog name the same harness for every launch line', () => {
+    for (const line of LINES) expect(harnessOfCommand(line), line).toBe(harnessFor(line)?.id ?? null)
+  })
+
+  it('herdr is told the kind its detector knows; the process check keeps the binary', () => {
+    expect(herdrAgentKind('/Users/me/.cookrew/bin/qwen-pi --model q')).toBe('pi')
+    expect(agentKind('/Users/me/.cookrew/bin/qwen-pi --model q')).toBe('qwen-pi')
+    for (const id of HARNESS_IDS) expect(herdrAgentKind(`${HARNESS_CARDS[id].bin} --x`)).toBe(HARNESS_CARDS[id].herdrKind)
+    expect(herdrAgentKind('/opt/homebrew/bin/codex resume')).toBe('codex')
+    expect(herdrAgentKind('zsh')).toBe('zsh')
+    expect(herdrAgentKind('')).toBe('shell')
+  })
+
+  it('renderer tables answer false for anything that is not a harness', () => {
+    for (const value of [null, undefined, 'shell', 'other', 'Codex', 3]) {
+      expect(harnessFlag(LINE_REBUILT_ON_SEND, value)).toBe(false)
+    }
+    expect(harnessFlag(LINE_REBUILT_ON_SEND, 'codex')).toBe(true)
+    expect(supportedIdsOf(LINE_REBUILT_ON_SEND)).toEqual(['codex'])
+    expect(supportedIdsOf(GATEWAY_MODELS_IN_TUNE)).toEqual(['claude'])
+  })
+})
+
+function supportedIdsOf(table: Readonly<Record<string, boolean>>): string[] {
+  return HARNESS_IDS.filter((id) => table[id])
+}

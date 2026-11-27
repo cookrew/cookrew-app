@@ -68,8 +68,8 @@ export interface SessionWatchSpec {
   file: string
   parse: SessionTurnParser
   /**
-   * The harness's declared closure story (see TurnFinality): 'native' can
-   * prove its tail record final, 'boundary' only ever finalizes a record
+   * The harness's declared closure story (see TurnFinality): 'native' and
+   * 'structural' can prove a tail record final, 'boundary' only ever finalizes a record
    * when the NEXT one arrives — which a background dispatch never sends, so
    * dispatch acceptance refuses 'boundary' file targets (A2 precondition).
    */

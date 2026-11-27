@@ -63,10 +63,11 @@ export const SETUP_LINE_COPY = {
 } as const
 
 export const TOOL_COPY = {
-  claude: { name: 'Claude Code', does: 'Runs your agent. You need one of these four.' },
-  codex: { name: 'Codex', does: 'Runs your agent. You need one of these four.' },
-  pi: { name: 'Pi', does: 'Runs your agent. You need one of these four.' },
-  opencode: { name: 'OpenCode', does: 'Runs your agent. You need one of these four.' },
+  claude: { name: 'Claude Code', does: 'Runs your agent. You need one of these.' },
+  codex: { name: 'Codex', does: 'Runs your agent. You need one of these.' },
+  pi: { name: 'Pi', does: 'Runs your agent. You need one of these.' },
+  opencode: { name: 'OpenCode', does: 'Runs your agent. You need one of these.' },
+  agy: { name: 'Antigravity CLI', does: 'Runs your agent. You need one of these.' },
   multiplexer: { name: 'herdr or tmux', does: 'Keeps your agents alive across restarts.' },
   chrome: { name: 'Chrome', does: 'Lets agents open and use web pages.' },
   magpie: { name: 'Magpie', does: 'Lets agents use other AI models.' },

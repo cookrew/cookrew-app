@@ -3,7 +3,8 @@ import type { AgentRole, CanvasNode } from '../../shared/model'
 import { useEffect } from 'react'
 import { GlobalPrompt, type PromptAgent } from './prompt/GlobalPrompt'
 import { noteLineAgents } from './prompt/live-line'
-import { isCodexCommand } from '../../shared/codex-command'
+import { harnessOfCommand } from '../../shared/harness-catalog'
+import { harnessFlag, LINE_REBUILT_ON_SEND } from '../../shared/harness-ui'
 import { sharedZoomFleet } from './zoom/use-zoom-fleet'
 import { SHELL_PRESET } from './prompt/harness-pref'
 import type { PromptArtifact } from './prompt/artifact-refs'
@@ -159,13 +160,13 @@ export function Dock({
   const slidIn = boardFor !== null
   // Inside another machine its own app has the box and the bar (zoom/MachineGuestView.tsx): this one steps aside.
   const insideMachine = useInsideMachine()
-  // Which agents' lines a send rebuilds whole: Codex's (live-line.ts · noteLineAgents).
+  // Which agents' lines a send rebuilds whole (shared/harness-ui.ts · live-line.ts noteLineAgents).
   // This workspace's cards, and every workspace of this machine (a tile's reply box sends there too).
-  useEffect(() => noteLineAgents(nodes.flatMap((n) => (n.kind === 'terminal' ? [{ id: n.id, codex: isCodexCommand(n.command) }] : []))), [nodes])
+  useEffect(() => noteLineAgents(nodes.flatMap((n) => (n.kind === 'terminal' ? [{ id: n.id, rebuild: harnessFlag(LINE_REBUILT_ON_SEND, harnessOfCommand(n.command)) }] : []))), [nodes])
   useEffect(() => {
     const fleet = sharedZoomFleet()
     const note = (): void =>
-      noteLineAgents(fleet.get().machines.filter((m) => m.local).flatMap((m) => m.workspaces.flatMap((w) => w.agents.map((a) => ({ id: a.id, codex: a.harness === 'codex' })))))
+      noteLineAgents(fleet.get().machines.filter((m) => m.local).flatMap((m) => m.workspaces.flatMap((w) => w.agents.map((a) => ({ id: a.id, rebuild: harnessFlag(LINE_REBUILT_ON_SEND, a.harness) })))))
     note()
     return fleet.subscribe(note)
   }, [])

@@ -16,6 +16,7 @@ import { TurnTracker } from '../src/main/turn-tracker'
 import type { PtySession } from '../src/main/pty'
 import { parseClaudeTrace, parseCodexTrace, parsePiTrace } from '../src/shared/trace-blocks'
 import { parseSessionTurns } from '../src/shared/session-turns'
+import { parseAgyTrace } from '../src/shared/agy-trace'
 
 describe('harness registry conformance', () => {
   it('every harness declares a turn-history capability', () => {
@@ -85,6 +86,8 @@ describe('harness registry conformance', () => {
     // drops invalid ids before they reach paths/commands) — pin that the
     // resolver-facing contract at least rejects empties.
     expect(byId.get('claude')!.resumeKey('')).toBeNull()
+    expect(byId.get('agy')!.resumeKey('../../etc/passwd')).toBeNull()
+    expect(byId.get('agy')!.resumeKey('x; rm -rf /')).toBeNull()
   })
 })
 
@@ -110,11 +113,22 @@ describe('turn/trace identity alignment (phantom-offset gate)', () => {
     JSON.stringify({ type: 'message', id: 'u2', parentId: 'u1', message: { role: 'user', content: 'two', timestamp: T0 + 1000 } })
   ]
 
+  const agyLines = [
+    JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: new Date(T0).toISOString(), content: 'one' }),
+    JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: new Date(T0 + 1000).toISOString(), content: 'r1' }),
+    JSON.stringify({ step_index: 2, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: new Date(T0 + 2000).toISOString(), content: 'two' })
+  ]
+
   const cases: Array<{ id: string; lines: string[]; trace: (l: string[]) => { index: number }[] }> = [
     { id: 'claude', lines: claudeLines, trace: parseClaudeTrace },
     { id: 'codex', lines: codexLines, trace: parseCodexTrace },
-    { id: 'pi', lines: piLines, trace: parsePiTrace }
+    { id: 'pi', lines: piLines, trace: parsePiTrace },
+    { id: 'agy', lines: agyLines, trace: (l) => parseAgyTrace(l) }
   ]
+
+  it('every file harness has an alignment case', () => {
+    expect(cases.map((c) => c.id).sort()).toEqual(HARNESSES.filter((h) => h.turns === 'file').map((h) => h.id).sort())
+  })
 
   for (const { id, lines, trace } of cases) {
     it(`${id}: turn indices === trace block indices`, () => {
@@ -243,7 +257,8 @@ describe('file harnesses: the boot window is never a recording gap', () => {
         parentId: null,
         message: { role: 'user', content: 'one', timestamp: 1 }
       })
-    ]
+    ],
+    agy: [JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-08-05T10:00:00Z', content: 'one' })]
   }
 
   for (const harness of HARNESSES.filter((h) => h.turns === 'file')) {

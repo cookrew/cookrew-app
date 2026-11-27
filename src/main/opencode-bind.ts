@@ -11,9 +11,10 @@ import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { realCwd } from './claude-fork'
+import { HARNESS_CARDS } from '../shared/harness-catalog'
 
 export function isOpenCodeCommand(command: string): boolean {
-  return /^\s*opencode\b/.test(command)
+  return HARNESS_CARDS.opencode.matches(command)
 }
 
 /** |session.time.created - spawnedAt| tolerance for the spawn-time bind. */

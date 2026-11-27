@@ -102,7 +102,8 @@ export const NOT_ROUTABLE_REASON: Record<HarnessRow['id'], string | null> = {
   claude: null,
   codex: null,
   opencode: null,
-  pi: 'pi takes a provider only from its global models.json'
+  pi: 'pi takes a provider only from its global models.json',
+  agy: 'agy takes its model only from its Google sign-in or the Gemini API; a route through Magpie is not proven yet'
 }
 
 /** Forge's word when it sent one; the table above until then. */

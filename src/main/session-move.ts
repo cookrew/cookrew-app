@@ -106,7 +106,9 @@ export const SESSION_CARRY: Readonly<Record<HarnessId, (options: SessionMoveOpti
   pi: (options, ref) => carryPiSession(options, ref),
   // The ref IS the address (a rollout path, a ses_ id), independent of any directory.
   codex: () => ({ kind: 'not-needed' }),
-  opencode: () => ({ kind: 'not-needed' })
+  opencode: () => ({ kind: 'not-needed' }),
+  // A conversation is resumed by its id from any folder (`agy --conversation <id>`).
+  agy: () => ({ kind: 'not-needed' })
 }
 
 /**

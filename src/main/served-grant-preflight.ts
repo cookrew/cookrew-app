@@ -165,6 +165,11 @@ export function completionRequest(
         env,
         files
       }
+    case 'agy':
+      // No served seat runs agy: its sign-in is the owner's Google account in
+      // the login keychain, which a stranger's sandbox must never reach. The
+      // preflight refuses the grant rather than probe the owner's account.
+      return null
   }
 }
 

@@ -145,6 +145,12 @@ export interface TerminalNodeData {
    */
   piSessionId?: string | null
   /**
+   * Antigravity CLI conversation id (a lowercase UUID) this terminal is bound
+   * to: the conversation whose presence lock the pane's agy process holds
+   * (agy-bind.ts), resumed with `agy --conversation <id>`.
+   */
+  agySessionId?: string | null
+  /**
    * Claude session lineage: prior claudeSessionIds this node ran on, oldest
    * first (a /clear, restore, undo, or re-resolve each append one). The
    * checkpoint rail UNIONS across it so pre-clear endpoints stay visible and

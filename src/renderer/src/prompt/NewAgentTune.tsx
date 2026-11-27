@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { GATEWAY_MODELS_IN_TUNE } from '../../../shared/harness-ui'
 import { keyboardCoverNow, riseOver, riseStyle, typesIntoBox, type RiseAnchor, topBarBottom } from './rise-anchor'
 import { LAUNCH_KNOBS, effortOffer, launchTuneLabel, type LaunchKnob, type LaunchOffer, type LaunchTune } from '../../../shared/launch-tune'
 import { effortLevelsFor, modelChipText, modelRows } from '../../../shared/model-pick'
@@ -82,7 +83,7 @@ export function NewAgentTune({
   useLayoutEffect(() => {
     if (at) centerCurrent(menu.current)
   }, [at !== null])
-  const merged = offer.harness === 'claude' && gateway !== null && gateway.ids.length > 0
+  const merged = GATEWAY_MODELS_IN_TUNE[offer.harness] && gateway !== null && gateway.ids.length > 0
   const label = merged ? newAgentLabel(tune, gateway) : (launchTuneLabel(tune) ?? 'default')
   const levels = (model: string | null | undefined): readonly string[] =>
     merged ? effortLevelsFor(model ?? gateway.defaultModel, gateway.models) : effortOffer(offer, model ?? undefined)

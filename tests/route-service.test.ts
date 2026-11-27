@@ -187,7 +187,7 @@ describe('state', () => {
       expect(online.setup.addGroupLine).toBe('magpie group add smart models=claude/claude-sonnet-5-5,deepseek/deepseek-chat routing=smart')
       expect(online.setup.pluginLine).toBe("magpie plugin add '/app/resources/magpie'")
       expect(online.setup.addKeyLine).toBe('magpie provider add ')
-      expect(online.harnesses.map((h) => [h.id, h.inDock])).toEqual([['claude', true], ['codex', true], ['opencode', false], ['pi', false]])
+      expect(online.harnesses.map((h) => [h.id, h.inDock])).toEqual([['claude', true], ['codex', true], ['opencode', false], ['pi', false], ['agy', false]])
       fake.answer = false
       const offline = await svc.refresh()
       expect(offline.status).toBe('offline')

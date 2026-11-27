@@ -211,6 +211,12 @@ function claudeToolArgs(input: unknown): string {
   return ''
 }
 
+/** The tool-call summary every parser shows: a description, else the first string value, head-capped. */
+export const traceToolArgs = (input: unknown): string => claudeToolArgs(input)
+
+/** A tool result's text, head-capped the way every parser caps it. */
+export const traceResultHead = (text: string): string => head(text, ACTIVITY_RESULT_CHARS)
+
 /** Text head of a tool_result content (string, or [{type:'text',text}]). */
 function claudeResultText(content: unknown): string {
   if (typeof content === 'string') return head(content, ACTIVITY_RESULT_CHARS)
