@@ -19,6 +19,7 @@ const allFound: ToolFacts = {
   pi: 'found',
   opencode: 'found',
   agy: 'found',
+  devin: 'found',
   herdr: 'found',
   tmux: 'found',
   chrome: 'found',
@@ -39,6 +40,7 @@ const bareMac: ToolFacts = {
   pi: 'missing',
   opencode: 'missing',
   agy: 'missing',
+  devin: 'missing',
   herdr: 'missing',
   tmux: 'missing',
   chrome: 'missing',
@@ -56,7 +58,7 @@ const row = (rows: readonly PreflightRow[], id: PreflightRow['id']): PreflightRo
 
 describe('the rows', () => {
   it('lists the tools in the order they matter, every harness the app can run', () => {
-    expect(preflightRows(allFound).map((r) => r.id)).toEqual(['claude', 'codex', 'pi', 'opencode', 'agy', 'multiplexer', 'chrome', 'magpie', 'ollama'])
+    expect(preflightRows(allFound).map((r) => r.id)).toEqual(['claude', 'codex', 'pi', 'opencode', 'agy', 'devin', 'multiplexer', 'chrome', 'magpie', 'ollama'])
   })
 
   it('marks only Magpie and Ollama optional', () => {

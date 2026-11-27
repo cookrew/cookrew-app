@@ -23,6 +23,7 @@ import { launchOffer, type LaunchOffer } from '../shared/launch-tune'
 import { harnessFor, type HarnessId } from './harness'
 import { piModelFor, piModels, piThinkingLevels, type PiModel } from './pi-catalog'
 import { agyLaunchOffer } from './agy-models'
+import { devinLaunchOffer } from './devin-models'
 
 export interface LaunchOfferOptions {
   /** Test seams; each defaults to where the harness itself looks. */
@@ -30,8 +31,9 @@ export interface LaunchOfferOptions {
   piAgentDir?: string
   opencodeConfig?: string
   agyModelCache?: string
+  devinModelCache?: string
   /** Test seam: what starts an `agy models` refresh. */
-  agyRefresh?: (cacheFile: string) => void
+  modelRefresh?: (cacheFile: string) => void
 }
 
 function readText(file: string): string | null {
@@ -137,7 +139,8 @@ export const LAUNCH_OFFERS: Readonly<Record<HarnessId, (command: string, options
   codex: (_command, options) => codexLaunchOffer(options),
   pi: (_command, options) => piLaunchOffer(options),
   opencode: (_command, options) => opencodeLaunchOffer(options),
-  agy: (_command, options) => agyLaunchOffer({ cacheFile: options.agyModelCache, refresh: options.agyRefresh })
+  agy: (_command, options) => agyLaunchOffer({ cacheFile: options.agyModelCache, refresh: options.modelRefresh }),
+  devin: (_command, options) => devinLaunchOffer({ cacheFile: options.devinModelCache, refresh: options.modelRefresh })
 }
 
 /**

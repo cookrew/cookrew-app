@@ -50,7 +50,7 @@ type BrandMark = Exclude<HarnessMark, 'shell'>
 const isBrand = (mark: HarnessMark): mark is BrandMark => mark !== 'shell'
 
 /** A logo's width in the ensō's 100-box, so the four read about the same size. */
-const SIZE: Readonly<Record<BrandMark, number>> = { claude: 54, codex: 50, opencode: 46, pi: 48, agy: 50 }
+const SIZE: Readonly<Record<BrandMark, number>> = { claude: 54, codex: 50, opencode: 46, pi: 48, agy: 50, devin: 50 }
 /** The middle of the disc, where the ink mark stood (GLYPH). */
 const CENTRE = { x: 50, y: 50.5 }
 
@@ -60,6 +60,9 @@ const OPENCODE_FRAME = 'M384 416H128V96H384V416ZM320 160H192V352H320V160Z'
 const OPENCODE_BLOCK = 'M320 224V352H192V224H320Z'
 /** Antigravity CLI: an arch (its boot banner draws one), Cookrew's own drawing — not Google's logo. */
 const AGY_ARCH = 'M8 92 C8 30 26 8 50 8 C74 8 92 30 92 92 L72 92 C72 44 62 28 50 28 C38 28 28 44 28 92 Z'
+
+/** Devin: a diamond with its centre cut out, Cookrew's own drawing — not Cognition's logo. */
+const DEVIN_DIAMOND = 'M50 6 L94 50 L50 94 L6 50 Z M50 32 L32 50 L50 68 L68 50 Z'
 
 const PI: readonly { d: string; fill: string }[] = [
   { d: 'M165.29 165.29H517.36V400H400V282.65H165.29Z', fill: '#F09082' },
@@ -100,6 +103,13 @@ const HarnessLogo = memo(function HarnessLogo({ mark }: { mark: BrandMark }): Re
       <svg className="ink-logo-art" {...box} viewBox="96 96 320 320">
         <path d={OPENCODE_BLOCK} fill="#5A5858" />
         <path d={OPENCODE_FRAME} fill="var(--zv-logo-ink)" fillRule="evenodd" clipRule="evenodd" />
+      </svg>
+    )
+  }
+  if (mark === 'devin') {
+    return (
+      <svg className="ink-logo-art" {...box} viewBox="0 0 100 100">
+        <path d={DEVIN_DIAMOND} fill="#2FA36B" fillRule="evenodd" />
       </svg>
     )
   }

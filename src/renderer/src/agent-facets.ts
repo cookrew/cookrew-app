@@ -89,6 +89,7 @@ const PRESET_ALIASES: Record<string, string> = {
   agy: 'Antigravity CLI',
   antigravity: 'Antigravity CLI',
   'antigravity cli': 'Antigravity CLI',
+  devin: 'Devin',
 }
 
 export function normalizePreset(preset: string): string {

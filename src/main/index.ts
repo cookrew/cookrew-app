@@ -259,6 +259,7 @@ import { isCodexCommand, resolveCodexRolloutByPid, validCodexSessionRef } from '
 import { codexRolloutToFollow } from './codex-lineage'
 import { harnessLaunchLine } from './harness-launch'
 import { agyLastConversation, resolveAgyConversationByPid, validAgyConversationId } from './agy-bind'
+import { devinNewerLock, resolveDevinSessionByPid, validDevinSessionId } from './devin-bind'
 import { piAdoptableSession, piLaunchBinding, resolvePiSessionByPane } from './pi-bind'
 import {
   applyTuning,
@@ -4001,6 +4002,7 @@ function spawnTracked(t: {
   opencodeSessionId?: string | null
   piSessionId?: string | null
   agySessionId?: string | null
+  devinSessionId?: string | null
   sessionLineage?: string[]
 }): boolean {
   // A card being closed takes no new pane: it would outlive the card, or be
@@ -4106,7 +4108,7 @@ function spawnTracked(t: {
   // Per-harness launch arguments (harness-launch.ts): Codex inline, agy's session settings.
   const launched = harnessLaunchLine(
     spawnRoute && route && (route.effective !== 'direct' || access) ? withoutRoutedPick(effective, harnessFor(effective)?.id) : directClaudeLine(effective),
-    t.cwd
+    { cwd: t.cwd, terminalId: t.id }
   )
   const fresh = !ptys.get(t.id)
   let session: PtySession
@@ -4463,6 +4465,10 @@ const FOLLOW_BOUND_SESSION: PerHarness<(terminalId: string) => void> = {
   // A /clear opens a new conversation; the sweep re-reads the lock the process holds (followHeldAgyConversation).
   agy: (terminalId) => {
     for (const delay of [8000, 45000]) setTimeout(() => followHeldAgyConversation(terminalId), delay).unref()
+  },
+  // /clear and /resume move a Devin card to another session: follow the lock it holds.
+  devin: (terminalId) => {
+    for (const delay of [8000, 45000]) setTimeout(() => followHeldDevinSession(terminalId), delay).unref()
   }
 }
 
@@ -4488,6 +4494,43 @@ const SWEEP_FOLLOW: PerHarness<(terminalId: string, mayLookUp: () => boolean) =>
   agy: (terminalId) => {
     followHeldAgyConversation(terminalId, true)
     return true
+  },
+  // One readdir per card; a process lookup only when a newer session lock exists.
+  devin: (terminalId) => {
+    followHeldDevinSession(terminalId, true)
+    return true
+  }
+}
+
+/**
+ * Devin moved this card to another session (/clear, /resume): its worker now
+ * holds that session's lock. Follow it, never onto a session another card
+ * owns. `hinted`: look the process up only when a lock newer than the bound
+ * session's exists.
+ */
+function followHeldDevinSession(terminalId: string, hinted = false): void {
+  try {
+    const hit = store.nodeAcrossWorkspaces(terminalId)
+    if (!hit || hit.node.kind !== 'terminal') return
+    const node = hit.node as TerminalNodeData
+    const bound = node.devinSessionId
+    if (harnessFor(node.command)?.id !== 'devin' || !validDevinSessionId(bound)) return
+    if (hinted && !devinNewerLock(bound)) return
+    const held = resolveDevinSessionByPid(panePids.pidOf(terminalId))
+    if (held === null || held === bound) return
+    if (isRefOwned(store.terminalsAcross(), terminalId, 'devinSessionId', held)) return
+    store.updateNodeAcrossWorkspacesUnsafe(terminalId, { devinSessionId: held })
+    agents.setSessionRef(terminalId, held)
+    const spec = traces.watchSpec(terminalId)
+    if (spec) {
+      sessionSync.rebind(terminalId, spec.file, spec.parse)
+      multiplexer()?.reportAgentSession?.(sessionNameFor(terminalId), spec.file)
+    }
+    store.withOpContext({ actor: 'agent' }, () =>
+      store.recordEventIn(hit.workspaceId, 'terminal.session-rotated', terminalId, node.name, `${bound} → ${held}`)
+    )
+  } catch (error) {
+    console.error('Devin session follow failed:', error)
   }
 }
 

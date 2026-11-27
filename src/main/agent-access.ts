@@ -130,7 +130,8 @@ export const OWN_ENDPOINT: PerHarness<EndpointLaunch> = {
     }
   },
   opencode: unsupported('no key-helper hook: it would need the key written into its config file'),
-  agy: unsupported('it speaks only the Gemini API; an own endpoint is Anthropic or OpenAI')
+  agy: unsupported('it speaks only the Gemini API; an own endpoint is Anthropic or OpenAI'),
+  devin: unsupported('Devin runs on its own Cognition account: no gateway or own key reaches it')
 }
 
 export interface AccessStoreDeps {

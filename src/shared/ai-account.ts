@@ -95,7 +95,8 @@ export const OWN_SUBSCRIPTION: PerHarness<Omit<SubscriptionLine, 'line'>> = {
   codex: { id: 'chatgpt', label: 'ChatGPT' },
   opencode: unsupported('signs in to many providers, none of them a subscription first-run offers'),
   pi: unsupported('has no sign-in of its own'),
-  agy: unsupported('signs in with a Google account in its own first run')
+  agy: unsupported('signs in with a Google account in its own first run'),
+  devin: unsupported('signs in to Cognition with `devin auth login`, which the tool check offers')
 }
 
 export interface GuideFacts {

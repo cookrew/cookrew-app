@@ -24,6 +24,15 @@ import { codexTraceAccumulatorFor, codexTurnParserFor } from './codex-lineage'
 import { codexTuning } from './codex-tuning'
 import { resolveOpencodeSessionByPid } from './opencode-bind'
 import { agyTurnParser, createAgyTraceAccumulator, parseAgyTurns } from '../shared/agy-trace'
+import { createDevinTraceAccumulator, devinTurnParser, parseDevinTurns } from '../shared/devin-trace'
+import {
+  devinResumeCommand,
+  devinSessionOfFile,
+  devinWatchFile,
+  resolveDevinSessionByPid,
+  stripDevinSessionFlags,
+  validDevinSessionId
+} from './devin-bind'
 import {
   agyConversationOfFile,
   agyResumeCommand,
@@ -49,6 +58,7 @@ export interface HarnessWatchOptions {
   piSessionsRoot?: string
   piAgentDir?: string
   agyDataDir?: string
+  devinDataDir?: string
 }
 
 export type { HarnessId }
@@ -60,6 +70,7 @@ export type SessionField =
   | 'opencodeSessionId'
   | 'piSessionId'
   | 'agySessionId'
+  | 'devinSessionId'
 
 /**
  * The node fields a watchFile resolver may read — id, cwd, and this harness's
@@ -400,13 +411,42 @@ const AGY: Harness = {
   traceParser: (file) => createAgyTraceAccumulator(agyConversationOfFile(file))
 }
 
+const DEVIN_PARSERS = new Map<string, ReturnType<typeof devinTurnParser>>()
+
+const DEVIN: Harness = {
+  id: 'devin',
+  matches: HARNESS_CARDS.devin.matches,
+  // The session whose lock the Devin worker under the pane holds (devin-bind.ts).
+  bind: { kind: 'pid-held', resolveByPid: (pid) => resolveDevinSessionByPid(pid) },
+  sessionField: 'devinSessionId',
+  // Persisted and mobile-originated values reach a shell line: Devin's slug alphabet only.
+  resumeKey: (ref) => (validDevinSessionId(ref) ? ref : null),
+  resumeCommand: (command, key) => devinResumeCommand(command, key),
+  stripSessionFlags: stripDevinSessionFlags,
+  turns: 'file',
+  // Tail proof: an assistant reply with finish_reason 'stop' and no tool call
+  // (devin-trace.ts, verified on real 3000.14 session logs).
+  turnFinality: 'native',
+  parseTurns: parseDevinTurns,
+  parseTurnsFor: (file) => {
+    const known = DEVIN_PARSERS.get(file)
+    if (known) return known
+    const parser = devinTurnParser(devinSessionOfFile(file))
+    DEVIN_PARSERS.set(file, parser)
+    return parser
+  },
+  watchFile: devinWatchFile,
+  traceParser: (file) => createDevinTraceAccumulator(devinSessionOfFile(file))
+}
+
 /** One entry per catalog id: a new id does not compile until it has one. */
 export const HARNESS_BY_ID: Readonly<Record<HarnessId, Harness>> = {
   claude: CLAUDE,
   codex: CODEX,
   opencode: OPENCODE,
   pi: PI,
-  agy: AGY
+  agy: AGY,
+  devin: DEVIN
 }
 
 /** Every registered harness, in catalog order. Conformance: tests/harness-conformance.test.ts. */

@@ -52,7 +52,7 @@ export interface RouteEnv {
 export const SESSION_HEADER = 'X-Magpie-Session'
 export const ROUTE_DIR = path.join(process.env.HOME ?? '', '.cookrew', 'route')
 /** Which harnesses can be pointed at the gateway per process — all four, each proven with one real turn on 2026-10-11. */
-export const ROUTABLE: Record<HarnessId, boolean> = { claude: true, codex: true, opencode: true, pi: true, agy: false }
+export const ROUTABLE: Record<HarnessId, boolean> = { claude: true, codex: true, opencode: true, pi: true, agy: false, devin: false }
 
 /** The header line claude takes: `Name: value`, one per line. */
 export function sessionHeaderLine(cardId: string): string {
@@ -154,6 +154,10 @@ export function routeEnv(input: RouteEnvInput): RouteEnv {
     case 'agy':
       // Not routable yet (ROUTABLE.agy): agy reaches a gateway only through the
       // Gemini API with modelProvider=gemini, which no real turn has proven.
+      return { env: {}, args: [], files: [], routable: false }
+    case 'devin':
+      // Not routable (ROUTABLE.devin): Devin's models are served on its own
+      // Cognition account, with no base URL or key a gateway could stand in.
       return { env: {}, args: [], files: [], routable: false }
   }
 }

@@ -16,7 +16,8 @@ export const LINE_REBUILT_ON_SEND: Readonly<Record<HarnessId, boolean>> = {
   codex: true,
   opencode: false,
   pi: false,
-  agy: false
+  agy: false,
+  devin: false
 }
 
 /**
@@ -30,7 +31,8 @@ export const GATEWAY_MODELS_IN_TUNE: Readonly<Record<HarnessId, boolean>> = {
   codex: false,
   opencode: false,
   pi: false,
-  agy: false
+  agy: false,
+  devin: false
 }
 
 /** Table lookup for a value that may not be a harness (a shell, 'other', a wire string, null). */

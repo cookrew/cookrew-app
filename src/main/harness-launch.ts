@@ -7,9 +7,15 @@
 import type { HarnessId } from '../shared/harness-catalog'
 import { agySessionLine } from './agy-bind'
 import { codexInlineLine } from './codex-inline'
+import { devinSessionLine } from './devin-bind'
 import { harnessFor } from './harness'
 
-type LaunchLine = (line: string, cwd: string) => string
+export interface LaunchContext {
+  cwd: string
+  terminalId: string
+}
+
+type LaunchLine = (line: string, card: LaunchContext) => string
 
 const AS_IS: LaunchLine = (line) => line
 
@@ -20,11 +26,13 @@ export const LAUNCH_LINE: Readonly<Record<HarnessId, LaunchLine>> = {
   opencode: AS_IS,
   pi: AS_IS,
   // The card's folder trusted and inline rendering, for this session only (agy-bind.ts).
-  agy: (line, cwd) => agySessionLine(line, cwd)
+  agy: (line, card) => agySessionLine(line, card.cwd),
+  // Its own config (files store, no Claude hooks), in-process, folder trust skipped (devin-bind.ts).
+  devin: (line, card) => devinSessionLine(line, card.terminalId)
 }
 
 /** The line a card's process is started with, given the line resume and routing produced. */
-export function harnessLaunchLine(line: string, cwd: string): string {
+export function harnessLaunchLine(line: string, card: LaunchContext): string {
   const harness = harnessFor(line)
-  return harness ? LAUNCH_LINE[harness.id](line, cwd) : line
+  return harness ? LAUNCH_LINE[harness.id](line, card) : line
 }

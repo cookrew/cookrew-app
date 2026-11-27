@@ -17,6 +17,7 @@ import type { PtySession } from '../src/main/pty'
 import { parseClaudeTrace, parseCodexTrace, parsePiTrace } from '../src/shared/trace-blocks'
 import { parseSessionTurns } from '../src/shared/session-turns'
 import { parseAgyTrace } from '../src/shared/agy-trace'
+import { parseDevinTrace } from '../src/shared/devin-trace'
 
 describe('harness registry conformance', () => {
   it('every harness declares a turn-history capability', () => {
@@ -88,6 +89,8 @@ describe('harness registry conformance', () => {
     expect(byId.get('claude')!.resumeKey('')).toBeNull()
     expect(byId.get('agy')!.resumeKey('../../etc/passwd')).toBeNull()
     expect(byId.get('agy')!.resumeKey('x; rm -rf /')).toBeNull()
+    expect(byId.get('devin')!.resumeKey('../../etc/passwd')).toBeNull()
+    expect(byId.get('devin')!.resumeKey('wary-seeker; rm -rf /')).toBeNull()
   })
 })
 
@@ -119,11 +122,20 @@ describe('turn/trace identity alignment (phantom-offset gate)', () => {
     JSON.stringify({ step_index: 2, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: new Date(T0 + 2000).toISOString(), content: 'two' })
   ]
 
+  const devinNode = (id: number, parent: number | null, role: string, content: string, extra: Record<string, unknown> = {}): string =>
+    JSON.stringify({ kind: 'node', at: 1, node: { id, parent_id: parent, message: { role, content, ...extra } } })
+  const devinLines = [
+    devinNode(1, null, 'user', 'one', { metadata: { is_user_input: true } }),
+    devinNode(2, 1, 'assistant', 'r1', { tool_calls: [], metadata: { finish_reason: 'stop' } }),
+    devinNode(3, 2, 'user', 'two', { metadata: { is_user_input: true } })
+  ]
+
   const cases: Array<{ id: string; lines: string[]; trace: (l: string[]) => { index: number }[] }> = [
     { id: 'claude', lines: claudeLines, trace: parseClaudeTrace },
     { id: 'codex', lines: codexLines, trace: parseCodexTrace },
     { id: 'pi', lines: piLines, trace: parsePiTrace },
-    { id: 'agy', lines: agyLines, trace: (l) => parseAgyTrace(l) }
+    { id: 'agy', lines: agyLines, trace: (l) => parseAgyTrace(l) },
+    { id: 'devin', lines: devinLines, trace: (l) => parseDevinTrace(l) }
   ]
 
   it('every file harness has an alignment case', () => {
@@ -258,7 +270,8 @@ describe('file harnesses: the boot window is never a recording gap', () => {
         message: { role: 'user', content: 'one', timestamp: 1 }
       })
     ],
-    agy: [JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-08-05T10:00:00Z', content: 'one' })]
+    agy: [JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-08-05T10:00:00Z', content: 'one' })],
+    devin: [JSON.stringify({ kind: 'node', at: 1, node: { id: 1, parent_id: null, message: { role: 'user', content: 'one', metadata: { is_user_input: true } } } })]
   }
 
   for (const harness of HARNESSES.filter((h) => h.turns === 'file')) {

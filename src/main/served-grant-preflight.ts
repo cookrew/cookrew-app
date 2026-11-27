@@ -170,6 +170,9 @@ export function completionRequest(
       // the login keychain, which a stranger's sandbox must never reach. The
       // preflight refuses the grant rather than probe the owner's account.
       return null
+    case 'devin':
+      // Same: a Devin seat would spend the owner's Cognition account.
+      return null
   }
 }
 

@@ -151,6 +151,12 @@ export interface TerminalNodeData {
    */
   agySessionId?: string | null
   /**
+   * Devin CLI session slug (`wary-seeker`) this terminal is bound to: the
+   * session whose lock the pane's Devin worker holds (devin-bind.ts), resumed
+   * with `devin -r <slug>`.
+   */
+  devinSessionId?: string | null
+  /**
    * Claude session lineage: prior claudeSessionIds this node ran on, oldest
    * first (a /clear, restore, undo, or re-resolve each append one). The
    * checkpoint rail UNIONS across it so pre-clear endpoints stay visible and

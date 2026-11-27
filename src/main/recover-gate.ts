@@ -19,6 +19,7 @@ import { claudeSessionFile, resolveExistingClaudeSession, type ResolveSessionOpt
 import { supportFor, unsupported, type PerHarness } from '../shared/harness-support'
 import { opencodeSessionFileExists } from './opencode-bind'
 import { agyConversationExists } from './agy-bind'
+import { devinSessionExists } from './devin-bind'
 import { piSessionHome } from './pi-bind'
 
 /** Injectable side-effects so the gate is testable without real files. */
@@ -43,6 +44,8 @@ export interface ExactGateDeps {
   piAdoptable?: (nodeId: string, cwd: string) => string | null
   /** Antigravity conversation-store existence check (defaults to the real data dir). */
   agyExists?: (conversationId: string) => boolean
+  /** Devin session-files existence check (defaults to the real data dir). */
+  devinExists?: (sessionId: string) => boolean
   /** Claude session resolver (defaults to the real, file-backed resolver). */
   claudeResolver?: (options: ResolveSessionOptions) => string | null
 }
@@ -113,6 +116,12 @@ export const EXACT_RESTORE: Readonly<Record<HarnessId, ExactCheck>> = {
     const agyExists = deps.agyExists ?? ((id: string) => agyConversationExists(id))
     const key = HARNESS_BY_ID.agy.resumeKey(node.agySessionId ?? '')
     return key !== null && agyExists(key)
+  },
+  // devin: a slug-shaped session id whose session files are still on disk.
+  devin: (node, deps) => {
+    const devinExists = deps.devinExists ?? ((id: string) => devinSessionExists(id))
+    const key = HARNESS_BY_ID.devin.resumeKey(node.devinSessionId ?? '')
+    return key !== null && devinExists(key)
   }
 }
 
@@ -128,7 +137,8 @@ export const SESSION_ON_DISK: PerHarness<(node: TerminalNodeData, exists: (file:
   codex: (node, exists) => typeof node.codexSessionRef === 'string' && exists(node.codexSessionRef),
   opencode: unsupported('the exact-context gate already proves the session file'),
   pi: unsupported('the exact-context gate already proves the session file'),
-  agy: unsupported('the exact-context gate already proves the conversation')
+  agy: unsupported('the exact-context gate already proves the conversation'),
+  devin: unsupported('the exact-context gate already proves the session')
 }
 
 export function sessionOnDisk(node: TerminalNodeData, exists: (file: string) => boolean = existsSync): boolean {

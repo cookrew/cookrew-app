@@ -16,6 +16,8 @@ export const PRESETS: AgentPreset[] = [
   // accept-edits: edits run, shell commands ask. agy's default Auto mode ran
   // `rm` unasked in the 2026-11-26 capture; the owner can choose otherwise.
   { name: 'Antigravity CLI', command: 'agy --mode accept-edits' },
+  // Devin's default `auto` permission mode runs read-only tools and asks before writes and commands.
+  { name: 'Devin', command: 'devin' },
   { name: 'Shell', command: '' }
 ]
 

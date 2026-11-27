@@ -54,6 +54,16 @@ export function agyComposerDrawn(screen: string): boolean {
   return /\? for shortcuts/.test(screen)
 }
 
+/**
+ * Devin's input box, read off real 3000.14 boots: a rule, then the `❭` row
+ * ("❭ Ask Devin to build features…" while empty), then a rule. Its approval
+ * selector draws `❭` rows too, with no rule straight above the cursor row.
+ */
+export function devinComposerDrawn(screen: string): boolean {
+  const lines = screen.split('\n')
+  return lines.some((line, at) => /^❭(?:\s|$)/.test(line) && at > 0 && /^[─━]{10,}/.test(lines[at - 1]))
+}
+
 export interface HarnessInput {
   /** Its input box is drawn on this screen. */
   drawn: (screen: string) => boolean
@@ -76,7 +86,9 @@ export const HARNESS_INPUT: Readonly<Record<HarnessId, HarnessInput>> = {
   opencode: { drawn: opencodeComposerDrawn, gatesEveryInput: false, directSubmit: '\r' },
   pi: { drawn: piComposerDrawn, gatesEveryInput: false, directSubmit: '\n' },
   // Every input waits: keys sent during its sign-in spinner are lost (measured 2026-11-26).
-  agy: { drawn: agyComposerDrawn, gatesEveryInput: true, directSubmit: '\r' }
+  agy: { drawn: agyComposerDrawn, gatesEveryInput: true, directSubmit: '\r' },
+  // It signs in and asks about Git first: every input waits for its box.
+  devin: { drawn: devinComposerDrawn, gatesEveryInput: true, directSubmit: '\r' }
 }
 
 /** The input facts for a launch command, or null for a plain shell. */
