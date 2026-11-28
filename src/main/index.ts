@@ -1,4 +1,5 @@
 import { launchBoot } from './launch-settings-boot'
+import { spawn } from 'node:child_process'
 import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, net, Notification, powerMonitor, powerSaveBlocker, safeStorage, session, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
@@ -292,7 +293,9 @@ import { claudeSettingsGateway, launchPick, newAgentPlan, withGatewayModel } fro
 import { harnessFor, settlesFromFile, type Harness as HarnessEntry, type SessionField } from './harness'
 import { harnessHas } from './harness-features'
 import { inputFor } from './harness-input'
-import { HARNESS_CARDS, HARNESS_NAMES } from '../shared/harness-catalog'
+import { HARNESS_CARDS, HARNESS_NAMES, isHarnessId } from '../shared/harness-catalog'
+import { MAGPIE_AGENT } from '../shared/agents-page'
+import { agentVersionProbe, buildAgentPage } from './agents-page'
 import { supportFor, unsupported, type PerHarness } from '../shared/harness-support'
 import { canRestoreExact as exactGate, isRefOwned, sessionOnDisk } from './recover-gate'
 import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
@@ -9819,6 +9822,30 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('tuning:list', () => tuningFleet())
   // The route (route program): read on demand, pushed on change (routeService).
   ipcMain.handle('route:state', () => routeService.refresh())
+  // The Agents page (shared/agents-page.ts): the scan's rows, a cached version each, the dock line.
+  const agentVersions = agentVersionProbe()
+  ipcMain.handle('agents:page', () =>
+    buildAgentPage({
+      harnessRow: (id) => routeService.state().harnesses.find((row) => row.id === id) ?? null,
+      presets: PRESETS,
+      version: agentVersions
+    })
+  )
+  // Magpie's own page for an agent (`magpie <agent>` — its model and effort live there).
+  ipcMain.handle('agents:open-magpie', async (_event, id: unknown) => {
+    const agent = isHarnessId(id) ? MAGPIE_AGENT[id] : null
+    if (!agent) return { ok: false, error: 'Magpie does not know this agent' }
+    return new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      try {
+        const child = spawn('magpie', [agent], { stdio: 'ignore', detached: true })
+        child.on('error', (error: Error) => resolve({ ok: false, error: error.message }))
+        child.unref()
+        resolve({ ok: true })
+      } catch (error) {
+        resolve({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      }
+    })
+  })
   ipcMain.handle('route:set-default', (_e, model: string | null) => routeService.setDefault(model))
   ipcMain.handle('route:set-shared-mcp', (_e, on: boolean) => routeService.setSharedMcp(on === true))
   ipcMain.handle('terminal:route', (_e, terminalId: string) => routeService.cardState(terminalId))
