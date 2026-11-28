@@ -71,7 +71,10 @@ export class AlmaBackend {
     this.events = events
     this.threadId = null
     this.ws = null
-    this.sawMessage = new Map()
+    /** What of THIS turn's reply has been handed to the screen, as one string across messages. */
+    this.emittedText = ''
+    this.emittedThoughts = ''
+    this.sentTools = new Map()
   }
 
   async workspace() {
@@ -118,6 +121,9 @@ export class AlmaBackend {
 
   /** One turn: send, then watch the thread until it is no longer busy. */
   async prompt(text) {
+    this.emittedText = ''
+    this.emittedThoughts = ''
+    this.sentTools = new Map()
     const sent = await this.api.request(`/api/threads/${this.threadId}/send`, { method: 'POST', body: { text, ...(this.wantModel ? { model: this.wantModel } : {}) } })
     if (sent.status === 409) throw new Error('Alma is busy with another turn on this thread')
     if (sent.status !== 202) throw new Error(`Alma would not take the prompt: ${sent.body?.error ?? sent.status}`)
@@ -135,47 +141,57 @@ export class AlmaBackend {
     return { stop: stop === 'stop' || stop === 'end_turn' ? 'end_turn' : stop }
   }
 
-  /** New parts since the last poll, as the host's events. */
+  /**
+   * New parts since the last poll, as the host's events.
+   *
+   * Alma REBUILDS an assistant message while it streams (a fresh message id, the
+   * whole text so far), and one turn can hold several assistant messages (one
+   * per step). So what is compared is the TURN's reply as one string — every
+   * assistant message after the last user message, joined — and only the part
+   * past what was already handed over goes out. A rewrite that no longer starts
+   * with it (a regenerate) is taken as the new truth without being printed
+   * again: the bug this fixes was the whole reply printed once per poll
+   * (owner, 2026-11-28).
+   */
   async pollTurn() {
     const messages = rows((await this.api.request(`/api/threads/${this.threadId}/messages`)).body)
-    const last = messages.filter((m) => m?.message?.role === 'assistant').at(-1)
-    if (last) this.readAssistant(last.message)
-    for (const ask of rows((await this.api.request('/api/handoff/tool-approvals')).body)) {
-      if (ask?.threadId && ask.threadId !== this.threadId) continue
-      await this.answer(ask)
+    const said = messages.filter((m) => m?.message)
+    let lastUser = -1
+    said.forEach((m, i) => {
+      if (m.message.role === 'user') lastUser = i
+    })
+    const turn = said.slice(lastUser + 1).filter((m) => m.message.role === 'assistant')
+    const text = turn.flatMap((m) => (m.message.parts ?? []).filter((p) => p?.type === 'text' && typeof p.text === 'string').map((p) => p.text)).join('')
+    if (text.length > this.emittedText.length && text.startsWith(this.emittedText)) {
+      const suffix = text.slice(this.emittedText.length)
+      if (suffix.trim()) this.events.text(turn.at(-1)?.message.id ?? null, suffix)
     }
-  }
-
-  readAssistant(message) {
-    const seen = this.sawMessage.get(message.id) ?? { reasoning: 0, texts: new Map(), tools: new Map() }
-    this.sawMessage.set(message.id, seen)
-    for (const part of message.parts ?? []) {
-      if (part.type === 'reasoning' && typeof part.text === 'string') {
-        const grown = part.text.slice(seen.reasoning)
-        if (grown) this.events.thought(message.id, grown)
-        seen.reasoning = Math.max(seen.reasoning, part.text.length)
-      } else if (part.type === 'text' && typeof part.text === 'string') {
-        const at = seen.texts.get(part.type + (part.toolCallId ?? '')) ?? 0
-        const grown = part.text.slice(at)
-        if (grown) this.events.text(message.id, grown)
-        seen.texts.set(part.type + (part.toolCallId ?? ''), part.text.length)
-      } else if (typeof part.type === 'string' && part.type.startsWith('tool-')) {
-        const id = part.toolCallId ?? part.id ?? `${message.id}:${part.type}`
-        const known = seen.tools.get(id)
-        if (!known) {
-          seen.tools.set(id, { state: part.state })
-          this.events.tool(id, part.type.slice(5), toolSummary(part.input))
-        } else if (known.state !== part.state) {
-          known.state = part.state
-        }
+    this.emittedText = text
+    const thoughts = turn.flatMap((m) => (m.message.parts ?? []).filter((p) => p?.type === 'reasoning' && typeof p.text === 'string').map((p) => p.text)).join('')
+    if (thoughts.length > this.emittedThoughts.length && thoughts.startsWith(this.emittedThoughts)) {
+      const suffix = thoughts.slice(this.emittedThoughts.length)
+      if (suffix.trim()) this.events.thought(turn.at(-1)?.message.id ?? null, suffix)
+    }
+    this.emittedThoughts = thoughts
+    for (const message of turn) {
+      for (const part of message.message.parts ?? []) {
+        if (typeof part?.type !== 'string' || !part.type.startsWith('tool-')) continue
+        const id = part.toolCallId ?? part.id ?? `${message.message.id}:${part.type}`
+        const known = this.sentTools.get(id)
+        if (!known) this.sentTools.set(id, { state: part.state })
+        if (!known) this.events.tool(id, part.type.slice(5), toolSummary(part.input))
         if (part.state === 'output-available' || part.state === 'output-error') {
-          const done = seen.tools.get(id).done
-          if (!done) {
-            seen.tools.get(id).done = true
+          const sent = this.sentTools.get(id)
+          if (!sent.done) {
+            sent.done = true
             this.events.toolDone(id, part.state === 'output-error' ? 'failed' : 'completed', outputText(part.output))
           }
         }
       }
+    }
+    for (const ask of rows((await this.api.request('/api/handoff/tool-approvals')).body)) {
+      if (ask?.threadId && ask.threadId !== this.threadId) continue
+      await this.answer(ask)
     }
   }
 

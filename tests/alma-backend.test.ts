@@ -22,7 +22,7 @@ interface Fake {
 }
 
 /** A fake Alma: one thread, one turn that streams a thought, a tool and a reply, then asks nothing. */
-async function fakeAlma({ askApproval = false, threadModel = 'p1:model-a' } = {}): Promise<Fake> {
+async function fakeAlma({ askApproval = false, threadModel = 'p1:model-a', rebuild = false } = {}): Promise<Fake> {
   const state: Fake['state'] = { answers: [], stops: [], sends: [], creates: [], puts: [], approvals: askApproval ? [{ requestId: 'tool-approval-1', title: 'Bash', message: 'rm x', threadId: 't-1' }] : [], polls: 0 }
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://x')
@@ -53,8 +53,14 @@ async function fakeAlma({ askApproval = false, threadModel = 'p1:model-a' } = {}
       }
       if (req.method === 'GET' && url.pathname === '/api/threads/t-1/run-status') {
         state.polls += 1
-        const done = state.polls > 2
+        const done = state.polls > (rebuild ? 7 : 2)
         return json({ id: 't-1', state: done ? 'done' : 'running', busy: !done, ...(done ? { reply: { messageId: 'a-1', text: 'all done', turnEndReason: state.stops.length > 0 ? 'aborted' : 'stop' } } : { reply: null }) })
+      }
+      if (req.method === 'GET' && url.pathname === '/api/threads/t-1/messages' && rebuild) {
+        // Alma's own shape while it streams: a FRESH message id each poll, the
+        // whole text so far inside it (the bug: printed again every poll).
+        const words = 'the full path as its tooltip'.split(' ').slice(0, Math.min(6, Math.max(1, state.polls)))
+        return json([{ message: { id: 'u-1', role: 'user', parts: [{ type: 'text', text: 'hi' }] } }, { message: { id: `a-${state.polls}`, role: 'assistant', parts: [{ type: 'text', text: words.join(' ') }] } }])
       }
       if (req.method === 'GET' && url.pathname === '/api/threads/t-1/messages') {
         const growing = state.polls > 1
@@ -136,6 +142,17 @@ describe('Alma as a hosted agent', () => {
     expect(seen.filter((e) => e.startsWith('toolDone:'))).toEqual(['toolDone:call-1:completed:a.txt'])
     expect(seen.filter((e) => e.startsWith('text:'))).toEqual(['text:a-1:all done'])
     backend.close()
+  })
+
+  it('a reply Alma rebuilds under a new id each poll is printed once, not once per poll', async () => {
+    running = await fakeAlma({ rebuild: true })
+    const { seen, events: sink } = events()
+    const backend = new AlmaBackend({ baseUrl: running.url, cwd: process.cwd(), events: sink })
+    await backend.open({})
+    await backend.prompt('hi')
+    const printed = seen.filter((e) => e.startsWith('text:')).map((e) => e.slice(e.indexOf(':', 5) + 1)).join('')
+    expect(printed).toBe('the full path as its tooltip')
+    expect(printed.match(/full path/g)).toHaveLength(1)
   })
 
   it('resumes a thread by id, and refuses one Alma does not have', async () => {
