@@ -4407,6 +4407,11 @@ function pollExclusiveDirBind(t: SpawnSubject, servedCtx: ServedSpawnPlace | und
           terminalId: t.id,
           command: pane?.command ?? null,
           paneStartedAtMs: pane?.startedAtMs ?? null,
+          // This card was launched by the spawn that called us, and that launch
+          // passes its own --session-dir: the exclusive dir is the answer. A
+          // pane's command is not reliable here (herdr reports none; the card's
+          // stored command never holds the flag the launch added).
+          exclusive: true,
           exclude: claimedPiSessions(t.id),
           // A SERVED pi writes its session under the SANDBOX roots (the
           // spawn passes them at line ~1145); scanning the owner's default
