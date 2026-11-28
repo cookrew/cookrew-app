@@ -44,6 +44,12 @@ export interface BrowserInstance {
   /** This viewer's page went out of sight, or came back. */
   viewerHidden?(id: string, hidden: boolean): void
   evaluate(expression: string): Promise<unknown>
+  /**
+   * A real mouse press at a page point, through CDP's input path, for controls
+   * that ignore script-dispatched events (Aliyun's swas-select opens only on a
+   * trusted press: 2026-11-28). Absent where the device has no page of its own.
+   */
+  clickAt?(x: number, y: number): Promise<void>
   navigate(url: string): Promise<void>
   pageInfo(): Promise<HeadlessPageState & { viewport: string }>
 
