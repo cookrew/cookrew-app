@@ -1,4 +1,5 @@
 import type { HarnessId } from "../../shared/harness-catalog";
+import type { AgentPageRow } from "../../shared/agents-page"
 import type { LaunchSaveResult, LaunchStatus, LaunchValues, LiveValues } from '../../shared/launch-settings'
 import type { MenuAct } from '../../shared/wait-choice'
 import type { FirstRunStage, FirstTask } from '../../shared/first-run'
@@ -571,6 +572,10 @@ export interface CookrewApi {
    * feature-detected like the dials: a bridge without it draws no panel.
    */
   routeState?: () => Promise<RouteState>;
+  /** The Agents page (AgentsSheet.tsx). Optional: an older main has none. */
+  agentsPage?: () => Promise<AgentPageRow[]>;
+  /** Open Magpie's own page for a harness (where its model is kept). */
+  agentOpenMagpie?: (id: string) => Promise<{ ok: boolean; error?: string }>;
   routeSetDefault?: (model: string | null) => Promise<RouteState>;
   routeSetSharedMcp?: (on: boolean) => Promise<RouteState>;
   /** Owner-only: this computer's Magpie shared with the owner's other devices (main/route/share-keys.ts). */

@@ -390,3 +390,33 @@
 }
 .cr-routing-menu .cr-remote-magpie .fr-foot button.fr-go { background: var(--amber) }
 .cr-routing-menu .cr-remote-magpie .fr-foot button:last-child { border-bottom: 2px solid var(--line) }
+
+/* THE AGENTS PAGE (AgentsSheet.tsx): the routing panel's frame, one row per
+   harness — state chips, the launch line, the actions that fix it. */
+.cr-agents { z-index: 75 }
+.cr-agents-panel { gap: 8px }
+.cr-agents-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--cream);
+  border: 2px solid var(--line);
+}
+.cr-agents-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.cr-agents-name { font-family: var(--font-pixel); font-size: 11px; letter-spacing: 0.1em }
+.cr-agents-bin, .cr-agents-ver { font-family: var(--font-mono, monospace); font-size: 11px; opacity: 0.75 }
+.cr-agents-line { font-family: var(--font-mono, monospace); font-size: 11.5px; word-break: break-all }
+.cr-agents-note { font-size: 11.5px; opacity: 0.8; max-width: 70ch }
+.cr-agents-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px }
+.cr-agents-chip {
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  background: var(--cream-hi);
+}
+.cr-agents-chip.on { border-color: var(--amber-deep); color: var(--amber-deep) }
+.cr-agents-chip.off { border-color: var(--red, #b42318); color: var(--red, #b42318) }
+.cr-agents-said { font-size: 11.5px; opacity: 0.85 }

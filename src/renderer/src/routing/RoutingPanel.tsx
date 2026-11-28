@@ -5,6 +5,7 @@ import { SETUP_LINE_COPY } from '../../../shared/first-run-copy'
 import { ROUTING_COPY } from '../../../shared/route-view'
 import { Accounts, Harnesses, LiveRoutes, LoopbackRemotes, PlainRemotes, RemoteRisks, Rented, SignInLink, StatusLine, type RunLine } from './RoutingSections'
 import { SetupScreen } from './SetupScreen'
+import { AgentsSheet } from './AgentsSheet'
 import { ROUTE_UPDATE_REQUIRED } from './route-state-order'
 import './routing-panel.css'
 
@@ -60,6 +61,8 @@ export interface RoutingPanelProps {
 export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null {
   const { open, onClose, state, available, onRun, setupTerminalId, focusTick, onSetDefault, onSetSharedMcp, error, onAddToDock, names, onZoom, running = null, stuck = false, onStop } = props
   const [setupOpen, setSetupOpen] = useState(true)
+  const [agentsOpen, setAgentsOpen] = useState(false)
+  const rowsOf = new Map((state?.harnesses ?? []).map((row) => [row.id, row] as const))
   // A key line was typed: the fold opens so the paste has somewhere to land.
   useEffect(() => {
     if (focusTick > 0) setSetupOpen(true)
@@ -75,10 +78,14 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
   if (!open) return null
   return (
     <div className="cr-routing" role="dialog" aria-modal="true" aria-label={ROUTING_COPY.title} onClick={onClose}>
+      {agentsOpen && <AgentsSheet onClose={() => setAgentsOpen(false)} onRun={onRun} onAddToDock={onAddToDock} rowsOf={rowsOf} />}
       <div className="cr-routing-panel" onClick={(e) => e.stopPropagation()}>
         <div className="cr-routing-title">
           ⇄ {ROUTING_COPY.title}
           <span className="sp" />
+          <button type="button" className="cr-routing-btn" onClick={() => setAgentsOpen(true)} title="Every agent this app can run, and how to keep it">
+            Agents
+          </button>
           <button type="button" className="cr-routing-btn" onClick={onClose} aria-label="Close">
             ✕
           </button>

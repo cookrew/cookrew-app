@@ -584,6 +584,9 @@ const api = {
   routeState: () => ipcRenderer.invoke('route:state'),
   routeSetDefault: (model: string | null) => ipcRenderer.invoke('route:set-default', model),
   routeSetSharedMcp: (on: boolean) => ipcRenderer.invoke('route:set-shared-mcp', on),
+  // The Agents page (AgentsSheet.tsx): every harness it can run, with a cached version, and Magpie's page for it.
+  agentsPage: () => ipcRenderer.invoke('agents:page'),
+  agentOpenMagpie: (id: string) => ipcRenderer.invoke('agents:open-magpie', id),
   // Sharing this computer's Magpie with the owner's other devices (owner-only in main).
   routeShareList: () => ipcRenderer.invoke('route:share-list'),
   routeShareIssue: (input: { device: string; dailyUsd: number }) => ipcRenderer.invoke('route:share-issue', input),
