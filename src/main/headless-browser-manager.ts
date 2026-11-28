@@ -13,6 +13,10 @@ import type { BrowserInstance } from './browser-instance'
 import { parseUseUrl, useUrl, type UseTarget } from '../shared/use-url'
 import { mainDrawsCard } from './browser-owner'
 import { browserDownloadsDir } from './browser-downloads'
+import type { VaultCookie } from './card-cookie-shape'
+
+/** How long a closing Chrome gets to hand over its cookies (keepCookies); then it is closed without. */
+export const COOKIE_CAPTURE_MS = 3000
 
 const SIZE_MIN = 320
 const SIZE_MAX = 2048
@@ -59,6 +63,21 @@ export interface HeadlessBrowserManagerDeps {
   uses?: { makeInstance: (target: UseTarget, node: BrowserNodeData) => BrowserInstance | null }
   /** A card's instance is gone — replaced, removed or exited: its viewers are let go (browser-cast drop). */
   onInstanceGone?: (browserId: string) => void
+  /**
+   * Where each card's cookies are kept across a Chrome restart
+   * (card-cookie-vault.ts): every card, every site, on by default (owner
+   * 11-28). Absent: nothing is kept, as before.
+   */
+  cookieVault?: CardCookieKeeper
+  /** The bound on one Chrome's cookie hand-over; COOKIE_CAPTURE_MS by default. */
+  cookieCaptureMs?: number
+  log?: (line: string) => void
+}
+
+/** The slice of the card cookie vault the manager uses. Neither is expected to throw; both are guarded anyway. */
+export interface CardCookieKeeper {
+  load(browserId: string): readonly VaultCookie[] | null
+  save(browserId: string, cookies: readonly unknown[]): unknown
 }
 
 interface StartingEntry {
@@ -123,6 +142,7 @@ export class HeadlessBrowserManager {
       // a window card at another app. The old device is let go first.
       this.instances.delete(node.id)
       this.backing.delete(node.id)
+      await this.keepCookies(node.id, live)
       await live.stop()
       this.deps.onInstanceGone?.(node.id)
     }
@@ -263,9 +283,49 @@ export class HeadlessBrowserManager {
       height: clampSize(node.size.height, 600),
       tabs: browserTabs(node),
       activeTabId: active.id,
-      ...(this.primed.has(browserId) ? { cookies: this.primed.get(browserId) } : {})
+      ...(this.primed.has(browserId) ? { cookies: this.primed.get(browserId) } : {}),
+      ...this.keptCookiesFor(browserId)
     }
     return (this.deps.makeInstance ?? ((opts) => new HeadlessInstance(opts)))(options)
+  }
+
+  /** The card's vault, for its next Chrome: restored before the first page loads (card-cookie-restore.ts). */
+  private keptCookiesFor(browserId: string): { restoredCookies?: readonly VaultCookie[] } {
+    try {
+      const kept = this.deps.cookieVault?.load(browserId)
+      return kept && kept.length > 0 ? { restoredCookies: kept } : {}
+    } catch {
+      return {}
+    }
+  }
+
+  /**
+   * A Chrome about to close hands its cookies to the vault — session cookies,
+   * which Chrome itself drops at every start, above all. Bounded: a Chrome
+   * that does not answer is closed anyway and the card's last vault stays.
+   * Never throws: keeping cookies never holds up a stop or a quit.
+   */
+  private async keepCookies(browserId: string, instance: BrowserInstance): Promise<void> {
+    const vault = this.deps.cookieVault
+    if (!vault || !instance.getCookies) return
+    const ms = this.deps.cookieCaptureMs ?? COOKIE_CAPTURE_MS
+    const log = this.deps.log ?? ((line: string): void => console.error(line))
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<'late'>((resolve) => {
+      timer = setTimeout(() => resolve('late'), ms)
+    })
+    try {
+      const cookies = await Promise.race([instance.getCookies(), late])
+      if (cookies === 'late') {
+        log(`cookie vault: card ${browserId}'s Chrome did not hand over its cookies within ${ms} ms; its last vault is kept`)
+        return
+      }
+      vault.save(browserId, cookies)
+    } catch (error) {
+      log(`cookie vault: card ${browserId}'s cookies were not kept (${error instanceof Error ? error.message : 'error'})`)
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   private handleExit(browserId: string, instance: BrowserInstance): void {
@@ -279,7 +339,8 @@ export class HeadlessBrowserManager {
     void instance.stop()
   }
 
-  async remove(browserId: string): Promise<void> {
+  /** Stop a card's instance. `keep`: its Chrome's cookies go to the vault first (keepCookies); a deleted card's do not. */
+  async remove(browserId: string, keep = true): Promise<void> {
     const pending = this.stopping.get(browserId)
     if (pending) return pending
     this.desired.delete(browserId)
@@ -296,7 +357,7 @@ export class HeadlessBrowserManager {
       this.backing.delete(browserId)
       if (instance) {
         this.instances.delete(browserId)
-        stopping.push(instance.stop())
+        stopping.push((keep ? this.keepCookies(browserId, instance) : Promise.resolve()).then(() => instance.stop()))
       }
       await Promise.all(stopping)
       if (instance) this.deps.onInstanceGone?.(browserId)
@@ -313,7 +374,7 @@ export class HeadlessBrowserManager {
   async discard(browserId: string): Promise<void> {
     // Signed in for good only while the card exists: a stop or a workspace switch keeps it.
     this.primed.delete(browserId)
-    await this.remove(browserId)
+    await this.remove(browserId, false)
     await this.deps.deleteProfile?.(browserId)
   }
 

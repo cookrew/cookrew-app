@@ -31,6 +31,8 @@ import {
 } from './browser-signin'
 import { COPY_BINDING, PAGE_COPY_SCRIPT, PASTE_FUNCTION, copyText } from './page-copy'
 import { FIELDS_BINDING, FIELDS_WATCH, PAGE_FIELDS_SCRIPT, sanitizeFieldReport, type FieldReport } from './page-fields'
+import { restoreCardCookies } from './card-cookie-restore'
+import type { CookiePartitionKey, VaultCookie } from './card-cookie-shape'
 
 function httpJson<T>(url: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -208,17 +210,27 @@ export interface HeadlessOptions {
   startupDelayMs?: number
   /** Set before the first page loads (CDP Storage.setCookies): a card signed in to a page main opened for it (magpie-card-open.ts). */
   cookies?: readonly HeadlessCookie[]
+  /**
+   * The card's kept cookies (card-cookie-vault.ts), set before the first page
+   * loads where Chrome has none of its own and `cookies` does not name them
+   * (card-cookie-restore.ts). A refusal never fails the start.
+   */
+  restoredCookies?: readonly VaultCookie[]
 }
 
-/** A cookie as CDP's Storage.setCookies takes it. */
+/** A cookie as CDP's Storage.setCookies takes it (Network.CookieParam): a url, a domain, or both. */
 export interface HeadlessCookie {
   readonly name: string
   readonly value: string
-  readonly url: string
-  readonly domain: string
-  readonly path: string
-  readonly httpOnly: boolean
-  readonly sameSite: 'Lax' | 'Strict' | 'None'
+  readonly url?: string
+  readonly domain?: string
+  readonly path?: string
+  /** Seconds since the epoch; absent: a session cookie. */
+  readonly expires?: number
+  readonly httpOnly?: boolean
+  readonly secure?: boolean
+  readonly sameSite?: 'Lax' | 'Strict' | 'None'
+  readonly partitionKey?: CookiePartitionKey
 }
 
 export interface FrameMeta {
@@ -444,7 +456,11 @@ export class HeadlessInstance {
     }
     this.browserCdp = browserCdp
     await this.downloads?.attach(browserCdp)
-    // Before any page loads: the first request already carries them.
+    // Before any page loads: the first request already carries them. Kept
+    // cookies first, then primed ones over them.
+    if (this.opts.restoredCookies && this.opts.restoredCookies.length > 0) {
+      await restoreCardCookies((method, params) => browserCdp.send(method, params), this.opts.restoredCookies, this.opts.cookies ?? [])
+    }
     if (this.opts.cookies && this.opts.cookies.length > 0) await browserCdp.send('Storage.setCookies', { cookies: this.opts.cookies })
 
     // In this order: /json still lists a closing probe page for a moment, and
@@ -1104,6 +1120,13 @@ export class HeadlessInstance {
   async setCookies(cookies: readonly HeadlessCookie[]): Promise<void> {
     if (this.browserCdp === null) throw new Error('The browser is not running.')
     await this.browserCdp.send('Storage.setCookies', { cookies })
+  }
+
+  /** Every cookie in this card's browser, session ones included (Storage.getCookies, default context); rejects when it is not attached. */
+  async getCookies(): Promise<readonly unknown[]> {
+    if (this.browserCdp === null) throw new Error('The browser is not running.')
+    const answer = (await this.browserCdp.send('Storage.getCookies', {})) as { cookies?: unknown } | null
+    return Array.isArray(answer?.cookies) ? answer.cookies : []
   }
 
   /** Update the node-card fallback without clobbering a viewer-owned viewport. */

@@ -31,6 +31,8 @@ export interface BrowserInstance {
   start(): Promise<void>
   /** Set cookies in the running browser. Absent where there is no web page to sign in (a phone). */
   setCookies?(cookies: readonly HeadlessCookie[]): Promise<void>
+  /** Every cookie the running browser holds, as CDP Network.Cookie objects (card-cookie-vault.ts). Absent where there is none (a phone). */
+  getCookies?(): Promise<readonly unknown[]>
   stop(gracefulTimeoutMs?: number): Promise<HeadlessStopResult>
   syncTabs(tabs: BrowserTab[], activeTabId: string): Promise<void>
   resize(width: number, height: number): Promise<void>
