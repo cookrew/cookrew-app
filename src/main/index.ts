@@ -4316,7 +4316,13 @@ function exclusiveDirLaunchLine(t: SpawnSubject, command: string, servedCtx: Ser
     // in pi-bind, because only the store knows what every other node claims
     // — and that check is the whole reason this is not the most-recent
     // guess the exclusive-dir design exists to forbid.
-    storedSessionId: t.piSessionId ?? (servedCtx ? null : adoptablePiSession(t.id, t.cwd))
+    // Adoption is for a REATTACHED pane (one that was launched before the
+    // exclusive-dir wiring and is still alive): its session sits in pi's
+    // shared cwd dir and would otherwise never bind. A card being opened for
+    // the first time has no pane yet and must start fresh — adoption here gave
+    // brand-new agents an old stranger's conversation (owner, 2026-11-28: the
+    // two new Pi cards opened on an August session).
+    storedSessionId: t.piSessionId ?? (servedCtx || panePresence(t.id) !== true ? null : adoptablePiSession(t.id, t.cwd))
   })
   if (t.piSessionId !== binding.sessionId) {
     store.updateNodeUnsafe(t.id, { piSessionId: binding.sessionId })

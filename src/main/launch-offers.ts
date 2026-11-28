@@ -147,7 +147,9 @@ export const LAUNCH_OFFERS: Readonly<Record<HarnessId, (command: string, options
   claude: (command) => launchOffer(command),
   codex: (_command, options) => codexLaunchOffer(options),
   pi: (_command, options) => piLaunchOffer(options),
-  opencode: (_command, options) => opencodeLaunchOffer(options),
+  // OpenCode 2's TUI has no launch flag for a model (2026-11-28), so a new
+  // agent has no pick to take; a routed card's model comes from its config.
+  opencode: () => null,
   agy: (_command, options) => agyLaunchOffer({ cacheFile: options.agyModelCache, refresh: options.modelRefresh }),
   devin: (_command, options) => devinLaunchOffer({ cacheFile: options.devinModelCache, refresh: options.modelRefresh }),
   dsh: () => DSH_OFFER,

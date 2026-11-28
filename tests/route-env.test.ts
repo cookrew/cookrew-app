@@ -65,7 +65,8 @@ describe('routeEnv', () => {
     const r = routeEnv({ harness: 'opencode', gateway, model: 'group/smart', cardId: 'card-3' })
     expect(r.routable).toBe(true)
     expect(r.env.OPENCODE_CONFIG).toMatch(/\.cookrew[\\/]route[\\/]card-3[\\/]opencode\.json$/)
-    expect(r.args).toEqual(['--model', 'magpie/group/smart'])
+    // OpenCode 2's TUI has no --model (2.4.1, 2026-11-28): the config's model field is the way in.
+    expect(r.args).toEqual([])
     expect(r.files).toHaveLength(1)
     const config = JSON.parse(r.files[0].content) as {
       provider: { magpie: { npm: string; options: { baseURL: string; apiKey: string; headers: Record<string, string> }; models: Record<string, unknown> } }

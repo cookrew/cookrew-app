@@ -115,9 +115,13 @@ export function routeEnv(input: RouteEnvInput): RouteEnv {
         },
         model: `magpie/${model}`
       }
+      // OpenCode 2 (2.4.1, measured 2026-11-28) has no `--model` on its TUI:
+      // the flag it removed made the card print its usage and exit at once
+      // ("opencode stopped right after it started"). The config's `model`
+      // field is what starts it on the gateway now, so no args are needed.
       return {
         env: { OPENCODE_CONFIG: file },
-        args: ['--model', `magpie/${model}`],
+        args: [],
         files: [{ path: file, content: `${JSON.stringify(config, null, 2)}\n` }],
         routable: true
       }

@@ -452,3 +452,14 @@ describe('piAdoptableSession — a node whose id was never captured', () => {
     rmSync(empty, { recursive: true, force: true })
   })
 })
+
+describe('a fresh Pi card never adopts a stranger’s session', () => {
+  it('adopts only for a pane that already exists (a reattach), never for a card being opened', async () => {
+    const { readFileSync } = await import('node:fs')
+    const source = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
+    // The spawn passes an adopted id only when the pane was there BEFORE the
+    // spawn: a first-open card has none, and adoption there gave new agents an
+    // old session (owner, 2026-11-28).
+    expect(source).toContain('servedCtx || panePresence(t.id) !== true ? null : adoptablePiSession(t.id, t.cwd)')
+  })
+})
