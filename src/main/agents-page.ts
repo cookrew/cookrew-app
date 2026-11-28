@@ -18,8 +18,8 @@ export interface AgentPageDeps {
   harnessRow: (id: HarnessId) => Pick<HarnessRow, 'installed' | 'signedIn' | 'inDock' | 'installLine' | 'loginLine'> | null
   /** The dock's launching presets. */
   presets: readonly { name: string; command: string }[]
-  /** `<bin> --version`, first line, or null. Defaults to running the bin. */
-  version: (bin: string) => Promise<string | null>
+  /** `<bin> <args>` → its version, or null. Defaults to running the bin. */
+  version: (bin: string, args: readonly string[]) => Promise<string | null>
 }
 
 /** The first version-looking token of a CLI's `--version` output. */
@@ -28,9 +28,15 @@ export function versionOf(output: string): string | null {
   return match ? match[0] : null
 }
 
-const defaultVersion = (bin: string): Promise<string | null> =>
+/** How each harness's CLI is asked for its version, where `--version` is not the way. */
+export const VERSION_ARGS: Readonly<Partial<Record<HarnessId, readonly string[]>>> = {
+  // `alma --version` is "Unknown command"; `alma version` prints "Alma valma-server 0.4.1190".
+  alma: ['version']
+}
+
+const defaultVersion = (bin: string, args: readonly string[]): Promise<string | null> =>
   new Promise((resolve) => {
-    execFile(bin, ['--version'], { timeout: PROBE_TIMEOUT_MS, env: process.env }, (error, stdout, stderr) => {
+    execFile(bin, [...args], { timeout: PROBE_TIMEOUT_MS, env: process.env }, (error, stdout, stderr) => {
       if (error && !stdout && !stderr) return resolve(null)
       resolve(versionOf(String(stdout ?? '')) ?? versionOf(String(stderr ?? '')))
     })
@@ -42,25 +48,26 @@ const defaultVersion = (bin: string): Promise<string | null> =>
  * failure is remembered for its TTL too: a bin that hangs on --version must
  * not be run again on every open.
  */
-export function agentVersionProbe(probe: (bin: string) => Promise<string | null> = defaultVersion, now: () => number = Date.now) {
+export function agentVersionProbe(probe: (bin: string, args: readonly string[]) => Promise<string | null> = defaultVersion, now: () => number = Date.now) {
   const seen = new Map<string, { at: number; value: string | null }>()
   const running = new Map<string, Promise<string | null>>()
-  return async (bin: string): Promise<string | null> => {
-    const known = seen.get(bin)
+  return async (bin: string, args: readonly string[] = ['--version']): Promise<string | null> => {
+    const key = `${bin} ${args.join(' ')}`
+    const known = seen.get(key)
     if (known && now() - known.at < VERSION_TTL_MS) return known.value
-    const pending = running.get(bin)
+    const pending = running.get(key)
     if (pending) return pending
-    const run = probe(bin)
+    const run = probe(bin, args)
       .then((value) => {
-        seen.set(bin, { at: now(), value })
+        seen.set(key, { at: now(), value })
         return value
       })
       .catch(() => {
-        seen.set(bin, { at: now(), value: null })
+        seen.set(key, { at: now(), value: null })
         return null
       })
-      .finally(() => running.delete(bin))
-    running.set(bin, run)
+      .finally(() => running.delete(key))
+    running.set(key, run)
     return run
   }
 }
@@ -80,7 +87,7 @@ export async function buildAgentPage(deps: AgentPageDeps): Promise<AgentPageRow[
         command: preset?.command ?? card.bin,
         installed,
         signedIn: scan?.signedIn ?? null,
-        version: installed ? await deps.version(card.bin) : null,
+        version: installed ? await deps.version(card.bin, VERSION_ARGS[id] ?? ['--version']) : null,
         installLine: scan?.installLine ?? '',
         loginLine: scan?.loginLine ?? null,
         inDock: scan?.inDock ?? preset !== undefined,
