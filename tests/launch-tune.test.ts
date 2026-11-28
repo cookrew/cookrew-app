@@ -99,9 +99,11 @@ describe('the launch command', () => {
     expect(launchCommand('qwen-pi --thinking off', { model: 'ifunk/k3', effort: 'low' }, PI)).toBe('qwen-pi --model ifunk/k3 --thinking low')
   })
 
-  it('gives opencode its model and nothing else', () => {
-    expect(launchCommand('opencode', { model: 'gemini/gemini-2.5-pro', effort: 'high' }, OPENCODE)).toBe('opencode --model gemini/gemini-2.5-pro')
-    expect(launchCommand('opencode -m openai/gpt-5.2-codex', { model: 'gemini/gemini-2.5-pro' }, OPENCODE)).toBe('opencode --model gemini/gemini-2.5-pro')
+  it("opencode 2 has no launch model flag, so it takes nothing (its TUI picks the model)", () => {
+    // The flag it removed made a routed card exit at once (2026-11-28);
+    // launchOfferFor returns none for opencode now.
+    expect(launchCommand('opencode', { model: 'gemini/gemini-2.5-pro' }, null)).toBe('opencode')
+    expect(withoutRoutedPick('opencode --model gemini/gemini-2.5-pro', 'opencode')).toBe('opencode')
   })
 
   it('replaces a flag the preset already carries instead of repeating it', () => {

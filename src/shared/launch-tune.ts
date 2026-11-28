@@ -121,6 +121,9 @@ const SPELLING: Readonly<Record<LaunchHarness, Partial<Record<LaunchKnob, FlagSp
     model: { flag: (v) => `--model ${v}`, strip: flagForm('--model') },
     effort: { flag: (v) => `--thinking ${v}`, strip: flagForm('--thinking') }
   },
+  // OpenCode 2's TUI takes no `--model` (it kept `-m` on `opencode run` only),
+  // so the flag is never appended (no launch offer exists); the strip stays,
+  // for a launch line that still carries one from an older pick or route.
   opencode: {
     model: { flag: (v) => `--model ${v}`, strip: flagForm('-m|--model') }
   },
