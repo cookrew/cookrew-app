@@ -219,11 +219,26 @@ export class HeadlessBrowserCommandEngine {
           // a dropdown item is usually no ref of its own until it is listed,
           // and its name is what a person clicks by (2026-11-28).
           const arg = params[0] ?? ''
+          const where = await instance.evaluate(`(() => {
+            const el = (${selectorFor(arg)}) || (${byText(arg)})
+            if (!el) return null
+            const box = el.getBoundingClientRect()
+            return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) }
+          })()`)
+          if (where === null || where === undefined) {
+            throw new Error(`Element '${arg}' not found - re-run snapshot`)
+          }
+          const point = where as { x: number; y: number }
+          // A REAL press where the device can send one: swas-select (Aliyun's
+          // selects) and most popper menus open on a trusted mousedown only,
+          // and a script-dispatched one is ignored (2026-11-28).
+          if (instance.clickAt) {
+            await instance.clickAt(point.x, point.y)
+            return 'Clicked'
+          }
           const result = await instance.evaluate(`(() => {
             const el = (${selectorFor(arg)}) || (${byText(arg)})
             if (!el) return '__COOKREW_NOT_FOUND__'
-            // The whole press, not only its click: a menu item that listens for
-            // mousedown (Aliyun's selects, most popper menus) never sees a bare click().
             const box = el.getBoundingClientRect()
             const at = { bubbles: true, cancelable: true, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2, view: window }
             el.dispatchEvent(new MouseEvent('mousedown', at))

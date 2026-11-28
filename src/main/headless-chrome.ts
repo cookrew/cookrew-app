@@ -879,6 +879,21 @@ export class HeadlessInstance {
     await page.cdp.send('Input.insertText', { text }).catch(() => undefined)
   }
 
+  /**
+   * A REAL mouse press on the page the viewers are looking at, through CDP's
+   * input path. A control may ignore script-dispatched events entirely: Aliyun's
+   * swas-select opens on a trusted mousedown only (2026-11-28), so clicking its
+   * item with el.click() did nothing.
+   */
+  async clickAt(x: number, y: number): Promise<void> {
+    const page = this.pages.get(this.activeTabId)
+    if (!page) return
+    const at = { x, y, button: 'left' as const, clickCount: 1 }
+    await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y }).catch(() => undefined)
+    await page.cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...at }).catch(() => undefined)
+    await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...at }).catch(() => undefined)
+  }
+
   /** A copy on the page the viewers are looking at; a background tab's is nobody's. */
   private onBindingCalled(page: PageBinding, params: Record<string, unknown>): void {
     if (params.name === FIELDS_BINDING) return this.onFieldsCalled(page, params.payload)

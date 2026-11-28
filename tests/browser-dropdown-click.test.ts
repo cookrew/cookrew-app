@@ -83,7 +83,7 @@ function dropdownPage() {
   return { context, tcp, udp, zone, button }
 }
 
-function engineOn(page: ReturnType<typeof dropdownPage>): HeadlessBrowserCommandEngine {
+function engineOn(page: ReturnType<typeof dropdownPage>, clicks?: { x: number; y: number }[]): HeadlessBrowserCommandEngine {
   const node: BrowserNodeData = {
     kind: 'browser', id: 'b1', name: 'Picker', url: 'https://example.test',
     tabs: [{ id: 't1', url: 'https://example.test', title: '' }], activeTabId: 't1',
@@ -91,7 +91,10 @@ function engineOn(page: ReturnType<typeof dropdownPage>): HeadlessBrowserCommand
   }
   const instance = {
     evaluate: vi.fn((expression: string) => Promise.resolve(runInNewContext(expression, page.context))),
-    beginAgentViewportActivity: vi.fn(() => Promise.resolve(vi.fn()))
+    beginAgentViewportActivity: vi.fn(() => Promise.resolve(vi.fn())),
+    ...(clicks
+      ? { clickAt: vi.fn((x: number, y: number) => (clicks.push({ x, y }), Promise.resolve())) }
+      : {})
   }
   return new HeadlessBrowserCommandEngine({
     store: { nodeByName: () => node, node: () => undefined } as unknown as WorkspaceStore,
@@ -116,6 +119,17 @@ describe('a dropdown item is listed and can be clicked by its words', () => {
     await expect(engineOn(page).run(['click', 'Picker', 'UDP'], 'agent')).resolves.toBe('Clicked')
     expect(page.udp.pressed).toEqual(['mousedown', 'mouseup', 'click'])
     expect(page.tcp.pressed).toEqual([])
+  })
+
+  // Aliyun's swas-select opens only on a trusted press; a script-dispatched
+  // event is ignored. A device that can send a real one is used when there is one.
+  it('a device that can press for real sends the press at the item\'s centre', async () => {
+    const page = dropdownPage()
+    const clicks: { x: number; y: number }[] = []
+    await expect(engineOn(page, clicks).run(['click', 'Picker', 'UDP'], 'agent')).resolves.toBe('Clicked')
+    expect(clicks).toEqual([{ x: 70, y: 62 }])
+    // The synthetic path is not also taken.
+    expect(page.udp.pressed).toEqual([])
   })
 
   it('a name with a dot is not read as a CSS selector that does not exist', async () => {
