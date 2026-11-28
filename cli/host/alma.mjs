@@ -52,6 +52,15 @@ function toolSummary(input) {
   return one.length > 100 ? `${one.slice(0, 99)}…` : one
 }
 
+/** One kind of part across a turn's assistant messages, joined: the turn is the unit that only ever grows. */
+function turnText(turn, type) {
+  return turn
+    .flatMap((m) => m.message.parts ?? [])
+    .filter((p) => p?.type === type && typeof p.text === 'string')
+    .map((p) => p.text)
+    .join('')
+}
+
 function outputText(output) {
   if (typeof output === 'string') return output
   if (output && typeof output === 'object') {
@@ -71,10 +80,13 @@ export class AlmaBackend {
     this.events = events
     this.threadId = null
     this.ws = null
-    /** What of THIS turn's reply has been handed to the screen, as one string across messages. */
-    this.emittedText = ''
-    this.emittedThoughts = ''
-    this.sentTools = new Map()
+    /**
+     * What of THIS turn the screen already has, as one string per kind across
+     * the turn's messages (pollTurn: Alma rebuilds its messages as it streams).
+     */
+    this.printed = { text: '', thoughts: '' }
+    /** The tools already drawn, by id, so a rebuilt message does not draw one twice. */
+    this.drawnTools = new Map()
   }
 
   async workspace() {
@@ -121,9 +133,8 @@ export class AlmaBackend {
 
   /** One turn: send, then watch the thread until it is no longer busy. */
   async prompt(text) {
-    this.emittedText = ''
-    this.emittedThoughts = ''
-    this.sentTools = new Map()
+    this.printed = { text: '', thoughts: '' }
+    this.drawnTools = new Map()
     const sent = await this.api.request(`/api/threads/${this.threadId}/send`, { method: 'POST', body: { text, ...(this.wantModel ? { model: this.wantModel } : {}) } })
     if (sent.status === 409) throw new Error('Alma is busy with another turn on this thread')
     if (sent.status !== 202) throw new Error(`Alma would not take the prompt: ${sent.body?.error ?? sent.status}`)
@@ -142,16 +153,21 @@ export class AlmaBackend {
   }
 
   /**
-   * New parts since the last poll, as the host's events.
+   * New since the last poll, as the host's events.
    *
-   * Alma REBUILDS an assistant message while it streams (a fresh message id, the
-   * whole text so far), and one turn can hold several assistant messages (one
-   * per step). So what is compared is the TURN's reply as one string — every
-   * assistant message after the last user message, joined — and only the part
-   * past what was already handed over goes out. A rewrite that no longer starts
-   * with it (a regenerate) is taken as the new truth without being printed
-   * again: the bug this fixes was the whole reply printed once per poll
-   * (owner, 2026-11-28).
+   * ALMA REBUILDS THE REPLY WHILE IT STREAMS — and a turn is not one message but
+   * one per step. Each poll can hand back a message with a fresh id carrying the
+   * text so far, and the next step's message carries another text part beside
+   * it. So nothing here is compared by message id, and nothing is counted per
+   * part either: the comparison is THE TURN as one string — every assistant
+   * message after the last user message, joined — and only what lies past what
+   * the screen already has goes out.
+   *
+   * Both earlier readings printed the reply again, hundreds of times: keyed by
+   * message id, a rebuilt message was a stranger on every 400ms poll; keyed by
+   * part kind, a second text part advanced a cursor the first part rewound, so
+   * every poll re-emitted the tail — a card showed "nd the card itself.with the
+   * full path as its tooltip." a thousand times until the turn ended.
    */
   async pollTurn() {
     const messages = rows((await this.api.request(`/api/threads/${this.threadId}/messages`)).body)
@@ -161,38 +177,63 @@ export class AlmaBackend {
       if (m.message.role === 'user') lastUser = i
     })
     const turn = said.slice(lastUser + 1).filter((m) => m.message.role === 'assistant')
-    const text = turn.flatMap((m) => (m.message.parts ?? []).filter((p) => p?.type === 'text' && typeof p.text === 'string').map((p) => p.text)).join('')
-    if (text.length > this.emittedText.length && text.startsWith(this.emittedText)) {
-      const suffix = text.slice(this.emittedText.length)
-      if (suffix.trim()) this.events.text(turn.at(-1)?.message.id ?? null, suffix)
-    }
-    this.emittedText = text
-    const thoughts = turn.flatMap((m) => (m.message.parts ?? []).filter((p) => p?.type === 'reasoning' && typeof p.text === 'string').map((p) => p.text)).join('')
-    if (thoughts.length > this.emittedThoughts.length && thoughts.startsWith(this.emittedThoughts)) {
-      const suffix = thoughts.slice(this.emittedThoughts.length)
-      if (suffix.trim()) this.events.thought(turn.at(-1)?.message.id ?? null, suffix)
-    }
-    this.emittedThoughts = thoughts
-    for (const message of turn) {
-      for (const part of message.message.parts ?? []) {
-        if (typeof part?.type !== 'string' || !part.type.startsWith('tool-')) continue
-        const id = part.toolCallId ?? part.id ?? `${message.message.id}:${part.type}`
-        const known = this.sentTools.get(id)
-        if (!known) this.sentTools.set(id, { state: part.state })
-        if (!known) this.events.tool(id, part.type.slice(5), toolSummary(part.input))
-        if (part.state === 'output-available' || part.state === 'output-error') {
-          const sent = this.sentTools.get(id)
-          if (!sent.done) {
-            sent.done = true
-            this.events.toolDone(id, part.state === 'output-error' ? 'failed' : 'completed', outputText(part.output))
-          }
-        }
+    const lastId = turn.at(-1)?.message.id ?? ''
+
+    const reply = turnText(turn, 'text')
+    const grownReply = this.grown('text', reply)
+    if (grownReply.trim()) this.events.text(lastId, grownReply)
+    const thoughts = turnText(turn, 'reasoning')
+    const grownThought = this.grown('thoughts', thoughts)
+    if (grownThought.trim()) this.events.thought(lastId, grownThought)
+
+    // A tool is drawn once, whether its part arrives in a new message or in a
+    // rebuilt one; parts with no id of their own are told apart by their order.
+    let ordinal = 0
+    for (const part of turn.flatMap((m) => m.message.parts ?? [])) {
+      if (typeof part?.type !== 'string' || !part.type.startsWith('tool-')) continue
+      const id = part.toolCallId ?? part.id ?? `#${ordinal}`
+      ordinal += 1
+      let drawn = this.drawnTools.get(id)
+      if (!drawn) {
+        drawn = { state: part.state, done: false }
+        this.drawnTools.set(id, drawn)
+        this.events.tool(id, part.type.slice(5), toolSummary(part.input))
+      }
+      drawn.state = part.state
+      if (!drawn.done && (part.state === 'output-available' || part.state === 'output-error')) {
+        drawn.done = true
+        this.events.toolDone(id, part.state === 'output-error' ? 'failed' : 'completed', outputText(part.output))
       }
     }
+
     for (const ask of rows((await this.api.request('/api/handoff/tool-approvals')).body)) {
       if (ask?.threadId && ask.threadId !== this.threadId) continue
       await this.answer(ask)
     }
+  }
+
+  /**
+   * What lies past what the screen has, or '' when nothing does.
+   *
+   * THE CURSOR ONLY MOVES FORWARD, and that is the whole point. Alma's message
+   * list is a VIEW of a turn being rebuilt, and it flickers: the newest message
+   * is there, then gone for a poll while the next step is written, then back
+   * with the same text. A cursor assigned `text` unconditionally follows it down
+   * and the same tail is printed again on the way back up — 1469 characters of
+   * a reply, once every 400ms, which is what a card showed after the first fix
+   * for this (owner, 2026-11-28). A shorter view therefore changes nothing, and
+   * a rewrite that runs longer than what was printed (a regenerate) is taken
+   * silently: it becomes the new truth without being said twice.
+   */
+  grown(kind, text) {
+    const printed = this.printed[kind]
+    if (text.length <= printed.length) return ''
+    if (!text.startsWith(printed)) {
+      this.printed[kind] = text
+      return ''
+    }
+    this.printed[kind] = text
+    return text.slice(printed.length)
   }
 
   async answer(ask) {
