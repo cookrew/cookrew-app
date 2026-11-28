@@ -41,7 +41,8 @@ describe('a menu rising over the dock', () => {
   })
 
   it('is how every menu of the box is placed', () => {
-    expect(src('prompt/HarnessMenu.tsx')).toContain('style={riseStyle(at, GAP)}')
+    // The ＋ menu is retired (owner, 2026-11-28: one agent picker): the box draws
+    // WhoPicker in its own layout, so only the chips' menus rise any more.
     expect(src('prompt/NewAgentTune.tsx')).toContain('style={riseStyle(at, GAP)}')
     expect(src('nodes/TuneMenu.tsx')).toContain('riseStyle(risen, EDGE)')
     for (const file of ['prompt/GlobalPrompt.tsx', 'prompt/NewAgentTune.tsx', 'nodes/TuneMenu.tsx']) {
@@ -79,7 +80,12 @@ describe('each pick puts the caret in the box', () => {
   })
 
   it("lets a menu's Esc close only the menu, not the box's caret", () => {
-    expect(between('const close = (e: Event): void => {', 'setPicking(null)')).toContain('e.stopPropagation()')
+    // The picker's own field stops every key it takes (WhoPicker.tsx), and the
+    // box's Esc closes the picker first (GlobalPrompt.tsx's form keydown).
+    const picker = src('prompt/WhoPicker.tsx')
+    expect(picker).toMatch(/onKeyDown=\{\(e\) => \{\s*\n\s*\/\/[^\n]*\n\s*e\.stopPropagation\(\)/)
+    expect(picker).toMatch(/e\.key === 'Escape'[\s\S]{0,60}onClose\(\)/)
+    expect(box).toContain('if (who) {\n          e.stopPropagation()\n          return closeWho()')
     expect(src('prompt/NewAgentTune.tsx')).toMatch(/if \(e\.key === 'Escape'\) \{\s*\n\s*\/\/[^\n]*\n\s*e\.stopPropagation\(\)/)
   })
 })
