@@ -734,3 +734,9 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
     transform: none;
   }
 }
+
+/* The harness's own mark in the picker (HarnessGlyph.tsx), and the rows that
+   open something at once (OpenNowRows, folded in from the ＋ menu). */
+.pf-harness-glyph { width: 18px; height: 18px; object-fit: contain; border-radius: 4px; display: block }
+.pf-who-act { display: flex; align-items: center; gap: 6px; }
+.pf-who-act small { opacity: 0.6; font-size: 10px }

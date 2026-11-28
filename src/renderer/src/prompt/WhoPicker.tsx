@@ -1,5 +1,7 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { InkAvatar } from '../zoom/InkAvatar'
+import { HarnessGlyph, harnessLogo } from './HarnessGlyph'
+import { SHELL_PRESET } from './harness-pref'
 import { pickerRows } from './item-user'
 import type { FaceAgent } from './PromptFace'
 import { agentKey, newKey, revealAt, whoFilter, whoKeys, whoStart, whoStep } from './who-keys'
@@ -25,6 +27,64 @@ import { agentKey, newKey, revealAt, whoFilter, whoKeys, whoStart, whoStep } fro
 
 export type WhoRow = FaceAgent & { lastActivityAt: number }
 
+/**
+ * What a harness row shows for the new agent: the harness's own logo where the
+ * vendor has one (HarnessGlyph), the ink mark where it has not.
+ */
+export function NewFace({ harness }: { harness: string }): React.JSX.Element {
+  return harnessLogo(harness) === null ? (
+    <InkAvatar id={`new:${harness}`} preset={harness} status="idle" weight="regular" />
+  ) : (
+    <HarnessGlyph preset={harness} />
+  )
+}
+
+/** What a new-agent picker holds beyond agents: a bare shell, the saved roles, and the window picker. */
+export interface NewMenuActs {
+  /** A bare shell is on offer. */
+  shell: boolean
+  roles: readonly string[]
+  /** Make a shell by its preset name. */
+  onPreset: (name: string) => void
+  onRole: (name: string) => void
+  /** Open the window picker; absent where this client cannot. */
+  onSource?: () => void
+  /** A card is being made: the acts hold still so one press makes one. */
+  making: boolean
+}
+
+/**
+ * OPEN NOW: the rows the ＋ menu held beside the harnesses (owner, 2026-11-01),
+ * now in the one picker (owner, 2026-11-28: one agent option frame). Exported
+ * for its own test: it is pure and takes its acts.
+ */
+export function OpenNowRows({ acts, onDone }: { acts: NewMenuActs; onDone: () => void }): React.JSX.Element | null {
+  const act = (run: () => void) => () => {
+    run()
+    onDone()
+  }
+  if (!acts.shell && acts.roles.length === 0 && acts.onSource === undefined) return null
+  return (
+    <>
+      {acts.shell && (
+        <button type="button" role="menuitem" className="pf-who-act" title="A plain terminal, opened now: it takes no prompt" disabled={acts.making} onClick={act(() => acts.onPreset(SHELL_PRESET))}>
+          {SHELL_PRESET}
+        </button>
+      )}
+      {acts.roles.map((name) => (
+        <button key={`role:${name}`} type="button" role="menuitem" className="pf-who-act" title={`Role · boots its harness with the “${name}” prompt`} disabled={acts.making} onClick={act(() => acts.onRole(name))}>
+          {name} <small>role</small>
+        </button>
+      ))}
+      {acts.onSource && (
+        <button type="button" role="menuitem" className="pf-who-act" title="Show a window or a whole screen as a card" onClick={act(acts.onSource)}>
+          Window or screen
+        </button>
+      )}
+    </>
+  )
+}
+
 export interface WhoPickerProps {
   /** Every agent of the crew, as its face draws it. */
   rows: readonly WhoRow[]
@@ -36,6 +96,8 @@ export interface WhoPickerProps {
   current: { id: string | null; harness: string }
   onAgent: (id: string) => void
   onNew: (harness: string) => void
+  /** The rows that open something at once (OpenNowRows); absent on a bridge that cannot. */
+  acts?: NewMenuActs
   /** Esc in the field: the box takes the focus back. */
   onClose: () => void
 }
@@ -68,9 +130,7 @@ function Row({ id, agent, harness, current, active, sub, onPoint, onPick }: RowP
       onMouseMove={onPoint}
       onClick={onPick}
     >
-      <span className="pf-who-face">
-        <InkAvatar id={agent?.id ?? `new:${harness}`} preset={agent?.preset ?? harness} orch={agent?.orch ?? false} status={agent?.status ?? 'idle'} weight="regular" />
-      </span>
+      <span className="pf-who-face">{agent ? <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={agent.status} weight="regular" /> : <NewFace harness={harness} />}</span>
       <b>{agent ? agent.name : harness}</b>
       <small>{sub}</small>
       {active && (
@@ -93,7 +153,7 @@ function reveal(scroller: HTMLElement | null, el: HTMLElement | null): void {
   scroller.scrollLeft = revealAt(scroller.scrollLeft, scroller.clientWidth, at.left - box.left + scroller.scrollLeft - pad, at.width + 2 * pad)
 }
 
-export function WhoPicker({ rows, first, recentTitle, harnesses, current, onAgent, onNew, onClose }: WhoPickerProps): React.JSX.Element {
+export function WhoPicker({ rows, first, recentTitle, harnesses, current, onAgent, onNew, onClose, acts }: WhoPickerProps): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [pointed, setPointed] = useState<string | null>(null)
   const lists = pickerRows(rows, { current: current.id, first, query })
@@ -182,6 +242,16 @@ export function WhoPicker({ rows, first, recentTitle, harnesses, current, onAgen
         {lists.waiting.length > 0 && group('needs you', lists.waiting.map((a) => agentRow(a, SUB.waiting)))}
         {lists.recent.length > 0 && group(query.trim() ? 'agents' : recentTitle, lists.recent.map((a) => agentRow(a, SUB[a.status] ?? '')))}
         {news.length > 0 && group('new agent', news.map(newRow))}
+        {acts !== undefined && (!query.trim() || 'open now'.startsWith(query.trim().toLowerCase())) && (
+          <div className="pf-who-group" role="group" aria-label="open now">
+            <div className="pf-who-title" aria-hidden="true">
+              open now
+            </div>
+            <div className="pf-who-rows">
+              <OpenNowRows acts={acts} onDone={onClose} />
+            </div>
+          </div>
+        )}
       </div>
       {keys.length === 0 && (
         <p className="pf-who-none" role="status">

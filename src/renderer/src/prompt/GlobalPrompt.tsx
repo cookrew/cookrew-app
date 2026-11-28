@@ -17,7 +17,7 @@ import { NewAgentTune, type NewAgentGateway } from './NewAgentTune'
 import { useRouteState } from '../routing/use-route-state'
 import { routeChoices } from '../../../shared/route-view'
 import { usePresetOffers } from './use-preset-commands'
-import { HarnessMenu, type NewMenuActs } from './HarnessMenu'
+import { NewFace, type NewMenuActs } from './WhoPicker'
 import { agentRefs, artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef, type PromptArtifact } from './artifact-refs'
 import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
 import { earSays, withHeard } from './dictation'
@@ -34,7 +34,7 @@ import { extrasShown, rememberExtras, toolsOpen } from './extras-pref'
 import { useSpokenReplies } from './use-spoken-replies'
 import { PictureStrip, picturesOfDraft } from '../pictures/PictureStrip'
 import { shownWords, withoutLastPicture, withoutPicture, withShownWords } from './draft-pictures'
-import { keyboardCoverNow, riseOver, type RiseAnchor, topBarBottom } from './rise-anchor'
+import { keyboardCoverNow } from './rise-anchor'
 import { useCrewContext } from '../stage/crew-rows'
 import { inkStatusOfRow } from '../zoom/ink-status'
 import type { AgentRow } from '../agent-rows'
@@ -294,26 +294,6 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   }, [offered, firstTask])
   // Chosen elsewhere (the tool check, a saved endpoint): the box follows.
   useEffect(() => onHarnessPref(() => setHarness(lastHarness(harnesses))), [offered]) // eslint-disable-line react-hooks/exhaustive-deps
-  /** The harness menu, anchored over its chip: the dock clips anything that hangs out of it. */
-  const [picking, setPicking] = useState<RiseAnchor | null>(null)
-  useEffect(() => setPicking(null), [to?.id])
-  useEffect(() => {
-    if (!picking) return
-    const close = (e: Event): void => {
-      if (e instanceof KeyboardEvent) {
-        if (e.key !== 'Escape') return
-        // The menu's Esc: the box behind it keeps its caret.
-        e.stopPropagation()
-      } else if (e.target instanceof Element && e.target.closest('.cr-prompt-menu, .cr-prompt-harness')) return
-      setPicking(null)
-    }
-    window.addEventListener('pointerdown', close, true)
-    window.addEventListener('keydown', close, true)
-    return () => {
-      window.removeEventListener('pointerdown', close, true)
-      window.removeEventListener('keydown', close, true)
-    }
-  }, [picking])
   // The new agent's model and effort: sticky like the harness, sent only as
   // far as the harness takes them (shared/launch-tune).
   // Each harness keeps its own pick: a codex model means nothing to claude.
@@ -701,7 +681,6 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     if (!foldable || folded) return
     return listenFoldPress(window, {
       onFold: () => {
-        setPicking(null)
         promptFold.fold()
       }
     })
@@ -873,6 +852,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           focusBox()
         }}
         onClose={closeWho}
+        acts={acts}
       />
     )
   })()
@@ -882,7 +862,6 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     picked.current = name
     setHarness(name)
     rememberHarness(name)
-    setPicking(null)
   }
   const pick = (name: string): void => {
     takeHarness(name)
@@ -947,20 +926,16 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           <button
             type="button"
             className="cr-prompt-harness"
-            aria-haspopup="menu"
-            aria-expanded={picking !== null}
+            aria-haspopup="listbox"
+            aria-expanded={who}
             title="What the new agent runs — or open a shell"
-            onClick={(e) => {
-              const at = riseOver(e.currentTarget.getBoundingClientRect(), window.innerHeight, keyboardCoverNow(), 6, topBarBottom())
-              setPicking((open) => (open ? null : at))
-            }}
+            onClick={() => (who ? closeWho() : setWho(true))}
           >
             <span className="pf-chip-face pf-new" ref={chipFace}>
-              <InkAvatar id={`new:${harness}`} preset={harness} status="idle" weight="regular" />
+              <NewFace harness={harness} />
             </span>
             <span ref={chipName}>＋ {harness} ▾</span>
           </button>
-          {picking && <HarnessMenu at={picking} harnesses={harnesses} harness={harness} onPick={pick} acts={acts} onDone={() => setPicking(null)} />}
         </span>
       )}
       {suggesting && anchor && pending && (
