@@ -360,6 +360,7 @@ import { registerFirstRunIpc } from './first-run-ipc'
 import { FirstRunStore } from './first-run-store'
 import { machineProbe, probeTools, readLoginShellDirs } from './preflight'
 import { HeadlessBrowserManager } from './headless-browser-manager'
+import { createCardCookieVault } from './card-cookie-vault'
 import { HeadlessBrowserCommandEngine, withActiveUrl } from './headless-browser-command'
 import { browserForCaller, keptBrowsers } from './browser-reach'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
@@ -7501,6 +7502,14 @@ const browserProfileRoot = (): string =>
   path.join(app.getPath('userData'), 'interactive-browser')
 
 /**
+ * Every card's cookies, session ones included, kept sealed beside its profile
+ * across a Chrome restart (card-cookie-vault.ts). The owner wants it on for
+ * every card and every site, with no exclusion list (11-28);
+ * `cardCookieVault.forgetAll()` is the action a future settings toggle calls.
+ */
+const cardCookieVault = createCardCookieVault({ safeStorage, profileRoot: browserProfileRoot })
+
+/**
  * Caches half of the same profile — `~/Library/Caches/<app>/interactive-browser`
  * on macOS, where Chrome splits a user-data-dir in two.
  *
@@ -7721,6 +7730,7 @@ const browserManager = new HeadlessBrowserManager({
   chromePath: findChrome,
   chromeLauncher,
   profileRoot: browserProfileRoot,
+  cookieVault: cardCookieVault,
   // Chromium's own layout keeps downloaded components at INSTALLATION scope,
   // beside the profiles rather than inside each one. Cookrew gives every card a
   // whole user-data-dir, so without this every card downloads its own copy.
@@ -9257,6 +9267,8 @@ app.on('before-quit', (event) => {
         : undefined
     })
     .catch(() => undefined)
+    // Each card's Chrome hands its cookies to its vault before it is closed,
+    // inside COOKIE_CAPTURE_MS (headless-browser-manager.ts · keepCookies).
     .then(() => browserManager.shutdown())
     .then(() => useInstances.dispose())
     .catch((error) => console.error('Headless browser shutdown failed:', error))
