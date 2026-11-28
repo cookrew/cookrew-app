@@ -49,7 +49,12 @@ const CENTER_OF = (selector: string): string => `(() => {
 })()`
 
 const SNAPSHOT_SCRIPT = `(() => {
-  const SALIENT = 'a,button,input,textarea,select,[role="button"],[role="link"],[role="tab"],[onclick],h1,h2,h3,label,summary'
+  // A DROPDOWN'S OPTIONS ARE PART OF THE PAGE a person can click: many selects
+  // (Aliyun's firewall protocol, Cloudflare's zone picker) are a div of
+  // role="option" items, or plain list items, that no other selector here
+  // matched — the snapshot offered no ref for them and click-by-text found
+  // nothing (2026-11-28). They are listed like any other control.
+  const SALIENT = 'a,button,input,textarea,select,[role="button"],[role="link"],[role="tab"],[role="option"],[role="menuitem"],[role="menuitemcheckbox"],[role="combobox"],[role="listbox"],[role="checkbox"],[onclick],h1,h2,h3,label,summary,li[role],[data-value],option'
   const out = []
   let n = 0
   for (const el of document.querySelectorAll(SALIENT)) {
@@ -93,6 +98,28 @@ const SET_VALUE = `((el, value) => {
   else el.value = value
 })`
 
+/**
+ * The element whose own visible text is exactly `want`, or the smallest such
+ * element: a dropdown item, a menu row, a plain div that a framework listens on.
+ * Clicking by what is written on it is how a person picks one (2026-11-28).
+ */
+function byText(want: string): string {
+  return `(() => {
+    const want = ${JSON.stringify(want)}.trim()
+    if (want.length === 0) return null
+    const hits = []
+    for (const el of document.querySelectorAll('body *')) {
+      const own = (el.innerText ?? '').trim()
+      if (own !== want) continue
+      const r = el.getBoundingClientRect()
+      if (r.width < 2 || r.height < 2) continue
+      hits.push({ el, size: own.length, kids: el.childElementCount, area: r.width * r.height })
+    }
+    hits.sort((a, b) => a.size - b.size || a.kids - b.kids || a.area - b.area)
+    return hits.length > 0 ? hits[0].el : null
+  })()`
+}
+
 function selectorFor(selector: string): string {
   if (selector.startsWith('@')) {
     return `document.querySelector('[data-cookrew-ref="${selector.slice(1)}"]')`
@@ -101,7 +128,10 @@ function selectorFor(selector: string): string {
     const [x, y] = selector.split(',')
     return `document.elementFromPoint(${x}, ${y})`
   }
-  return `document.querySelector(${JSON.stringify(selector)})`
+  // Not every name a person reads on screen is a CSS selector (a menu item that
+  // says "cookrew.dev" once threw an invalid-selector error): a selector this
+  // page cannot parse is simply no match, and click falls back to the text.
+  return `(() => { try { return document.querySelector(${JSON.stringify(selector)}) } catch { return null } })()`
 }
 
 async function withElement(
@@ -184,8 +214,28 @@ export class HeadlessBrowserCommandEngine {
           const info = await instance.pageInfo()
           return `url: ${info.url}\ntitle: ${info.title}\nviewport: ${info.viewport}`
         }
-        case 'click':
-          return withElement(instance, params[0], `el.click(); return 'Clicked'`)
+        case 'click': {
+          // A ref, a point, a selector — or, when none matches, the words on it:
+          // a dropdown item is usually no ref of its own until it is listed,
+          // and its name is what a person clicks by (2026-11-28).
+          const arg = params[0] ?? ''
+          const result = await instance.evaluate(`(() => {
+            const el = (${selectorFor(arg)}) || (${byText(arg)})
+            if (!el) return '__COOKREW_NOT_FOUND__'
+            // The whole press, not only its click: a menu item that listens for
+            // mousedown (Aliyun's selects, most popper menus) never sees a bare click().
+            const box = el.getBoundingClientRect()
+            const at = { bubbles: true, cancelable: true, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2, view: window }
+            el.dispatchEvent(new MouseEvent('mousedown', at))
+            el.dispatchEvent(new MouseEvent('mouseup', at))
+            el.click()
+            return 'Clicked'
+          })()`)
+          if (result === '__COOKREW_NOT_FOUND__') {
+            throw new Error(`Element '${arg}' not found - re-run snapshot`)
+          }
+          return String(result)
+        }
         case 'fill':
           return withElement(
             instance,
