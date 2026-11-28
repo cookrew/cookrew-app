@@ -78,6 +78,21 @@ describe('the rows', () => {
     expect(rows.filter((r) => r.id !== 'codex').every((r) => r.version === null)).toBe(true)
   })
 
+  it('asks each harness its own way: alma answers `version`, not `--version`', async () => {
+    const asked: Array<[string, readonly string[]]> = []
+    const rows = await buildAgentPage({
+      harnessRow: () => ({ installed: true, signedIn: null, inDock: true, installLine: 'x', loginLine: null }),
+      presets,
+      version: async (bin, args) => {
+        asked.push([bin, args])
+        return '1.0.0'
+      }
+    })
+    expect(asked).toContainEqual(['alma', ['version']])
+    expect(asked).toContainEqual(['claude', ['--version']])
+    expect(rows.every((r) => r.version === '1.0.0')).toBe(true)
+  })
+
   it('a bridge that knows nothing still lists every harness (missing, with its dock line)', async () => {
     const rows = await buildAgentPage({ harnessRow: () => null, presets: [], version: async () => '1.0.0' })
     expect(rows).toHaveLength(HARNESS_IDS.length)
