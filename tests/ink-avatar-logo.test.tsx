@@ -19,6 +19,16 @@ describe('the face', () => {
     for (const preset of ['Claude Code', 'Codex', 'OpenCode', 'Pi']) expect(face(preset)).toContain('ink-logo-art')
   })
 
+  it("the harnesses added on 2026-11-26 wear the vendor's own artwork (existing cards too)", () => {
+    for (const preset of ['Antigravity CLI', 'Devin', 'DeepSeek Harness', 'Alma']) {
+      const html = face(preset)
+      expect(html, preset).toContain('ink-logo-art')
+      expect(html, preset).toMatch(/<image href="[^"]+" x="0" y="0" width="100" height="100"/)
+    }
+    // The four originals keep their drawn marks: no image, the same path art.
+    for (const preset of ['Claude Code', 'Codex', 'OpenCode', 'Pi']) expect(face(preset), preset).not.toContain('<image')
+  })
+
   it('keeps the ink prompt for a plain shell, with no logo', () => {
     const shell = face('Shell')
     expect(shell).not.toContain('ink-logo-art')

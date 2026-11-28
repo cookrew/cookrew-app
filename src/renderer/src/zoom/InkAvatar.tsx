@@ -1,4 +1,8 @@
 import { memo, useId } from 'react'
+import almaLogo from '../prompt/harness-logos/alma.png'
+import devinLogo from '../prompt/harness-logos/devin.png'
+import agyLogo from '../prompt/harness-logos/agy.png'
+import deepseekLogo from '../prompt/harness-logos/deepseek.svg'
 import { brushPathCached, CORNER, harnessMark, type HarnessMark, type MarkName } from './ink-marks'
 import { cornerOf, type CornerMark, type InkStatus } from './ink-status'
 
@@ -59,16 +63,10 @@ const CODEX = 'M8.086.457a6.105 6.105 0 013.046-.415c1.333.153 2.521.72 3.564 1.
 const OPENCODE_FRAME = 'M384 416H128V96H384V416ZM320 160H192V352H320V160Z'
 const OPENCODE_BLOCK = 'M320 224V352H192V224H320Z'
 /** Antigravity CLI: an arch (its boot banner draws one), Cookrew's own drawing — not Google's logo. */
-const AGY_ARCH = 'M8 92 C8 30 26 8 50 8 C74 8 92 30 92 92 L72 92 C72 44 62 28 50 28 C38 28 28 44 28 92 Z'
 
 /** Alma: a sprout in a ring, Cookrew's own drawing — not Alma's logo. */
-const SPROUT = 'M50 8 A42 42 0 1 0 50 92 A42 42 0 1 0 50 8 Z M50 22 A28 28 0 1 1 50 78 A28 28 0 1 1 50 22 Z M50 84 C50 62 60 50 74 42 C68 62 62 72 50 84 Z M50 84 C50 66 42 56 30 50 C35 66 41 74 50 84 Z'
 
 /** DeepSeek Harness: two waves, Cookrew's own drawing — not DeepSeek's whale. */
-const DSH_WAVES = 'M6 40 Q22 22 38 40 T70 40 T94 34 L94 46 Q78 54 70 52 T38 52 T6 52 Z M6 64 Q22 46 38 64 T70 64 T94 58 L94 70 Q78 78 70 76 T38 76 T6 76 Z'
-
-/** Devin: a diamond with its centre cut out, Cookrew's own drawing — not Cognition's logo. */
-const DEVIN_DIAMOND = 'M50 6 L94 50 L50 94 L6 50 Z M50 32 L32 50 L50 68 L68 50 Z'
 
 const PI: readonly { d: string; fill: string }[] = [
   { d: 'M165.29 165.29H517.36V400H400V282.65H165.29Z', fill: '#F09082' },
@@ -112,37 +110,14 @@ const HarnessLogo = memo(function HarnessLogo({ mark }: { mark: BrandMark }): Re
       </svg>
     )
   }
-  if (mark === 'alma') {
+  // The harnesses added on 2026-11-26 wear the vendor's own artwork (owner,
+  // 2026-11-28: existing cards updated too). Claude Code, Codex, OpenCode and
+  // Pi keep the marks they always had.
+  const vendor = mark === 'agy' ? agyLogo : mark === 'devin' ? devinLogo : mark === 'dsh' ? deepseekLogo : mark === 'alma' ? almaLogo : null
+  if (vendor !== null) {
     return (
       <svg className="ink-logo-art" {...box} viewBox="0 0 100 100">
-        <path d={SPROUT} fill="#5FAF7F" fillRule="evenodd" />
-      </svg>
-    )
-  }
-  if (mark === 'dsh') {
-    return (
-      <svg className="ink-logo-art" {...box} viewBox="0 0 100 100">
-        <path d={DSH_WAVES} fill="#4D6BFE" />
-      </svg>
-    )
-  }
-  if (mark === 'devin') {
-    return (
-      <svg className="ink-logo-art" {...box} viewBox="0 0 100 100">
-        <path d={DEVIN_DIAMOND} fill="#2FA36B" fillRule="evenodd" />
-      </svg>
-    )
-  }
-  if (mark === 'agy') {
-    return (
-      <svg className="ink-logo-art" {...box} viewBox="0 0 100 100">
-        <defs>
-          <linearGradient id={gradient} x1="0" x2="1" y1="0" y2="1">
-            <stop stopColor="#4D9ABF" />
-            <stop offset="1" stopColor="#3941FF" />
-          </linearGradient>
-        </defs>
-        <path d={AGY_ARCH} fill={`url(#${gradient})`} />
+        <image href={vendor} x="0" y="0" width="100" height="100" preserveAspectRatio="xMidYMid meet" />
       </svg>
     )
   }

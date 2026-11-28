@@ -20,6 +20,8 @@ const stubStorage = (): void => {
 }
 
 const HARNESSES = ['Claude Code', 'Codex', 'OpenCode', 'Pi', 'Antigravity CLI', 'Devin', 'DeepSeek Harness', 'Alma']
+/** The four added on 2026-11-26: the ones that take the vendor's own mark. */
+const VENDOR = ['Antigravity CLI', 'Devin', 'DeepSeek Harness', 'Alma']
 const actsWith = (over: Partial<NewMenuActs> = {}): NewMenuActs => ({
   shell: true,
   roles: ['Reviewer'],
@@ -71,12 +73,11 @@ describe('the agent picker', () => {
     for (const gone of ['YOUR TEAMS', 'Import a team', 'ORCH']) expect(html).not.toContain(gone)
   })
 
-  it("each harness row wears the harness's own logo", () => {
+  it("the four NEW harnesses wear their own logo; claude/codex/opencode/pi keep the marks they had", () => {
     const html = renderToStaticMarkup(picker())
-    const images = [...html.matchAll(/<img[^>]+class="pf-harness-glyph"[^>]*>/g)].map((m) => m[0])
-    expect(images).toHaveLength(HARNESSES.length)
-    for (const name of HARNESSES) expect(harnessLogo(name), name).not.toBeNull()
-    expect(harnessLogo('Shell')).toBeNull()
+    expect(html.match(/<img[^>]+class="pf-harness-glyph"[^>]*>/g)?.length).toBe(VENDOR.length)
+    for (const name of VENDOR) expect(harnessLogo(name), name).not.toBeNull()
+    for (const name of ['Claude Code', 'Codex', 'OpenCode', 'Pi', 'Shell', 'My Team']) expect(harnessLogo(name), name).toBeNull()
   })
 
   it('has no open-now group when there is nothing to open', () => {

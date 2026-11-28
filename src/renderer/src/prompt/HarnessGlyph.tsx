@@ -1,30 +1,21 @@
 import { harnessOfPreset } from '../../../shared/harness-catalog'
 import almaLogo from './harness-logos/alma.png'
-import codexLogo from './harness-logos/codex.png'
 import devinLogo from './harness-logos/devin.png'
 import agyLogo from './harness-logos/agy.png'
-import claudeLogo from './harness-logos/claude.svg'
 import deepseekLogo from './harness-logos/deepseek.svg'
-import opencodeLogo from './harness-logos/opencode.svg'
-import piLogo from './harness-logos/pi.svg'
 
 /**
- * A HARNESS'S OWN MARK, for the agent options (owner, 2026-11-28: the picker
- * shows the harness's original logo, not an ink drawing of one).
+ * THE NEW HARNESSES' OWN MARKS (owner, 2026-11-28: "claude code/codex/
+ * opencode/pi 之前的版本挺好的，不要变" — those four keep the ink marks they
+ * have always had, in the picker and on their cards alike; the four added on
+ * 2026-11-26 get the vendor's own artwork instead of a drawn stand-in).
  *
- * Sources, all the vendor's own artwork: the SVG marks are Simple Icons
- * (CC0-licensed files; the brands themselves remain their owners' trademarks)
- * and the raster marks are the vendors' own touch icons — Anthropic's and
- * OpenAI's, Antigravity's from antigravity.google, Devin's favicon from
- * app.devin.ai, DeepSeek's mark from Simple Icons, and Alma's AppIcon taken
- * from the installed app. A preset that is no harness gets no glyph and the
- * row keeps its text alone.
+ * Sources: Antigravity's icon from antigravity.google, Devin's favicon from
+ * app.devin.ai, DeepSeek's mark from Simple Icons (CC0-licensed file; the
+ * brand remains its owner's trademark), and Alma's AppIcon from the installed
+ * app. Any other preset gets no glyph: the row keeps the ink mark it had.
  */
 const LOGO: Readonly<Record<string, string>> = {
-  claude: claudeLogo,
-  codex: codexLogo,
-  opencode: opencodeLogo,
-  pi: piLogo,
   agy: agyLogo,
   devin: devinLogo,
   dsh: deepseekLogo,
