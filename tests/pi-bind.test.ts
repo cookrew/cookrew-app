@@ -463,3 +463,34 @@ describe('a fresh Pi card never adopts a stranger’s session', () => {
     expect(source).toContain('servedCtx || panePresence(t.id) !== true ? null : adoptablePiSession(t.id, t.cwd)')
   })
 })
+
+describe('a pane Cookrew launched binds only its own directory', () => {
+  it('exclusive: the shared cwd tree is never scanned, even when the command reads as flagless', async () => {
+    const { mkdtempSync, mkdirSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const path = (await import('node:path')).default
+    const root = mkdtempSync(path.join(tmpdir(), 'pi-excl-'))
+    const cwd = path.join(root, 'work')
+    mkdirSync(cwd, { recursive: true })
+    // An old session in the shared cwd tree: a fresh card must not adopt it.
+    const shared = path.join(cwd, '.pi', 'agent', 'sessions', '--work--')
+    mkdirSync(shared, { recursive: true })
+    const write = (await import('node:fs')).writeFileSync
+    write(path.join(shared, '2026-08-26T08-53-47-138Z_019fd18d-stranger.jsonl'), JSON.stringify({ type: 'session', id: '019fd18d-stranger', timestamp: '2026-08-26T08:53:47.138Z', cwd }) + '\n')
+    const common = {
+      cwd,
+      terminalId: 'term-fresh',
+      paneStartedAtMs: Date.now(),
+      agentDir: path.join(cwd, '.pi', 'agent'),
+      sessionsRoot: path.join(root, 'cookrew-pi')
+    }
+    // Flagless command: without `exclusive` the shared tree is read (and could adopt).
+    expect(resolvePiSessionByPane({ ...common, command: 'pi --model x' })).toBeNull()
+    // With it, the terminal's own (empty) dir is the only place looked at.
+    expect(resolvePiSessionByPane({ ...common, command: 'pi --model x', exclusive: true })).toBeNull()
+    const own = (await import('../src/main/pi-bind')).piNodeSessionDir('term-fresh', { rootDir: common.sessionsRoot })
+    mkdirSync(own, { recursive: true })
+    write(path.join(own, '2026-11-28T05-53-36-784Z_019fd18d-ours.jsonl'), JSON.stringify({ type: 'session', id: '019fd18d-ours', timestamp: '2026-11-28T05:53:36.784Z', cwd }) + '\n')
+    expect(resolvePiSessionByPane({ ...common, command: 'pi --model x', exclusive: true })?.id).toBe('019fd18d-ours')
+  })
+})

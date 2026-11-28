@@ -335,6 +335,15 @@ export interface PiPaneBindOptions {
   terminalId: string
   /** The command tmux launched the live pane with, or null when unknown. */
   command: string | null
+  /**
+   * Cookrew launched this pane itself, with its exclusive --session-dir: the
+   * dir is the answer whatever the pane's command reads as. A live pane's
+   * command is not always readable (herdr reports none, and the stored card
+   * command never carries the flag the launch added), and falling back to the
+   * shared cwd tree there adopted a stranger's old conversation for a
+   * brand-new card (owner, 2026-11-28).
+   */
+  exclusive?: boolean
   /** Epoch ms the pane started (tmux session_created), or null when unknown. */
   paneStartedAtMs: number | null
   /** Session ids already claimed by OTHER terminals — never reassignable. */
@@ -362,12 +371,10 @@ function match(entry: PiSessionEntry | undefined): PiSessionMatch | null {
  */
 export function resolvePiSessionByPane(options: PiPaneBindOptions): PiSessionMatch | null {
   const exclusiveDir = piNodeSessionDir(options.terminalId, { rootDir: options.sessionsRoot })
-  const declared = options.command === null ? null : piSessionDirFromCommand(options.command)
-  const dir =
-    declared ??
-    (options.command === null
-      ? exclusiveDir
-      : piSessionDir(options.cwd, { agentDir: options.agentDir }))
+  const declared = options.exclusive === true || options.command === null ? null : piSessionDirFromCommand(options.command)
+  const dir = options.exclusive === true
+    ? exclusiveDir
+    : declared ?? (options.command === null ? exclusiveDir : piSessionDir(options.cwd, { agentDir: options.agentDir }))
   const entries = piSessionEntries(options.cwd, { sessionsDir: dir }).filter(
     (entry) => !options.exclude?.has(entry.id)
   )
