@@ -22,7 +22,7 @@ interface Fake {
 }
 
 /** A fake Alma: one thread, one turn that streams a thought, a tool and a reply, then asks nothing. */
-async function fakeAlma({ askApproval = false, threadModel = 'p1:model-a', rebuild = false } = {}): Promise<Fake> {
+async function fakeAlma({ askApproval = false, threadModel = 'p1:model-a', shape = null }: { askApproval?: boolean; threadModel?: string; shape?: 'rebuild' | 'parts' | 'blink' | null } = {}): Promise<Fake> {
   const state: Fake['state'] = { answers: [], stops: [], sends: [], creates: [], puts: [], approvals: askApproval ? [{ requestId: 'tool-approval-1', title: 'Bash', message: 'rm x', threadId: 't-1' }] : [], polls: 0 }
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://x')
@@ -53,14 +53,40 @@ async function fakeAlma({ askApproval = false, threadModel = 'p1:model-a', rebui
       }
       if (req.method === 'GET' && url.pathname === '/api/threads/t-1/run-status') {
         state.polls += 1
-        const done = state.polls > (rebuild ? 7 : 2)
+        const done = state.polls > (shape ? 6 : 2)
         return json({ id: 't-1', state: done ? 'done' : 'running', busy: !done, ...(done ? { reply: { messageId: 'a-1', text: 'all done', turnEndReason: state.stops.length > 0 ? 'aborted' : 'stop' } } : { reply: null }) })
       }
-      if (req.method === 'GET' && url.pathname === '/api/threads/t-1/messages' && rebuild) {
-        // Alma's own shape while it streams: a FRESH message id each poll, the
-        // whole text so far inside it (the bug: printed again every poll).
+      if (req.method === 'GET' && url.pathname === '/api/threads/t-1/messages' && shape === 'rebuild') {
+        // Alma's own shape while it streams: a FRESH message id on every poll,
+        // the whole text so far inside it (the bug: printed again each poll).
         const words = 'the full path as its tooltip'.split(' ').slice(0, Math.min(6, Math.max(1, state.polls)))
-        return json([{ message: { id: 'u-1', role: 'user', parts: [{ type: 'text', text: 'hi' }] } }, { message: { id: `a-${state.polls}`, role: 'assistant', parts: [{ type: 'text', text: words.join(' ') }] } }])
+        return json([
+          { message: { id: 'u-1', role: 'user', parts: [{ type: 'text', text: 'hi' }] } },
+          { message: { id: `a-${state.polls}`, role: 'assistant', parts: [{ type: 'step-start' }, { type: 'text', text: words.join(' ') }] } }
+        ])
+      }
+      if (req.method === 'GET' && url.pathname === '/api/threads/t-1/messages' && shape === 'blink') {
+        // Alma's list is a VIEW of a turn being rebuilt and it flickers: the
+        // newest message is there, gone for a poll, then back with the same text.
+        // A cursor that follows it down reprints the tail on the way back up.
+        const second = state.polls % 2 === 0
+        return json([
+          { message: { id: 'u-1', role: 'user', parts: [{ type: 'text', text: 'hi' }] } },
+          { message: { id: 'a-1', role: 'assistant', parts: [{ type: 'text', text: 'the card model' }] } },
+          ...(second ? [{ message: { id: 'a-2', role: 'assistant', parts: [{ type: 'text', text: ' and the card itself.' }] } }] : [])
+        ])
+      }
+      if (req.method === 'GET' && url.pathname === '/api/threads/t-1/messages' && shape === 'parts') {
+        // One message, a tool between two text parts — which is the shape a real
+        // card showed: the first part's length rewound the second one's cursor, so
+        // every poll re-sent 'nd the card itself.' (owner, 2026-11-28).
+        const parts = [
+          { type: 'step-start' },
+          { type: 'text', text: 'the card model' },
+          { type: 'tool-Bash', toolCallId: 'call-1', state: 'input-available', input: { command: 'ls' } },
+          ...(state.polls > 1 ? [{ type: 'step-start' }, { type: 'text', text: 'and the card itself.' }] : [])
+        ]
+        return json([{ message: { id: 'u-1', role: 'user', parts: [{ type: 'text', text: 'hi' }] } }, { message: { id: 'a-1', role: 'assistant', parts } }])
       }
       if (req.method === 'GET' && url.pathname === '/api/threads/t-1/messages') {
         const growing = state.polls > 1
@@ -124,6 +150,9 @@ function events() {
   }
 }
 
+/** Every reply fragment the host handed the screen, in order. */
+const printedText = (seen: string[]): string[] => seen.filter((e) => e.startsWith('text:')).map((e) => e.slice(e.indexOf(':', 5) + 1))
+
 describe('Alma as a hosted agent', () => {
   it('opens a thread in this folder, sends, streams parts and ends on the turn-end reason', async () => {
     running = await fakeAlma()
@@ -144,15 +173,40 @@ describe('Alma as a hosted agent', () => {
     backend.close()
   })
 
-  it('a reply Alma rebuilds under a new id each poll is printed once, not once per poll', async () => {
-    running = await fakeAlma({ rebuild: true })
+  it('prints a reply Alma rebuilds under a new id on every poll once, not once per poll', async () => {
+    running = await fakeAlma({ shape: 'rebuild' })
     const { seen, events: sink } = events()
     const backend = new AlmaBackend({ baseUrl: running.url, cwd: process.cwd(), events: sink })
     await backend.open({})
     await backend.prompt('hi')
-    const printed = seen.filter((e) => e.startsWith('text:')).map((e) => e.slice(e.indexOf(':', 5) + 1)).join('')
-    expect(printed).toBe('the full path as its tooltip')
-    expect(printed.match(/full path/g)).toHaveLength(1)
+    const said = printedText(seen).join('')
+    expect(said).toBe('the full path as its tooltip')
+    expect(said.match(/full path/g)).toHaveLength(1)
+    backend.close()
+  })
+
+  it('a second text part does not re-send the first one’s tail', async () => {
+    running = await fakeAlma({ shape: 'parts' })
+    const { seen, events: sink } = events()
+    const backend = new AlmaBackend({ baseUrl: running.url, cwd: process.cwd(), events: sink })
+    await backend.open({})
+    await backend.prompt('hi')
+    const said = printedText(seen).join('')
+    expect(said).toBe('the card modeland the card itself.')
+    expect(said.match(/and the card itself/g)).toHaveLength(1)
+    backend.close()
+  })
+
+  it('a message that blinks out of Alma’s list does not reprint its tail on the way back', async () => {
+    running = await fakeAlma({ shape: 'blink' })
+    const { seen, events: sink } = events()
+    const backend = new AlmaBackend({ baseUrl: running.url, cwd: process.cwd(), events: sink })
+    await backend.open({})
+    await backend.prompt('hi')
+    const said = printedText(seen).join('')
+    expect(said).toBe('the card model and the card itself.')
+    expect(said.match(/and the card itself/g)).toHaveLength(1)
+    backend.close()
   })
 
   it('resumes a thread by id, and refuses one Alma does not have', async () => {
