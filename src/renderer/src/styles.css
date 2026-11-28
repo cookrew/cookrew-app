@@ -6717,3 +6717,8 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
     animation-duration: 1ms;
   }
 }
+
+/* A vendor mark in a dock row (AgentSprite.tsx): the pixel grid's box, the
+   logo kept whole inside it. */
+.cr-chip .vi-sprite-logo { width: 16.5px; height: 12px; object-fit: contain; border-radius: 2px }
+.vi-sprite-logo { object-fit: contain; border-radius: 3px; }

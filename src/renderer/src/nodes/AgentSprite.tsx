@@ -2,7 +2,11 @@
     33×24 px), drawn in currentColor so the card's phase class tints them:
     Claude Code a starburst, Codex a ring, OpenCode a terminal block, Pi a
     pixel π, Antigravity CLI an arch, Devin a diamond, DeepSeek Harness a wave, Alma a sprout, and
-    Shell (or any custom preset) the classic invader. */
+    Shell (or any custom preset) the classic invader.
+    The harnesses added on 2026-11-26 show the vendor's own mark instead of a
+    pixel drawing (owner, 2026-11-28: "别搞漏了" — the dock's rows too); a
+    preset that is no harness keeps the invader. */
+import { harnessLogo } from '../prompt/HarnessGlyph'
 import { harnessOfPreset, type HarnessId } from '../../../shared/harness-catalog'
 
 export type AgentSpriteKind = HarnessId | 'shell'
@@ -118,6 +122,10 @@ export function AgentSprite({
   preset: string
   className?: string
 }): React.JSX.Element {
+  const logo = harnessLogo(preset)
+  if (logo !== null) {
+    return <img className={className ? `vi-sprite vi-sprite-logo ${className}` : 'vi-sprite vi-sprite-logo'} src={logo} alt="" draggable={false} aria-hidden="true" />
+  }
   return (
     <svg
       className={className ? `vi-sprite ${className}` : 'vi-sprite'}
